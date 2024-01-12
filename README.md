@@ -21,6 +21,9 @@ source(PATH/TO/SAMOVAR/scripts/source.R)
 
 ### Usage
 
+### Demo version
+Demo is now avialable at /demo repository. To run it, install it and run demo.R
+
 ### If you want to run pipeline without contol on results, you can execute:
 ```R
 new_counts <- data %>% samovaR(...)
@@ -80,7 +83,9 @@ data %>% res_trim (...) %>% plot_data_n2amount(normalisation_function = function
 ```
 
 <img src="additional/plot_distribution.png" align="center" width="600" >
-<img src="additional/glm1.png" align="center" width="300" ><img src="additional/glm2.png" align="center" width="300" >
+Distribution plot
+<img src="additional/glm1.png" align="left" width="250" ><img src="additional/glm2.png" align="right" width="250" >
+Log10 and custom normalisation results
 
 #### Normalize data distribution and apply treshholds:
 ```R
@@ -106,7 +111,9 @@ data_scaled %>% res_cluster_PCA2D
 # k_means - numeric, number of k-means to use
 # speices - logical, by default true. if false, distribution of runs will be shown
 ```
-<img src="additional/cluster.png" align="center" height="300" ><img src="additional/PCA.png" align="center" height="300" >
+<img src="additional/cluster.png" align="center" height="300" >
+<img src="additional/PCA.png" align="center" height="300" >
+Clusterisation and PCA results. On PCA, each colour is for different clusters
 
 #### Create coherence tables
 ```R
