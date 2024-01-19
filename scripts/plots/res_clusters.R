@@ -1,6 +1,6 @@
 res_cluster_dendro <- function(
     data_scaled,
-    speices = T,
+    species = T,
     k_means = 1
 ){
   if (!species) data_scaled <- data_scaled %>% t
@@ -16,7 +16,7 @@ res_cluster_dendro <- function(
 
 res_cluster_PCA2D <- function(
     data_scaled,
-    speices = T,
+    species = T,
     k_means = 1
 ){
   if (!species) data_scaled <- data_scaled %>% t
