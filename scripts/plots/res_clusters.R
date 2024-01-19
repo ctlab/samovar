@@ -22,7 +22,7 @@ res_cluster_PCA2D <- function(
   if (!species) data_scaled <- data_scaled %>% t
   
   samples = colnames(data_scaled)
-  clust = data_scaled %>% 
+  clust = data_scaled %>% t %>%
     dist(method = "euclidian") %>% 
     hclust (method = "ward.D2") 
 
