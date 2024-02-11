@@ -6,7 +6,7 @@
 The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `SAMOVAR`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This addon implement creation of abundance files 
 
 
-### Installation
+## Installation
 
 To get the tool clone the git repository:
 ```bash
@@ -19,14 +19,41 @@ source(PATH/TO/SAMOVAR/scripts/source.R)
 ```
 
 
-### Usage
+## Usage
 
 
 ### Demo version
 Demo is now avialable at /demo repository. To run it, install it and run demo.R
 
 
-### If you want to run pipeline without contol on results, you can execute:
+### Command line interface
+Now samovar could be used from command line. To run, use SHamova.R:
+
+```
+---  BASH interface of samova.R  ---
+
+Usage example:
+Rscript SHamova.R --test -a new_ -n 100 -is Bifidobacterium_asteroides -il 0.002 -o generated.csv
+
+Options:
+--help: show this massage and exit
+--test: use test data as input
+
+-t:  treshhold to remove species occurances. 0 by default
+-a:  add novel data to current table. FALSE by default, or you can specify column name for new lines
+-is: species name to initiate. most occured as default
+-il: species level to initiate. mean as default
+-o:  output
+
+To be implemented:
+-r: runs as input
+-d: desease as input
+-t: csv data.frame as input
+-n: number of runs to process. for -r and -d
+```
+
+### R usage
+If you want to run pipeline without contol on results, you can execute:
 ```R
 new_counts <- data %>% samovaR(...)
 
@@ -41,7 +68,7 @@ new_counts <- data %>% samovaR(...)
 ```
 
 
-### Or follow the pipeline to take full control on process.
+Or follow the pipeline to take full control on process.
 
 #### Get the data from GMrepo. If you want to use your abundance file, skip this stage
 ```R
