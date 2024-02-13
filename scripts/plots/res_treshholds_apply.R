@@ -26,7 +26,7 @@ plot_data_with_treshhold <- function(
                 width = max(resF$amount)/25, height = max(resF$N)/25) +
     
     geom_smooth(aes(y = resF$N, resF$amount), method = "glm", 
-                method.args = list(family = "Gamma"),
+                #method.args = list(family = "Gamma"),
                 color = "red",
                 linewidth = 0.5,
                 linetype = 2,
