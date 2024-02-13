@@ -1,4 +1,4 @@
-build_samovar <- function(
+build_samovar_DEPRECATED <- function(
     data_scaled,
     k_means = 1,
     inner_model = "gaussian",
