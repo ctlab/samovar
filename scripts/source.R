@@ -5,13 +5,7 @@ liblist <- c("tidyverse",
              "viridis",
              "plotly",
              "ggdendro",
-             "httr",
-             "jsonlite",
-             "xml2",
              "tsne",
-             "cluster",
-             "Matrix",
-             "shiny",
              "here")
 
 for (i in liblist) {
