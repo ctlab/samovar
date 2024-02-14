@@ -6,6 +6,7 @@ liblist <- c("tidyverse",
              "plotly",
              "ggdendro",
              "tsne",
+             "jsonlite",
              "here")
 
 for (i in liblist) {
