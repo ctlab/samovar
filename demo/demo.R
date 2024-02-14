@@ -67,7 +67,8 @@ server <- function (input, output) {
       add_pie(hole = 0.4) %>%
       layout(xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
              yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
-    
+
+    res <<- res
     fig
     })
   
