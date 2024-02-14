@@ -39,8 +39,8 @@ server <- function (input, output) {
   output$plot <- renderPlotly({
     req(input$generate)
     
-    init <- input$init
-    init_level <- input$init_level
+    init <- isolate(input$init)
+    init_level <- isolate(input$init_level)
     
     res <- prediction(init = init,
                       init_level = init_level, 
@@ -67,16 +67,28 @@ server <- function (input, output) {
       add_pie(hole = 0.4) %>%
       layout(xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
              yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
-
     res <<- res
     fig
     })
   
   output$preview <- renderTable({
     req(input$add)
+    
     counter <<- counter + 1
-    colnames(res)[2] <- paste(counter, input$init, input$init_level, sep = "_")
-    results <<- full_join(results, res, by = "sp")
+    colnames(res)[2] <- paste0(counter,": ", 
+                               isolate(input$init), " - ", 
+                               isolate(input$init_level))
+    
+    results <- full_join(results, res, by = "sp")
+    results[is.na(results)] <- 0
+    results <<- results
+    
+    sumres <- as.data.frame(results[,-1]) %>% apply(1, sum)
+    results <- results[order(sumres, decreasing = T),]
+    results[,-1] <-results[,-1] * 100
+    results[,-1] <- as.data.frame(results[,-1]) %>% 
+      sapply(round, 2) %>% 
+      sapply(paste0, " %")
     head(results)
   })
   
@@ -87,6 +99,7 @@ server <- function (input, output) {
   
   output$specifics <- renderText({
     req(input$add)
+    
     if(ncol(results) - 1 == 1){
       paste0("Data frame of ", nrow(results), " species, generated ", ncol(results) - 1, " sample")
     } else {
