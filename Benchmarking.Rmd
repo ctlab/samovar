@@ -1,0 +1,1331 @@
+---
+title: "Benchmarking"
+author: "dsmutin"
+date: "2024-07-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/mnt/tank/scratch/dsmutin/samovar/")
+```
+
+```{bash setup, include=FALSE}
+screen -r benchmarking
+```
+
+# Install samovar
+
+```{bash}
+git clone https://github.com/dsmutin/samovar.git
+```
+
+# Source
+
+```{r}
+source("alpha_1/samovar/scripts/source.R")
+```
+
+# libs
+
+# R using listing version
+
+```{R}
+# Setup ----
+default_path <- "/mnt/tank/scratch/dsmutin/samovar/" #path to save all output
+sample_amount <- 100 #number of samples
+minimal_abundance <- 10^(-4) #minimal abundance per species to determine as not the noise
+mesh_id = "D006262" #only implemented
+number_of_clusters = 20 #number of clusters to split the data
+inner_model <- "gaussian" #model of glm connections within clusters
+inter_model <- "gaussian" #model of glm connections between clusters
+
+initial <- "Bifidobacterium bifidum" #initialized sp
+initial_level <- 0.002 # initialized level
+generated_amount <- 10 #number of generated samples
+
+# Add libraries ----
+cat("Initiallized\n")
+liblist <- c("tidyverse",
+             "corrplot",
+             "viridis",
+             "plotly",
+             #"ggtree",
+             "ape",
+             "httr",
+             "jsonlite",
+             "xml2",
+             "tsne",
+             "cluster",
+             "Matrix",
+             "progress",
+             "ggnewscale",
+             "htmlwidgets")
+
+for (i in liblist) {
+  library(i, character.only = T)
+  cat("--- ", i, " loaded  ---\n")
+}
+
+rm(i, liblist)
+
+# Configure misc functions ----
+trsh <- minimal_abundance
+
+progress_function <- function (iters) {
+  if (length(iters) != 1) iters = length(iters)
+  
+  progress_bar$new(format = "(:spin) [:bar] :percent [Elapsed time: :elapsedfull || Estimated time remaining: :eta]",
+                   total = iters,
+                   complete = "=",
+                   incomplete = "-",
+                   current = ">",
+                   clear = FALSE,
+                   width = 100)
+}
+
+gsave <- function(gg, postf, height = 1200) {
+  ggsave(paste0(default_path,"/",mesh_id, "_", postf, ".png"), gg,
+         width = 2000, height = height, units = "px")
+}
+
+psave <- function(pp, postf){
+  htmlwidgets::saveWidget(as_widget(pp), paste0(default_path,"/",mesh_id, "_", postf, ".html"))
+}
+
+which.max.coord <- function(df, pred) {
+  df <- as.data.frame(df)
+  df[,-pred] <- 0
+  df[pred,] <- 0
+  
+  df_row <- apply(df, 1, max)
+  df_row <- which.max(df_row)[1]
+  
+  df_col <- apply(df, 2, max)
+  df_col <- which.max(df_col)[1]
+  
+  return(c(df_col, df_row))
+}
+
+prob_cl <- function(a, b){
+  and <- ((a > 0) & (b > 0)) %>% sum
+  or  <- ((a > 0) | (b > 0)) %>% sum
+  return(and/or)
+}
+
+composition <- function(data_generated) {
+  data_generated[is.na(data_generated)] <- 0
+  data_generated[data_generated < trsh] <- 0
+  
+  split_samples <- hclust(dist(data_generated %>% t))
+  
+  data_generated <- data_generated[,split_samples[["order"]]]
+  
+  gg <- data_generated %>% 
+    mutate("mean" = apply(.,1,mean)) %>% 
+    dplyr::arrange(.$mean) %>%
+    rownames_to_column("sp") %>% 
+    pivot_longer(cols = -1) %>% 
+    subset(value > 0) %>% 
+    mutate(name = fct_inorder(name)) %>% 
+    mutate(sp = fct_inorder(.$sp)) %>% 
+    ggplot(aes(name, value, fill = sp, text = sp)) +
+    geom_col(position = "stack", show.legend = F, color = "white", linewidth = .5, alpha = .7) +
+    xlab("sample") +
+    scale_fill_viridis_d() +
+    theme_void()
+  
+  gg
+}
+
+# Read data ----
+cat("Read data\n")
+## read data from file or get it from web
+run_info <- readLines("https://raw.githubusercontent.com/dsmutin/samovar/main/scripts/test/health_runIDs.txt")[1:sample_amount] 
+
+## set config to ignore certificate
+httr::set_config(httr::config(ssl_verifypeer = FALSE))
+options(RCurlOptions = list(ssl_verifypeer = FALSE))
+options(rsconnect.check.certificate = FALSE)
+
+pb <- progress_function(length(run_info))
+res_sp <- tibble(taxa = character()) 
+
+## Read abundance data frame from run list ----
+for (RUN in run_info) {
+  pb$tick()
+  
+  # get run info from GMrepo
+  query <- httr::POST("https://gmrepo.humangut.info/api/getFullTaxonomicProfileByRunID",
+                      body = list("run_id" = RUN), encode = "json"
+  ) %>%
+    httr::content() %>%
+    xml2::xml_text() %>%
+    jsonlite::fromJSON()
+  
+  if (!is.null(query[["species"]])) {
+    df_sp <- query[["species"]][, -2] %>%
+      summarise(N = sum(relative_abundance), .by = scientific_name)
+    colnames(df_sp) <- c("taxa", RUN)
+    res_sp <- full_join(res_sp, df_sp, by = "taxa")
+  }
+}
+rm(df_sp)
+rm(query)
+
+res_sp <- res_sp %>% column_to_rownames("taxa")
+
+# Vizualize composition ----
+cat("Composition vizualization")
+
+# Data processing ----
+cat("Prepare\n")
+#remove all taxa with abundance < 2
+sumNA <- !is.na(res_sp[,-c(1:2)])
+sumNA <- apply(sumNA, 1, sum)
+sumNA <- which(sumNA > 2)
+
+res_sp <- res_sp[sumNA,]
+
+#make % from abundance
+res_sp <- res_sp / 100
+res_sp[is.na(res_sp)] <- 0
+#make tables for further analysis
+species <- res_sp %>% rownames
+
+# we further need tables with median and sd numbers for each group
+
+res_stat <- data.frame("sp" = rownames(res_sp),
+                       "mn" = apply(res_sp, 1, mean, na.rm = T),
+                       "sd" = apply(res_sp, 1, sd, na.rm = T))
+
+trsh = minimal_abundance
+resF <- unlist(res_sp) %>% as.numeric()
+distr <- (res_sp > trsh) %>% apply(1, sum) %>% rep(each = length(res_sp[1,])) / length(res_sp[1,])
+distr <- distr[resF > trsh]
+resF <- resF[resF > trsh]
+
+ord = resF %>% order(decreasing = T)
+
+resF <- resF[ord]
+distr <- distr[ord]
+N <- 1:length(resF)
+
+split_n <- 0.25
+gg <- ggplot() +
+  geom_jitter(mapping = aes(y = N[distr<=split_n], resF[distr<=split_n]), 
+              color = "lightyellow",
+              alpha = 0.5, size = 0.3, 
+              width = max(resF)/25, height = max(N)/25) +
+  geom_jitter(mapping = aes(y = N[distr>split_n], resF[distr>split_n], 
+                            color = distr[distr>split_n]),
+              alpha = 0.5, size = 0.3, 
+              width = max(resF)/25, height = max(N)/25) +
+  geom_smooth(aes(y = N, resF), method = "glm", 
+              method.args = list(family = "Gamma"),
+              color = "red",
+              linewidth = 0.5,
+              linetype = 2,
+              formula = 'y~x') +
+  scale_color_gradient2("consistency", low = "lightyellow", mid = "lightgreen", 
+                        high = "darkblue",midpoint = 0.4) +
+  xlab("mean abundance value") + ylab("index") + ggtitle("Means distribution") +
+  theme_minimal()
+
+gsave(gg, "distribution")
+
+# model re-normalization
+sum0 <- apply(res_sp > trsh, 1, sum)
+res_sp <- res_sp[sum0 > 2,]
+species <- species[which(sum0 > 2)]
+
+res_stat <- res_stat[which(sum0 > 2),]
+
+res_scale <- function(x) {
+  x <- log10(1/(1-log10(x+1)))*(1-2*log10(x+1))
+  return(x)
+}
+
+res_sp_scale <- res_scale(res_sp)
+
+resF <- unlist(res_sp) %>% as.numeric()
+resF <- resF[resF > trsh]
+ord = resF %>% order(decreasing = T)
+resF <- resF[ord]
+resF2 <- resF %>% res_scale
+
+gg <- data.frame(res = resF, type = "before", N = 1:length(resF)) %>% 
+  rbind(data.frame(res = resF2, type = "after", N = 1:length(resF))) %>% 
+  ggplot(mapping = aes(sample = res)) +
+  geom_qq()+
+  geom_qq_line() +
+  facet_wrap(~type, scales = "free") +
+  #geom_smooth(method = "glm", formula = 'y~x') +
+  theme_minimal() +
+  ggtitle("QQ-plot")
+
+gsave(gg, "QQ_plot")
+
+# Get scaled stats ----
+min_res_sp_scale <- min(res_sp_scale, na.rm = T)
+res_sp_scale <- res_sp_scale - min_res_sp_scale
+res_sp_scale[is.na(res_sp_scale)] <- 0
+res_sp_scale <- as.matrix(res_sp_scale)
+
+res_stat_scale <- data.frame("sp" = species,
+                             "mn" = apply(res_sp, 1, mean, na.rm = T),
+                             "sd" = apply(res_sp, 1, sd, na.rm = T))
+
+# Generate inverse function ----
+res_unscale <- function(z) {
+  resF <- data.frame(x = as.numeric(unlist(res_sp_scale)),
+                     y = as.numeric(unlist(res_sp)))
+  resF <- resF[order(resF$x),]
+  
+  if(z <= 0) {
+    return(0)
+  } else {
+    wz <- which(resF$x > z)[1]
+    res_sc <- resF[c(wz-1, wz),]
+    
+    rs <- res_sc$y[1] -
+      ((res_sc$x[2] - z) / (res_sc$x[2] - res_sc$x[1])) *
+      (res_sc$y[1] - res_sc$y[2])
+    
+    return(rs)
+  }
+}
+
+# Clusterization ----
+## HClust ----
+cat("Clustering\n")
+clust <- res_sp_scale %>% 
+  dist(method = "euclidian") %>% 
+  hclust (method = "ward.D2")
+
+KM = number_of_clusters
+kmeans <- cutree(clust, k = KM)
+
+## Dendrogramm ----
+d <- data.frame(label=clust$labels, 
+                cluster = kmeans, 
+                amount = res_stat$mn, 
+                presence = res_sp %>% apply(1, function(x) sum(x > trsh)))
+
+## PCA, etc ----
+fit <- kmeans(res_sp_scale, KM)
+
+PCA <- prcomp(res_sp_scale %>% apply(1, scale) %>% t )
+
+gg <- ggplot(mapping = aes (PCA[["x"]][,1], PCA[["x"]][,2], text = species)) +
+  geom_point(aes(colour = kmeans), show.legend = F) +
+  theme_minimal() +
+  xlab(paste0("1 comp, sdev = ", round(PCA[["sdev"]][1], digits = 2))) + 
+  ylab(paste0("2 comp, sdev = ", round(PCA[["sdev"]][2], digits = 2))) +
+  scale_color_viridis_c(direction = -1)
+
+cat("Perform tSNE\n")
+
+tSNE2D <- res_sp %>% apply(2, scale) %>% 
+  tsne(k = 2, initial_dims = KM) %>% data.frame
+
+gg <- ggplot(tSNE2D, text = species) + 
+  geom_point(aes(x=X1, y=X2, color = kmeans), 
+             show.legend = T, alpha = 0.5) +
+  xlab("") + ylab("") +
+  scale_color_continuous("", type = "viridis") +
+  theme_minimal()
+
+gsave(gg, "tSNE_2D")
+
+tSNE3D <- res_sp %>% apply(2, scale) %>% 
+  tsne(k = 3) %>% data.frame
+
+
+# Build samovar ----
+## Inner-clusters ----
+cat("Number of clusters:", KM, "\n")
+cat("Samovar initialized")
+# get R square tables and GLMs for different clusters
+Rsq_cl <- list()
+Rsq_pr <- list()
+
+
+# subsetting tables and make 
+for (k in 1:KM) {
+  clust_num <- (kmeans == k)
+  cat("\nCluster", k, "\n")
+  if (sum(clust_num) > 1) {
+    df_k <- res_sp_scale[clust_num,]
+    ldfk <- length(df_k[,1])
+    
+    df_r2 <- matrix(ncol = ldfk, nrow = ldfk)
+    df_pr <- matrix(ncol = ldfk, nrow = ldfk)
+    
+    pb <- progress_function(ldfk)
+    for(i in 1:ldfk){
+      pb$tick()
+      j <- i
+      for(j in i:ldfk) {
+        if(i == j) {
+          df_r2[i,j] <- 0
+        } else {
+          
+          dfkj <- df_k[j,]
+          dfki <- df_k[i,]
+          dfNA <- !((dfki>0) & (dfkj>0))
+          dfBOTH <- ((dfki>0) | (dfkj>0)) %>% sum
+          dfkj <- dfkj[!dfNA]
+          dfki <- dfki[!dfNA]
+          
+          #get the prob = W(a&b)/W(a|b)
+          probij <- (sum(!dfNA) / dfBOTH)
+          if(sum(!dfNA) > 1) {
+            glmij <- glm(dfki ~ dfkj, family = inner_model)
+            df_r2[i,j] <- with(summary(glmij), 1 - deviance/null.deviance)
+          } else {
+            df_r2[i,j] <- 0
+          }
+          df_pr[i,j] <- probij
+        }
+        j <- j + 1
+      }
+    }
+    df_r2 <- Matrix::forceSymmetric(df_r2)
+    df_pr <- Matrix::forceSymmetric(df_pr)
+  } else {
+    df_r2 <- 0
+    df_pr <- 0
+  }
+  
+  Rsq_cl[[k]] <- df_r2
+  Rsq_pr[[k]] <- df_pr
+  
+  #cat("%", k, "%")
+}
+
+cat("Generate inter-cluster connections\n")
+## Inter-clusters ----
+# get R square tables and GLMs for between clusters
+Rsq_il <- matrix(ncol = KM, nrow = KM)
+Glm_il <- list()
+
+pb <- progress_function(KM)
+for (i in 1:KM){
+  pb$tick()
+  df_k1 <- res_sp_scale[kmeans == i,]
+  if(!is.null(ncol(df_k1))) df_k1 <- apply(df_k1, 2, mean) %>% unlist %>% as.numeric
+  j <- i
+  
+  while (j <= KM) {
+    
+    if(i == j) {
+      Rsq_il[i,j] <- 0
+      j <- j + 1
+    } else {
+      df_k2 <- res_sp_scale[kmeans == j,]
+      if(!is.null(ncol(df_k2))) df_k2 <- apply(df_k2, 2, mean) %>% unlist %>% as.numeric
+      
+      glmij <- glm(df_k1 ~ df_k2, family = inter_model)
+      Rsq_il[i,j] <- with(summary(glmij), 1 - deviance/null.deviance)
+      Glm_il[[as.character(i)]][[as.character(j)]] <- glmij
+      j <- j + 1
+    }
+  }
+}
+
+Rsq_il <- Matrix::forceSymmetric(Rsq_il) %>% as.matrix
+
+# Generation ----
+cat("\nSamovar built, generation started...")
+data_generated <- data.frame(sp = res_sp %>% rownames)
+
+for (i in 1:generated_amount) {
+  seed_rand <- runif(1, 0, 10000) %>% round
+  cat("\nSample", i, "of", generated_amount, "- seed -",seed_rand, "- prediction\n")
+  set.seed(seed_rand)
+  
+  init <- initial
+  init_level <- initial_level
+  
+  res <- data.frame()
+  pb <- progress_function(KM)
+  cl_todo <- 1:KM
+  cl_done <- c()
+  
+  #check is there some cluster else to do and start with init cluster
+  cl <- kmeans[which(init == species)]
+  
+  #rescale init
+  init_level <- res_scale(init_level) - min_res_sp_scale
+  
+  while (length(cl_todo)>0) {
+    pb$tick()
+    #make predictions for relevant cluster
+    #for now: easiest prediction just based on one group. 
+    #in future, find the best path must be based on ML
+    
+    #first: make cluster tables for R2 and means 
+    sp_cl <- species[cl == kmeans]
+    df_k <- res_sp_scale[cl == kmeans,]
+    df_r_cl <- Rsq_cl[[cl]] %>% as.matrix
+    df_r_pr <- Rsq_pr[[cl]] %>% as.matrix
+    df_r_pr[is.na(df_r_pr)] <- 0
+    
+    res_cl <- data.frame("sp" = sp_cl,
+                         "res_scale" = NA)
+    
+    #prediction of initial level 
+    if(!is.na(init)){
+      #for represented cluster
+      pred <- data.frame(from = which(init == sp_cl), to = which(init == sp_cl))
+      res_cl[which(sp_cl == init),2] <- init_level
+      
+      #second: start predictions based on biggest R2
+      while(sum(is.na(res_cl[,2]))) {
+        
+        #prediction graph
+        pr <- which.max.coord(df_r_pr, pred$to)
+        pred <- rbind(pred, pr)
+        
+        if(sum(pr == c(1,1)) == 2) {
+          res_cl[is.na(res_cl)] <- 0
+        }
+        
+        #prediction of presence
+        if(runif(1) <= df_r_pr[pr[1], pr[2]]) {
+          
+          df <- df_r_cl
+          df[-pred$from,] <- 0
+          best <- which.max(df[,pr[2]])
+          
+          #fit GLM
+          dfi <- df_k[best,]
+          dfj <- df_k[pr[2],]
+          
+          dfij <- ((dfi > 0) & (dfj > 0)) %>% which
+          
+          if(length(dfij) < 2){
+            #edit in future; for now if there are less than 2 connected observations for 2 groups level of 2 group <- 0
+            res_cl[pr[2],2] <- 0
+            
+          } else {
+            dfij <- data.frame("i" = as.numeric(dfi[dfij]), 
+                               "j" = as.numeric(dfj[dfij]))
+            glmij <-glm(j~i, data = dfij, family = inner_model)
+            res_cl[pr[2],2] <- predict.glm(glmij, newdata = data.frame(i = res_cl[pr[1],2]))
+          }
+          
+        } else {
+          #the best way is bayesian correction if prob <- 0, so we should re-celculate:
+          # prob <- w(!a&b)/w(!a|b)
+          
+          #but for now, lets just remove that probabilities
+          df_r_pr[pr[2],] <- 0
+          df_r_pr[,pr[2]] <- 0
+          
+          res_cl[pr[2],2] <- 0
+        }
+        
+      }
+      
+    } else {
+      #for not represented cluster
+      res_cl$res_scale <- 0
+    }
+    
+    #add results
+    res <- rbind(res, res_cl)
+    cl_todo <- cl_todo[-cl]
+    cl_done <- c(cl_done, cl)
+    
+    #select new cluster for generation and predict initial levels
+    #it is also better to use bayesian correction
+    if(length(cl_todo) > 0) {
+      cl_new <- which.max.coord(Rsq_il, cl_done)
+      
+      if((cl_new[1] == 1) & (cl_new[2] == 1)) break
+      
+      df_k1 <- df_k
+      if(!is.null(ncol(df_k1))) df_k1 <- apply(df_k1, 2, mean)
+      
+      df_k <- res_sp_scale[cl_new[2] == kmeans,]
+      df_k2 <- df_k
+      if(!is.null(ncol(df_k2))) df_k2 <- apply(df_k2, 2, mean)
+      
+      df_i12 <- (df_k1 > 0) & (df_k2 > 0)
+      df_o12 <- (df_k1 > 0) | (df_k2 > 0)
+      
+      #random generation of cluster presence based on Bayesian model
+      if(runif(1) < (sum(df_i12)/sum(df_o12))) {
+        
+        #mean of cluster level
+        dfk12 <- data.frame("i" = as.numeric(df_k2[df_i12]),
+                            "j" = as.numeric(df_k1[df_i12]))
+        glmij <- glm(i~j, data = dfk12, family = inter_model)
+        cl_level <- predict.glm(glmij, newdata = data.frame(j = mean(res_cl$res_scale)), type = "response")
+        
+        #select init
+        sp_cl <- species[cl_new[2] == kmeans]
+        
+        if(length(sp_cl) == 1) {
+          res <- rbind(res, c(sp_cl, cl_level))
+        } else {
+          probs <- apply(df_k, 1, prob_cl, df_k1)
+          probs <- probs / sum(probs)
+          init <- sample(sp_cl, size = 1, prob = probs)
+          df_ki <- df_k[which(init == sp_cl),] %>% as.numeric
+          df_k2i <- data.frame("i" = as.numeric(df_ki),
+                               "j" = as.numeric(df_k2))
+          glmij <- glm(i~j, data = dfk12, family = inter_model)
+          init_level <- predict.glm(glmij, newdata = data.frame(j = mean(res_cl$res_scale)), type = "response")
+        }
+        
+      } else {
+        sp_cl <- species[cl_new[2] == kmeans]
+        init <- NA
+      }
+      
+      cl <- cl_new[2]
+    }
+  }
+  
+  #rescale
+  res$res_scale <- as.numeric(res$res_scale)
+  
+  cat("rescaling...")
+  res$res_scale <- sapply(res$res_scale, res_unscale)
+
+  res <- res[!duplicated(res[,1]),]
+  res$res_scale[res$res_scale < 0] <- 0
+  if(sum(res$res_scale) > 1 ) res$res_scale = res$res_scale / sum (res$res_scale)
+  res$res_scale[res$sp == "Unknown"] <- 1-sum(res$res_scale[res$res_scale != "Unknown"])
+  
+  colnames(res)[2] <- i
+  data_generated <- full_join(data_generated, res, by = "sp")
+}
+
+# Viz results ----
+
+data_generated <- data_generated %>% 
+  column_to_rownames("sp") %>% 
+  mutate_all(as.numeric)
+
+data_generated[data_generated < trsh] <- 0
+
+gg <- data_generated %>% 
+  composition
+
+gsave(gg, "composition_generated")
+
+# PCA
+merged_df <- cbind(res_sp, data_generated)
+PCA <- prcomp(merged_df %>% apply(1, scale))
+
+cols <- c(
+  rep("initial", ncol(res_sp)),
+  rep("generated", ncol(data_generated))
+)
+
+gg <- ggplot(mapping = aes (PCA[["x"]][,1], PCA[["x"]][,2], text = colnames(merged_df))) +
+  geom_point(aes(colour = cols), show.legend = F) +
+  theme_minimal() +
+  xlab(paste0("1 comp, sdev = ", round(PCA[["sdev"]][1], digits = 2))) + 
+  ylab(paste0("2 comp, sdev = ", round(PCA[["sdev"]][2], digits = 2))) +
+  scale_color_viridis_d(direction = -1)
+
+gsave(gg, "generatedPCA")
+
+# New species tSNE
+keep_df <- apply(data_generated, 1, sum)>0
+tSNE2D <- data_generated %>% 
+  subset(apply(., 1, sum)>0) %>% 
+  apply(2, scale) %>% 
+  tsne(k = 2, initial_dims = KM) %>% 
+  data.frame
+
+gg <- ggplot(tSNE2D, text = species[keep_df]) + 
+  geom_point(aes(x=X1, y=X2, color = kmeans[keep_df]), 
+             show.legend = T, alpha = 0.5) +
+  xlab("") + ylab("") +
+  scale_color_continuous("", type = "viridis") +
+  theme_minimal()
+
+gsave(gg, "tSNE_2D_generated")
+
+# Save ----
+cat("Write data...")
+
+write.csv(data_generated, file = paste0(default_path,"/",mesh_id, "_generated.csv"))
+
+cat("All done")
+```
+
+# Benchmarking
+
+## Generate
+
+```{bash}
+path=/mnt/tank/scratch/dsmutin/samovar/test_genomes
+
+mkdir benchmarking/initial
+cd benchmarking/initial
+
+iss_generate () {
+  iss generate \
+    --genomes $1 \
+    --model hiseq \
+    --output ${2}_cont \
+    --n_reads $3
+}
+
+iss_generate_2 () {
+  iss_generate $path/Hsap.fna Hsap.$1 $human_reads
+  iss_generate $path/Ecoli.fna Ecoli.$1 $meta_reads
+  iss_generate $path/Scer.fna Scer.$1 $meta_reads
+  iss_generate $path/Phix.fna Phix.$1 $meta_reads
+}
+
+for ((i=1;i<=25;i++)); do
+  # making network
+  human_reads=$((($RANDOM % 100) * 250))
+  meta_reads=$(((25000 - $human_reads)/3))
+  
+  # generate
+  iss_generate_2 $i
+  
+  # concat
+  cat *${i}*_R1* > ${i}_full_R1.fastq
+  cat *${i}*_R2* > ${i}_full_R2.fastq
+
+  #почистим
+  rm *tmp*
+  rm *_cont_*
+  rm *abundance*
+  rm *vcf
+  
+  echo -e "done " $i "\n"
+done
+```
+
+## annotations
+
+### kraken
+
+```{bash}
+kraken2_samovar () {
+  R1=($(ls -d *R1*))
+  R2=($(ls -d *R2*))
+  #DB=$3
+  DB=/nfs/home/dsmutin/kraken2_bases
+  #DB=/mnt/metagenomics/kraken2/db_standard_03_2023
+  
+  mkdir $1
+  for i in "${!R1[@]}"; do
+    concat=$(echo ${R1[i]} | sed 's/_.*//g')
+    
+    echo -e "\n" $concat "\n"
+
+    ~/kraken2/kraken2 \
+      --use-names \
+      --db $DB  \
+      --threads 250 \
+      --paired $2/${R1[i]} $2/${R2[i]}  \
+      --report $1/$concat.report \
+      --output $1/$concat.out 
+
+  done
+
+}
+
+#kraken2_samovar reports/initial/k2_plus ./ /nfs/home/dsmutin/kraken2_bases
+kraken2_samovar reports/initial/k2 ./
+```
+
+### mp4
+
+```{bash}
+metaphlan_samovar () {
+  R1=($(ls -d [1-9]_*R1*))
+  R2=($(ls -d *R2*))
+  
+  mkdir $1
+  
+  for i in "${!R1[@]}"; do
+    concat=$(echo ${R1[i]} | sed 's/_.*//g')
+    
+    echo -e "\n" $concat "\n"
+
+    metaphlan \
+      --input_type fastq \
+      --nproc 2500 \
+      $2/${R1[i]} \
+      --bowtie2out metagenome.bowtie2.bz2 \
+      -o $1/$concat.out 
+      
+      rm metagenome*
+  done
+}
+
+metaphlan_samovar reports/initial/metaphlan ./
+```
+
+### kaiju
+
+```{bash}
+kaiju_samovar () {
+  DB=/nfs/home/dsmutin/kaiju_refseq
+
+  R1=($(ls -d *R1*))
+  R2=($(ls -d *R2*))
+  
+  mkdir $1
+  
+  for i in "${!R1[@]}"; do
+    concat=$(echo ${R1[i]} | sed 's/_.*//g')
+    
+    echo -e "\n" $concat "\n"
+
+    kaiju \
+      -t $DB/nodes.dmp \
+      -f $DB/kaiju_db_refseq_ref.fmi \
+      -i $2/${R1[i]} \
+      -j $2/${R2[i]} \
+      -z 25000 \
+      -o $1/$concat.raw
+      
+    kaiju-addTaxonNames \
+    -t $DB/nodes.dmp \
+    -n $DB/names.dmp \
+    -i $1/$concat.raw \
+    -o $1/$concat.out
+    
+  done
+}
+
+kaiju_samovar reports/initial/kaiju ./
+```
+
+## read
+
+```{r}
+cname <- function(x) {
+  x %>% 
+    str_remove_all("\\..*") %>% 
+    str_replace_all(".*Phi.*", "Phix") %>% 
+    str_replace_all("Esch.*", "Ecoli") %>% 
+    str_replace_all("Enterobact.*", "Ecoli") %>% 
+    str_replace_all("Homo.*", "Hsap") %>% 
+    str_replace_all("Sach.*", "Scer") %>% 
+    str_replace_all(".*uncl.*", "unclassified") %>% 
+    str_replace_all("root.*", "root") %>% 
+    str_replace_all("other.*", "other")
+}
+
+# K2 ----
+read_k2 <- function(path, sep = "\t") {
+  
+  res <- tibble()
+  for (i in dir(path, pattern = "out", full.names = T)) {
+    
+    cat(basename(i),"\t")
+    
+    if (file.size(i) > 0) {
+      tmp <- read.table(i, sep = sep, fill = T, header = F) %>% 
+                   mutate(sample = i %>%
+                            str_remove_all(".*\\/"))
+      res <- rbind(res, tmp)
+    }
+  }
+  return(res)
+}
+
+# K2 to abund
+
+read_kraken <- function(path) {
+  res <- read_k2(path) %>% 
+    mutate(V3 = cname(V3)) %>%  
+    count(V3, sample) %>% 
+    pivot_wider(names_from = V3, id_cols = sample, values_from = n) %>% 
+    sapply(function(x) {
+      x[is.na(x)] = 0 
+      return(x)} ) %>% 
+    as.data.frame() %>% 
+    column_to_rownames("sample") %>% t %>%  
+    apply(c(1,2), as.numeric)
+}
+
+read_true <- function(path) {
+  res <- read_k2(path) %>% 
+    mutate(V2 = cname(V2)) %>%  
+    count(V2, sample) %>% 
+  pivot_wider(names_from = V2, id_cols = sample, values_from = n) %>% 
+  sapply(function(x) {
+    x[is.na(x)] = 0 
+    return(x)} ) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("sample") %>% t %>% 
+  apply(c(1,2), as.numeric)
+}
+
+# kaiju ----
+
+read_kaiju <- function(path) {
+  res <- read_k2(path) %>% 
+    mutate(V4 = ifelse(V4 == "", "unclassified", cname(V4))) %>%
+    count(V4, sample) %>% 
+    pivot_wider(names_from = V4, id_cols = sample, values_from = n) %>% 
+    sapply(function(x) {
+      x[is.na(x)] = 0 
+      return(x)} ) %>% 
+    as.data.frame() %>%
+    column_to_rownames("sample") %>% t %>% 
+    apply(c(1,2), as.numeric)
+}
+
+# mp4
+
+read_metaphlan <- function (path) {
+  
+}
+
+samovar2iss <- function (path, 
+                         type, res_true = F, 
+                         default_path = "benchmarking") {
+  
+  mesh_id <- type
+  
+
+  if(type == "k2") res <- read_kraken(path)
+  if(type == "kaiju") res<- read_kaiju(path)
+  if(type == "mp4") res <- read_metaphlan(path)
+  
+  if (type == "true") {
+    res <- read_true(path) 
+    return(res) }
+  
+  # viz ----
+  ch <- c("Ecoli", "Scer", "Phix", "Hsap", "other", "unclassified", "root")
+
+  # network
+  res_count <- res %>%
+    apply(1, mean) %>% 
+    as.data.frame() %>% 
+    rownames_to_column("sp") %>% 
+    mutate("sp_show" = ifelse(sp %in% ch, sp, NA))
+  
+  #UMAP
+  gg <- umap::umap(res)
+  
+  gg2 <- gg$layout %>% 
+    as.data.frame() %>%
+    cbind(res_count) %>% 
+    ggplot() +
+    geom_point(aes(V1, V2, size = ., color = .)) +
+    ggrepel::geom_text_repel(aes(V1, V2, label = sp_show)) +
+    scale_size_continuous(guide = NULL) +
+    theme_minimal() +
+    scale_color_gradient(low = "lightblue", high = "darkblue")
+  
+  gsave(gg2, "umap")
+  
+  #stats
+  
+  if (!isFALSE(res_true)) {
+    
+    #find most related groups
+    res_true <- res_true[,colnames(res)]
+    
+    # DISTANCES_INIT
+    distmat <- tibble()
+    cormat <- tibble()
+    for (sp in unique(rownames(res_true)) ) {
+      distances <- res %>% 
+        apply(1, function(x) dist(rbind(x, res_true[sp,]))) %>% 
+        as.data.frame() %>% 
+        rownames_to_column("classified") %>% 
+        mutate("true" = sp)
+      distmat <- rbind(distmat, distances)
+      
+      
+      distances <- res %>% 
+        apply(1, function(x) cor(x, res_true[sp,])) %>% 
+        as.data.frame() %>% 
+        rownames_to_column("classified") %>% 
+        mutate("true" = sp)
+      cormat <- rbind(cormat, distances)
+    }
+    
+    gg <- htmp(distmat, 1,3,2, scale = minmaxscale) +
+      ggtitle("before correction") +
+    scale_color_gradient(name = "dist", low = "lightblue", high = "darkblue")
+  gsave(gg, "dist_before")
+  
+    gg <- htmp(cormat, 1,3,2, scale = F) +
+      ggtitle("before correction") +
+      scale_fill_gradient2(name = "cor")
+    gsave(gg, "cor_before")
+    
+     #calculate F1
+    f1_init <- f1_score(res, res_true)
+    
+    cat("\nF1-score initial:", f1_init)
+   
+    
+    # calculate R2 ----
+  stat_table <- tibble(stat = "f1-score", type = "before", val = f1_init) 
+  
+  for (sp in rownames(res_true)) {
+    if(sp %in% rownames(res)) {
+      sp1 <- res_true[sp,]
+      sp2 <- res[sp,]
+      
+      reg <- glm(sp1~sp2) 
+      R2 <-  with(summary(reg), 1 - deviance/null.deviance)
+      stat_table <- rbind(stat_table,
+                          data.frame(stat = paste0(sp, " R^2"),type= "before", val =  R2))
+    } else {
+      stat_table <- rbind(stat_table,
+                          data.frame(stat = paste0(sp, " R^2"),type= "before", val =  0))
+    }
+  }
+  
+    
+    #re-assign taxa
+    newres <- res
+    
+    for (sp in rownames(newres)) {
+      if (!(sp %in% rownames(res_true))) {
+        tmp_res <- newres
+        
+        tmp_cormat <- cormat[cormat$classified == sp,]
+        new_sp <- tmp_cormat$true[which.max(tmp_cormat$.)[1]]
+        
+        if (!(new_sp %in% rownames(tmp_res))) {
+          tmp_res <- rbind(tmp_res, 0)
+          rownames(tmp_res)[nrow(tmp_res)] <- new_sp
+          }
+          
+          
+        tmp_res[new_sp,] <- tmp_res[sp,]
+        tmp_res <- tmp_res[-which(rownames(tmp_res) == sp),]
+        
+        if(f1_score(tmp_res, res_true) > f1_init) newres <- tmp_res
+      }
+    }
+    
+    res <- newres
+    # DISTANCES_AFTER
+    distmat <- tibble()
+    cormat <- tibble()
+    for (sp in unique(rownames(res_true)) ) {
+      distances <- res %>% 
+        apply(1, function(x) dist(rbind(x, res_true[sp,]))) %>% 
+        as.data.frame() %>% 
+        rownames_to_column("classified") %>% 
+        mutate("true" = sp)
+      distmat <- rbind(distmat, distances)
+      
+      
+      distances <- res %>% 
+        apply(1, function(x) cor(x, res_true[sp,])) %>% 
+        as.data.frame() %>% 
+        rownames_to_column("classified") %>% 
+        mutate("true" = sp)
+      cormat <- rbind(cormat, distances)
+    }
+    
+    gg <- htmp(distmat, 1,3,2, scale = minmaxscale) +
+    scale_color_gradient(name = "dist", low = "lightblue", high = "darkblue") +
+      ggtitle("after correction")
+  gsave(gg, "dist_after")
+  
+    gg <- htmp(cormat, 1,3,2, scale = F) +
+      ggtitle("after correction") +
+      scale_fill_gradient2(name = "cor")
+    gsave(gg, "cor_after")
+    
+    # f1 score after
+    
+  f1_after <- f1_score(newres, res_true)
+    
+  cat("\nF1-score after taxa correction:", f1_after)
+  
+  # calculate R2 ----
+  stat_table <- rbind(stat_table, 
+                      tibble(stat = "f1-score", type = "after", val = f1_after))
+  
+  for (sp in rownames(res_true)) {
+    if(sp %in% rownames(res)) {
+      sp1 <- res_true[sp,]
+      sp2 <- res[sp,]
+      
+      reg <- glm(sp1~sp2) 
+      R2 <-  with(summary(reg), 1 - deviance/null.deviance)
+      stat_table <- rbind(stat_table,
+                          data.frame(stat = paste0(sp, " R^2"),type= "after", val =  R2))
+    } else {
+      stat_table <- rbind(stat_table,
+                          data.frame(stat = paste0(sp, " R^2"),type= "after", val =  0))
+    }
+  }
+  
+  #viz stats
+  gg <- stat_table %>% 
+    mutate(stat = fct_inorder(stat)) %>%
+    ggplot(aes(x = type)) +
+    geom_col(aes(y = val, fill = val)) + 
+    geom_text(aes(y = val+0.2, label = round(val, 2))) +     
+    facet_wrap(~stat) +
+    theme_minimal() +
+    scale_fill_gradient("", low = "lightblue", high = "darkblue") +
+    theme(strip.text.x.top = ggtext::element_markdown()) +
+    xlab("") + ylab("")
+  
+  gsave(gg, "stat")
+  }
+    
+  # generate ----
+  
+  res %>% 
+    apply(2, function(x) x / sum(x)) %>% 
+    table2iss(mesh_id = mesh_id, 
+              output = mesh_id,
+              default_path = default_path,
+            number_of_clusters = 1
+          #normalization_function = function(x) log10(x+1)
+          )
+  
+  return(res)
+}
+```
+
+```{r}
+res_k2 <- samovar2iss("benchmarking/reports/initial/k2", type = "k2")
+
+res_true <- read_true("benchmarking/reports/initial/k2")
+
+res_kaiju <- read_kaiju("benchmarking/reports/initial/kaiju/")
+```
+
+```{r}
+ch <- c("Ecoli", "Scer", "Phix", "Hsap", "other", "unclassified", "root")
+
+# network
+res_count <- res_k2%>%
+  apply(2, mean) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sp") %>% 
+  mutate("sp_show" = ifelse(sp %in% ch, sp, NA))
+
+#UMAP
+gg <- umap::umap(res_network %>% t)
+
+gg2 <- gg$layout %>% 
+  as.data.frame() %>%
+  cbind(res_count) %>% 
+  ggplot() +
+  geom_point(aes(V1, V2, size = ., color = .)) +
+  geom_text(aes(V1, V2, label = sp_show)) +
+  theme_minimal()
+ggsave("t1.png", gg2)
+
+#stats
+tmp <- res %>%
+  mutate(newal = ifelse(V3 %in% ch, V3, "other"))
+
+gg3 <- table(tmp$V2, tmp$newal) %>% 
+  as.data.frame() %>% 
+  ggplot(aes(Var1, x = Var2)) +
+  ylab("initial") + xlab("classified") +
+  geom_tile(aes(fill = log10(Freq+1))) +
+  theme_minimal() +
+  scale_fill_gradient2(low = "white", mid = "lightblue", high = "darkblue", midpoint = 3) +
+  theme(legend.position = "bottom")
+
+ggsave("h1.png", gg3)
+```
+
+#remember to deal smth with unclassified and add them to benchmarking!!!
+
+## parse to samovar
+
+```{r}
+res_k2 <- t(res_network) %>% 
+  apply(2, function(x) x / sum(x))
+samovar_k2 <- samovar(samovar_table = res_k2, mesh_id = "init_k2", number_of_clusters = 2)
+
+table2iss(samovar_table = res_k2, 
+          mesh_id = "init_k2",
+          number_of_clusters = 2,
+          normalization_function = function(x) log10(x+1))
+```
+
+# -
+
+# Clear!
+
+## generate
+
+```{bash}
+path=/mnt/tank/scratch/dsmutin/samovar/test_genomes
+
+mkdir benchmarking/initial
+cd benchmarking/initial
+
+iss_generate () {
+  iss generate \
+    --genomes $1 \
+    --model hiseq \
+    --output ${2}_cont \
+    --n_reads $3
+}
+
+iss_generate_2 () {
+  iss_generate $path/Hsap.fna Hsap.$1 $human_reads
+  iss_generate $path/Ecoli.fna Ecoli.$1 $meta_reads
+  iss_generate $path/Scer.fna Scer.$1 $meta_reads
+  iss_generate $path/Phix.fna Phix.$1 $meta_reads
+}
+
+for ((i=1;i<=50;i++)); do
+  # making network
+  human_reads=$((($RANDOM % 100) * 1000))
+  meta_reads=$(((100000 - $human_reads)/3))
+  
+  # generate
+  iss_generate_2 $i
+  
+  # concat
+  cat *${i}*_R1* > ${i}_full_R1.fq
+  cat *${i}*_R2* > ${i}_full_R2.fq
+
+  #почистим
+  rm *.fastq
+  rm *abundance*
+  rm *vcf
+  
+  echo -e "done " $i "\n"
+done
+```
+
+## annotate them all
+
+```{bash}
+
+kraken2_samovar () {
+  R1=($(ls -d *R1*))
+  R2=($(ls -d *R2*))
+  #DB=$3
+  DB=/nfs/home/dsmutin/kraken2_bases
+  #DB=/mnt/metagenomics/kraken2/db_standard_03_2023
+  
+  mkdir $1
+  for i in "${!R1[@]}"; do
+    concat=$(echo ${R1[i]} | sed 's/_.*//g')
+    
+    echo -e "\n" $concat "\n"
+
+    ~/kraken2/kraken2 \
+      --use-names \
+      --db $DB  \
+      --threads 2500 \
+      --paired $2/${R1[i]} $2/${R2[i]}  \
+      --report $1/$concat.report \
+      --output $1/$concat.out 
+
+  done
+
+}
+
+
+kaiju_samovar () {
+  DB=/nfs/home/dsmutin/kaiju_refseq
+
+  R1=($(ls -d *R1*))
+  R2=($(ls -d *R2*))
+  
+  mkdir $1
+  
+  for i in "${!R1[@]}"; do
+    concat=$(echo ${R1[i]} | sed 's/_.*//g')
+    
+    echo -e "\n" $concat "\n"
+
+    kaiju \
+      -t $DB/nodes.dmp \
+      -f $DB/kaiju_db_refseq_ref.fmi \
+      -i $2/${R1[i]} -z 25000 \
+      -o $1/$concat.raw
+      
+    kaiju-addTaxonNames \
+    -t $DB/nodes.dmp \
+    -n $DB/names.dmp \
+    -i $1/$concat.raw \
+    -o $1/$concat.out
+    
+  done
+}
+
+
+
+annot_samovar() {
+  papka=$1
+    
+  cd /mnt/tank/scratch/dsmutin/samovar/benchmarking/$papka
+  annot=../reports/$papka
+  mkdir $annot
+  #kraken2_samovar $annot/k2 ./
+  #metaphlan_samovar $annot/mp4 ./
+  kaiju_samovar $annot/kaiju ./
+}
+
+mkdir ../reports
+annot_samovar initial
+```
+
+## read them all
+
+```{r}
+init_true <- samovar2iss("benchmarking/reports/initial/k2", type = "true")
+
+init_k2 <- samovar2iss("benchmarking/reports/initial/k2", type = "k2", init_true)
+
+init_kaiju <- samovar2iss("benchmarking/reports/initial/kaiju/", type = "kaiju", init_true)
+```
+
+## regenerate
+
+```{bash}
+bash iss_list.bash
+```
+
+## reannotate
+
+```{bash}
+annot_samovar k2
+annot_samovar kaiju
+```
+
+## read them all
+
+```{r}
+k2_true <- samovar2iss("benchmarking/reports/k2/k2", type = "true")
+
+k2_k2 <- samovar2iss("benchmarking/reports/k2/k2", type = "k2", k2_true)
+
+k2_kaiju <- samovar2iss("benchmarking/reports/k2/kaiju/", type = "kaiju", init_true)
+
+
+kaiju_true <- samovar2iss("benchmarking/reports/k2/k2", type = "true")
+
+kaiju_k2 <- samovar2iss("benchmarking/reports/k2/k2", type = "k2", k2_true)
+
+kaiju_kaiju <- samovar2iss("benchmarking/reports/k2/kaiju/", type = "kaiju", init_true)
+```
+
+## viz and calc
+
+```{r}
+
+```
