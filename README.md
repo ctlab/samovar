@@ -16,7 +16,7 @@ devtools::install_github("https://github.com/dsmutin/samovar/tree/beta")
 
 ## Usage
 
-See <a href="samovar.html"> or source <a href="vignettes/samovar-basic.Rmd">
+<a "See" href="samovar.html"> or <a "source" href="vignettes/samovar-basic.Rmd">
 
 ``` r
 library(samovaR)
