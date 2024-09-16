@@ -1,4 +1,4 @@
-# samova.R <a href=""><img src="https://github.com/dsmutin/samovar/tree/main/additional/samovar_new_logo.png" align="right" width="150" ></a> 
+# samova.R <a href=""><img src="https://github.com/dsmutin/samovar/blob/main/additional/samovar_new_logo.png" align="right" width="150" ></a> 
 ### R package for generating model metagenomes with specified properties
 
 *Metagenomics* serves as a fundamental approach in the analysis of biological communities. 
