@@ -48,6 +48,10 @@ new_data <- samovar %>%
   samovar_boil(n = 100)
 ```
 
+## Documentation
+This package can generate new abundance tables based on known abundance tables. It can be done in a few steps: download or import, filtration, normalization, clusterization, generating prediction graphs and generation itself.
+
+Full documentation and tests are avialable in R functions help or in manual and vignettes folder.
 
 ## References
 - Vaulin N., Chechenina A., Ivanov. A, Ulyantsev V. SAMOVAR: a pipeline for in silico generation of metagenomic communities with given properties. Природа, 2023, 443, 27–28
