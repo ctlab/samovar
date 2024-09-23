@@ -21,6 +21,17 @@ source(PATH/TO/SAMOVAR/scripts/source.R)
 
 ## Usage
 
-Source R script R_samova.R. To specify properties, change inputs in header
+Source R script R_samova.R. To specify properties, change inputs in setup
 
 Avialable options:
+`default_path` path to save all output plots and files
+sample_amount number of samples
+minimal_abundance minimal abundance per species to determine as not the noise
+mesh_id GMrepo meshID
+number_of_clusters number of clusters to split the data
+inner_model model of glm connections within clusters
+inter_model model of glm connections between clusters
+
+initial initialized sp
+initial_level initialized level
+generated_amount number of generated samples
