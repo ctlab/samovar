@@ -245,7 +245,7 @@ plot_corr(data, new_reads)
 ```
 
 ### References
-- Vaulin N., Chechenina A., Ivanov. A, Ulyantsev V. SAMOVAR: a pipeline for in silico generation of metagenomic communities with given properties. Природа, 2023, 443, 27–28
+- Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
 - Dai, D. et al. "GMrepo v2: a curated human gut microbiome database with special focus on disease markers and cross-dataset comparison". Nucleic Acids Res (2022). Volume 50, Issue D1, Pages D777–D784.
 
 
