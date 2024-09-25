@@ -1,4 +1,4 @@
-# samovaR <a href=""><img src="additional/Logo_SAMOVAR_pprpl.png" align="right" width="150" ></a> 
+# samovaR: raw script <a href=""><img src="additional/Logo_SAMOVAR_pprpl.png" align="right" width="150" ></a> 
 ### R vignette for generating model metagenomes with specified properties
 
 *Metagenomics* serves as a fundamental approach in the analysis of biological communities. 
@@ -14,6 +14,7 @@ git clone https://github.com/dsmutin/samovar.git
 ```
 
 In your R session, source all functions:
+
 ```R
 source(PATH/TO/SAMOVAR/scripts/source.R)
 ```
@@ -21,17 +22,16 @@ source(PATH/TO/SAMOVAR/scripts/source.R)
 
 ## Usage
 
-Source R script R_samova.R. To specify properties, change inputs in setup
+Run <a href ="raw_generation_script.R">raw_generation_script.R</a>. 
 
-Avialable options:
-`default_path` path to save all output plots and files
-sample_amount number of samples
-minimal_abundance minimal abundance per species to determine as not the noise
-mesh_id GMrepo meshID
-number_of_clusters number of clusters to split the data
-inner_model model of glm connections within clusters
-inter_model model of glm connections between clusters
-
-initial initialized sp
-initial_level initialized level
-generated_amount number of generated samples
+To specify properties, **change inputs** in setup:
+- `default_path` path to save all output plots and files
+- `sample_amount` number of samples
+- `minimal_abundance` minimal abundance per species to determine as not the noise
+- `mesh_id` GMrepo meshID
+- `number_of_clusters` number of clusters to split the data
+- `inner_model` model of glm connections within clusters
+- `inter_model` model of glm connections between clusters
+- `initial` initialized sp
+- `initial_level` initialized level
+- `generated_amount` number of generated samples
