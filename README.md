@@ -1,10 +1,16 @@
-# samova.R <a href=""><img src="additional/Logo_SAMOVAR_pprpl.png" align="right" width="150" ></a> 
+# samova.R <a href=""><img src="additional/logos/logo_stable.png" align="right" width="150" ></a> 
 ### R package for generating model metagenomes with specified properties
 
 *Metagenomics* serves as a fundamental approach in the analysis of biological communities. 
 
 The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `SAMOVAR`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This addon implement creation of abundance files 
 
+## Branch navigation
+
+- [RID](https://github.com/ctlab/samovar/tree/RID) contains 0.1 version - vignette in one script
+- [main](https://github.com/ctlab/samovar/tree/main) is a **stable** 0.2 version (*source R package*) with command line and app demo support
+- [beta](https://github.com/ctlab/samovar/tree/beta) is an **unstable** 0.3 version (*R package*) with extended algorythms properties, parameters and much accelerated
+- [benchmarking](https://github.com/ctlab/samovar/tree/benchmarking) is a vignette used 0.1 version for metagenomic annotators cross-validation and benchmarking
 
 ## Installation
 
@@ -18,13 +24,13 @@ In your R session, source all functions:
 source(PATH/TO/SAMOVAR/scripts/source.R)
 ```
 
+<br>
 
-## Usage
 
+# Stable version usage <a href=""><img src="additional/logos/logo_02.png" align="right" width="150" ></a> 
 
 ### Demo version
 Demo is now avialable at /demo repository. To run it, install it and run demo.R
-
 
 ### R interface
 To use samovaR in R environment, use R_samova.R
@@ -37,9 +43,7 @@ tea <- GMrepo_type2data(test = T)[[1]] %>% res_normalize %>% build_samovar %>% b
 ### Command line interface
 Now samovar could be used from command line. 
 To run and build samovar, use SH_samova.R:
-```
----  BASH interface of samova.R  ---
-
+```bash
 Usage example:
 Rscript samova.R --test --drop_unclassified > samovar.log
 
@@ -74,9 +78,7 @@ To be implemented:
 
 
 To run test build, use SHamova.R:
-```
----  BASH interface of samova.R  ---
-
+```bash
 Usage example:
 Rscript SHamova.R --test -a new_ -n 100 -is Bifidobacterium_asteroides -il 0.002 -o generated.csv
 
