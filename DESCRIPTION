@@ -4,7 +4,8 @@ Title: R package for generating model metagenomes with specified properties
 Version: 0.1.2
 Author@R: c(person("Smutin", "Daniil", email = "dvsmutin@gmail.com", role = c("aut", "cre"),
            comment = c(ORCID = "0009-0009-1460-4108")),
-           person("Ivanov", "Artem", role = c("aut")))
+           person("Ivanov", "Artem", role = c("aut")),
+           person("ctlab", role = c("fnd")))
 Description: Metagenomics serves as a fundamental approach in the analysis of biological communities.
     The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `samovaR`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This addon implement creation of abundance files
 URL: https://github.com/dsmutin/samovar/tree/beta
@@ -26,6 +27,7 @@ Imports:
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Suggests: 
+    ggnewscale,
     knitr,
     rmarkdown
 VignetteBuilder: knitr

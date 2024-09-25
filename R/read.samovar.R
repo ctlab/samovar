@@ -6,7 +6,7 @@
 #' @export
 # Need tests!
 
-read.abundance <- function(data, metadata) {
+read.abundance <- function(data, metadata, ...) {
   if (is.character(data)) data <- read.table(data, header = T, row.names = 1, ...)
   if (is.character(metadata)) metadata <- read.table(metadata, header = T, row.names = 1, ...)
   data[is.na(data)] <- 0

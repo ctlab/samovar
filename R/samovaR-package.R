@@ -3,6 +3,7 @@
 
 ## usethis namespace: start
 #' @import tidyverse
+#' @importFrom Matrix forceSymmetric
 ## usethis namespace: end
 
 library(tidyverse)

@@ -8,11 +8,15 @@ The field continuously witnesses the emergence of numerous novel tools, which in
 
 ## Installation
 
-To get the tool clone the git repository:
+To get, run in R:
 
 ``` r
 devtools::install_github("https://github.com/dsmutin/samovar/tree/beta")
 ```
+
+## Algorithm summary
+<img src="img/additional/algo.png">
+
 
 ## Usage
 
@@ -52,6 +56,9 @@ new_data <- samovar %>%
 This package can generate new abundance tables based on known abundance tables. It can be done in a few steps: download or import, filtration, normalization, clusterization, generating prediction graphs and generation itself.
 
 Full documentation and tests are avialable in R functions help or in manual and vignettes folder.
+
+## Algorithm details
+<img src="img/additional/details.png">
 
 ## References
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330

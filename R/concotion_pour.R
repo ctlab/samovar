@@ -7,8 +7,8 @@
 #' @param network FALSE or graph that can be used for generation. To be implemented
 #' @param inner_method Character, glm, other to be implemented (bootstrap, bsPCA)
 #' @param inter_method Character, glm, other to be implemented (bootstrap, bsPCA)
-#' @param inner_model Character, model processed by glm(). For glm mode only
-#' @param inter_model Character, model processed by glm(). For glm mode only
+#' @param inner_model Character, model processed by glm(). For glm mode only. quasipoisson by default
+#' @param inter_model Character, model processed by glm(). For glm mode only. quasipoisson by default
 #' @param cooccurrence Character, co-occurrence calculation.
 #' <br>
 #' <br>If "simple", calculated as:
@@ -16,6 +16,9 @@
 #' <br>
 #' <br>If "oriented", calculated as
 #' <br>P(A|B) = P(A&B|B)
+#' <br>
+#' <br>If "compositional", calculated as
+#' <br>P(A|B) = P(A&B|B), and than sampled one of represented conditions of occurence
 #' @param cluster_connection Character (mean, median), or function. The way of cluster connection. If function, way of summarize all samples of species cluster
 #' @example R/examples/preprocessing.R
 #' @export
@@ -29,94 +32,14 @@ concotion_pour <- function(
     minimal_cluster = 2,
     probability_calculation = "oriented", # oriented or simple
     cluster_connection = "mean" # mean_oriented, mean, simple or PCA
-    ) {
-  #__ ----
-  # Additional functions ----
+) {
+  # Additional functions re-import
+  prob_calc <- function(...) prob_calc_general(..., probability_calculation = probability_calculation)
+  summarise_cluster <- function(...) summarise_cluster_general(..., cluster_connection = cluster_connection)
+  glm_calc <- function(...) glm_calc_general(..., summarise_cluster = summarise_cluster)
+  rsq_calc <- function(...) rsq_calc_general(..., glm_calc = glm_calc)
+  symmetric <- function(df) df %>% t %>% Matrix::forceSymmetric() %>% as.matrix
 
-  ## misc ----
-  prep_matrix = function(cl) {
-    cl <- as.numeric(cl)
-    matrix(nrow = cl, ncol = cl, data = 0)
-  }
-
-  ## Prob ----
-  # calculate probabilities
-  occurrence <- function(X, min_value = 0){
-
-    #deal with matrix
-    matrix_to_prob <- function(x){
-      if(is.data.frame(x)) {
-        x <- apply(x, 2, sum)
-      }
-      x %>% as.numeric()
-    }
-
-    X <- matrix_to_prob(X) > min_value
-
-    return(X)
-  }
-
-  prob_calc <- function(X, Y, min_value = 0) {
-    X <- occurrence(X)
-    Y <- occurrence(Y)
-
-    #calculate probs
-    if (probability_calculation == "simple") {
-      # PR(Y|X) = PR(Y)[PR(X)]
-      Y1 <- Y[X] > min_value
-      return(sum(Y1) / sum(X))
-    } else if (probability_calculation == "oriented") {
-      # get the prob = W(a&b)/W(a|b)
-      return(sum(X & Y) / sum(X | Y))
-    } else {
-      warning("Not implemented")
-      #break
-    }
-  }
-
-  ## Cluster connection
-  summarise_cluster <- function(x) {
-    if (is.numeric(x)){
-      return(x)
-    } else if (nrow(x) == 1) {
-      return(x %>% as.numeric)
-    } else if (cluster_connection == "mean"){
-      return(x %>% apply(2, mean))
-    } else if (is.function(cluster_connection)) {
-      return(x %>% apply(2, cluster_connection))
-    } else {
-      warning("Not implemented yet")
-    }
-  }
-
-  ## GLM ----
-  glm_calc <- function(X, Y, model) {
-    prob = occurrence(X) & occurrence(Y)
-
-    #deal with df
-    X <- X %>% summarise_cluster()
-    Y <- Y %>% summarise_cluster()
-
-    # correct Rsq to number of cases
-    if (sum(prob) == 0) {
-      return(0)
-    } else if (sum(prob) == 1) {
-      return(1) # correct in future!!!!!!
-    } else {
-      return(glm(Y[prob] ~ X[prob], family = model))
-    }
-  }
-
-  rsq_calc <- function(X, Y, model) {
-    glmxy <- glm_calc(X, Y, model)
-    if(is.numeric((glmxy))) return(glmxy)
-
-    Rsq <- with(summary(glmxy), 1 - deviance / null.deviance)
-    return(Rsq)
-  }
-
-
-  #__ ----
   # Parse data ----
 
   #df <- samovar_data$data
@@ -153,12 +76,12 @@ concotion_pour <- function(
           Y <- df_cluster[j, ]
           df_pr[j, i] <- prob_calc(X, Y, min_value)
           df_r2[j, i] <- rsq_calc(X, Y, inner_model)
-          }
+        }
       }
       if(sum(df_pr) == 0) warning(paste0("May be problems with some species in cluster ", cl,"\nIt is better to re-filter or increase min_size of cluster"))
 
-      Rs_cl[[cl]] <- df_r2
-      Pr_cl[[cl]] <- df_pr
+      Rs_cl[[cl]] <- df_r2 %>% symmetric
+      Pr_cl[[cl]] <- df_pr %>% symmetric
     }
   } else {
     warning("Not implemented yet")
@@ -170,30 +93,36 @@ concotion_pour <- function(
   #progress bar for connection between clusters calculation
   pb <- progress_function(length(clust_list)-1)
 
-  if(inter_method == "glm") {
-    cl_len <- length(clust_list)
-    Rs_il <- prep_matrix(cl_len)
-    Pr_il <- prep_matrix(cl_len)
+  if(samovar_data$cluster_n() > 1) {
+    if(inter_method == "glm") {
+      cl_len <- length(clust_list)
+      Rs_il <- prep_matrix(cl_len)
+      Pr_il <- prep_matrix(cl_len)
 
-    for (i in 1:(cl_len-1)) {
-      X <- samovar_data$get(clust_list[i])
-      for (j in (i:cl_len)) {
-        Y <- samovar_data$get(clust_list[j])
-        Pr_il[j,i] <- prob_calc(X, Y, min_value)
-        Rs_il[j,i] <- rsq_calc(X, Y, inter_model)
+      for (i in 1:(cl_len-1)) {
+        X <- samovar_data$get(clust_list[i])
+        for (j in (i+1):cl_len) {
+          Y <- samovar_data$get(clust_list[j])
+          Pr_il[j,i] <- prob_calc(X, Y, min_value)
+          Rs_il[j,i] <- rsq_calc(X, Y, inter_model)
+        }
+        pb$tick()
       }
-      pb$tick()
     }
+  } else {
+    Rs_il <- matrix(1)
+    Pr_il <- matrix(1)
   }
+
 
   # Return ----
   samovar_base_new <- new(
     "samovar_base",
     samovar_data = samovar_data,
     inner_cluster_graph_method = Rs_cl,
-    inter_cluster_graph_method = Rs_il,
+    inter_cluster_graph_method = Rs_il %>% symmetric,
     inner_cluster_graph_prob = Pr_cl,
-    inter_cluster_graph_prob = Pr_il,
+    inter_cluster_graph_prob = Pr_il %>% symmetric,
     preferences = list(
       inner_method = inner_method,
       inter_method = inter_method,

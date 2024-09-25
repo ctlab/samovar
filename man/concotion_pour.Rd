@@ -22,9 +22,9 @@ concotion_pour(
 
 \item{inter_method}{Character, glm, other to be implemented (bootstrap, bsPCA)}
 
-\item{inner_model}{Character, model processed by glm(). For glm mode only}
+\item{inner_model}{Character, model processed by glm(). For glm mode only. quasipoisson by default}
 
-\item{inter_model}{Character, model processed by glm(). For glm mode only}
+\item{inter_model}{Character, model processed by glm(). For glm mode only. quasipoisson by default}
 
 \item{cluster_connection}{Character (mean, median), or function. The way of cluster connection. If function, way of summarize all samples of species cluster}
 
@@ -36,7 +36,10 @@ concotion_pour(
 \if{html}{\out{<br>}}P(A|B) = sum(A&B)/sum(A|B).
 \if{html}{\out{<br>}}
 \if{html}{\out{<br>}}If "oriented", calculated as
-\if{html}{\out{<br>}}P(A|B) = P(A&B|B)}
+\if{html}{\out{<br>}}P(A|B) = P(A&B|B)
+\if{html}{\out{<br>}}
+\if{html}{\out{<br>}}If "compositional", calculated as
+\if{html}{\out{<br>}}P(A|B) = P(A&B|B), and than sampled one of represented conditions of occurence}
 }
 \description{
 Samovar network is a 2D-oriented graph with metadata and abundances of species per sample. Oriented graph could be used for network prediction, or for better generation some network could be used as initial (to be implemented)

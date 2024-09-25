@@ -1,5 +1,5 @@
 ---
-title: "samovar-basic"
+title: "Basic samovar usage"
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{samovar-basic}
@@ -14,15 +14,17 @@ knitr::opts_chunk$set(
 )
 ```
 
-```{r setup}
-library(samovaR)
+```{r setup, include = FALSE}
+#library(samovaR)
 library(tidyverse)
 ```
 
 # Download data
 
+Download and vizualize data from GMrepo
 ```{r}
-teatree <- GMrepo_type2data(number_to_process = 2000)
+teatree <- GMrepo_type2data(number_to_process = 1500)
+viz_composition(teatree, type = "tile", interactive = T, top = 10)
 ```
 
 # Preprocessing
@@ -45,7 +47,8 @@ Good approximation to normal distribution is required for `glm` generating metho
 
 ```{r}
 teabag <- tealeaves %>%
-  tealeaves_pack(normalization_function = function(x) log10(x+1))
+  tealeaves_pack(normalization_function = 
+                   function(x) log10(1/(1-log10(x+1)))*(1-2*log10(x+1) + 1) )
 ```
 
 ## Clustering
@@ -56,20 +59,25 @@ Remember: if you want to re-filter, it is better to re-do welding stage to avoid
 
 ```{r}
 concotion <- teabag %>%
-  teabag_brew(min_cluster_size = 4, max_cluster_size = 6)
+  teabag_brew(min_cluster_size = 40, max_cluster_size = 150)
 ```
 
 ## Build samovar
 
 ```{r}
 samovar <- concotion %>%
-  concotion_pour()
+  concotion_pour(probability_calculation = "simple")
 ```
 
 ## Generate data
 
 ```{r}
 new_data <- samovar %>%
-  samovar_boil(n = 100)
+  samovar_boil(N = 10, avoid_zero_generations = F)
+```
+
+
+```{r}
+viz_composition(new_data, type = "tile", interactive = T, top = 100)
 ```
 

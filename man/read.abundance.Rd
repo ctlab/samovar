@@ -4,7 +4,7 @@
 \alias{read.abundance}
 \title{Build samovar data object from file or environment}
 \usage{
-read.abundance(data, metadata)
+read.abundance(data, metadata, ...)
 }
 \arguments{
 \item{data}{Data.frame or path to abundance file. Row names is using as species list, column names as sample list. Unique names required}
