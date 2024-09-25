@@ -1,9 +1,9 @@
-# samova.R <a href=""><img src="https://github.com/dsmutin/samovar/blob/main/additional/samovar_new_logo.png" align="right" width="150" ></a> 
+# samova.R <a href=""><img src ="img/logos/logo_03.png" align="right" width="150" ></a> 
 ### R package for generating model metagenomes with specified properties
 
 *Metagenomics* serves as a fundamental approach in the analysis of biological communities. 
 
-The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `SAMOVAR`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This addon implement creation of abundance files 
+The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `samova.R`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This package implement creation of abundance files 
 
 
 ## Installation
