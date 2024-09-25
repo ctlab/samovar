@@ -1,4 +1,4 @@
-# samova.R: benchmarking <a href=""><img src="additional/Logo_SAMOVAR_pprpl.png" align="right" width="150" ></a> 
+# samova.R: benchmarking <a href=""><img src="additional/logo_benchmarking.png" align="right" width="150" ></a> 
 ### Vignette for automatic benchmarking of taxonomy annotation tools
 
 Diffrent metagenomics tools produce different results. If most of them can produce some metrics for evaluation of their results, different WGS annotators can not. Most evaluations are based on indirected metrics: unclassified an "noizy" taxa abundance, while overall classification quality should be based on accuracy of taxa assignment. 
@@ -10,7 +10,7 @@ Follow general steps or see vignette from example
 For the benchmarking, you need to install: samovaR for artificial abundance tables generation, InSilicoSeq to generate raw .fastq metagenomics data based on fasterq-dump obtained genomes:
 
 ```bash
-git clone https://github.com/dsmutin/samovar.git
+wget https://github.com/ctlab/samovar/edit/benchmarking
 ```
 
 In your R session, source all functions:
@@ -20,7 +20,7 @@ source(PATH/TO/SAMOVAR/scripts/source.R)
 
 Obtain InSilicoSeq and fasterq-dump as follows:
 
-```
+```bash
 conda install bioconda::insilicoseq
 conda install fasterq-dump
 ```
