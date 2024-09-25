@@ -30,7 +30,7 @@ source(PATH/TO/SAMOVAR/scripts/source.R)
 # Stable version usage <a href=""><img src="additional/logos/logo_02.png" align="right" width="150" ></a> 
 
 ### Demo version
-Demo is now avialable at /demo repository. To run it, install it and run demo.R
+Demo is now avialable at [demo](https://github.com/ctlab/samovar/tree/main/demo) repository. To run it, install it and run demo.R
 
 ### R interface
 To use samovaR in R environment, use R_samova.R
