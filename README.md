@@ -1,14 +1,14 @@
-# samova.R <a href=""><img src="additional/Logo_SAMOVAR_pprpl.png" align="right" width="150" ></a> 
-### R package for generating model metagenomes with specified properties
+# samova.R: benchmarking <a href=""><img src="additional/Logo_SAMOVAR_pprpl.png" align="right" width="150" ></a> 
+### Vignette for automatic benchmarking of taxonomy annotation tools
 
-*Metagenomics* serves as a fundamental approach in the analysis of biological communities. 
+Diffrent metagenomics tools produce different results. If most of them can produce some metrics for evaluation of their results, different WGS annotators can not. Most evaluations are based on indirected metrics: unclassified an "noizy" taxa abundance, while overall classification quality should be based on accuracy of taxa assignment. 
 
-The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `SAMOVAR`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This addon implement creation of abundance files 
-
+Follow general steps or see vignette from example
 
 ## Installation
 
-To get the tool clone the git repository:
+For the benchmarking, you need to install: samovaR for artificial abundance tables generation, InSilicoSeq to generate raw .fastq metagenomics data based on fasterq-dump obtained genomes:
+
 ```bash
 git clone https://github.com/dsmutin/samovar.git
 ```
