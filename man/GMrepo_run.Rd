@@ -10,7 +10,7 @@ GMrepo run data class
 \section{Slots}{
 
 \describe{
-\item{\code{description}}{metadata DataFrame}
+\item{\code{metadata}}{metadata DataFrame}
 
 \item{\code{run}}{character}
 }}

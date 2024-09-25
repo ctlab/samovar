@@ -1,0 +1,25 @@
+---
+title: "samovar-basic"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{samovar-basic}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Import
+## Data download
+```{r}
+help("GMrepo_run2data") %>% print
+```
+
+
+## Import from file
+

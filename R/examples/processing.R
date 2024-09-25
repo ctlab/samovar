@@ -8,5 +8,3 @@ samovar <- GMrepo_type2data(number_to_process = 2000) %>%
 # generate
 new_data <- samovar %>%
   samovar_boil(n = 100)
-
-

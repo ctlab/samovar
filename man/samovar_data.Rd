@@ -6,8 +6,6 @@
 \title{samovar data class}
 \description{
 samovar data class
-
-samovar base class
 }
 \section{Slots}{
 
@@ -20,17 +18,17 @@ samovar base class
 
 \item{\code{species}}{character, runs}
 
-\item{\code{samovar_dataa}}{samovar_data object}
+\item{\code{normalization_function}}{normalization function for samples}
 
-\item{\code{method}}{method to obtain samovar_data}
+\item{\code{reverse_normalization_function}}{reverse normalization function}
 
-\item{\code{inner_cluster_graph_method}}{list of graphs in matrix form of inner cluster connections}
+\item{\code{min_value}}{minimal value after scaling}
 
-\item{\code{inter_cluster_graph_method}}{list of graphs in matrix form of inter cluster connections}
+\item{\code{max_value}}{maximal value after scaling}
 
-\item{\code{inner_cluster_graph_prob}}{list of co-occurrence probabilities in matrix form of inner cluster members}
+\item{\code{cluster}}{character vector, enumerated clusters for each species}
 
-\item{\code{inter_cluster_graph_prob}}{list of co-occurrence probabilities in matrix form between clusters}
+\item{\code{cluster_size}}{named numeric, cluster sizes per cluster}
 }}
 
 

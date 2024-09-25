@@ -4,16 +4,24 @@
 \alias{samovar_boil}
 \title{Generate artificial data}
 \usage{
-samovar_boil(samovar_base, n = 1, init_sp, init_value)
+samovar_boil(
+  samovar_base,
+  N = 1,
+  init_sp = F,
+  init_ab = F,
+  avoid_zero_generations = T
+)
 }
 \arguments{
 \item{samovar_base}{samovar data after preprocessing and building stages}
 
-\item{n}{number of artificial samples to generate}
+\item{N}{number of artificial samples to generate}
 
-\item{init_sp}{species vector for initializing data generation, or FALSE for automatic usage}
+\item{init_sp}{species vector for initializing data generation, or FALSE for usage most common taxa, auto for choosing random taxa}
 
-\item{init_value}{species amount vector (values from 0 to 1) for initializing data generation, or FALSE for automatic usage}
+\item{init_ab}{species amount vector (values from 0 to 1) for initializing data generation, or FALSE for mean initial taxa assignment, or auto for usage from known edf for each species from init_sp}
+
+\item{avoid_zero_generations}{logical, avoid zero-based generations or not. FALSE might results in under-distributed communities, while TRUE in over-represented with species from different clusters possibly come from different samples groups}
 }
 \description{
 Use pre-built samovar_data with its parameters
@@ -29,6 +37,4 @@ samovar <- GMrepo_type2data(number_to_process = 2000) \%>\%
 # generate
 new_data <- samovar \%>\%
   samovar_boil(n = 100)
-
-
 }
