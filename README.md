@@ -1,4 +1,4 @@
-# samovaR: raw script <a href=""><img src="additional/Logo_SAMOVAR_pprpl.png" align="right" width="150" ></a> 
+# samovaR: raw script <a href=""><img src="additional/logo_01.png" align="right" width="150" ></a> 
 ### R vignette for generating model metagenomes with specified properties
 
 *Metagenomics* serves as a fundamental approach in the analysis of biological communities. 
@@ -8,17 +8,10 @@ The field continuously witnesses the emergence of numerous novel tools, which in
 
 ## Installation
 
-To get the tool clone the git repository:
+To get the tool clone the repository:
 ```bash
-git clone https://github.com/dsmutin/samovar.git
+wget https://github.com/ctlab/samovar/tree/RID -O samovar_01
 ```
-
-In your R session, source all functions:
-
-```R
-source(PATH/TO/SAMOVAR/scripts/source.R)
-```
-
 
 ## Usage
 
@@ -35,3 +28,5 @@ To specify properties, **change inputs** in setup:
 - `initial` initialized sp
 - `initial_level` initialized level
 - `generated_amount` number of generated samples
+
+**For more info**, vizit other [repositories](https://github.com/ctlab/samovar/)
