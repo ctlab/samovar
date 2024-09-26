@@ -50,6 +50,21 @@ reorder_df <- function(data, dim = 1, reord = "fpc") {
 
 # Transform to data ----
 samovar2data <- function(data) {
+  #!!!!
+  if(class(data) == "samovar_base") {
+    data <- data$samovar_data }
+  if(class(data) == "samovar_data") {
+    data$data[data$data < data$min_value] <- data$min_value
+    data$data[data$data > data$max_value] <- data$max_value
+    data$data <- data$data %>%
+      data.frame() %>%
+      apply(c(1,2), data$reverse_normalization_function) %>%
+      apply(2, function(line) {
+        if((sum(line)) > 1) {line/sum(line)} else{line}
+      }) %>%
+      data.frame()
+  }
+
   data <- switch(class(data),
                  "data.frame" = data,
                  "tibble" = data,

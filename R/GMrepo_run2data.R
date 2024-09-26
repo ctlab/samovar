@@ -60,6 +60,7 @@ GMrepo_run2data <- function(run,
   )
 
   GMrepo$rescale()
+  GMrepo$data <- GMrepo$data %>% apply(2, as.numeric) %>% as.data.frame
 
   return(GMrepo)
 }
