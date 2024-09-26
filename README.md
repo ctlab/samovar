@@ -50,9 +50,16 @@ Import results to R. If you combine them by sequence name field, you than can pr
 After importing and comparison, summarize data by assigned taxa and sample name fields, and than pivot to produce abundance matrix with `samples x species` dimensions
 
 ### Generate new data
-Iteratively
+
+Iteratively for each species generate new compositions:
+
+![](https://github.com/ctlab/samovar/blob/main/additional/validation_plots/D006262_composition_generated.png)
+
+And use it for iss generation
 
 ### Perform cross-validation
+
+
 
 ### Evaluate raw scores
 
