@@ -1,4 +1,4 @@
-# samova.R: benchmarking <a href=""><img src="additional/logo_benchmarking.png" align="right" width="150" ></a> 
+i# samova.R: benchmarking <a href=""><img src="additional/logo_benchmarking.png" align="right" width="150" ></a> 
 ### Vignette for automatic benchmarking of taxonomy annotation tools
 
 Diffrent metagenomics tools produce different results. If most of them can produce some metrics for evaluation of their results, different WGS annotators can not. Most evaluations are based on indirected metrics: unclassified an "noizy" taxa abundance, while overall classification quality should be based on accuracy of taxa assignment. 
@@ -59,11 +59,21 @@ And use it for iss generation
 
 ### Perform cross-validation
 
+Using results we can estimate quality of classificator:
 
+![](https://github.com/ctlab/samovar/blob/main/additional/validation_plots/kraken_heatmap.jpg)
 
 ### Evaluate raw scores
 
-### Merge annotations
+And than estimate real scores using random correction scripts:
+
+https://github.com/ctlab/samovar/blob/main/additional/validation_plots/k2_stat.png
+
+Using UMAP, nioize could be descriminated:
+
+![](https://github.com/ctlab/samovar/blob/main/additional/validation_plots/k2_umap.png)
+
+So, overall quality could be increased up tp 0.9
 
 ### References
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
