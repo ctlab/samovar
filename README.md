@@ -12,6 +12,9 @@ The field continuously witnesses the emergence of numerous novel tools, which in
 - [beta](https://github.com/ctlab/samovar/tree/beta) is an **unstable** 0.3 version (*R package*) with extended algorythms properties, parameters and much accelerated
 - [benchmarking](https://github.com/ctlab/samovar/tree/benchmarking) is a vignette used 0.1 version for metagenomic annotators cross-validation and benchmarking
 
+- [merge](https://github.com/ctlab/samovar/blob/benchmarking/ipynb/Metagenomics_data_voting_classifier.ipynb) is a python vignette for data merging based on benchmarking results with voting classifier
+- [app](https://dsmutin.shinyapps.io/samovaR/) is a web application use samovar 0.3.
+
 ## Installation
 
 To get the tool clone the git repository:
@@ -30,7 +33,7 @@ source(PATH/TO/SAMOVAR/scripts/source.R)
 # Stable version usage <a href=""><img src="additional/logos/logo_02.png" align="right" width="150" ></a> 
 
 ### Demo version
-Demo is now avialable at [demo](https://github.com/ctlab/samovar/tree/main/demo) repository. To run it, install it and run demo.R
+Demo for 0.2. is now avialable at [demo](https://github.com/ctlab/samovar/tree/main/demo) repository. To run it, install it and run demo.R
 
 ### R interface
 To use samovaR in R environment, use R_samova.R
