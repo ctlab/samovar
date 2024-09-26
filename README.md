@@ -14,6 +14,10 @@ To get, run in R:
 devtools::install_github("https://github.com/dsmutin/samovar/tree/beta")
 ```
 
+## Demo
+
+See the shiny [app](https://dsmutin.shinyapps.io/samovaR/) 
+
 ## Algorithm summary
 <img src="img/additional/algo.png">
 
