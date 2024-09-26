@@ -1,4 +1,4 @@
-i# samova.R: benchmarking <a href=""><img src="additional/logo_benchmarking.png" align="right" width="150" ></a> 
+# samova.R: benchmarking <a href=""><img src="additional/logo_benchmarking.png" align="right" width="150" ></a> 
 ### Vignette for automatic benchmarking of taxonomy annotation tools
 
 Diffrent metagenomics tools produce different results. If most of them can produce some metrics for evaluation of their results, different WGS annotators can not. Most evaluations are based on indirected metrics: unclassified an "noizy" taxa abundance, while overall classification quality should be based on accuracy of taxa assignment. 
