@@ -1307,7 +1307,7 @@ annot_samovar k2
 annot_samovar kaiju
 ```
 
-## read them all
+## read results and compare
 
 ```{r}
 k2_true <- samovar2iss("benchmarking/reports/k2/k2", type = "true")
@@ -1322,10 +1322,4 @@ kaiju_true <- samovar2iss("benchmarking/reports/k2/k2", type = "true")
 kaiju_k2 <- samovar2iss("benchmarking/reports/k2/k2", type = "k2", k2_true)
 
 kaiju_kaiju <- samovar2iss("benchmarking/reports/k2/kaiju/", type = "kaiju", init_true)
-```
-
-## viz and calc
-
-```{r}
-
 ```
