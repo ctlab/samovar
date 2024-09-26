@@ -38,10 +38,12 @@ viz_composition <- function(data,
   if(type == "tile") {
     sp <- rownames(data)
     sm <- colnames(data)
+
     data <- data %>%
       apply(1, scale) %>%
       t %>%
       data.frame()
+
     rownames(data) <- sp
     colnames(data) <- sm
   }
