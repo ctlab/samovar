@@ -2,6 +2,8 @@
 library(tidyverse)
 library(shiny)
 library(plotly)
+
+devtools::install_github("https://github.com/ctlab/samovar/tree/beta")
 library(samovaR)
 
 # UI ----

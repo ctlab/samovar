@@ -7,7 +7,7 @@
 #' @param network FALSE or graph that can be used for generation. To be implemented
 #' @param distance_function function used for measuring distances between species based on samples
 # @param k_means FALSE or number of k-means using for split. recommended for lazy-bootstrap
-#' @param min_min_cluster_size FALSE or minimum number of species per cluster
+#' @param min_cluster_size FALSE or minimum number of species per cluster
 #' @param max_cluster_size FALSE or minimum number of species per cluster
 #' @param plot_log Logical or path for log plots output
 #' @importFrom distances distances
@@ -19,7 +19,7 @@ teabag_brew <- function(
     samovar_data,
     dist_function = function(x) dist(x),
     network = F,
-    min_cluster_size = 1,
+    min_cluster_size = 10,
     max_cluster_size = 100,
     plot_log = T) {
 

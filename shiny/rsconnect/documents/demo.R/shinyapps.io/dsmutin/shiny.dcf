@@ -1,0 +1,12 @@
+name: shiny
+title: shiny
+username: dsmutin
+account: dsmutin
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12834000
+bundleId:
+url: https://dsmutin.shinyapps.io/shiny/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
