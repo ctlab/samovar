@@ -8,13 +8,15 @@ teabag_brew(
   samovar_data,
   dist_function = function(x) dist(x),
   network = F,
-  min_cluster_size = 1,
+  min_cluster_size = 2,
   max_cluster_size = 100,
   plot_log = T
 )
 }
 \arguments{
 \item{network}{FALSE or graph that can be used for generation. To be implemented}
+
+\item{min_cluster_size}{FALSE or minimum number of species per cluster}
 
 \item{max_cluster_size}{FALSE or minimum number of species per cluster}
 
@@ -23,8 +25,6 @@ teabag_brew(
 \item{data}{samovar data after preprocessing stages}
 
 \item{distance_function}{function used for measuring distances between species based on samples}
-
-\item{min_min_cluster_size}{FALSE or minimum number of species per cluster}
 }
 \description{
 Samovar network is a 2D-oriented graph with metadata and abundances of species per sample. Oriented graph could be used for network prediction, or for better generation some network could be used as initial (to be implemented)

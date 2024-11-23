@@ -1,4 +1,4 @@
-# samova.R <a href=""><img src="img/logos/logo_03.png" align="right" width="150" ></a> 
+# samova.R <a href=""><img src="https://github.com/dsmutin/samovar/blob/main/additional/samovar_new_logo.png" align="right" width="150" ></a> 
 ### R package for generating model metagenomes with specified properties
 
 *Metagenomics* serves as a fundamental approach in the analysis of biological communities. 
@@ -13,10 +13,6 @@ To get, run in R:
 ``` r
 devtools::install_github("https://github.com/dsmutin/samovar/tree/beta")
 ```
-
-## Demo
-
-See the shiny [app](https://dsmutin.shinyapps.io/samovaR/) 
 
 ## Algorithm summary
 <img src="img/additional/algo.png">

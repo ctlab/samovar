@@ -1,0 +1,12 @@
+name: samovaR
+title: samovaR
+username: dsmutin
+account: dsmutin
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12833989
+bundleId: 9147786
+url: https://dsmutin.shinyapps.io/samovaR/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

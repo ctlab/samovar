@@ -133,6 +133,6 @@ concotion_pour <- function(
       cluster_connection = cluster_connection
     )
   )
-  cat("\n---  Samovar built  ---\n")
+  cat("\n---  Samovar built  ---\n\n")
   return(samovar_base_new)
 }
