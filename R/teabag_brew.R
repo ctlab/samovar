@@ -47,7 +47,7 @@ teabag_brew <- function(
       hierarchical_clustering(size_constraint = min_cluster_size)
 
     if(sum(new_sc) == 0) {
-      warning("Error in reducing maximum sample: to similar species!\nIf you want to use bootstrap for samovaR build, it might be better to re-filter species")
+      message("Warning in reducing maximum sample: to similar species!\nIf you want to use bootstrap for samovaR build, it might be better to re-filter species")
       break
     } else {
       sc[sc == mc] <- max(sc) + new_sc + 1
@@ -86,7 +86,7 @@ teabag_brew <- function(
            prcomp(center = T))[["rotation"]] %>%
     as.data.frame() %>%
     rownames_to_column("sp") %>%
-    left_join(sc_df) %>%
+    left_join(sc_df, by = "sp") %>%
     ggplot(aes(PC1, PC2, color = new_sc, text = sp)) +
     geom_point() +
     scale_color_viridis_c(name = "cluster") +

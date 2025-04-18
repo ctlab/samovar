@@ -9,7 +9,8 @@ samovar_boil(
   N = 1,
   init_sp = F,
   init_ab = F,
-  avoid_zero_generations = T
+  avoid_zero_generations = T,
+  seed = 42
 )
 }
 \arguments{
@@ -22,6 +23,8 @@ samovar_boil(
 \item{init_ab}{species amount vector (values from 0 to 1) for initializing data generation, or FALSE for mean initial taxa assignment, or auto for usage from known edf for each species from init_sp}
 
 \item{avoid_zero_generations}{logical, avoid zero-based generations or not. FALSE might results in under-distributed communities, while TRUE in over-represented with species from different clusters possibly come from different samples groups}
+
+\item{seed}{initial seed for the seeds generation}
 }
 \description{
 Use pre-built samovar_data with its parameters

@@ -8,12 +8,14 @@
 #' @param init_sp species vector for initializing data generation, or FALSE for usage most common taxa, auto for choosing random taxa
 #' @param init_ab species amount vector (values from 0 to 1) for initializing data generation, or FALSE for mean initial taxa assignment, or auto for usage from known edf for each species from init_sp
 #' @param avoid_zero_generations logical, avoid zero-based generations or not. FALSE might results in under-distributed communities, while TRUE in over-represented with species from different clusters possibly come from different samples groups
+#' @param seed initial seed for the seeds generation
 #' @example R/examples/processing.R
 #' @export
 
 samovar_boil <- function(samovar_base, N = 1,
                          init_sp = F, init_ab = F,
-                         avoid_zero_generations = T) {
+                         avoid_zero_generations = T,
+                         seed = 42) {
   #__ ----
   # Additional functions ----
   prob_calc <- function(...) prob_calc_general(..., probability_calculation = samovar_base$preferences$probability_calculation)
@@ -50,7 +52,7 @@ samovar_boil <- function(samovar_base, N = 1,
       init_ab[sp] <- samovar_base$samovar_data$data %>%
         subset(rownames(.) %in% init_sp[sp]) %>%
         as.numeric %>%
-        mean
+        mean(na.rm = T)
     }
     init_ab <- init_ab %>% as.numeric
   }
@@ -59,11 +61,16 @@ samovar_boil <- function(samovar_base, N = 1,
   init_sp <- rep(init_sp, length.out = N)
   init_ab <- rep(init_ab %>% samovar_base$samovar_data$normalization_function(.), length.out = N)
 
+  #generate seeds
+  seed_list <- runif(n = N)*100000
+
   cat("---  Generation started  ---\n\n")
   results <- new("samovar_run")
 
   ## make iterations ----
   for(iter in 1:N) {
+    set.seed(seed_list[iter])
+
     iter_error <- try(silent = T, {
 
       init <- init_sp[iter]
@@ -114,7 +121,7 @@ samovar_boil <- function(samovar_base, N = 1,
           # predict new value of the cluster
           Y <- samovar_base$samovar_data$get(from_to[2])
           X <- samovar_base$samovar_data$get(from_to[1])
-          xval <- results$get_cluster(from_to[1]) %>% mean
+          xval <- suppressWarnings(results$get_cluster(from_to[1]) %>% mean(na.rm = T))
 
           cluster_init_level <- get_newval(X = X, Y = Y, xval = xval,
                                            model = samovar_base$preferences$inter_model)
@@ -129,7 +136,7 @@ samovar_boil <- function(samovar_base, N = 1,
 
           if(sum(tmp2) != 0) {
             init <- sp_cl[which(tmp2 > 0)] %>% sample(.,1)
-            means <- tmp %>% apply(1, mean)
+            means <- suppressWarnings(tmp %>% apply(1, mean, na.rm = T))
             init_level <- means[init] / mean(means) * cluster_init_level
           } else {
             init <- NA
@@ -205,6 +212,7 @@ samovar_boil <- function(samovar_base, N = 1,
 
     pb$tick()
   }
+  set.seed(seed)
 
 
   #### Postprocessing ----
@@ -220,6 +228,8 @@ samovar_boil <- function(samovar_base, N = 1,
     data.frame()
 
   results$data["unclassified",] <- apply(results$data, 2, function(x) 1 - sum(x) )
+
+  colnames(results$data) <- paste0("gen", 1:ncol(results$data))
   ###
   cat("---  Generation done  ---\n\n")
   #results$data <- results$data %>%  samovar$samovar_data$reverse_normalize_df
