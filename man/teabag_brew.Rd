@@ -8,7 +8,7 @@ teabag_brew(
   samovar_data,
   dist_function = function(x) dist(x),
   network = F,
-  min_cluster_size = 2,
+  min_cluster_size = 10,
   max_cluster_size = 100,
   plot_log = T
 )

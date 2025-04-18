@@ -1,0 +1,155 @@
+---
+title: "samovar for ML"
+author: "D.Smutin"
+date: "2024-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+library(samovaR)
+library(tidyverse)
+library(randomForest)
+library(umap)
+```
+
+
+# Get data
+```{r}
+data1 <- GMrepo_type2data(mesh_ids = "D006262", number_to_process = 1500) %>% 
+    teatree_trim(treshhold_amount = 0.0001, 
+                 treshhold_samples = 5, treshhold_species = 5)
+data2 <- GMrepo_type2data(mesh_ids = "D003967", number_to_process = 1500) %>% 
+        teatree_trim(treshhold_amount = 0.0001, 
+                 treshhold_samples = 5, treshhold_species = 5)
+
+print(data1)
+print(data2)
+```
+
+# Process new samples using samovaR
+```{r}
+samovar_easy <- function(data, n){
+  data %>% 
+    tealeaves_pack() %>% 
+    teabag_brew(min_cluster_size = 30) %>% 
+    concotion_pour() %>% 
+    samovar_boil(N = n)
+}
+
+data1_new <- samovar_easy(data1, n = 500)
+data2_new <- samovar_easy(data2, n = 500)
+```
+
+# ML
+## prep
+```{r}
+data_merged <- data1$data %>% mutate(sp = data1$species) %>% 
+  full_join(data2$data %>% mutate(sp = data2$species), by = "sp") %>% 
+  column_to_rownames("sp") %>%
+  subset(apply(., 1, function(x) mean(x, na.rm = T) > 0.01)) %>% 
+  t %>% 
+  as.data.frame() %>% 
+  subset(apply(., 1, function(x) mean(x, na.rm = T) > 0.01)) %>% 
+  rownames_to_column('id') %>% 
+  mutate(des = id %in% colnames(data2$data))
+
+data_merged[is.na(data_merged)] <- 0
+
+table(data_merged$des)
+
+training_dataset  <- data_merged %>% dplyr::sample_frac(0.1) 
+testing_dataset   <- dplyr::anti_join(data_merged, 
+                                      training_dataset, by = 'id') %>%
+  column_to_rownames('id')
+
+training_dataset <- training_dataset %>%
+  column_to_rownames('id')
+```
+
+# raw data
+```{r}
+d1 <- randomForest(y = training_dataset$des,
+                   x = training_dataset[,-length(training_dataset)], 
+                   importance=TRUE,
+                   proximity=TRUE)
+
+p1 <- predict(d1, 
+              newdata = testing_dataset[,-length(testing_dataset)])
+
+pca <- prcomp(testing_dataset[,-length(testing_dataset)])[['x']][,1:2] %>% 
+  as.data.frame() %>% 
+  mutate(tr = testing_dataset$des %>% as.numeric(),
+         p = p1 %>% as.numeric())
+
+ggplot(pca) +
+  geom_point(aes(color = p, shape = as.factor(tr), PC1, PC2))
+
+um <- umap::umap(testing_dataset[,-length(testing_dataset)])$layout %>% 
+  as.data.frame() %>% 
+  mutate(tr = testing_dataset$des %>% as.numeric(),
+         p = p1 %>% as.numeric())
+
+gg <- ggplot(um) +
+  geom_point(aes(color = p, shape = as.factor(tr), V1, V2), alpha = .5) +
+  theme_void() +
+  scale_color_gradient2(NULL,#"Desease", 
+                       high = "red", mid = "green", 
+                       midpoint = .5,  low = "blue",
+                       breaks = c(0,1), labels = c("health", "")
+                                                   #"diseased")
+                       ) +
+  scale_shape(NULL, breaks = c(0,1), labels = c("health", "diseased")) +
+  theme(legend.position = "bottom")
+gg
+```
+
+# adjusted data
+```{r}
+at1 <- data1_new$data %>% 
+  mutate(des = F, 
+         species = data1_new$species[rownames(.)])
+at2 <- data2_new$data %>% 
+  mutate(des = F, 
+         species = data2_new$species[rownames(.)])
+
+training_dataset <- training_dataset %>% 
+  mutate()
+  
+
+set.seed(1)
+d1 <- randomForest(y = training_dataset$des,
+                   x = training_dataset[,-length(training_dataset)], 
+                   importance=TRUE,
+                   proximity=TRUE)
+
+p1 <- predict(d1, 
+              newdata = testing_dataset[,-length(testing_dataset)])
+
+pca <- prcomp(testing_dataset[,-length(testing_dataset)])[['x']][,1:2] %>% 
+  as.data.frame() %>% 
+  mutate(tr = testing_dataset$des %>% as.numeric(),
+         p = p1 %>% as.numeric())
+
+ggplot(pca) +
+  geom_point(aes(color = p, shape = as.factor(tr), PC1, PC2))
+
+um <- umap::umap(testing_dataset[,-length(testing_dataset)])$layout %>% 
+  as.data.frame() %>% 
+  mutate(tr = testing_dataset$des %>% as.numeric(),
+         p = p1 %>% as.numeric())
+
+ggplot(um) +
+  geom_point(aes(color = p, shape = as.factor(tr), V1, V2)) +
+  theme_void() +
+  scale_color_gradient2(NULL,#"Desease", 
+                       high = "red", mid = "green", 
+                       midpoint = .5,  low = "blue",
+                       breaks = c(0,1), labels = c("health", "deseased")) +
+  scale_shape(NULL, breaks = c(0,1), labels = c("health", "deseased")) +
+  theme(legend.position = "bottom")
+```

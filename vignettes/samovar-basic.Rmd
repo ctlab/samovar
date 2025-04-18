@@ -12,10 +12,8 @@ knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>"
 )
-```
 
-```{r setup, include = FALSE}
-#library(samovaR)
+library(samovaR)
 library(tidyverse)
 ```
 
@@ -24,7 +22,7 @@ library(tidyverse)
 Download and vizualize data from GMrepo
 ```{r}
 teatree <- GMrepo_type2data(number_to_process = 1500)
-viz_composition(teatree, type = "tile", interactive = T, top = 10)
+viz_composition(teatree, type = "tile", interactive = F, top = 10)
 ```
 
 # Preprocessing
@@ -65,19 +63,19 @@ concotion <- teabag %>%
 ## Build samovar
 
 ```{r}
-samovar <- concotion %>%
+data.samovar <- concotion %>%
   concotion_pour(probability_calculation = "simple")
 ```
 
 ## Generate data
 
 ```{r}
-new_data <- samovar %>%
-  samovar_boil(N = 10, avoid_zero_generations = F)
+new_data <- data.samovar %>%
+  samovar_boil(N = 100, avoid_zero_generations = T)
 ```
 
 
 ```{r}
-viz_composition(new_data, type = "tile", interactive = T, top = 100)
+viz_composition(new_data, reord_samples = "hcl",type = "tile", interactive = T, top = 50)
 ```
 
