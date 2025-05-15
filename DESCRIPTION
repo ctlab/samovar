@@ -6,9 +6,8 @@ Author@R: c(person("Smutin", "Daniil", email = "dvsmutin@gmail.com", role = c("a
            comment = c(ORCID = "0009-0009-1460-4108")),
            person("Ivanov", "Artem", role = c("aut")),
            person("ctlab", role = c("fnd")))
-Description: Metagenomics serves as a fundamental approach in the analysis of biological communities.
-    The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `samovaR`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This addon implement creation of abundance files
-URL: https://github.com/dsmutin/samovar/tree/beta
+Description: There is a fundamental problem in modern ***metagenomics***: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. We propose an approach that utilizes de novo generation of the artificial metagenomes - `SamovaR`.
+URL: https://github.com/dsmutin/samovar/
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
