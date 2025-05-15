@@ -1,0 +1,18 @@
+# Input/Output directories
+genome_dir: "data/test_genomes/meta"
+output_dir: "tests_outs/benchmarking/initial"
+host_genome: "data/test_genomes/host/Hsap.fna"
+
+# Number of samples to generate
+n_samples: 2
+
+# Read counts
+total_reads: 25000
+host_fraction: "RANDOM"
+
+# Generation
+seed: 42
+model: "hiseq"
+
+# List of genomes to process (will be automatically populated from genome_dir)
+genomes: [] 

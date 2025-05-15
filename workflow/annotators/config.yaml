@@ -1,0 +1,22 @@
+# Input directories
+r1_dir: "data/raw/R1"
+r2_dir: "data/raw/R2"
+
+# Database paths
+kaiju_db: "/nfs/home/dsmutin/kaiju_refseq"
+kraken2_db: "/nfs/home/dsmutin/kraken2_bases"
+
+# Command paths
+kaiju_cmd: "kaiju"
+metaphlan_cmd: "metaphlan"
+kraken2_cmd: "~/kraken2/kraken2"
+
+# Thread settings
+kaiju_threads: 25000
+metaphlan_threads: 2500
+kraken2_threads: 250
+
+# Additional options (optional)
+kaiju_extra: ""
+metaphlan_extra: ""
+kraken2_extra: ""

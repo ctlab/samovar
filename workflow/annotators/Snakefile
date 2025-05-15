@@ -1,0 +1,81 @@
+configfile: "config.yaml"
+
+# Common functions
+def get_sample_name(wildcards):
+    return wildcards.sample
+
+# Kaiju rule
+rule kaiju:
+    input:
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq.gz",
+        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq.gz"
+    output:
+        raw = "reports/kaiju/{sample}.raw",
+        out = "reports/kaiju/{sample}.out"
+    params:
+        db = config['kaiju_db'],
+        threads = config.get('kaiju_threads', 25000),
+        extra = config.get('kaiju_extra', '')
+    shell:
+        """
+        {config['kaiju_cmd']} \
+            -t {params.db}/nodes.dmp \
+            -f {params.db}/kaiju_db_refseq_ref.fmi \
+            -i {input.r1} \
+            -j {input.r2} \
+            -z {params.threads} \
+            -o {output.raw} \
+            {params.extra}
+            
+        kaiju-addTaxonNames \
+            -t {params.db}/nodes.dmp \
+            -n {params.db}/names.dmp \
+            -i {output.raw} \
+            -o {output.out}
+        """
+
+# Metaphlan rule
+rule metaphlan:
+    input:
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq.gz"
+    output:
+        out = "reports/metaphlan/{sample}.out"
+    params:
+        threads = config.get('metaphlan_threads', 2500),
+        extra = config.get('metaphlan_extra', '')
+    shell:
+        """
+        {config['metaphlan_cmd']} \
+            --input_type fastq \
+            --nproc {params.threads} \
+            {input.r1} \
+            --bowtie2out {wildcards.sample}.bowtie2.bz2 \
+            -o {output.out} \
+            {params.extra}
+            
+        rm {wildcards.sample}.bowtie2.bz2
+        """
+
+# Kraken2 rule
+rule kraken2:
+    input:
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq.gz",
+        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq.gz"
+    output:
+        report = "reports/kraken2/{sample}.report",
+        out = "reports/kraken2/{sample}.out"
+    params:
+        db = config['kraken2_db'],
+        threads = config.get('kraken2_threads', 250),
+        extra = config.get('kraken2_extra', '')
+    shell:
+        """
+        {config['kraken2_cmd']} \
+            --use-names \
+            --db {params.db} \
+            --threads {params.threads} \
+            --paired {input.r1} {input.r2} \
+            --report {output.report} \
+            --output {output.out} \
+            {params.extra}
+        """

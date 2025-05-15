@@ -3,3 +3,5 @@ generate_docs_pdf.R
 vignettes/Rplots.pdf
 tests/__pycache__
 .coverage
+.snakemake
+tests_outs/
