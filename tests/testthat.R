@@ -10,6 +10,6 @@ library(testthat)
 library(samovaR)
 
 test_data_env <- new.env()
-load("./../../data/data_test.RData", envir = test_data_env)
+load("./../../data/main/data_test.RData", envir = test_data_env)
 
 test_check("samovaR")
