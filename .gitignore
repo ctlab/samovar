@@ -1,2 +1,3 @@
 generate_docs_pdf.R
 .Rproj.user
+vignettes/Rplots.pdf

@@ -21,7 +21,7 @@ library(tidyverse)
 # Download data
 
 Download and vizualize data from GMrepo
-```{r}
+```{r API}
 teatree <- GMrepo_type2data(number_to_process = 1500)
 viz_composition(teatree, type = "tile", interactive = F, top = 10)
 ```
@@ -30,7 +30,7 @@ viz_composition(teatree, type = "tile", interactive = F, top = 10)
 
 ## Filter data
 
-```{r}
+```{r filter}
 tealeaves <- teatree %>%
   teatree_trim(treshhold_species = 3, 
                treshhold_samples = 3, 
@@ -44,10 +44,9 @@ If you build teatree by your own, do rescaling stage when building via `teatree$
 
 Good approximation to normal distribution is required for `glm` generating methods
 
-```{r}
+```{r normalize}
 teabag <- tealeaves %>%
-  tealeaves_pack(normalization_function = 
-                   function(x) log10(1/(1-log10(x+1)))*(1-2*log10(x+1) + 1) )
+  tealeaves_pack()
 ```
 
 ## Clustering
@@ -56,27 +55,27 @@ Do hierarchical (deprecated) or aggregating clustering of species
 
 Remember: if you want to re-filter, it is better to re-do welding stage to avoid crashes in future!
 
-```{r}
+```{r cluster}
 concotion <- teabag %>%
   teabag_brew(min_cluster_size = 40, max_cluster_size = 150)
 ```
 
 ## Build samovar
 
-```{r}
+```{r build}
 data.samovar <- concotion %>%
   concotion_pour(probability_calculation = "simple")
 ```
 
 ## Generate data
 
-```{r}
+```{r generate}
 new_data <- data.samovar %>%
   samovar_boil(N = 100, avoid_zero_generations = T)
 ```
 
-
-```{r}
-viz_composition(new_data, reord_samples = "hcl",type = "tile", interactive = T, top = 50)
+The generated data:
+```{r generate_viz}
+viz_composition(new_data, reord_samples = "hcl",type = "tile", interactive = F, top = 10)
 ```
 

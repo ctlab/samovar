@@ -21,7 +21,7 @@ teabag_brew <- function(
     network = F,
     min_cluster_size = 10,
     max_cluster_size = 100,
-    plot_log = T) {
+    plot_log = F) {
 
   data <- samovar_data$copy()
 
@@ -94,6 +94,7 @@ teabag_brew <- function(
     theme_minimal()
 
   log_plot(plot_log, "PCA", ggplotly(gg))
+  print(gg)
 
 
   # IMPLEMENT IN FUTURE

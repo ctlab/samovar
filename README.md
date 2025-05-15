@@ -1,4 +1,4 @@
-# samova.R v.0.5 <a href=""><img src="img/logos/logo_stable.png" align="right" width="150" ></a> 
+# samova.R v.0.5 <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
 ### Artificial metagenome generation and automatic benchmarking
 
 There is a fundamental problem in modern ***metagenomics***: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. 
@@ -31,7 +31,7 @@ devtools::install_github("https://github.com/dsmutin/samovar/")
 
 ## Usage
 
-<a href="https://html-preview.github.io/?url=https://github.com/ctlab/samovar/samovar.html">See</a> or <a href="vignettes/samovar-basic.Rmd">source</a>
+<a href="https://github.com/ctlab/samovar/samovaR.pdf">See</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
 
 ``` r
 library(samovaR)
@@ -61,16 +61,13 @@ new_data <- samovar %>%
 ```
 
 ## Documentation
-This package can generate new abundance tables based on known abundance tables. It can be done in a few steps: download or import, filtration, normalization, clusterization, generating prediction graphs and generation itself.
-
-Full documentation and tests are avialable in R functions help or in manual and vignettes folder.
+<a src="https://github.com/ctlab/samovar/blob/main/samovaR_man.pdf">Documentation</a> for the **R package**
 
 ## Algorithm details
 <img src="data/img/additional/details.png">
 
 ## References
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
-- Dai, D. et al. "GMrepo v2: a curated human gut microbiome database with special focus on disease markers and cross-dataset comparison". Nucleic Acids Res (2022). Volume 50, Issue D1, Pages D777–D784.
 
 
 ## Dependencies
