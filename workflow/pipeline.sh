@@ -9,9 +9,9 @@ snakemake -s workflow/database_prep/Snakefile \
     --cores 1
 
 # Prepare databases
+python workflow/database_prep/build_database_kraken2.py
 
-
-# Run annotators
+# Run annotators on initial reads
 snakemake -s workflow/annotators/Snakefile \
-    --configfile workflow/annotators/config.yaml \
+    --configfile workflow/annotators/config_init.yaml \
     --cores 1

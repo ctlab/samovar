@@ -1,26 +1,85 @@
-configfile: "config.yaml"
+import os
+import glob
 
-# Common functions
-def get_sample_name(wildcards):
-    return wildcards.sample
+# Load configuration
+configfile: "config_init.yaml"
+
+# Get all samples from input directories
+def get_samples():
+    r1_files = glob.glob(os.path.join(config['r1_dir'], "*_R1.fastq"))
+    return [os.path.basename(f).replace('_R1.fastq', '') for f in r1_files]
+
+# Get all annotator outputs needed
+def get_annotator_outputs():
+    outputs = []
+    for run in config['run_config']:
+        if run['type'] == 'kraken2':
+            outputs.extend(expand(f"{config['output_dir']}/{{sample}}_{{run_name}}.{{ext}}", 
+                                run_name=run['run_name'],
+                                sample=get_samples(),
+                                ext=['kraken2.report', 'kraken2.out']))
+        elif run['type'] == 'kaiju':
+            outputs.extend(expand(f"{config['output_dir']}/{{sample}}_{{run_name}}.{{ext}}",
+                                run_name=run['run_name'],
+                                sample=get_samples(),
+                                ext=['kaiju.raw', 'kaiju.out']))
+        elif run['type'] == 'metaphlan4':
+            outputs.extend(expand(f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.out",
+                                run_name=run['run_name'],
+                                sample=get_samples()))
+    return outputs
+
+# Main rule
+rule all:
+    input:
+        get_annotator_outputs()
+
+# Kraken2 rule
+rule kraken2:
+    input:
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq",
+        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq"
+    output:
+        report = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.report",
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.out"
+    params:
+        db = lambda wildcards: next(run['db_path'] for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "kraken2" for run in config['run_config'] if run['run_name'] == wildcards.run_name)
+    shell:
+        """
+        mkdir -p $(dirname {output.report})
+        {params.cmd} \
+            --use-names \
+            --db {params.db} \
+            --threads {params.threads} \
+            --paired {input.r1} {input.r2} \
+            --report {output.report} \
+            --output {output.out} \
+            {params.extra}
+        """
 
 # Kaiju rule
 rule kaiju:
     input:
-        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq.gz",
-        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq.gz"
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq",
+        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq"
     output:
-        raw = "reports/kaiju/{sample}.raw",
-        out = "reports/kaiju/{sample}.out"
+        raw = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.raw",
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
     params:
-        db = config['kaiju_db'],
-        threads = config.get('kaiju_threads', 25000),
-        extra = config.get('kaiju_extra', '')
+        db = lambda wildcards: next(run['db_path'] for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        db_file = lambda wildcards: next(run['db_path']+"/*.fmi" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "kaiju" for run in config['run_config'] if run['run_name'] == wildcards.run_name)
     shell:
         """
-        {config['kaiju_cmd']} \
+        mkdir -p $(dirname {output.raw})
+        {params.cmd} \
             -t {params.db}/nodes.dmp \
-            -f {params.db}/kaiju_db_refseq_ref.fmi \
+            -f {params.db_file} \
             -i {input.r1} \
             -j {input.r2} \
             -z {params.threads} \
@@ -35,47 +94,27 @@ rule kaiju:
         """
 
 # Metaphlan rule
-rule metaphlan:
+rule metaphlan4:
     input:
-        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq.gz"
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq",
+        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq"
     output:
-        out = "reports/metaphlan/{sample}.out"
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.out",
+        out_bowtie = f"{config['output_dir']}/{{sample}}_{{run_name}}.bowtie2.bz2"
     params:
-        threads = config.get('metaphlan_threads', 2500),
-        extra = config.get('metaphlan_extra', '')
+        threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "metaphlan" for run in config['run_config'] if run['run_name'] == wildcards.run_name)
     shell:
         """
-        {config['metaphlan_cmd']} \
+        mkdir -p $(dirname {output.out})
+        {params.cmd} \
             --input_type fastq \
             --nproc {params.threads} \
-            {input.r1} \
-            --bowtie2out {wildcards.sample}.bowtie2.bz2 \
-            -o {output.out} \
-            {params.extra}
+            -1 {input.r1} \
+            -2 {input.r2} \
+            --bowtie2out {output.out_bowtie} \
+            -o {output.out} {params.extra}
             
-        rm {wildcards.sample}.bowtie2.bz2
-        """
-
-# Kraken2 rule
-rule kraken2:
-    input:
-        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq.gz",
-        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq.gz"
-    output:
-        report = "reports/kraken2/{sample}.report",
-        out = "reports/kraken2/{sample}.out"
-    params:
-        db = config['kraken2_db'],
-        threads = config.get('kraken2_threads', 250),
-        extra = config.get('kraken2_extra', '')
-    shell:
-        """
-        {config['kraken2_cmd']} \
-            --use-names \
-            --db {params.db} \
-            --threads {params.threads} \
-            --paired {input.r1} {input.r2} \
-            --report {output.report} \
-            --output {output.out} \
-            {params.extra}
+        rm {output.out_bowtie}
         """

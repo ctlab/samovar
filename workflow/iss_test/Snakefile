@@ -10,7 +10,12 @@ if not config['genomes']:
     config['genomes'] = [os.path.basename(g).replace('.fna', '') for g in genome_files]
     print(f"Found genomes: {config['genomes']}")
 
-random.seed(config['seed'])
+# Set base seed from config
+base_seed = config['seed']
+
+# Function to get deterministic seed for each sample
+def get_sample_seed(sample_num):
+    return base_seed + int(sample_num)
 
 # Create a list of concrete output files
 SAMPLES = [str(i) for i in range(1, config['n_samples'] + 1)]

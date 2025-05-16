@@ -1,0 +1,23 @@
+# Input directories
+r1_dir: "tests_outs/benchmarking/initial"
+r2_dir: "tests_outs/benchmarking/initial"
+output_dir: "tests_outs/benchmarking/initial_reports"
+
+# Run names
+# issue2fix: run name can not contain "_"
+run_config: [
+  {
+    "run_name": "k2-custom",
+    "type": "kraken2",
+    "db_path": "tests_outs/kraken_db"
+  },
+  {
+    "run_name": "kaiju-custom",
+    "type": "kaiju",
+    "db_path": "tests_outs/kaiju_db"
+  },
+  {
+    "run_name": "metaphlan",
+    "type": "metaphlan4"
+  }
+]
