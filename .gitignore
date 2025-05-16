@@ -5,3 +5,5 @@ tests/__pycache__
 .coverage
 .snakemake
 tests_outs/
+src/samovar/__pycache__
+src/__pycache__

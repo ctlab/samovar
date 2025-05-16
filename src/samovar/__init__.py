@@ -1,5 +1,5 @@
 """
-Python wrapper for the samovaR package.
+Automated benchmarcing with SamovaR
 """
 
 try:
@@ -7,4 +7,5 @@ try:
 except ImportError:
     __version__ = "unknown"
 
-from .core import *  # noqa 
+from .core import *  
+from .fasta_processor import *  

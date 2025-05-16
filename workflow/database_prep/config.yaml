@@ -1,0 +1,10 @@
+# Input directories containing FASTA files
+input_dir:
+  - "data/test_genomes/meta"
+  - "data/test_genomes/host"
+
+output_dir: "tests_outs/database_prep"
+
+# Processing parameters
+mutation_rate: 0.01
+include_percent: 50.0 
