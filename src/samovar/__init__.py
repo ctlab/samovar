@@ -7,5 +7,6 @@ try:
 except ImportError:
     __version__ = "unknown"
 
-from .core import *  
-from .fasta_processor import *  
+#from .core import *  
+from .fasta_processor import * 
+from .build_database import * 

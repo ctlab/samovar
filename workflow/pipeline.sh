@@ -8,6 +8,9 @@ snakemake -s workflow/database_prep/Snakefile \
     --configfile workflow/database_prep/config.yaml \
     --cores 1
 
+# Prepare databases
+
+
 # Run annotators
 snakemake -s workflow/annotators/Snakefile \
     --configfile workflow/annotators/config.yaml \
