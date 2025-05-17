@@ -2,7 +2,7 @@ import unittest
 import tempfile
 import os
 from pathlib import Path
-from samovar.fasta_processor import read_fasta, apply_mutations, process_fasta
+from samovar.fasta_processor import read_fasta, apply_mutations, preprocess_fasta
 
 class TestFastaProcessor(unittest.TestCase):
     def setUp(self):
@@ -39,11 +39,11 @@ GCTAGCTA"""
         self.assertEqual(len(mutated), len(sequence))
         self.assertTrue(all(n in 'ATCG' for n in mutated))
     
-    def test_process_fasta(self):
+    def test_preprocess_fasta(self):
         output_path = os.path.join(self.temp_dir.name, 'output.fasta')
         
         # Test with 50% include and 0 mutation rate
-        process_fasta(self.test_fasta_path, output_path, 0.0, 50.0)
+        preprocess_fasta(self.test_fasta_path, output_path, 0.0, 50.0)
         
         with open(output_path, 'r') as f:
             content = f.read()
@@ -58,11 +58,11 @@ GCTAGCTA"""
             header, sequence = seq.strip().split('\n')
             self.assertEqual(len(sequence), 4)  # Each part should be 4 nucleotides
     
-    def test_process_fasta_with_mutations(self):
+    def test_preprocess_fasta_with_mutations(self):
         output_path = os.path.join(self.temp_dir.name, 'output.fasta')
         
         # Test with 50% include and 1.0 mutation rate
-        process_fasta(self.test_fasta_path, output_path, 1.0, 50.0)
+        preprocess_fasta(self.test_fasta_path, output_path, 1.0, 50.0)
         
         with open(output_path, 'r') as f:
             content = f.read()

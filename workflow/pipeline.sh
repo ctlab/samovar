@@ -10,6 +10,7 @@ snakemake -s workflow/database_prep/Snakefile \
 
 # Prepare databases
 python workflow/database_prep/build_database_kraken2.py
+python workflow/database_prep/build_database_kaiju.py
 
 # Run annotators on initial reads
 snakemake -s workflow/annotators/Snakefile \

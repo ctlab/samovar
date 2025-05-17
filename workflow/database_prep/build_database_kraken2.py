@@ -1,4 +1,4 @@
-from samovar.build_database import build_database, add_database, get_taxonomy_db
+from samovar.build_database import build_database_kraken2, add_database_kraken2, get_taxonomy_db
 
 input_files = [
     "data/test_genomes/meta/Ecoli.fna",
@@ -15,8 +15,8 @@ taxids = [
 ]
 
 for input_file, taxid in zip(input_files, taxids):
-    add_database(input_file, taxid, db_path="tests_outs/kraken_db")
+    add_database_kraken2(input_file, taxid, db_path="tests_outs/kraken_db")
 
 get_taxonomy_db(db_path="tests_outs/kraken_db")
 
-build_database(db_path="tests_outs/kraken_db/")
+build_database_kraken2(db_path="tests_outs/kraken_db", threads=1, kmer_len=35, minimizer_len=31, minimizer_spaces=7, skip_maps=True)

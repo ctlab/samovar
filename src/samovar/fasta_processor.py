@@ -43,7 +43,7 @@ def apply_mutations(sequence: str, mutation_rate: float) -> str:
     
     return ''.join(mutated_sequence)
 
-def process_fasta(input_file: str, output_file: str, mutation_rate: float, include_percent: float):
+def preprocess_fasta(input_file: str, output_file: str, mutation_rate: float, include_percent: float):
     """Process FASTA file, apply mutations and split sequences."""
     sequences = read_fasta(input_file)
     input_filename = Path(input_file).stem
