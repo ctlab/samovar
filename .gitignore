@@ -10,3 +10,4 @@ src/__pycache__
 .vscode
 taxdump.tar.gz
 .Rprofile
+config.json

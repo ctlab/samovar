@@ -48,11 +48,11 @@ EOF
 # Install R dependencies
 echo "Installing R dependencies..."
 R -e "if (!require('devtools')) install.packages('devtools', repos='https://cloud.r-project.org/', lib='$R_LIB_PATH')"
-R -e "devtools::install_deps(dependencies = TRUE, lib='$R_LIB_PATH')"
+R -e "library(devtools, lib='$R_LIB_PATH'); devtools::install_deps(dependencies = TRUE, lib='$R_LIB_PATH')"
 
 # Install R package
 echo "Installing R package..."
-R -e "devtools::install_local('.', lib='$R_LIB_PATH')"
+R -e "library(devtools, lib='$R_LIB_PATH'); devtools::install_local('.', lib='$R_LIB_PATH')"
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
