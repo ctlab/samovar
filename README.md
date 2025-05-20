@@ -1,4 +1,4 @@
-# samova.R v.0.5 <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
+# samova.R v.0.6 <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
 ### Artificial metagenome generation and automatic benchmarking
 
 There is a fundamental problem in modern ***metagenomics***: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. 
@@ -43,9 +43,38 @@ You can also try the generator with <a href="https://dsmutin.shinyapps.io/samova
 
 ## Installation
 
+### Quick Installation
+The easiest way to install SamovaR is to use our installation script:
+
+```bash
+git clone https://github.com/ctlab/samovar
+cd samovar
+chmod +x install.sh
+./install.sh
+```
+
+This script will:
+1. Detect and use your custom R library path (if set in ~/.Renviron or ~/.Rprofile)
+2. Install all R dependencies
+3. Install the R package
+4. Install all Python dependencies
+5. Install the Python package
+6. Install Snakemake and InSilicoSeq if not present
+
+The script automatically detects custom R library paths from:
+- `~/.Renviron` (R_LIBS environment variable)
+- `~/.Rprofile` (libPaths() function)
+- Falls back to the default R library path if no custom path is found
+
+### Manual Installation
+
+If you prefer to install components separately:
+
 Install R package:
 
 ```r
+# If you have a custom library path, specify it:
+.libPaths('/path/to/your/R/library')
 devtools::install_github("https://github.com/ctlab/samovar/")
 ```
 
