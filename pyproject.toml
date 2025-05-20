@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "samovar"
-version = "0.5.2"
-description = "Python wrapper for the samovaR package"
+version = "0.5.3"
+description = "Automated re-profiling and benchmarking with SamovaR"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE.md"}
@@ -15,7 +15,10 @@ authors = [
 dependencies = [
     "rpy2>=3.5.0",
     "numpy>=1.20.0",
-    "pandas>=1.3.0"
+    "pandas>=1.3.0",
+    "requests>=2.25.0",
+    "ete3>=3.1.3",
+    "pytest>=7.0.0"  # For running tests
 ]
 
 [project.optional-dependencies]

@@ -124,4 +124,11 @@ new_data <- samovar %>%
 
 ### Automated benchmarking
 - **R packages**
+- snakemake
 - InSilicoSeq
+- **python packages**
+  - rpy2
+  - nump
+  - pandas
+  - requests
+  - ete3
