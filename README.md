@@ -12,6 +12,30 @@ Therefore, we propose an approach that utilizes de novo generation of the artifi
 - **R** package `samova.R` for the artificial abundance table generation
 - **Python** + **bash** pipeline for the automated benchmarking
 
+## Project Structure
+
+```mermaid
+graph TD
+    A[SamovaR] --> G1[Abundance table generation]
+    G1 --> B[R Package]
+    A --> G2[Automated re-profiling]
+    G2 --> C[Python Pipeline]
+    G1 --> G[Shiny App]
+
+    B --> B1[R/]
+    B --> B2[man/]
+    B --> B3[vignettes/]
+    B --> B4[DESCRIPTION]
+    B --> B5[NAMESPACE]
+
+    C --> C1[workflow/]
+    C --> C2[src/]
+    C --> C3[setup.py]
+    C --> C4[pyproject.toml]
+
+    G --> H[shiny/]
+```
+
 ## Usage
 Basic usage described in <a href="./vignettes">**vignettes**</a> and <a href="https://github.com/ctlab/samovar/wiki">**wiki**</a>
 
@@ -19,17 +43,25 @@ You can also try the generator with <a href="https://dsmutin.shinyapps.io/samova
 
 ## Installation
 
-To get, run in R:
+Install R package:
 
 ```r
-devtools::install_github("https://github.com/dsmutin/samovar/")
+devtools::install_github("https://github.com/ctlab/samovar/")
+```
+
+Install python package:
+
+```bash
+git clone https://github.com/ctlab/samovar
+cd samovar
+pip install -e .
 ```
 
 ## R algorithm summary
 <img src="data/img/additional/algo.png">
 
 
-## Usage
+## R generation
 
 <a href="https://github.com/ctlab/samovar/samovaR.pdf">See</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
 
