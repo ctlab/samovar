@@ -15,23 +15,19 @@ Therefore, we propose an approach that utilizes de novo generation of the artifi
 ## Project Structure
 
 ```mermaid
-graph TD
+graph LR
     A[SamovaR] --> G1[Abundance table generation]
     G1 --> B[R Package]
     A --> G2[Automated re-profiling]
-    G2 --> C[Python Pipeline]
+    G2 --> C[snakemake + Python Pipeline]
     G1 --> G[Shiny App]
 
     B --> B1[R/]
     B --> B2[man/]
     B --> B3[vignettes/]
-    B --> B4[DESCRIPTION]
-    B --> B5[NAMESPACE]
 
     C --> C1[workflow/]
     C --> C2[src/]
-    C --> C3[setup.py]
-    C --> C4[pyproject.toml]
 
     G --> H[shiny/]
 ```
