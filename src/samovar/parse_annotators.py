@@ -89,7 +89,7 @@ def read_metaphlan_raw(file_path: str) -> pd.DataFrame:
     df = pd.read_table(file_path, header=None)
     df.columns = ["seq", "taxID"]
     # Extract sequence ID from the full path
-    df["seq"] = [re.sub(r"\/.*", "", i) for i in df["seq"]]
+    #df["seq"] = [re.sub(r"\/.*", "", i) for i in df["seq"]]
     # Extract taxID from the VDB format
     df["taxID"] = df["taxID"].apply(lambda x: re.search(r'M\d+-c\d+', x).group(0) if re.search(r'M\d+-c\d+', x) else None)
     return df

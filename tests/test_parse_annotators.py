@@ -39,6 +39,11 @@ def kraken2_file(test_data_dir):
     """Return path to Kraken2 test file."""
     return os.path.join(test_data_dir, "kraken2.log")
 
+@pytest.fixture
+def krakenu_file(test_data_dir):
+    """Return path to Kraken-Unique test file."""
+    return os.path.join(test_data_dir, "krakenunique.log")
+
 
 @pytest.fixture
 def metaphlan_file(test_data_dir):
@@ -51,6 +56,7 @@ def test_read_kaiju_raw(kaiju_file):
     df = read_kaiju_raw(kaiju_file)
     assert isinstance(df, pd.DataFrame)
     assert list(df.columns) == ["classified", "seq", "score", "taxID", "N"]
+    assert len(df.seq.unique()) == len(df.seq)
     assert len(df) > 0
 
 
@@ -59,14 +65,24 @@ def test_read_kraken1_raw(kraken1_file):
     df = read_kraken1_raw(kraken1_file)
     assert isinstance(df, pd.DataFrame)
     assert list(df.columns) == ["classified", "seq", "taxID", "length", "k-mer"]
+    assert len(df.seq.unique()) == len(df.seq)
     assert len(df) > 0
 
 
 def test_read_kraken2_raw(kraken2_file):
-    """Test reading Kraken2 output file."""
+    """Test reading Kraken 2 output file."""
     df = read_kraken2_raw(kraken2_file)
     assert isinstance(df, pd.DataFrame)
     assert "taxID" in df.columns
+    assert len(df.seq.unique()) == len(df.seq)
+    assert len(df) > 0
+
+def test_read_krakenu_raw(krakenu_file):
+    """Test reading Kraken Unique output file."""
+    df = read_krakenu_raw(krakenu_file)
+    assert isinstance(df, pd.DataFrame)
+    assert "taxID" in df.columns
+    assert len(df.seq.unique()) == len(df.seq)
     assert len(df) > 0
 
 
@@ -75,6 +91,7 @@ def test_read_metaphlan_raw(metaphlan_file):
     df = read_metaphlan_raw(metaphlan_file)
     assert isinstance(df, pd.DataFrame)
     assert list(df.columns) == ["seq", "taxID"]
+    assert len(df.seq.unique()) == len(df.seq)
     assert len(df) > 0
 
 
@@ -82,12 +99,17 @@ def test_read_annotation(test_data_dir):
     """Test reading multiple annotation files."""
     file_path_type = {
         os.path.join(test_data_dir, "kaiju.log"): "kaiju",
-        os.path.join(test_data_dir, "kraken.log"): "kraken1"
+        os.path.join(test_data_dir, "kraken.log"): "kraken1",
+        os.path.join(test_data_dir, "kraken2.log"): "kraken2",
+        os.path.join(test_data_dir, "krakenunique.log"): "krakenu"
+        #os.path.join(test_data_dir, "metaphlan4.log"): "metaphlan"
     }
-    df = read_annotation(file_path_type)
-    assert isinstance(df, pd.DataFrame)
-    assert len(df) > 0
-    assert any(col.startswith("taxID_") for col in df.columns)
+    ann = Annotation(file_path_type, get_true_annotation=r".*")
+    ann.export("tests_outs/annotation.csv")
+
+    assert isinstance(ann.DataFrame, pd.DataFrame)
+    assert len(ann.DataFrame) > 0
+    assert any(col.startswith("taxID_") for col in ann.DataFrame.columns)
 
 
 def test_annotation_class(test_data_dir):

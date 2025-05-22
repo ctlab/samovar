@@ -1,0 +1,136 @@
+import os
+import glob
+import pandas as pd
+from pathlib import Path
+
+# Configuration
+configfile: "config.yaml"
+
+# Input and output directories
+ANNOTATION_DIR = config["annotation_dir"]
+GENOME_DIR = config["genome_dir"]
+OUTPUT_DIR = config["output_dir"]
+EMAIL = config["email"]
+
+# Create output directories
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(GENOME_DIR, exist_ok=True)
+
+# Get all annotation files
+annotation_files = [str(f) for f in Path(ANNOTATION_DIR).glob("*")]
+
+# Rule to parse annotation files and create combined table
+rule parse_annotations:
+    input:
+        files = annotation_files
+    output:
+        combined = os.path.join(OUTPUT_DIR, "combined_annotations.csv")
+    run:
+        from samovar.parse_annotators import Annotation
+        import os
+        
+        # Create file path to tool type mapping
+        file_path_type = {}
+        for f in input.files:
+            filename = os.path.basename(f).lower()
+            if "kaiju" in filename:
+                tool_type = "kaiju"
+            elif "kraken2" in filename and not filename.endswith(".report"):
+                tool_type = "kraken2"
+            elif "kraken" in filename:
+                tool_type = "kraken"
+            elif "metaphlan" in filename:
+                tool_type = "metaphlan"
+            else:
+                print(f"Warning: Unknown file type for {f}, skipping")
+                continue
+            file_path_type[f] = tool_type
+        
+        if not file_path_type:
+            raise ValueError("No valid annotation files found")
+        
+        # Process annotations using the Annotation class
+        annotation = Annotation(file_path_type, get_true_annotation=r"taxid_(\d+)")
+        
+        # Export to CSV
+        annotation.export(output.combined)
+
+# Rule to fetch genomes for unique taxids
+rule fetch_genomes:
+    input:
+        combined = os.path.join(OUTPUT_DIR, "combined_annotations.csv")
+    output:
+        genomes = os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")
+    run:
+        from samovar.genome_fetcher import parse_taxonomy_table
+        
+        # Read combined annotations
+        df = pd.read_csv(input.combined)
+        
+        # Get unique taxids
+        taxid_columns = [col for col in df.columns if 'taxid' in col.lower()]
+        unique_taxids = set()
+        for col in taxid_columns:
+            unique_taxids.update(df[col].astype(str).unique())
+            
+        # Remove non-numeric taxids
+        unique_taxids = {tid for tid in unique_taxids if tid.isdigit()}
+        
+        # Download genomes
+        downloaded_genomes = parse_taxonomy_table(
+            input.combined,
+            GENOME_DIR,
+            EMAIL,
+            reference_only=True
+        )
+        
+        # Write list of downloaded genomes
+        with open(output.genomes, 'w') as f:
+            for genome in downloaded_genomes:
+                f.write(f"{genome}\n")
+
+# Rule to process genomes and generate simulated reads
+rule process_genomes:
+    input:
+        genomes = os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")
+    output:
+        fastqs = os.path.join(OUTPUT_DIR, "simulated_reads_{sample}.fastq")
+    run:
+        from samovar.fasta_processor import preprocess_fasta
+        from samovar.table2iss import generate_reads
+        
+        # Read list of downloaded genomes
+        with open(input.genomes) as f:
+            genome_files = [line.strip() for line in f]
+            
+        # Process each genome
+        for genome_file in genome_files:
+            taxid = os.path.basename(genome_file).split(".")[0]
+            output_fasta = os.path.join(OUTPUT_DIR, f"{taxid}_processed.fa")
+            
+            # Process genome with no mutations
+            preprocess_fasta(
+                genome_file,
+                output_fasta,
+                mutation_rate=0.0,
+                include_percent=100.0
+            )
+            
+            # Generate reads using table2iss
+            generate_reads(
+                output_fasta,
+                output.fastqs.format(sample=taxid),
+                read_length=config["read_length"],
+                coverage=config["coverage"]
+            )
+
+# Get list of samples from downloaded genomes
+def get_samples(wildcards):
+    with open(os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")) as f:
+        return [os.path.basename(line.strip()).split(".")[0] for line in f]
+
+# Main rule to run the entire workflow
+rule all:
+    input:
+        expand(os.path.join(OUTPUT_DIR, "simulated_reads_{sample}.fastq"),
+               sample=get_samples) 

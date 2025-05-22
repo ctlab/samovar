@@ -1,0 +1,11 @@
+# Input and output directories
+annotation_dir: "tests/data/"
+genome_dir: "tests_outs/benchmarking/genomes"
+output_dir: "tests_outs/benchmarking/generated"
+
+# NCBI Entrez email (required for genome downloads)
+email: "test@samovar.com"
+
+# Read simulation parameters
+read_length: 150
+coverage: 30 
