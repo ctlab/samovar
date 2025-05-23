@@ -15,6 +15,7 @@ Therefore, we propose an approach that utilizes de novo generation of the artifi
 ## Project Structure
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
 graph LR
     A[SamovaR] --> G1[Abundance table generation]
     G1 --> B[R Package]
@@ -128,32 +129,52 @@ new_data <- samovar %>%
 
 
 ## Dependencies
-### R package
-- **main**
-  - tidyverse
-  - cluster
-  - scclust
-  - Matrix
-  - methods
-  - here
-- **vizualization** 
-  - ggplot
-  - plotly
-  - tsne
-  - ggnewscale
-- **API**
-  - httr
-  - jsonlite
-  - xml2
 
-
-### Automated benchmarking
-- **R packages**
-- snakemake
-- InSilicoSeq
-- **python packages**
-  - rpy2
-  - nump
-  - pandas
-  - requests
-  - ete3
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
+graph LR
+    subgraph "R Package Dependencies"
+        subgraph "Main"
+            direction LR
+            tidyverse
+            scclust
+            Matrix
+            methods
+        end
+        
+        subgraph "Visualization"
+            direction LR
+            ggplot
+            plotly
+            tsne
+            ggnewscale
+        end
+        
+        subgraph "API"
+            direction LR
+            httr
+            jsonlite
+            xml2
+        end
+    end
+    
+    subgraph "Automated Benchmarking"
+        subgraph "Major"
+            direction LR
+            samova.R
+            snakemake
+            InSilicoSeq
+        end
+        
+        subgraph "Python Packages"
+            direction LR
+            rpy2
+            numpy
+            pandas
+            requests
+            ete3
+        end
+    end
+    
+    linkStyle default stroke:#000
+```
