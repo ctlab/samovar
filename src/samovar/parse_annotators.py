@@ -13,22 +13,50 @@ import requests
 import re
 from ete3 import NCBITaxa
 from typing import Dict, List, Optional, Union
+import sqlite3
+import mmap
 
 # Initialize NCBI taxonomy database
 ncbi = NCBITaxa()
 
 
-def read_kaiju_raw(file_path: str) -> pd.DataFrame:
+def parse_metaphlan_db(db_path: str) -> Dict[str, str]:
+    """Parse MetaPhlAn database to map reference IDs to NCBI taxIDs.
+    
+    Args:
+        db_path: Path to MetaPhlAn database directory
+        
+    Returns:
+        Dictionary mapping MetaPhlAn reference IDs to NCBI taxIDs
+    """
+    # MetaPhlAn uses a SQLite database
+    db_file = os.path.join(db_path, "mpa_v30_CHOCOPhlAn_201901_species_map.db")
+    if not os.path.exists(db_file):
+        raise FileNotFoundError(f"MetaPhlAn database not found at {db_file}")
+        
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    
+    # Query to get mapping between reference IDs and taxIDs
+    cursor.execute("SELECT ref_id, tax_id FROM mpa_species_map")
+    mapping = {row[0]: row[1] for row in cursor.fetchall()}
+    
+    conn.close()
+    return mapping
+
+
+def read_kaiju_raw(file_path: str, db_path: Optional[str] = None) -> pd.DataFrame:
     """Read raw Kaiju output file.
     
     Args:
         file_path: Path to Kaiju output file
+        db_path: Optional path to Kaiju database file
         
     Returns:
         DataFrame with columns: classified, seq, score, taxID, N
     """
     df = pd.read_table(file_path, header=None)
-    df.columns = ["classified", "seq", "score", "taxID", "N"]
+    df.columns = ["classified", "seq", "taxID"]
     return df
 
 
@@ -77,21 +105,30 @@ def read_krakenu_raw(file_path: str) -> pd.DataFrame:
     return df
 
 
-def read_metaphlan_raw(file_path: str) -> pd.DataFrame:
+def read_metaphlan_raw(file_path: str, db_path: Optional[str] = None) -> pd.DataFrame:
     """Read raw MetaPhlAn output file.
     
     Args:
         file_path: Path to MetaPhlAn output file
+        db_path: Optional path to MetaPhlAn database directory
         
     Returns:
         DataFrame with columns: seq, taxID
     """
     df = pd.read_table(file_path, header=None)
     df.columns = ["seq", "taxID"]
-    # Extract sequence ID from the full path
-    #df["seq"] = [re.sub(r"\/.*", "", i) for i in df["seq"]]
-    # Extract taxID from the VDB format
-    df["taxID"] = df["taxID"].apply(lambda x: re.search(r'M\d+-c\d+', x).group(0) if re.search(r'M\d+-c\d+', x) else None)
+    
+    if db_path is not None:
+        # Parse database and map reference IDs to taxIDs
+        db_mapping = parse_metaphlan_db(db_path)
+        
+        # Extract reference ID from the taxID field
+        df["ref_id"] = df["taxID"].apply(lambda x: re.search(r'M\d+-c\d+', x).group(0) if re.search(r'M\d+-c\d+', x) else None)
+        
+        # Map reference IDs to taxIDs
+        df["taxID"] = df["ref_id"].map(db_mapping)
+        df = df.drop("ref_id", axis=1)
+    
     return df
 
 
@@ -124,7 +161,8 @@ def read_annotation(file_path_type: Dict[str, str], trimmed: bool = True) -> pd.
         df = READ_FUNCTIONS.get(tool_type)(path).set_index("seq")
         if trimmed:
             df = df[["taxID"]]
-        df.columns = [f"{col}_{tool_type}" if col != "seq" else col for col in df.columns]
+        tool_name = tool_type.split("_")[-1].split(".")[0]
+        df.columns = [f"{col}_{tool_name}" if col != "seq" else col for col in df.columns]
         res = pd.concat([res, df], axis=1)
     return res
 

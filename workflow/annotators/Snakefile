@@ -14,17 +14,17 @@ def get_annotator_outputs():
     outputs = []
     for run in config['run_config']:
         if run['type'] == 'kraken2':
-            outputs.extend(expand(f"{config['output_dir']}/{{sample}}_{{run_name}}.{{ext}}", 
+            outputs.extend(expand(os.path.join(config['output_dir'], f"{{sample}}_{{run_name}}.{{ext}}"),
                                 run_name=run['run_name'],
                                 sample=get_samples(),
                                 ext=['kraken2.report', 'kraken2.out']))
         elif run['type'] == 'kaiju':
-            outputs.extend(expand(f"{config['output_dir']}/{{sample}}_{{run_name}}.{{ext}}",
+            outputs.extend(expand(os.path.join(config['output_dir'], f"{{sample}}_{{run_name}}.{{ext}}"),
                                 run_name=run['run_name'],
                                 sample=get_samples(),
                                 ext=['kaiju.out']))
         elif run['type'] == 'metaphlan4':
-            outputs.extend(expand(f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.out",
+            outputs.extend(expand(os.path.join(config['output_dir'], f"{{sample}}_{{run_name}}.metaphlan4.out"),
                                 run_name=run['run_name'],
                                 sample=get_samples()))
     return outputs
@@ -69,8 +69,8 @@ rule kaiju:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
     params:
         db = lambda wildcards: next(run['db_path'] for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        db_file = lambda wildcards: next(run['db_path']+"/*.fmi" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        db_nodes = lambda wildcards: next(run['db_nodes'] if run.get('db_nodes') else run['db_path']+"/taxonomy/nodes.dmp" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        db_file = lambda wildcards: next(os.path.join(run['db_path'], run['db_name']) if run.get('db_name') else run['db_path']+"/*.fmi" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        db_nodes = lambda wildcards: next(run['db_nodes'] if run.get('db_nodes') else run['db_path']+"/nodes.dmp" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
         threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
         extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
         cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "kaiju" for run in config['run_config'] if run['run_name'] == wildcards.run_name)
@@ -109,7 +109,7 @@ rule metaphlan4:
             -1 {input.r1} \
             -2 {input.r2} \
             --bowtie2out {output.out_bowtie} \
-            -o {output.raw} {params.extra}
+            -o {output.out_raw} {params.extra}
             
         # Extract read IDs and marker gene IDs from bowtie2 output
         bzcat {output.out_bowtie} | \

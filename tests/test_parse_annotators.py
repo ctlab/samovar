@@ -12,7 +12,8 @@ from samovar.parse_annotators import (
     read_annotation,
     Annotation,
     RankAnnotation,
-    ExpandAnnotation
+    ExpandAnnotation,
+    parse_metaphlan_db
 )
 
 
@@ -55,7 +56,7 @@ def test_read_kaiju_raw(kaiju_file):
     """Test reading Kaiju output file."""
     df = read_kaiju_raw(kaiju_file)
     assert isinstance(df, pd.DataFrame)
-    assert list(df.columns) == ["classified", "seq", "score", "taxID", "N"]
+    assert list(df.columns) == ["classified", "seq", "taxID"]
     assert len(df.seq.unique()) == len(df.seq)
     assert len(df) > 0
 
@@ -144,4 +145,74 @@ def test_rank_annotation_class():
 def test_expand_annotation_class():
     """Test ExpandAnnotation class functionality."""
     expand_ann = ExpandAnnotation()
-    assert isinstance(expand_ann.rank_annotation, dict) 
+    assert isinstance(expand_ann.rank_annotation, dict)
+
+
+def test_parse_metaphlan_db(test_data_dir):
+    """Test parsing MetaPhlAn database."""
+    # Create a mock database file
+    db_dir = os.path.join(test_data_dir, "mock_metaphlan_db")
+    os.makedirs(db_dir, exist_ok=True)
+    db_file = os.path.join(db_dir, "mpa_v30_CHOCOPhlAn_201901_species_map.db")
+    
+    # Create a simple SQLite database with test data
+    import sqlite3
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE mpa_species_map (
+            ref_id TEXT,
+            tax_id TEXT
+        )
+    """)
+    test_data = [
+        ("M367-c418", "511145"),  # E. coli
+        ("M1206-c595", "9606"),   # Human
+    ]
+    cursor.executemany("INSERT INTO mpa_species_map VALUES (?, ?)", test_data)
+    conn.commit()
+    conn.close()
+    
+    # Test parsing
+    mapping = parse_metaphlan_db(db_dir)
+    assert isinstance(mapping, dict)
+    assert mapping["M367-c418"] == "511145"
+    assert mapping["M1206-c595"] == "9606"
+    
+    # Cleanup
+    os.remove(db_file)
+    os.rmdir(db_dir)
+
+def test_read_metaphlan_with_db(test_data_dir):
+    """Test reading MetaPhlAn output with database mapping."""
+    # Create mock database
+    db_dir = os.path.join(test_data_dir, "mock_metaphlan_db")
+    os.makedirs(db_dir, exist_ok=True)
+    db_file = os.path.join(db_dir, "mpa_v30_CHOCOPhlAn_201901_species_map.db")
+    
+    import sqlite3
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE mpa_species_map (
+            ref_id TEXT,
+            tax_id TEXT
+        )
+    """)
+    test_data = [
+        ("M367-c418", "511145"),  # E. coli
+        ("M1206-c595", "9606"),   # Human
+    ]
+    cursor.executemany("INSERT INTO mpa_species_map VALUES (?, ?)", test_data)
+    conn.commit()
+    conn.close()
+    
+    # Test reading with database
+    df = read_metaphlan_raw(os.path.join(test_data_dir, "metaphlan4.log"), db_dir)
+    assert isinstance(df, pd.DataFrame)
+    assert "taxID" in df.columns
+    assert df["taxID"].isin(["511145", "9606"]).any()
+    
+    # Cleanup
+    os.remove(db_file)
+    os.rmdir(db_dir)

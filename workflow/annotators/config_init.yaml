@@ -12,9 +12,10 @@ run_config: [
     "db_path": "tests_outs/kraken_db"
   },
   {
-    "run_name": "kaiju-custom",
+    "run_name": "kaiju",
     "type": "kaiju",
-    "db_path": "tests_outs/kaiju_db"
+    "db_path": "/mnt/metagenomics/kaiju",
+    "db_name": "kaiju_db_fungi.fmi"
   },
   {
     "run_name": "metaphlan",
