@@ -204,7 +204,7 @@ def test_process_annotation_table():
     
     # Check if output files exist
     for annotator in ["k1", "k2"]:
-        assert os.path.exists(os.path.join(reads_dir, annotator, "test_table_R1.fastq"))
-        assert os.path.exists(os.path.join(reads_dir, annotator, "test_table_R2.fastq"))
+        assert os.path.exists(os.path.join(reads_dir, f"test_table_{annotator}_R1.fastq"))
+        assert os.path.exists(os.path.join(reads_dir, f"test_table_{annotator}_R2.fastq"))
 
 
