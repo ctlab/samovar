@@ -11,3 +11,4 @@ src/__pycache__
 taxdump.tar.gz
 .Rprofile
 config.json
+data/test_genomes/meta/9606.fna

@@ -2,135 +2,119 @@ import os
 import glob
 import pandas as pd
 from pathlib import Path
+from samovar.table2iss import parse_annotation_table, process_annotation_table
+from samovar.genome_fetcher import fetch_genome
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configuration
 configfile: "config.yaml"
 
 # Input and output directories
-ANNOTATION_DIR = config["annotation_dir"]
+ANNOTATION = config["annotation_table"]
 GENOME_DIR = config["genome_dir"]
 OUTPUT_DIR = config["output_dir"]
 EMAIL = config["email"]
+READ_LENGTH = config["read_length"]
+COVERAGE = config["coverage"]
+MODEL = config.get("model", "hiseq")
 
 # Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(GENOME_DIR, exist_ok=True)
 
-# Get all annotation files
-annotation_files = [str(f) for f in Path(ANNOTATION_DIR).glob("*")]
+# Get list of annotators from the annotation table
+def get_annotators():
+    df = pd.read_csv(ANNOTATION)
+    taxid_cols = [col for col in df.columns if 'taxid' in col.lower()]
+    return [col.split('_')[-1] for col in taxid_cols]
 
-# Rule to parse annotation files and create combined table
-rule parse_annotations:
-    input:
-        files = annotation_files
-    output:
-        combined = os.path.join(OUTPUT_DIR, "combined_annotations.csv")
-    run:
-        from samovar.parse_annotators import Annotation
-        import os
-        
-        # Create file path to tool type mapping
-        file_path_type = {}
-        for f in input.files:
-            filename = os.path.basename(f).lower()
-            if "kaiju" in filename:
-                tool_type = "kaiju"
-            elif "kraken2" in filename and not filename.endswith(".report"):
-                tool_type = "kraken2"
-            elif "kraken" in filename:
-                tool_type = "kraken"
-            elif "metaphlan" in filename:
-                tool_type = "metaphlan"
-            else:
-                print(f"Warning: Unknown file type for {f}, skipping")
-                continue
-            file_path_type[f] = tool_type
-        
-        if not file_path_type:
-            raise ValueError("No valid annotation files found")
-        
-        # Process annotations using the Annotation class
-        annotation = Annotation(file_path_type, get_true_annotation=r"taxid_(\d+)")
-        
-        # Export to CSV
-        annotation.export(output.combined)
+# Get list of taxids from the annotation table
+def get_taxids():
+    df = pd.read_csv(ANNOTATION)
+    taxid_cols = [col for col in df.columns if 'taxid' in col.lower()]
+    taxids = set()
+    for col in taxid_cols:
+        taxids.update(df[col].astype(str).unique())
+    # Remove non-numeric taxids
+    return {tid for tid in taxids if tid.isdigit()}
 
-# Rule to fetch genomes for unique taxids
+# Rule to fetch genomes
 rule fetch_genomes:
     input:
-        combined = os.path.join(OUTPUT_DIR, "combined_annotations.csv")
+        annotation_table = ANNOTATION
     output:
-        genomes = os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")
+        genome_list = os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")
     run:
-        from samovar.genome_fetcher import parse_taxonomy_table
+        taxids = get_taxids()
+        downloaded_genomes = []
         
-        # Read combined annotations
-        df = pd.read_csv(input.combined)
+        for taxid in taxids:
+            genome_file = os.path.join(GENOME_DIR, f"{taxid}.fa")
+            if not os.path.exists(genome_file):
+                try:
+                    logger.info(f"Fetching genome for taxid {taxid}")
+                    fetch_genome(taxid, GENOME_DIR, EMAIL, reference_only=True)
+                    if os.path.exists(genome_file):
+                        downloaded_genomes.append(genome_file)
+                        logger.info(f"Successfully downloaded genome for taxid {taxid}")
+                    else:
+                        logger.warning(f"Failed to download genome for taxid {taxid}")
+                except Exception as e:
+                    logger.error(f"Error downloading genome for taxid {taxid}: {str(e)}")
+            else:
+                downloaded_genomes.append(genome_file)
+                logger.info(f"Genome for taxid {taxid} already exists")
         
-        # Get unique taxids
-        taxid_columns = [col for col in df.columns if 'taxid' in col.lower()]
-        unique_taxids = set()
-        for col in taxid_columns:
-            unique_taxids.update(df[col].astype(str).unique())
-            
-        # Remove non-numeric taxids
-        unique_taxids = {tid for tid in unique_taxids if tid.isdigit()}
-        
-        # Download genomes
-        downloaded_genomes = parse_taxonomy_table(
-            input.combined,
-            GENOME_DIR,
-            EMAIL,
-            reference_only=True
-        )
-        
-        # Write list of downloaded genomes
-        with open(output.genomes, 'w') as f:
+        # Write list of successfully downloaded genomes
+        with open(output.genome_list, 'w') as f:
             for genome in downloaded_genomes:
                 f.write(f"{genome}\n")
 
-# Rule to process genomes and generate simulated reads
-rule process_genomes:
+# Main rule to process annotations for each annotator
+rule process_annotations:
     input:
-        genomes = os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")
+        annotation_table = ANNOTATION,
+        genome_list = os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")
     output:
-        fastqs = os.path.join(OUTPUT_DIR, "simulated_reads_{sample}.fastq")
+        # Output files will be in annotator-specific directories
+        fastqs = expand(os.path.join(OUTPUT_DIR, "{annotator}", "{annotator}_R{read}.fastq"),
+                       annotator=get_annotators(),
+                       read=[1, 2])
     run:
-        from samovar.fasta_processor import preprocess_fasta
-        from samovar.table2iss import generate_reads
+        # Verify that we have genomes before processing
+        with open(input.genome_list) as f:
+            available_genomes = [line.strip() for line in f]
         
-        # Read list of downloaded genomes
-        with open(input.genomes) as f:
-            genome_files = [line.strip() for line in f]
+        if not available_genomes:
+            raise ValueError("No genomes available for processing. Please check genome downloads.")
             
-        # Process each genome
-        for genome_file in genome_files:
-            taxid = os.path.basename(genome_file).split(".")[0]
-            output_fasta = os.path.join(OUTPUT_DIR, f"{taxid}_processed.fa")
+        # Process annotations for each annotator
+        for annotator in get_annotators():
+            annotator_output_dir = os.path.join(OUTPUT_DIR, annotator)
+            os.makedirs(annotator_output_dir, exist_ok=True)
             
-            # Process genome with no mutations
-            preprocess_fasta(
-                genome_file,
-                output_fasta,
-                mutation_rate=0.0,
-                include_percent=100.0
-            )
-            
-            # Generate reads using table2iss
-            generate_reads(
-                output_fasta,
-                output.fastqs.format(sample=taxid),
-                read_length=config["read_length"],
-                coverage=config["coverage"]
-            )
-
-# Get list of samples from downloaded genomes
-def get_samples(wildcards):
-    with open(os.path.join(OUTPUT_DIR, "downloaded_genomes.txt")) as f:
-        return [os.path.basename(line.strip()).split(".")[0] for line in f]
+            try:
+                process_annotation_table(
+                    table_path=ANNOTATION,
+                    genome_dir=GENOME_DIR,
+                    output_dir=annotator_output_dir,
+                    email=EMAIL,
+                    reference_only=True,
+                    model=MODEL,
+                    read_length=READ_LENGTH,
+                    sample_name=annotator,
+                    mode="direct"
+                )
+                logger.info(f"Successfully processed annotations for {annotator}")
+            except Exception as e:
+                logger.error(f"Error processing annotations for {annotator}: {str(e)}")
+                raise
 
 # Main rule to run the entire workflow
 rule all:
     input:
-        expand(os.path.join(OUTPUT_DIR, "simulated_reads_{sample}.fastq"),
-               sample=get_samples) 
+        rules.process_annotations.output.fastqs 

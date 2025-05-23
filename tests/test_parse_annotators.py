@@ -42,7 +42,7 @@ def kraken2_file(test_data_dir):
 
 @pytest.fixture
 def krakenu_file(test_data_dir):
-    """Return path to Kraken-Unique test file."""
+    """Return path to Kraken Unique test file."""
     return os.path.join(test_data_dir, "krakenunique.log")
 
 
@@ -55,6 +55,7 @@ def metaphlan_file(test_data_dir):
 def test_read_kaiju_raw(kaiju_file):
     """Test reading Kaiju output file."""
     df = read_kaiju_raw(kaiju_file)
+    print(df.head())
     assert isinstance(df, pd.DataFrame)
     assert list(df.columns) == ["classified", "seq", "taxID"]
     assert len(df.seq.unique()) == len(df.seq)

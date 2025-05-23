@@ -5,19 +5,25 @@ from pathlib import Path
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from samovar.table2iss import read_taxonomy_table, generate_reads, process_table
+from samovar.table2iss import (
+    parse_annotation_table,
+    generate_reads_genome,
+    generate_reads_metagenome,
+    regenerate_metagenome,
+    process_annotation_table
+)
 
-def create_test_fasta(tmpdir):
+def create_test_fasta(output_dir):
     """Create a test FASTA file."""
-    fasta_path = os.path.join(tmpdir, "test.fa")
+    fasta_path = os.path.join(output_dir, "test.fa")
     seq = Seq("ATCG" * 100)  # 400 bp sequence
     record = SeqRecord(seq, id="test_seq", description="")
     SeqIO.write(record, fasta_path, "fasta")
     return fasta_path
 
-def create_test_table(tmpdir):
+def create_test_table(output_dir):
     """Create a test taxonomy table."""
-    table_path = os.path.join(tmpdir, "test_table.tsv")
+    table_path = os.path.join(output_dir, "test_table.tsv")
     df = pd.DataFrame({
         "taxid": ["9606", "10090", "10116"],
         "amount": [1000, 2000, 3000]
@@ -25,146 +31,180 @@ def create_test_table(tmpdir):
     df.to_csv(table_path, sep="\t", index=False)
     return table_path
 
-def test_read_taxonomy_table():
-    """Test reading taxonomy table."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create test table
-        table_path = create_test_table(tmpdir)
-        
-        # Read table
-        taxid_amounts = read_taxonomy_table(table_path)
-        
-        # Check results
-        assert isinstance(taxid_amounts, dict)
-        assert len(taxid_amounts) == 3
-        assert taxid_amounts["9606"] == 1000
-        assert taxid_amounts["10090"] == 2000
-        assert taxid_amounts["10116"] == 3000
+def test_parse_annotation_table():
+    """Test reading taxonomy table and counting occurrences."""
+    # Create output directory
+    output_dir = "tests_outs/test_parse_annotation_table"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create test table with the example data
+    table_path = os.path.join(output_dir, "test_table.csv")
+    df = pd.DataFrame({
+        "seqID": ["a1", "a2", "a3"],
+        "taxID_k1_0": ["0", "562", "0"],
+        "taxID_k2_1": ["0", "562", "562"]
+    })
+    df.to_csv(table_path, index=False)
+    
+    # Read table
+    result = parse_annotation_table(table_path)
+    
+    # Save output for inspection
+    result.to_csv(os.path.join(output_dir, "result.csv"), index=False)
+    
+    # Check results
+    assert isinstance(result, pd.DataFrame)
+    assert set(result.columns) == {'taxid', 'N_k1', 'N_k2'}
+    assert len(result) == 2  # 0 and 562
+    
+    # Check counts
+    taxid_0 = result[result['taxid'] == '0'].iloc[0]
+    assert taxid_0['N_k1'] == 2
+    assert taxid_0['N_k2'] == 1 
+    
+    taxid_562 = result[result['taxid'] == '562'].iloc[0]
+    assert taxid_562['N_k1'] == 1
+    assert taxid_562['N_k2'] == 2 
 
-def test_generate_reads():
-    """Test generating reads from a genome."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create test FASTA
-        fasta_path = create_test_fasta(tmpdir)
-        output_path = os.path.join(tmpdir, "test_reads.fastq")
-        
-        # Generate reads
-        generate_reads(
-            fasta_path,
-            output_path,
-            read_length=100,
-            coverage=10
-        )
-        
-        # Check if output file exists
-        assert os.path.exists(output_path)
-        
-        # Read generated reads
-        reads = list(SeqIO.parse(output_path, "fastq"))
-        
-        # Check number of reads (should be approximately genome_length * coverage / read_length)
-        expected_reads = (400 * 10) // 100  # 40 reads
-        assert len(reads) == expected_reads
-        
-        # Check read length
-        for read in reads:
-            assert len(read.seq) == 100
-            assert len(read.letter_annotations["phred_quality"]) == 100
+def test_parse_real_annotation_table():
+    """Test parsing the real annotation table and check output dimensions."""
+    # Create output directory
+    output_dir = "tests_outs/test_parse_real_annotation_table"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Path to real annotation file
+    table_path = "tests/data/annotation.csv"
+    
+    # Parse table
+    result = parse_annotation_table(table_path)
+    
+    # Save output for manual inspection
+    output_path = os.path.join(output_dir, "result.csv")
+    result.to_csv(output_path, index=False)
+    
+    # Check basic properties
+    assert isinstance(result, pd.DataFrame)
+    assert 'taxid' in result.columns
+    assert all(col.startswith('N_') for col in result.columns if col != 'taxid')
+    assert len(result) > 0  # Should have at least one taxid
 
-def test_generate_reads_with_amount():
-    """Test generating reads with specific amount."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create test FASTA
-        fasta_path = create_test_fasta(tmpdir)
-        output_path = os.path.join(tmpdir, "test_reads.fastq")
-        
-        # Generate reads with specific amount
-        generate_reads(
-            fasta_path,
-            output_path,
-            read_length=100,
-            amount=50
-        )
-        
-        # Read generated reads
-        reads = list(SeqIO.parse(output_path, "fastq"))
-        
-        # Check number of reads
-        assert len(reads) == 50
+def test_generate_reads_genome():
+    """Test generating reads from a single genome."""
+    # Create output directory
+    output_dir = "tests_outs/test_generate_reads_genome"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create test FASTA file
+    fasta_path = create_test_fasta(output_dir)
+    
+    # Set up output path
+    output_path = os.path.join(output_dir, "test_reads")
+    
+    # Generate reads
+    generate_reads_genome(
+        genome_file=fasta_path,
+        output_file=output_path,
+        amount=100,
+        read_length=150
+    )
+    
+    # Check if output files exist
+    assert os.path.exists(f"{output_path}_R1.fastq")
+    assert os.path.exists(f"{output_path}_R2.fastq")
 
-def test_process_table():
-    """Test processing taxonomy table and generating reads."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create test table
-        table_path = create_test_table(tmpdir)
-        
-        # Create test genome directory
-        genome_dir = os.path.join(tmpdir, "genomes")
-        os.makedirs(genome_dir)
-        
-        # Create test genomes
-        for taxid in ["9606", "10090", "10116"]:
-            fasta_path = os.path.join(genome_dir, f"{taxid}.fa")
-            seq = Seq("ATCG" * 100)
-            record = SeqRecord(seq, id=f"seq_{taxid}", description="")
-            SeqIO.write(record, fasta_path, "fasta")
-        
-        # Create output directory
-        output_dir = os.path.join(tmpdir, "output")
-        os.makedirs(output_dir)
-        
-        # Process table
-        process_table(
-            table_path,
-            genome_dir,
-            output_dir,
-            read_length=100,
-            coverage=10
-        )
-        
-        # Check output files
-        for taxid in ["9606", "10090", "10116"]:
-            output_file = os.path.join(output_dir, f"simulated_reads_{taxid}.fastq")
-            assert os.path.exists(output_file)
-            
-            # Check number of reads
-            reads = list(SeqIO.parse(output_file, "fastq"))
-            # Read table and convert taxid to string for comparison
-            table_df = pd.read_csv(table_path, sep="\t")
-            table_df["taxid"] = table_df["taxid"].astype(str)
-            expected_reads = int(table_df.set_index("taxid").loc[taxid, "amount"])
-            assert len(reads) == expected_reads
+def test_generate_reads_metagenome():
+    """Test generating reads from multiple genomes."""
+    # Create output directory
+    output_dir = "tests_outs/test_generate_reads_metagenome"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create multiple test FASTA files
+    fasta_paths = []
+    for i in range(3):
+        fasta_path = create_test_fasta(output_dir)
+        fasta_paths.append(fasta_path)
+    
+    # Generate reads
+    generate_reads_metagenome(
+        genome_files=fasta_paths,
+        output_dir=output_dir,
+        amount=[100, 200, 300],
+        read_length=150,
+        sample_name="test_metagenome"
+    )
+    
+    # Check if output files exist
+    assert os.path.exists(os.path.join(output_dir, "test_metagenome_R1.fastq"))
+    assert os.path.exists(os.path.join(output_dir, "test_metagenome_R2.fastq"))
 
-def test_process_table_missing_genome():
-    """Test processing table with missing genome file."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create test table
-        table_path = create_test_table(tmpdir)
-        
-        # Create test genome directory
-        genome_dir = os.path.join(tmpdir, "genomes")
-        os.makedirs(genome_dir)
-        
-        # Create only one test genome
-        fasta_path = os.path.join(genome_dir, "9606.fa")
-        seq = Seq("ATCG" * 100)
-        record = SeqRecord(seq, id="seq_9606", description="")
-        SeqIO.write(record, fasta_path, "fasta")
-        
-        # Create output directory
-        output_dir = os.path.join(tmpdir, "output")
-        os.makedirs(output_dir)
-        
-        # Process table
-        process_table(
-            table_path,
-            genome_dir,
-            output_dir,
-            read_length=100,
-            coverage=10
-        )
-        
-        # Check that only one output file exists
-        assert os.path.exists(os.path.join(output_dir, "simulated_reads_9606.fastq"))
-        assert not os.path.exists(os.path.join(output_dir, "simulated_reads_10090.fastq"))
-        assert not os.path.exists(os.path.join(output_dir, "simulated_reads_10116.fastq")) 
+def test_regenerate_metagenome():
+    """Test regenerating metagenome reads."""
+    # Create output directory
+    output_dir = "tests_outs/test_regenerate_metagenome"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create multiple test FASTA files
+    fasta_paths = []
+    for i in range(3):
+        fasta_path = create_test_fasta(output_dir)
+        fasta_paths.append(fasta_path)
+    
+    # Regenerate reads
+    regenerate_metagenome(
+        genome_files=fasta_paths,
+        output_dir=output_dir,
+        amount=[100, 200, 300],
+        read_length=150,
+        sample_name="test_regenerated",
+        mode="direct"
+    )
+    
+    # Check if output files exist
+    assert os.path.exists(os.path.join(output_dir, "test_regenerated_R1.fastq"))
+    assert os.path.exists(os.path.join(output_dir, "test_regenerated_R2.fastq"))
+
+def test_process_annotation_table():
+    """Test processing annotation table and generating reads."""
+    # Create output directory
+    output_dir = "tests_outs/test_process_annotation_table"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create test table
+    table_path = os.path.join(output_dir, "test_table.csv")
+    df = pd.DataFrame({
+        "seqID": ["a1", "a2", "a3"],
+        "taxID_k1_0": ["0", "562", "0"],
+        "taxID_k2_1": ["0", "562", "562"]
+    })
+    df.to_csv(table_path, index=False)
+    
+    # Create genome directory
+    genome_dir = os.path.join(output_dir, "genomes")
+    os.makedirs(genome_dir, exist_ok=True)
+    
+    # Create test genomes for taxids
+    for taxid in ["0", "562"]:
+        genome_path = os.path.join(genome_dir, f"{taxid}.fa")
+        seq = Seq("ATCG" * 100)  # 400 bp sequence
+        record = SeqRecord(seq, id=f"test_seq_{taxid}", description="")
+        SeqIO.write(record, genome_path, "fasta")
+    
+    # Create output directory for reads
+    reads_dir = os.path.join(output_dir, "reads")
+    os.makedirs(reads_dir, exist_ok=True)
+    
+    # Process table
+    process_annotation_table(
+        table_path=table_path,
+        genome_dir=genome_dir,
+        output_dir=reads_dir,
+        total_amount=1000,
+        mode="direct"
+    )
+    
+    # Check if output files exist
+    for annotator in ["k1", "k2"]:
+        assert os.path.exists(os.path.join(reads_dir, annotator, "test_table_R1.fastq"))
+        assert os.path.exists(os.path.join(reads_dir, annotator, "test_table_R2.fastq"))
+
+
