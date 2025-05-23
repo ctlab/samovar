@@ -6,12 +6,12 @@
 \alias{samovaR-package}
 \title{samovaR: R package for generating model metagenomes with specified properties}
 \description{
-Metagenomics serves as a fundamental approach in the analysis of biological communities. The field continuously witnesses the emergence of numerous novel tools, which in turn necessitates the validation of these tools to address the crucial challenge at hand. In light of this, we have devised an artificial data generation tool `samovaR`, aimed at enhancing the development of algorithms and expediting scientific discoveries. This addon implement creation of abundance files
+There is a fundamental problem in modern metagenomics: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. We propose an approach that utilizes de novo generation of the artificial metagenomes - SamovaR.
 }
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/dsmutin/samovar/tree/beta}
+  \item \url{https://github.com/dsmutin/samovar/}
 }
 
 }

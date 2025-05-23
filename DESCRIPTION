@@ -1,13 +1,14 @@
 Package: samovaR
 Type: Package
 Title: R package for generating model metagenomes with specified properties
-Version: 0.5
-Author@R: c(person("Smutin", "Daniil", email = "dvsmutin@gmail.com", role = c("aut", "cre"),
-           comment = c(ORCID = "0009-0009-1460-4108")),
-           person("Ivanov", "Artem", role = c("aut")),
-           person("ctlab", role = c("fnd")))
+Version: 0.6
+Authors@R: c(
+  person("Smutin", "Daniil", email = "dvsmutin@gmail.com", role = c("aut", "cre"),
+    comment = c(ORCID = "0009-0009-1460-4108")),
+  person("Ivanov", "Artem", role = c("aut")),
+  person("ctlab", role = c("fnd")))
 Description: There is a fundamental problem in modern metagenomics: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. We propose an approach that utilizes de novo generation of the artificial metagenomes - SamovaR.
-URL: https://github.com/dsmutin/samovar/
+URL: https://github.com/ctlab/samovar/
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
@@ -21,9 +22,11 @@ Imports:
     cluster,
     Matrix,
     shiny,
-    here,
     methods,
-    scclust
+    scclust,
+    distances,
+    htmlwidgets,
+    progress
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Suggests: 

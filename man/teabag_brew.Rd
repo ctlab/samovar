@@ -10,7 +10,7 @@ teabag_brew(
   network = F,
   min_cluster_size = 10,
   max_cluster_size = 100,
-  plot_log = T
+  plot_log = F
 )
 }
 \arguments{

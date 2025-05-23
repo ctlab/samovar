@@ -12,3 +12,4 @@ taxdump.tar.gz
 .Rprofile
 config.json
 data/test_genomes/meta/9606.fna
+tests/test_that/*.pdf
