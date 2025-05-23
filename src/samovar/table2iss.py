@@ -4,6 +4,8 @@ Module for converting tables to simulated reads using ISS-like functionality.
 
 import os
 import random
+import re
+import glob
 from typing import Dict, List, Tuple
 import pandas as pd
 from Bio import SeqIO
@@ -72,16 +74,17 @@ def generate_reads_genome(
         read_length: Length of reads to generate
         model: Model to use for simulation
     """
+    if os.path.exists(genome_file):
 
-    cmd = f"""
-           iss generate \
-            --genomes {genome_file} \
-            --model {model} \
-            --output {output_file} \
-            --n_reads {amount}
-    """ 
+        cmd = f"""
+            iss generate \
+                --genomes {genome_file} \
+                --model {model} \
+                --output {output_file} \
+                --n_reads {amount}
+        """ 
 
-    subprocess.run(cmd, shell=True)
+        subprocess.run(cmd, shell=True)
 
 def generate_reads_metagenome(
     genome_files: List[str],
@@ -90,6 +93,7 @@ def generate_reads_metagenome(
     read_length: int = 150,
     total_amount: int = None,
     sample_name: str = "merged",
+    annotator_name: str = None,
     model: str = "hiseq"
 ) -> None:
     """
@@ -101,6 +105,7 @@ def generate_reads_metagenome(
         read_length: Length of reads to generate
         amount: Number of reads to generate
         total_amount: Total number of reads to generate
+        annotator_name: Name of the annotator
         sample_name: Name of the sample
         model: Model to use for simulation with ISS
     """
@@ -109,16 +114,29 @@ def generate_reads_metagenome(
     else:
         total_amount = sum(amount)
 
+    if annotator_name is None:
+        annotator_name = "any"
+
     for genome_file, N in zip(genome_files, amount):
-        generate_reads_genome(genome_file, os.path.join(output_dir, f"{sample_name}"), N, read_length)
+        generate_reads_genome(genome_file, 
+        os.path.join(
+            output_dir, 
+            f"{annotator_name}_{os.path.basename(genome_file).split('.')[0]}"), 
+            N, read_length)
     
     # Merge all reads into a single file
-    output_file_R1 = os.path.join(output_dir, f"{sample_name}_R1.fastq")
-    output_file_R2 = os.path.join(output_dir, f"{sample_name}_R2.fastq")
-    cmd = f"""cat {output_dir}/{sample_name}*R1* >> {output_file_R1}
-        cat {output_dir}/{sample_name}*R2* >> {output_file_R2}
+    
+    output_file_R1 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
+    output_file_R2 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq")
+    cmd = f"""cat {output_dir}/{annotator_name}_*_R1* >> {output_file_R1}
+        cat {output_dir}/{annotator_name}_*_R2* >> {output_file_R2}
     """ 
     subprocess.run(cmd, shell=True)
+
+    # Cleanup
+    for file in glob.glob(os.path.join(output_dir, f"{annotator_name}*")):
+        if not os.path.basename(file).startswith("full"):
+            os.remove(file)
 
 def regenerate_metagenome(
     genome_files: List[str],
@@ -127,6 +145,7 @@ def regenerate_metagenome(
     read_length: int = 150,
     total_amount: int = None,
     sample_name: str = None,
+    annotator_name: str = None,
     model: str = "hiseq",
     mode: str = "direct"
 ) -> None:
@@ -141,7 +160,9 @@ def regenerate_metagenome(
             read_length = read_length, 
             total_amount = total_amount, 
             model = model, 
-            sample_name = sample_name)
+            sample_name = sample_name,
+            annotator_name = annotator_name
+        )
     elif mode == "samovar":
         raise NotImplementedError("Samovar mode not implemented yet")
 
@@ -184,22 +205,21 @@ def process_annotation_table(
 
     N_cols = [col for col in annotation_table.columns if 'n' in col.lower()]
     for N_annotator in N_cols:
-        annotator_name = N_annotator.split('_')[-1]
+        annotator_name = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator).group(1)
         amount = annotation_table[N_annotator].tolist()
         taxid = annotation_table['taxid'].tolist()
         genome_files = [os.path.join(genome_dir, f"{taxid}.fa") for taxid in taxid]
         
-        # Create output directory for this annotator
-        annotator_output_dir = os.path.join(output_dir, annotator_name)
-        os.makedirs(annotator_output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
         
         regenerate_metagenome(
             genome_files=genome_files,
-            output_dir=annotator_output_dir,
+            output_dir=output_dir,
             amount=amount,
             read_length=read_length,
             total_amount=total_amount,
             sample_name=sample_name,
             model=model,
-            mode=mode
+            mode=mode,
+            annotator_name=annotator_name
         ) 

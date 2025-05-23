@@ -1,0 +1,20 @@
+# Input directories
+r1_dir: "tests_outs/benchmarking/regenerated"
+r2_dir: "tests_outs/benchmarking/regenerated"
+output_dir: "tests_outs/benchmarking/regenerated_reports"
+
+# Run names
+# issue2fix: run name can not contain "_"
+run_config: [
+  {
+    "run_name": "k2-custom",
+    "type": "kraken2",
+    "db_path": "tests_outs/kraken_db"
+  },
+  {
+    "run_name": "kaiju",
+    "type": "kaiju",
+    "db_path": "/mnt/metagenomics/kaiju",
+    "db_name": "kaiju_db_fungi.fmi"
+  }
+]

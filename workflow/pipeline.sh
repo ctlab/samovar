@@ -21,3 +21,10 @@ snakemake -s workflow/annotators/Snakefile \
 snakemake -s workflow/annotation2iss/Snakefile \
     --configfile workflow/annotation2iss/config.yaml \
     --cores 1
+
+# Run annotators on new reads set
+snakemake -s workflow/annotators/Snakefile \
+    --configfile workflow/annotators/config_reannotate.yaml \
+    --cores 1
+
+# Produce to the table of annotations

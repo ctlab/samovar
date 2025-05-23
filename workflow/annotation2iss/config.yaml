@@ -1,7 +1,7 @@
 # Input and output directories
 annotation_table: "tests/data/annotation.csv"
 genome_dir: "tests_outs/benchmarking/genomes"
-output_dir: "tests_outs/benchmarking/generated"
+output_dir: "tests_outs/benchmarking/regenerated"
 
 # NCBI Entrez email (required for genome downloads)
 email: "test@samovar.com"
