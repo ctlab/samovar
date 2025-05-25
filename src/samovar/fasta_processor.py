@@ -77,7 +77,7 @@ def main():
                       help='Percentage of sequence to include in each split (default: 50.0)')
     
     args = parser.parse_args()
-    process_fasta(args.input_file, args.output_file, args.mutation_rate, args.include_percent)
+    preprocess_fasta(args.input_file, args.output_file, args.mutation_rate, args.include_percent)
 
 if __name__ == '__main__':
     main() 

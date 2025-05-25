@@ -6,10 +6,7 @@ to allow for easy comparison and analysis of results from different tools.
 """
 
 import pandas as pd
-import numpy as np
 import os
-import json
-import requests
 import re
 from ete3 import NCBITaxa
 from typing import Dict, List, Optional, Union

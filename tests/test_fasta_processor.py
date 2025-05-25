@@ -1,7 +1,6 @@
 import unittest
 import tempfile
 import os
-from pathlib import Path
 from samovar.fasta_processor import read_fasta, apply_mutations, preprocess_fasta
 
 class TestFastaProcessor(unittest.TestCase):

@@ -3,16 +3,12 @@ Module for converting tables to simulated reads using ISS-like functionality.
 """
 
 import os
-import random
 import re
 import glob
-from typing import Dict, List, Tuple
 import pandas as pd
-from Bio import SeqIO
-from Bio.Seq import Seq
-from Bio.SeqRecord import SeqRecord
 import subprocess
 from .genome_fetcher import fetch_genome
+from typing import List
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
     """
