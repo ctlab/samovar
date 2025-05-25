@@ -268,6 +268,45 @@ class Annotation:
         tmp["true"] = self.true_annotation
         return tmp
 
+    def correct_level(self, level: str = "sp") -> None:
+        """Correct annotations to specified taxonomic level.
+        
+        Args:
+            level: Taxonomic level to correct to (e.g. 'sp' for species, 'genus', etc.)
+            
+        This method:
+        1. Gets unique taxIDs from the DataFrame
+        2. Maps them to the specified taxonomic level
+        3. Replaces original taxIDs with their corrected versions
+        """
+        # Get all unique taxIDs from taxID columns
+        taxid_cols = [col for col in self.DataFrame.columns if col.startswith('taxID')]
+        unique_taxids = set()
+        for col in taxid_cols:
+            unique_taxids.update(self.DataFrame[col].dropna().unique())
+        
+        # Create mapping dictionary for taxIDs
+        taxid_map = {}
+        for taxid in unique_taxids:
+            if taxid == "0" or pd.isna(taxid):
+                taxid_map[taxid] = taxid
+                continue
+            try:
+                lineage = ncbi.get_lineage(int(taxid))
+                ranks = ncbi.get_rank(lineage)
+                for tid, rank in ranks.items():
+                    if rank == level:
+                        taxid_map[taxid] = str(tid)
+                        break
+                if taxid not in taxid_map:  # If no match found at specified level
+                    taxid_map[taxid] = taxid
+            except (ValueError, KeyError):
+                taxid_map[taxid] = taxid
+        
+        # Replace taxIDs in all taxID columns
+        for col in taxid_cols:
+            self.DataFrame[col] = self.DataFrame[col].map(taxid_map)
+
     def tr(self) -> pd.DataFrame:
         """Get DataFrame with only taxID columns."""
         return self.DataFrame.copy().filter(regex="taxID.*")

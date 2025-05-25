@@ -136,6 +136,40 @@ def test_annotation_class(test_data_dir):
     assert len(expand_ann.rank_annotation) == 2
 
 
+def test_correct_level(test_data_dir):
+    """Test correct_level method of Annotation class."""
+    # Create test data with known taxIDs
+    test_data = {
+        'seq': ['seq1', 'seq2', 'seq3', 'seq4'],
+        'taxID_kraken1_0': ['9606', '511145', '0', '1234567890'],  # Human, E. coli, unclassified, invalid
+        'taxID_kaiju_0': ['9606', '0', '0', '1234567890']
+    }
+    df = pd.DataFrame(test_data)
+    
+    # Create Annotation object with test data
+    ann = Annotation({}, get_true_annotation=r".*")
+    ann.DataFrame = df
+    
+    # Test correcting to species level
+    ann.correct_level(level='species')
+    
+    # Check that valid taxIDs were corrected
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[0] == '9606'  # Human species taxID
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[1] == '562'  # E. coli species taxID
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[2] == '0'  # Unclassified should remain 0
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[3] == '1234567890'  # Invalid taxID should remain unchanged
+    
+    # Test correcting to genus level
+    ann.correct_level(level='genus')
+    
+    # Check that taxIDs were corrected to genus level
+    # Note: These assertions may need to be adjusted based on actual NCBI taxonomy data
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[0] != '9606'  # Should be changed to genus level
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[1] != '511145'  # Should be changed to genus level
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[2] == '0'  # Unclassified should remain 0
+    assert ann.DataFrame['taxID_kraken1_0'].iloc[3] == '1234567890'  # Invalid taxID should remain unchanged
+
+
 def test_rank_annotation_class():
     """Test RankAnnotation class functionality."""
     rank_ann = RankAnnotation("species")
