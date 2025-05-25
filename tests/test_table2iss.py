@@ -134,8 +134,8 @@ def test_generate_reads_metagenome():
     )
     
     # Check if output files exist
-    assert os.path.exists(os.path.join(output_dir, "test_metagenome_R1.fastq"))
-    assert os.path.exists(os.path.join(output_dir, "test_metagenome_R2.fastq"))
+    assert os.path.exists(os.path.join(output_dir, "test_metagenome_any_R1.fastq"))
+    assert os.path.exists(os.path.join(output_dir, "test_metagenome_any_R2.fastq"))
 
 def test_regenerate_metagenome():
     """Test regenerating metagenome reads."""
@@ -160,8 +160,8 @@ def test_regenerate_metagenome():
     )
     
     # Check if output files exist
-    assert os.path.exists(os.path.join(output_dir, "test_regenerated_R1.fastq"))
-    assert os.path.exists(os.path.join(output_dir, "test_regenerated_R2.fastq"))
+    assert os.path.exists(os.path.join(output_dir, "test_regenerated_any_R1.fastq"))
+    assert os.path.exists(os.path.join(output_dir, "test_regenerated_any_R2.fastq"))
 
 def test_process_annotation_table():
     """Test processing annotation table and generating reads."""
