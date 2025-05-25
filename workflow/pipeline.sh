@@ -17,6 +17,12 @@ snakemake -s workflow/annotators/Snakefile \
     --configfile workflow/annotators/config_init.yaml \
     --cores 1
 
+# Combine annotation tables
+python workflow/combine_annotation_tables.py \
+    -i tests_outs/benchmarking/initial_reports \
+    -o tests_outs/benchmarking/initial_annotations \
+    -t "[^-]*"
+
 # Translate annotation table to new reads set
 snakemake -s workflow/annotation2iss/Snakefile \
     --configfile workflow/annotation2iss/config.yaml \
@@ -27,4 +33,8 @@ snakemake -s workflow/annotators/Snakefile \
     --configfile workflow/annotators/config_reannotate.yaml \
     --cores 1
 
-# Produce to the table of annotations
+# Combine annotation tables
+python workflow/combine_annotation_tables.py \
+    -i tests_outs/benchmarking/regenerated_reports \
+    -o tests_outs/benchmarking/regenerated_annotations \
+    -t "[^-]*" -s 2

@@ -189,7 +189,10 @@ class Annotation:
         for path, tool_type in file_path_type.items():
             df = READ_FUNCTIONS.get(tool_type)(path).set_index("seq").astype({"taxID": 'string'})
             df.columns = [f"{col}_{tool_type}_{self.id}" for col in df.columns]
-            self.DataFrame = pd.concat([self.DataFrame, df], axis=1)
+            try:
+                self.DataFrame = pd.concat([self.DataFrame, df], axis=1)
+            except:
+                raise ValueError(f"Error concatenating {path}; check sample names. Sample names should be unique")
             self.id += 1
 
         # Extract true annotations if pattern provided
@@ -414,3 +417,42 @@ class ExpandAnnotation:
             RankAnnotation object
         """
         return self.rank_annotation[rank]
+
+def match_annotation(annotation_name:str) -> str:
+    """Match annotation name to tool name.
+    
+    Args:
+        annotation_name: Annotation name
+        
+    Returns:
+        Tool name  
+    """
+    annotation_name = os.path.basename(annotation_name)
+    if annotation_name.endswith(".out"):
+        arg = annotation_name.split(".")[-2]
+    
+        if arg == "kraken":
+            return "kraken"
+        elif arg == "kraken1":
+            return "kraken1"
+        elif arg == "kraken2":
+            return "kraken2"
+        elif arg == "krakenunique":
+            return "krakenunique"
+        elif arg == "krakenu":
+            return "krakenu"
+        elif arg == "metaphlan":
+            return "metaphlan"
+        elif arg == "metaphlan4":
+            return "metaphlan"
+        elif arg == "mpa":
+            return "metaphlan"
+        elif arg == "mp4":
+            return "metaphlan"
+        elif arg == "kaiju":
+            return "kaiju"
+        else:
+            raise ValueError(f"Annotation name {annotation_name} not found. Check the input: file extention should be like sample_metainfo.annotator.out")
+    else:
+        print("Skipping", annotation_name)
+        return None
