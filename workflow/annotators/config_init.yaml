@@ -16,9 +16,5 @@ run_config: [
     "type": "kaiju",
     "db_path": "/mnt/metagenomics/kaiju",
     "db_name": "kaiju_db_fungi.fmi"
-  },
-  {
-    "run_name": "metaphlan",
-    "type": "metaphlan4"
   }
 ]

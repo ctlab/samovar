@@ -36,7 +36,16 @@ def fetch_genome(taxid: str, output_folder: str, email: str, reference_only: boo
     output_path.mkdir(parents=True, exist_ok=True)
     
     # Check if genome already exists
-    genome_path = output_path / f"{taxid}.fa"
+    # Try to match any of .fa, .fna, .fasta
+    possible_exts = [".fa", ".fna", ".fasta"]
+    for ext in possible_exts:
+        candidate = output_path / f"{taxid}{ext}"
+        if candidate.exists():
+            genome_path = candidate
+            break
+    else:
+        # Default to .fna for download if not present
+        genome_path = output_path / f"{taxid}.fna"
     if genome_path.exists():
         logger.info(f"Genome for taxid {taxid} already exists at {genome_path}")
         return str(genome_path)

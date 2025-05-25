@@ -1,4 +1,4 @@
-# samova.R v.0.6 <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
+# samova.R 0.7 <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
 ### Artificial metagenome generation and automatic benchmarking
 
 
@@ -10,6 +10,49 @@ There is a fundamental problem in modern ***metagenomics***: there are huge diff
 The use of golden practice and open code, while allowing data to be analyzed reproducibly, locks scientists into a single, far from perfect approach, with its own bias.
 
 Therefore, we propose an approach that utilizes de novo generation of the artificial metagenomes - `SamovaR`.
+
+## Installation
+
+### Quick Installation
+
+<span style="color:red">Warning:</span> beta
+Use installation script:
+
+```bash
+git clone https://github.com/ctlab/samovar
+cd samovar
+chmod +x install.sh
+./install.sh
+```
+
+*Attention: the script automatically detects custom R library paths from `.Renviron` (R_LIBS) or `.Rprofile` (libPaths())*
+
+### Manual Installation
+
+Install R package:
+
+```r
+# If you have a custom library path, specify it:
+.libPaths('/path/to/your/R/library')
+devtools::install_github("https://github.com/ctlab/samovar/")
+```
+
+Install python package:
+
+```bash
+git clone https://github.com/ctlab/samovar
+cd samovar
+pip install -e .
+```
+
+## Examples
+
+To check installation or dive into what SamovaR do, run
+
+```bash
+cd samovar
+bash workflow/pipeline.sh
+```
 
 ## Components
 
@@ -38,54 +81,19 @@ graph LR
 ```
 
 ## Usage
+### Full pipeline
+
+To run worklow, specify your config files and run:
+```bash
+cd samovar
+bash workflow/pipeline.sh
+```
+
+### R package
 Basic usage described in <a href="./vignettes">**vignettes**</a> and <a href="https://github.com/ctlab/samovar/wiki">**wiki**</a>
 
 You can also try the generator with <a href="https://dsmutin.shinyapps.io/samovaR/">**web** shiny app</a>
 
-## Installation
-
-### Quick Installation
-The easiest way to install SamovaR is to use our installation script:
-
-```bash
-git clone https://github.com/ctlab/samovar
-cd samovar
-chmod +x install.sh
-./install.sh
-```
-
-This script will:
-1. Detect and use your custom R library path (if set in ~/.Renviron or ~/.Rprofile)
-2. Install all R dependencies
-3. Install the R package
-4. Install all Python dependencies
-5. Install the Python package
-6. Install Snakemake and InSilicoSeq if not present
-
-The script automatically detects custom R library paths from:
-- `~/.Renviron` (R_LIBS environment variable)
-- `~/.Rprofile` (libPaths() function)
-- Falls back to the default R library path if no custom path is found
-
-### Manual Installation
-
-If you prefer to install components separately:
-
-Install R package:
-
-```r
-# If you have a custom library path, specify it:
-.libPaths('/path/to/your/R/library')
-devtools::install_github("https://github.com/ctlab/samovar/")
-```
-
-Install python package:
-
-```bash
-git clone https://github.com/ctlab/samovar
-cd samovar
-pip install -e .
-```
 
 ## R algorithm summary
 <img src="data/img/additional/algo.png">
@@ -93,7 +101,7 @@ pip install -e .
 
 ## R generation
 
-<a href="https://github.com/ctlab/samovar/samovaR.pdf">See</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
+<a href="https://github.com/ctlab/samovar/samovaR.pdf">See description</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
 
 ``` r
 library(samovaR)
@@ -170,9 +178,8 @@ graph LR
             InSilicoSeq
         end
         
-        subgraph "Python Packages"
+        subgraph "Python packages"
             direction LR
-            rpy2
             numpy
             pandas
             requests

@@ -1,10 +1,10 @@
 from samovar.build_database import build_database_kaiju, add_database_kaiju, get_taxonomy_db
 
 input_files = [
-    "data/test_genomes/meta/Ecoli.fna",
-    "data/test_genomes/meta/Phix.fna",
-    "data/test_genomes/meta/Scer.fna",
-    "data/test_genomes/host/Hsap.fna"
+    "data/test_genomes/meta/562.fna",
+    "data/test_genomes/meta/2886930.fna",
+    "data/test_genomes/meta/4932.fna",
+    "data/test_genomes/host/9606.fna"
 ]
 
 taxids = [

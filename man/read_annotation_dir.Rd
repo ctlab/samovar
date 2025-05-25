@@ -2,17 +2,23 @@
 % Please edit documentation in R/read_samovar.R
 \name{read_annotation_dir}
 \alias{read_annotation_dir}
-\title{Build samovar annotation object from directory}
+\title{Read annotations produced with samovar pipeline from the directory}
 \usage{
-read_annotation_dir(data_dir, metadata = F, ...)
+read_annotation_dir(data_dir, sample_name_position = 0, ...)
 }
 \arguments{
-\item{data_dir}{Path to abundance table. Row names: sequence IDs, column names: annotators; true_annotation}
+\item{data_dir}{Path to abundance table. Row names: sequence IDs, column names: annotators; true for true annotation}
 
-\item{metadata}{Data.frame or path to metadata file}
+\item{sample_name_position}{Position to split the file basename by "." to extract sample names. 0 by default}
 
 \item{...}{Parameters processed by read.csv()}
 }
 \description{
-Build samovar annotation object from directory
+Read annotations produced with samovar pipeline from the directory
+}
+\examples{
+library(samovaR)
+
+data <- read_annotation_dir("data/test_annotations/")
+viz_annotation(data)
 }

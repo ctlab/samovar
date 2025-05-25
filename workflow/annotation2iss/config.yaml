@@ -1,5 +1,5 @@
 # Input and output directories
-annotation_table: "tests/data/annotation.csv"
+annotation_dir: "tests_outs/benchmarking/initial_annotations"
 genome_dir: "tests_outs/benchmarking/genomes"
 output_dir: "tests_outs/benchmarking/regenerated"
 

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 configfile: "config.yaml"
 
 # Input and output directories
-ANNOTATION = config["annotation_table"]
+ANNOTATION_DIR = config["annotation_dir"]
 GENOME_DIR = config["genome_dir"]
 OUTPUT_DIR = config["output_dir"]
 EMAIL = config["email"]
@@ -27,48 +27,98 @@ MODEL = config.get("model", "hiseq")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(GENOME_DIR, exist_ok=True)
 
+# Get list of annotation files
+def get_annotation_files():
+    files = glob.glob(os.path.join(ANNOTATION_DIR, "*.annotation.csv"))
+    logger.info(f"Found annotation files: {files}")
+    return files
+
 # Get list of annotators from the annotation table
 def get_annotators():
-    df = pd.read_csv(ANNOTATION)
-    sample_name = "full"
-    taxid_cols = []
-    for col in df.columns:
-        if 'taxID_' in col.lower():
-            match = re.search(r'taxID_(.*?)(?:_[0-9]*)?$', col)
-            if match:
-                taxid_cols.append(match.group(1))
-    return taxid_cols
+    # Get the first annotation file for now
+    annotation_files = get_annotation_files()
+    if not annotation_files:
+        logger.error("No annotation files found!")
+        return []
+    
+    annotation_file = annotation_files[0]
+    logger.info(f"Reading annotators from {annotation_file}")
+    df = pd.read_csv(annotation_file)
+    
+    # Get all columns that start with taxID_
+    taxid_cols = [col for col in df.columns if col.startswith('taxID_')]
+    logger.info(f"Found taxID columns: {taxid_cols}")
+    
+    # Extract annotator names (e.g., 'kraken2' from 'taxID_kraken2_0')
+    annotators = []
+    for col in taxid_cols:
+        # Split by underscore and take the second part (index 1)
+        parts = col.split('_')
+        if len(parts) >= 2:
+            annotator = parts[1]
+            if annotator not in annotators:
+                annotators.append(annotator)
+    
+    logger.info(f"Found annotators: {annotators}")
+    return annotators
 
-# Main rule to process annotations for each annotator
+# Get all annotators
+ANNOTATORS = get_annotators()
+logger.info(f"Using annotators: {ANNOTATORS}")
+
+# Get sample names from annotation files
+def get_sample_names():
+    annotation_files = get_annotation_files()
+    sample_names = []
+    for file in annotation_files:
+        # Extract sample name from filename (assuming format: sample_name.annotation.csv)
+        sample_name = os.path.basename(file).split('.')[0]
+        sample_names.append(sample_name)
+    
+    logger.info(f"Found samples: {sample_names}")
+    return sample_names
+
+# Get all sample names
+SAMPLES = get_sample_names()
+logger.info(f"Using samples: {SAMPLES}")
+
+# Generate all output files
+ALL_OUTPUT_FILES = []
+for sample in SAMPLES:
+    for annotator in ANNOTATORS:
+        ALL_OUTPUT_FILES.append(os.path.join(OUTPUT_DIR, f"{sample}_{annotator}_R1.fastq"))
+        ALL_OUTPUT_FILES.append(os.path.join(OUTPUT_DIR, f"{sample}_{annotator}_R2.fastq"))
+
+logger.info(f"Generated {len(ALL_OUTPUT_FILES)} output files")
+
+# Main rule to run the entire workflow
+rule all:
+    input:
+        ALL_OUTPUT_FILES
+
+# Main rule to process annotations for each sample and annotator
 rule process_annotations:
     input:
-        annotation_table = ANNOTATION
+        annotation_file = os.path.join(ANNOTATION_DIR, "{sample}.annotation.csv")
     output:
-        # Output files will be in annotator-specific directories
-        fastqs = expand(os.path.join(OUTPUT_DIR, "full_{annotator}_R{read}.fastq"),
-                       annotator=get_annotators(),
-                       read=[1, 2])
+        r1 = os.path.join(OUTPUT_DIR, "{sample}_{annotator}_R1.fastq"),
+        r2 = os.path.join(OUTPUT_DIR, "{sample}_{annotator}_R2.fastq")
     run:
         # Process annotations
         try:
             process_annotation_table(
-                table_path=ANNOTATION,
+                table_path=input.annotation_file,
                 genome_dir=GENOME_DIR,
                 output_dir=OUTPUT_DIR,
                 email=EMAIL,
                 reference_only=True,
                 model=MODEL,
                 read_length=READ_LENGTH,
-                sample_name="full",
+                sample_name=wildcards.sample,
                 mode="direct"
                 )
-            logger.info(f"Successfully processed annotations")
+            logger.info(f"Successfully processed annotations for sample {wildcards.sample}")
         
         except Exception as e:
-            logger.error(f"Error processing annotations: {str(e)}")
+            logger.error(f"Error processing annotations for sample {wildcards.sample}: {str(e)}")
             raise
-
-# Main rule to run the entire workflow
-rule all:
-    input:
-        rules.process_annotations.output.fastqs

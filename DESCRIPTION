@@ -1,7 +1,7 @@
 Package: samovaR
 Type: Package
 Title: R package for generating model metagenomes with specified properties
-Version: 0.6
+Version: 0.7.0
 Authors@R: c(
   person("Smutin", "Daniil", email = "dvsmutin@gmail.com", role = c("aut", "cre"),
     comment = c(ORCID = "0009-0009-1460-4108")),
@@ -28,7 +28,11 @@ Imports:
     distances,
     htmlwidgets,
     progress,
-    methods
+    methods,
+    dplyr,
+    ggplot2,
+    stringr,
+    tibble
 Suggests: 
     ggnewscale,
     shiny,

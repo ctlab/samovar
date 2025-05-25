@@ -6,5 +6,5 @@ input_dir:
 output_dir: "tests_outs/database_prep"
 
 # Processing parameters
-mutation_rate: 0.01
-include_percent: 50.0 
+mutation_rate: 0.02
+include_percent: 70.0 
