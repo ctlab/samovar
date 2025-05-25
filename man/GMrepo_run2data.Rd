@@ -24,6 +24,9 @@ GMrepo_run2data(
 Get data from GMrepo_run object
 }
 \examples{
+library(samovaR)
+library(tidyverse)
+
 # get data from GMrepo
 data_GMrepo <- GMrepo_type2data(mesh_ids = "D006262", number_to_process = 1000)
 

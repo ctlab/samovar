@@ -3,13 +3,27 @@
 #
 # Where should you do additional test configuration?
 # Learn more about the roles of various files in:
-# * https://r-pkgs.org/testing-design.html#sec-tests-files-overview
-# * https://testthat.r-lib.org/articles/special-files.html
+# * https://r-pkgs.org/tests.html
+# * https://testthat.r-lib.org/reference/test_package.html#special-files
 
 library(testthat)
 library(samovaR)
 
+# Create a new environment for test data
 test_data_env <- new.env()
-load("./../../data/main/data_test.RData", envir = test_data_env)
 
+# Function to load test data
+load_test_data <- function() {
+  test_data_path <- system.file("testdata/data_test.RData", package = "samovaR")
+  if (!file.exists(test_data_path) || test_data_path == "") {
+    stop("Test data file not found at: ", test_data_path)
+  }
+  load(test_data_path, envir = test_data_env)
+  attach(test_data_env, name = "test_data_env", pos = 2)
+}
+
+# Load test data when the package is loaded
+load_test_data()
+
+# Run tests
 test_check("samovaR")

@@ -15,6 +15,9 @@ GMrepo_type2run(mesh_ids = c("D006262"), number_to_process = F)
 Get runs from GMrepo by meshID
 }
 \examples{
+library(samovaR)
+library(tidyverse)
+
 # get data from GMrepo
 data_GMrepo <- GMrepo_type2data(mesh_ids = "D006262", number_to_process = 1000)
 

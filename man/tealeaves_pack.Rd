@@ -21,6 +21,9 @@ tealeaves_pack(
 Scale species abundances
 }
 \examples{
+library(samovaR)
+library(tidyverse)
+
 # download data
 teatree <- GMrepo_type2data(number_to_process = 2000)
 
@@ -29,7 +32,8 @@ tealeaves <- teatree \%>\%
   teatree_trim(treshhold_species = 3, treshhold_samples = 3, treshhold_amount = 10^(-3))
 
 # normalizing
-## if you build teatree by your own, rescaling stage when building via teatree$rescale() or assigning teatree$min_value and teatree$max_value is required
+## if you build teatree by your own, rescaling stage when building via teatree$rescale()
+## or assigning teatree$min_value and teatree$max_value is required
 ## good approximation to normal distribution is required for glm generating methods
 teabag <- tealeaves \%>\%
   tealeaves_pack(normalization_function = function(x) log10(x+1))

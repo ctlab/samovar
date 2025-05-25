@@ -11,7 +11,21 @@ There is a fundamental problem in modern metagenomics: there are huge difference
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/dsmutin/samovar/}
+  \item \url{https://github.com/ctlab/samovar/}
+}
+
+}
+\author{
+\strong{Maintainer}: Smutin Daniil \email{dvsmutin@gmail.com} (\href{https://orcid.org/0009-0009-1460-4108}{ORCID})
+
+Authors:
+\itemize{
+  \item Ivanov Artem
+}
+
+Other contributors:
+\itemize{
+  \item ctlab [funder]
 }
 
 }

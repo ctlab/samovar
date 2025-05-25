@@ -1,3 +1,6 @@
+library(samovaR)
+library(tidyverse)
+
 # download and prepare data
 samovar <- GMrepo_type2data(number_to_process = 2000) %>%
   teatree_trim(treshhold_species = 3, treshhold_samples = 3, treshhold_amount = 10^(-3)) %>%
@@ -7,4 +10,4 @@ samovar <- GMrepo_type2data(number_to_process = 2000) %>%
 
 # generate
 new_data <- samovar %>%
-  samovar_boil(n = 100)
+  samovar_boil(N = 100)

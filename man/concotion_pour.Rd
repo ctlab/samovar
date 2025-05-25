@@ -46,6 +46,9 @@ Samovar network is a 2D-oriented graph with metadata and abundances of species p
 For better understanding of building database and using it in generation, visit github source
 }
 \examples{
+library(samovaR)
+library(tidyverse)
+
 # download data
 teatree <- GMrepo_type2data(number_to_process = 2000)
 
@@ -54,7 +57,8 @@ tealeaves <- teatree \%>\%
   teatree_trim(treshhold_species = 3, treshhold_samples = 3, treshhold_amount = 10^(-3))
 
 # normalizing
-## if you build teatree by your own, rescaling stage when building via teatree$rescale() or assigning teatree$min_value and teatree$max_value is required
+## if you build teatree by your own, rescaling stage when building via teatree$rescale()
+## or assigning teatree$min_value and teatree$max_value is required
 ## good approximation to normal distribution is required for glm generating methods
 teabag <- tealeaves \%>\%
   tealeaves_pack(normalization_function = function(x) log10(x+1))
