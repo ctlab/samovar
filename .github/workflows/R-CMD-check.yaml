@@ -47,4 +47,5 @@ jobs:
           upload-snapshots: true
           args: 'c("--no-manual","--no-examples")'
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
-          error_on: '"error"'
+          error-on: '"error"'
+          check-dir: '"check"'

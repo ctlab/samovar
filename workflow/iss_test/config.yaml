@@ -1,13 +1,13 @@
 # Input/Output directories
 genome_dir: "data/test_genomes/meta"
 output_dir: "tests_outs/benchmarking/initial"
-host_genome: "data/test_genomes/host/Hsap.fna"
+host_genome: "data/test_genomes/host/9606.fna"
 
 # Number of samples to generate
-n_samples: 2
+n_samples: 10
 
 # Read counts
-total_reads: 25000
+total_reads: 2000
 host_fraction: "RANDOM"
 
 # Generation
