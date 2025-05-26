@@ -31,6 +31,8 @@
 #' @importFrom tidyr pivot_longer
 #' @importFrom dplyr summarise
 #' @importFrom dplyr across
+#' @importFrom stringr str_detect
+#' @importFrom stringr str_remove
 #' @import ggplot2
 #'
 #' @example R/examples/check_samovar.R
