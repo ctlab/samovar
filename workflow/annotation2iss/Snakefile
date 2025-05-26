@@ -30,7 +30,7 @@ os.makedirs(GENOME_DIR, exist_ok=True)
 # Get list of annotation files
 def get_annotation_files():
     files = glob.glob(os.path.join(ANNOTATION_DIR, "*.annotation.csv"))
-    logger.info(f"Found annotation files: {files}")
+    #logger.info(f"Found annotation files: {files}")
     return files
 
 # Get list of annotators from the annotation table
@@ -42,12 +42,12 @@ def get_annotators():
         return []
     
     annotation_file = annotation_files[0]
-    logger.info(f"Reading annotators from {annotation_file}")
+    #logger.info(f"Reading annotators from {annotation_file}")
     df = pd.read_csv(annotation_file)
     
     # Get all columns that start with taxID_
     taxid_cols = [col for col in df.columns if col.startswith('taxID_')]
-    logger.info(f"Found taxID columns: {taxid_cols}")
+    #logger.info(f"Found taxID columns: {taxid_cols}")
     
     # Extract annotator names (e.g., 'kraken2' from 'taxID_kraken2_0')
     annotators = []
@@ -59,7 +59,7 @@ def get_annotators():
             if annotator not in annotators:
                 annotators.append(annotator)
     
-    logger.info(f"Found annotators: {annotators}")
+    #logger.info(f"Found annotators: {annotators}")
     return annotators
 
 # Get all annotators
@@ -75,7 +75,7 @@ def get_sample_names():
         sample_name = os.path.basename(file).split('.')[0]
         sample_names.append(sample_name)
     
-    logger.info(f"Found samples: {sample_names}")
+    #logger.info(f"Found samples: {sample_names}")
     return sample_names
 
 # Get all sample names
@@ -89,7 +89,7 @@ for sample in SAMPLES:
         ALL_OUTPUT_FILES.append(os.path.join(OUTPUT_DIR, f"{sample}_{annotator}_R1.fastq"))
         ALL_OUTPUT_FILES.append(os.path.join(OUTPUT_DIR, f"{sample}_{annotator}_R2.fastq"))
 
-logger.info(f"Generated {len(ALL_OUTPUT_FILES)} output files")
+logger.info(f"Generating {len(ALL_OUTPUT_FILES)} output files")
 
 # Main rule to run the entire workflow
 rule all:

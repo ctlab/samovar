@@ -53,6 +53,24 @@ def parse_annotation_table(table_path: str) -> pd.DataFrame:
     
     return result
 
+def get_genome_file(genome_dir: str, taxid: str) -> str:
+    """
+    Get the path to a genome file, checking multiple possible extensions.
+    
+    Args:
+        genome_dir: Directory containing genome files
+        taxid: Taxonomy ID of the genome
+        
+    Returns:
+        Path to the genome file if found, None otherwise
+    """
+    extensions = ['.fa', '.fna', '.fasta']
+    for ext in extensions:
+        genome_file = os.path.join(genome_dir, f"{taxid}{ext}")
+        if os.path.exists(genome_file):
+            return genome_file
+    return None
+
 def generate_reads_genome(
     genome_file: str,
     output_file: str,
@@ -70,7 +88,8 @@ def generate_reads_genome(
         read_length: Length of reads to generate
         model: Model to use for simulation
     """
-    if os.path.exists(genome_file):
+    
+    if genome_file is not None and os.path.exists(genome_file):
 
         cmd = f"""
             iss generate \
@@ -105,6 +124,7 @@ def generate_reads_metagenome(
         sample_name: Name of the sample
         model: Model to use for simulation with ISS
     """
+    
     if total_amount is not None:
         amount = [int(N/sum(amount) * total_amount) for N in amount]
     else:
@@ -114,18 +134,20 @@ def generate_reads_metagenome(
         annotator_name = "any"
 
     for genome_file, N in zip(genome_files, amount):
-        generate_reads_genome(genome_file, 
-        os.path.join(
-            output_dir, 
-            f"{annotator_name}_{os.path.basename(genome_file).split('.')[0]}"), 
-            N, read_length)
+        if N > 0:
+            generate_reads_genome(
+                genome_file, 
+                os.path.join(
+                    output_dir, 
+                    f"{sample_name}_{annotator_name}_{os.path.basename(genome_file).split('.')[0]}"), 
+                int(N), read_length)
     
     # Merge all reads into a single file
     
     output_file_R1 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
     output_file_R2 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq")
-    cmd = f"""cat {output_dir}/{annotator_name}_*_R1* >> {output_file_R1}
-        cat {output_dir}/{annotator_name}_*_R2* >> {output_file_R2}
+    cmd = f"""cat $(ls {output_dir}/{sample_name}_{annotator_name}_*_R1.fastq | grep -v ".iss.tmp.") >> {output_file_R1}
+        cat $(ls {output_dir}/{sample_name}_{annotator_name}_*_R2.fastq | grep -v ".iss.tmp.") >> {output_file_R2}
     """ 
     subprocess.run(cmd, shell=True)
 
@@ -195,8 +217,8 @@ def process_annotation_table(
         sample_name = os.path.basename(table_path).split(".")[0]
 
     for taxid in annotation_table['taxid']:
-        genome_file = os.path.join(genome_dir, f"{taxid}.fa")
-        if not os.path.exists(genome_file):
+        genome_file = get_genome_file(genome_dir, taxid)
+        if genome_file is None:
             fetch_genome(taxid, genome_dir, email, reference_only=True)
 
     N_cols = [col for col in annotation_table.columns if 'n' in col.lower()]
@@ -204,7 +226,8 @@ def process_annotation_table(
         annotator_name = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator).group(1)
         amount = annotation_table[N_annotator].tolist()
         taxid = annotation_table['taxid'].tolist()
-        genome_files = [os.path.join(genome_dir, f"{taxid}.fa") for taxid in taxid]
+        genome_files = [get_genome_file(genome_dir, taxid) for taxid in taxid]
+        genome_files = [f for f in genome_files if f is not None]  # Filter out None values
         
         os.makedirs(output_dir, exist_ok=True)
         

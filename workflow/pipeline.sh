@@ -40,8 +40,11 @@ snakemake -s workflow/annotation2iss/Snakefile \
     --configfile workflow/annotation2iss/config.yaml \
     --cores 1
 
-# Clean empty annotation files
+# Clean up
 find tests_outs/benchmarking/regenerated -type f -empty -delete
+rm tests_outs/benchmarking/regenerated/*_*_*_R*.fastq
+rm tests_outs/benchmarking/regenerated/*_abundance*
+rm tests_outs/benchmarking/regenerated/*iss.tmp*
 
 # Run annotators on new reads set
 snakemake -s workflow/annotators/Snakefile \
@@ -51,7 +54,8 @@ snakemake -s workflow/annotators/Snakefile \
 # Combine annotation tables
 python workflow/combine_annotation_tables.py \
     -i tests_outs/benchmarking/regenerated_reports \
-    -o tests_outs/benchmarking/regenerated_annotations
+    -o tests_outs/benchmarking/regenerated_annotations \
+    -s 2
 
 # Visualize & combine results
 Rscript workflow/compare_annotations.R \

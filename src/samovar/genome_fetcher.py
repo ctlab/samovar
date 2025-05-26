@@ -47,7 +47,7 @@ def fetch_genome(taxid: str, output_folder: str, email: str, reference_only: boo
         # Default to .fna for download if not present
         genome_path = output_path / f"{taxid}.fna"
     if genome_path.exists():
-        logger.info(f"Genome for taxid {taxid} already exists at {genome_path}")
+        #logger.info(f"Genome for taxid {taxid} already exists at {genome_path}")
         return str(genome_path)
     
     try:
@@ -61,7 +61,7 @@ def fetch_genome(taxid: str, output_folder: str, email: str, reference_only: boo
         handle.close()
         
         if not record["IdList"]:
-            logger.warning(f"No genome found for taxid {taxid}")
+            #logger.warning(f"No genome found for taxid {taxid}")
             return None
             
         # Get assembly details

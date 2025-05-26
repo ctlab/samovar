@@ -15,7 +15,8 @@ Therefore, we propose an approach that utilizes de novo generation of the artifi
 
 ### Quick Installation
 
-<span style="color:red">Warning:</span> beta
+<b><font color="red">Warning:</font></b> beta
+
 Use installation script:
 
 ```bash
