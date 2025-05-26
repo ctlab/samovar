@@ -11,15 +11,15 @@ The Samovar pipeline is a comprehensive workflow for metagenomic analysis that c
 graph TD
     subgraph Input
         subgraph Metagenomes
-            A1[FastQ Files]
-            A2([InSilicoSeq Config])
+            A1[FastQ files]
+            A2([InSilicoSeq config])
         end
-        A3([Annotation Config])
-        A4([Generation Config])
+        A3([Annotation config])
+        A4([Generation config])
     end
 
     subgraph Processing
-        Metagenomes --> C[Initial Annotation]
+        Metagenomes --> C[Initial annotation]
         A3 --> C
         C --> E
         A4 --> E[Metagenome generation]
