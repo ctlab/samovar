@@ -71,7 +71,8 @@ GCTAGCTA"""
         for seq in sequences:
             header, sequence = seq.strip().split('\n')
             original_part = 'ATCG' if 'test_seq1' in header else 'GCTA'
-            self.assertNotEqual(sequence, original_part)
+            # Check that at least one position is different
+            self.assertTrue(any(a != b for a, b in zip(sequence, original_part)))
             self.assertEqual(len(sequence), 4)
 
 if __name__ == '__main__':

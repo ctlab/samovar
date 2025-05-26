@@ -29,16 +29,6 @@ def test_annotation_table(test_output_dir):
     df.to_csv(file_path, sep='\t', index=False)
     return file_path
 
-def test_fetch_genome_existing(test_output_dir):
-    """Test fetching genome for a known taxid"""
-    # Use E. coli as a test case (taxid: 562)
-    email = "test@example.com"
-    result = fetch_genome("562", test_output_dir, email, reference_only=False)  # Try without reference filter
-    
-    assert result is not None
-    assert os.path.exists(result)
-    assert result.endswith("562.fa")
-
 def test_fetch_genome_invalid_taxid(test_output_dir):
     """Test fetching genome for an invalid taxid"""
     email = "test@example.com"

@@ -32,7 +32,8 @@ Imports:
     dplyr,
     ggplot2,
     stringr,
-    tibble
+    tibble,
+    tidyr
 Suggests: 
     ggnewscale,
     shiny,
