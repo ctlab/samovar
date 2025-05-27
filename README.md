@@ -134,10 +134,6 @@ Basic usage described in <a href="./vignettes">**vignettes**</a> and <a href="ht
 You can also try the generator with <a href="https://dsmutin.shinyapps.io/samovaR/">**web** shiny app</a>
 
 
-#### R algorithm summary
-<img src="data/img/additional/algo.png">
-
-
 #### R generation
 
 <a href="https://github.com/ctlab/samovar/blob/main/samovaR.pdf">See description</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
@@ -169,10 +165,16 @@ new_data <- samovar %>%
   samovar_boil(n = 100)
 ```
 
-## Documentation
 <a src="https://github.com/ctlab/samovar/blob/main/samovaR_man.pdf">Documentation</a> for the **R package**
 
-## Algorithm details
+#### Algorithm
+
+Summary
+
+<img src="data/img/additional/algo.png" width = 50%>
+
+Details
+
 <img src="data/img/additional/details.png">
 
 ## References
@@ -223,6 +225,7 @@ graph LR
             pandas
             requests
             ete3
+            scikit-learn
         end
     end
     

@@ -33,9 +33,9 @@ Imports:
     ggplot2,
     stringr,
     tibble,
-    tidyr
+    tidyr,
+    ggnewscale
 Suggests: 
-    ggnewscale,
     shiny,
     knitr,
     rmarkdown,
