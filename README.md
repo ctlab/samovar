@@ -1,4 +1,4 @@
-# samova.R 0.7 <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
+# SamovaR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
 ### Artificial metagenome generation and automatic benchmarking
 
 
@@ -90,48 +90,42 @@ cd samovar
 bash workflow/pipeline.sh
 ```
 
-Extended workflow:
-```bash
-# Generate reads with InSilicoSeq
-snakemake -s workflow/iss_test/Snakefile \
-    --configfile workflow/iss_test/config.yaml \
-    --cores 1
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
+graph TD
+    subgraph Input
+        subgraph Metagenomes
+            A1[FastQ files]
+            A2([InSilicoSeq config])
+        end
+        A3([Annotation config])
+        A4([Generation config])
+    end
 
-# Run annotators on initial reads
-snakemake -s workflow/annotators/Snakefile \
-    --configfile workflow/annotators/config_init.yaml \
-    --cores 1
+    subgraph Processing
+        Metagenomes --> C[Initial annotation]
+        A3 --> C
+        C --> E
+        A4 --> E[Metagenome generation]
+        E --> F[Re-annotation]
+        A4 --> F
+    end
 
-# Combine annotation tables
-python workflow/combine_annotation_tables.py \
-    -i tests_outs/benchmarking/initial_reports \
-    -o tests_outs/benchmarking/initial_annotations
+    subgraph Results
+        C --> C1[Cross-validation]
+        F --> G1[Annotators scores]
+        F --> ML
+        subgraph Re-profiling
+            C --> R
+            ML --> R[Corrected results]
+        end
+    end
 
-# Visualize annotations
-Rscript workflow/compare_annotations.R \
-    --annotation_dir tests_outs/benchmarking/initial_annotations \
-    --output_dir tests_outs/benchmarking/initial_annotations_plots
-
-# Translate annotation table to new reads set
-snakemake -s workflow/annotation2iss/Snakefile \
-    --configfile workflow/annotation2iss/config.yaml \
-    --cores 1
-
-# Run annotators on new reads set
-snakemake -s workflow/annotators/Snakefile \
-    --configfile workflow/annotators/config_reannotate.yaml \
-    --cores 1
-
-# Combine annotation tables
-python workflow/combine_annotation_tables.py \
-    -i tests_outs/benchmarking/regenerated_reports \
-    -o tests_outs/benchmarking/regenerated_annotations \
-    -s 2
-
-# Visualize & combine results
-Rscript workflow/compare_annotations.R \
-    --annotation_dir tests_outs/benchmarking/regenerated_annotations \
-    --output_dir tests_outs/benchmarking/regenerated_annotations_plots
+    style Input fill:#90ee9020,stroke:#333,stroke-width:2px
+    style Metagenomes fill:#b2ee9020,stroke:#333,stroke-width:2px
+    style Processing fill:#ee90bf20,stroke:#333,stroke-width:2px
+    style Results fill:#90d8ee20,stroke:#333,stroke-width:2px
+    style Re-profiling fill:#90a4ee20,stroke:#333,stroke-width:2px
 ```
 
 ### Artificial metagenome reneration

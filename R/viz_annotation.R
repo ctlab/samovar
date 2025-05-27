@@ -34,6 +34,7 @@
 #' @importFrom stringr str_detect
 #' @importFrom stringr str_remove
 #' @import ggplot2
+#' @import ggnewscale
 #'
 #' @example R/examples/check_samovar.R
 #' @export
@@ -110,13 +111,16 @@ viz_annotation <- function(
             ggplot(aes(y = .data[[tmp_name]], true %>% fct_rev)) +
             geom_tile(aes(fill = log10(Freq+1))) +
             geom_tile(aes(color = rect), fill = "transparent", show.legend = F, linewidth = 1) +
-            geom_text(aes(label = N)) +
             scale_color_manual(values = c(`TRUE` = "gray", `FALSE` = "transparent")) +
             scale_fill_gradientn(
               NULL,
               colours = palette_F1,
               labels = labels_10
             ) +
+
+            ggnewscale::new_scale_color() +
+            geom_text(aes(label = N, color = .data[[tmp_name]] == 0)) +
+            scale_color_manual(values = c(`TRUE` = "brown", `FALSE` = "black")) +
             theme_minimal() +
             theme(panel.grid = element_blank()) +
             coord_equal() +
@@ -279,6 +283,12 @@ viz_annotation <- function(
               colours = palette_F1,
               labels = labels_10
             ) +
+            ggnewscale::new_scale_color() +
+            geom_text(aes(label = N, color =
+                            (.data[[tmp_name1]] == 0) |
+                            (.data[[tmp_name2]] == 0)
+                          )) +
+            scale_color_manual(values = c(`TRUE` = "brown", `FALSE` = "black")) +
             theme_minimal() +
             theme(panel.grid = element_blank()) +
             coord_equal() +

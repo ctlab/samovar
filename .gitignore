@@ -16,3 +16,5 @@ data/test_genomes/meta/9606.fna
 tests/test_that/*.pdf
 .Rhistory
 *.png
+.pytest_cache
+project

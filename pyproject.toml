@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "samovar"
-version = "0.7.0"
+version = "0.8.0"
 description = "Automated re-profiling and benchmarking with SamovaR"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -17,7 +17,8 @@ dependencies = [
     "pandas>=1.3.0",
     "requests>=2.25.0",
     "ete3>=3.1.3",
-    "insilicoseq>2.0.0"
+    "insilicoseq>2.0.0",
+    "scikit-learn>1.6.0"
 ]
 
 [project.optional-dependencies]

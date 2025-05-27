@@ -62,3 +62,15 @@ Rscript workflow/compare_annotations.R \
     --annotation_dir tests_outs/benchmarking/regenerated_annotations \
     --output_dir tests_outs/benchmarking/regenerated_annotations_plots \
     --csv tests_outs/benchmarking/regenerated_annotations/combined_annotation_table.csv
+
+# Train and test ML
+python workflow/ML.py \
+    --reprofiling_dir tests_outs/benchmarking/initial_annotations \
+    --validation_file tests_outs/benchmarking/regenerated_annotations/combined_annotation_table.csv \
+    --output_dir tests_outs/benchmarking/reprofiled_annotations
+
+# Check reprofiled results
+Rscript workflow/compare_annotations.R \
+    --annotation_dir tests_outs/benchmarking/reprofiled_annotations \
+    --output_dir tests_outs/benchmarking/reprofiled_annotations_plots \
+    --csv tests_outs/benchmarking/reprofiled_annotations/combined_annotation_table.csv
