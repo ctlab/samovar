@@ -32,7 +32,7 @@ read_annotation_table <- function(data, metadata = F, ...) {
 
 read_annotation_dir <- function(data_dir,  sample_name_position = 0, ...) {
   results <- tibble()
-  for (data_path in dir(data_dir, full.names = T)) {
+  for (data_path in dir(data_dir, pattern = ".csv$", full.names = T)) {
     sample_name <- (basename(data_path) %>%
       stringr::str_split("\\."))[[1]][1:(sample_name_position+1)]
 
@@ -41,7 +41,8 @@ read_annotation_dir <- function(data_dir,  sample_name_position = 0, ...) {
 
     # fix colnames
     colnames(tmp) <- colnames(tmp) %>%
-      stringr::str_remove("_[0-9]*$")
+      stringr::str_remove("_[0-9]*$") %>%
+      stringr::str_replace("taxid", "taxID")
 
     results <- dplyr::bind_rows(
       results,

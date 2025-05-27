@@ -10,29 +10,22 @@
 #'
 #' @param type character vector.
 ##'
-##' - if present column true_annotation: could be one of "f1", "R2", or their combination
-##'
-##' - else: "cross-validation"
+##' - if present column true_annotation: could be one of
+##'   - "f1",
+##'   - "R2",
+##'   - "confidence",
+##'   - "cross-validation",
+##'   - or their combination (e.g. c("f1", "R2", "cv", "conf"))
 ##'
 #' @param show_top integer. Number of top annotations to show.
 #' @param output_dir character. Directory to save the plots. If NULL, plots are not saved.
 #' @param plot logical. If TRUE, plots are printed.
 #' @return list of ggplot objects
 #' @importFrom tibble tibble
-#' @importFrom dplyr mutate_all
-#' @importFrom dplyr mutate
-#' @importFrom dplyr summarise
-#' @importFrom dplyr group_by
-#' @importFrom dplyr %>%
-#' @importFrom dplyr sym
-#' @importFrom dplyr left_join
-#' @importFrom dplyr pull
-#' @importFrom dplyr arrange
+#' @importFrom dplyr mutate_all mutate summarise group_by %>% sym
+#' @importFrom dplyr summarise left_join pull arrange across
 #' @importFrom tidyr pivot_longer
-#' @importFrom dplyr summarise
-#' @importFrom dplyr across
-#' @importFrom stringr str_detect
-#' @importFrom stringr str_remove
+#' @importFrom stringr str_detect str_remove
 #' @import ggplot2
 #' @import ggnewscale
 #'
@@ -41,7 +34,7 @@
 
 viz_annotation <- function(
     data,
-    type = c("f1", "R2", "cv"),
+    type = c("f1", "R2", "cv", "conf"),
     show_top = 10,
     output_dir = NULL,
     plot = T
@@ -52,6 +45,8 @@ viz_annotation <- function(
   }
 
   palette_F1 <- c("#FFFFFF00", "#E6E487", "#90EE90")
+  palette_taxids <- colorRampPalette(c("lightgreen","#E6E487","pink","lightblue","purple"))
+
   labels_10 <- function(x) {
     ifelse(x == 0, "0",
            ifelse(x == 1, "10",
@@ -60,8 +55,9 @@ viz_annotation <- function(
 
   results <- list()
 
-  selected_columns <- colnames(data) %>%
-    str_detect("^taxID_|^N_") %>% which
+  selected_columns <- (str_detect(colnames(data) , "^taxID_|^N_") &
+                         str_detect(colnames(data) , "confidence", negate = T)) %>%
+    which
 
   colnames(data) <- colnames(data) %>%
     str_remove("^taxID_") %>%
@@ -119,7 +115,7 @@ viz_annotation <- function(
             ) +
 
             ggnewscale::new_scale_color() +
-            geom_text(aes(label = N, color = .data[[tmp_name]] == 0)) +
+            geom_text(aes(label = N, color = .data[[tmp_name]] == 0), show.legend = F) +
             scale_color_manual(values = c(`TRUE` = "brown", `FALSE` = "black")) +
             theme_minimal() +
             theme(panel.grid = element_blank()) +
@@ -132,12 +128,12 @@ viz_annotation <- function(
         }
 
         if(require(ggpubr,quietly = T)) {
-          results[["F1"]] <- ggpubr::ggarrange(plotlist = gglist)
+          results[["F1"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
           if(plot) {
             print(results[["F1"]])
           }
           if(!is.null(output_dir)) {
-            ggsave(results[["F1"]], filename = "F1.png", width = 10, height = 10)
+            ggsave(results[["F1"]], filename = "F1.png", width = 5, height = 5*length(gglist))
           }
         } else {
           results[["F1"]] <- gglist
@@ -220,12 +216,12 @@ viz_annotation <- function(
         }
 
         if(require(ggpubr,quietly = T)) {
-          results[["R2"]] <- ggpubr::ggarrange(plotlist = gglist)
+          results[["R2"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
           if(plot) {
             print(results[["R2"]])
           }
           if(!is.null(output_dir)) {
-            ggsave(results[["R2"]], filename = "R2.png", width = 10, height = 10)
+            ggsave(results[["R2"]], filename = "R2.png", width = 5, height = 5*length(gglist))
           }
         } else {
           results[["R2"]] <- gglist
@@ -287,7 +283,7 @@ viz_annotation <- function(
             geom_text(aes(label = N, color =
                             (.data[[tmp_name1]] == 0) |
                             (.data[[tmp_name2]] == 0)
-                          )) +
+                          ), show.legend = F) +
             scale_color_manual(values = c(`TRUE` = "brown", `FALSE` = "black")) +
             theme_minimal() +
             theme(panel.grid = element_blank()) +
@@ -301,12 +297,12 @@ viz_annotation <- function(
     }
 
     if(require(ggpubr,quietly = T)) {
-      results[["CV"]] <- ggpubr::ggarrange(plotlist = gglist)
+      results[["CV"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
       if(plot) {
         print(results[["CV"]])
       }
       if(!is.null(output_dir)) {
-        ggsave(results[["CV"]], filename = "cross-validation.png", width = 10, height = 10)
+        ggsave(results[["CV"]], filename = "cross-validation.png", width = 5, height = 5*length(gglist))
       }
     } else {
       results[["CV"]] <- gglist
@@ -320,4 +316,97 @@ viz_annotation <- function(
       }
     }
   }
+
+  if ((("confidence" %in% type)|("conf" %in% type))&
+      (any(str_detect(colnames(data), "_conf")))) {
+    gglist <- list()
+    gglist2 <- list()
+
+    selected_columns <- which(str_detect(colnames(data), "_conf"))
+    match_columns <- str_remove(colnames(data)[selected_columns], "_conf.*")
+
+    for (i in 1:length(selected_columns)) {
+      tmp_name <- match_columns[i]
+      tmp_conf <- selected_columns[i]
+
+      tmp <- data.frame(
+        x = data[[tmp_conf]],
+        y = data[[tmp_name]] %>% as.character()
+      )
+
+      if ("true" %in% colnames(data)) {
+        tmp$true <- data$true
+      }
+
+      if(show_top) {
+        tmp_top <- tmp %>%
+          count(y) %>%
+          arrange(n) %>%
+          head(show_top)
+
+        tmp <- tmp %>%
+          subset(y %in% tmp_top$y)
+      }
+
+      gg <- tmp %>%
+        ggplot(aes(x = x, y = y)) +
+        geom_boxplot(aes(fill = y), alpha = 0.5,
+                     position = position_nudge(y = .25),
+                     width = .1, show.legend = F,
+                     outliers = F) +
+        geom_jitter(aes(color = y), alpha = .1,
+                    size = .5, height = .1, width = 0, show.legend = F) +
+        theme_minimal() +
+        scale_color_manual("taxID", values =
+                             palette_taxids(length(unique(tmp$y)) )) +
+        scale_fill_manual("taxID", values =
+                             palette_taxids(length(unique(tmp$y)) )) +
+        theme(panel.grid.minor = element_blank()) +
+        xlab("confidence") +
+        ylab("taxID") +
+        scale_x_continuous(n.breaks = 3) +
+        ggtitle(paste(tmp_name, "confidence"))
+
+      gglist[[paste(tmp_name, "confidence")]] <- gg
+
+      if ("true" %in% colnames(data)) {
+        gg2 <- gg +
+          facet_wrap(~true, scales = "free_y") +
+          xlab("true taxID") + ylab("predicted taxID")
+        gglist2[[paste(tmp_name, "confidence", "true")]] <- gg2
+      }
+    }
+    if(require(ggpubr,quietly = T)) {
+      results[["confidence"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
+      if("true" %in% colnames(data)) {
+        results[["confidence_true"]] <- ggpubr::ggarrange(plotlist = gglist2, ncol = 1)
+      }
+      if(!is.null(output_dir)) {
+        ggsave(results[["confidence"]], filename = "confidence.png", width = 5*length(gglist[[i]]$data$true), height = 10)
+        if("true" %in% colnames(data)) {
+          ggsave(results[["confidence_true"]], filename = "confidence_true.png", width = 10, height = 10)
+        }
+      }
+      if(plot) {
+        print(results[["confidence"]])
+        if("true" %in% colnames(data)) {
+          print(results[["confidence_true"]])
+        }
+      } else {
+        for(i in 1:length(gglist)) {
+          ggsave(gglist[[i]], filename = paste0("confidence_", names(gglist)[i], ".png"), width = 10, height = 10)
+          if("true" %in% colnames(data)) {
+            ggsave(gglist2[[i]], filename = paste0("confidence_true_", names(gglist)[i], ".png"), width = 10, height = 10)
+          }
+          if(plot) {
+            print(gglist[[i]])
+            if("true" %in% colnames(data)) {
+              print(gglist2[[i]])
+            }
+          }
+        }
+      }
+    }
+  }
+  return(results)
 }

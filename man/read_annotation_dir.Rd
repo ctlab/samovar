@@ -20,5 +20,5 @@ Read annotations produced with samovar pipeline from the directory
 library(samovaR)
 
 data <- read_annotation_dir("data/test_annotations/")
-viz_annotation(data)
+gglist <- viz_annotation(data)
 }

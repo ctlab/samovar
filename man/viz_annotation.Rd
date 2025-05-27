@@ -6,7 +6,7 @@
 \usage{
 viz_annotation(
   data,
-  type = c("f1", "R2", "cv"),
+  type = c("f1", "R2", "cv", "conf"),
   show_top = 10,
   output_dir = NULL,
   plot = T
@@ -25,8 +25,14 @@ Column names:
 
 \item{type}{character vector.
 \itemize{
-\item if present column true_annotation: could be one of "f1", "R2", or their combination
-\item else: "cross-validation"
+\item if present column true_annotation: could be one of
+\itemize{
+\item "f1",
+\item "R2",
+\item "confidence",
+\item "cross-validation",
+\item or their combination (e.g. c("f1", "R2", "cv", "conf"))
+}
 }}
 
 \item{show_top}{integer. Number of top annotations to show.}
@@ -45,5 +51,5 @@ Visualize annotation results
 library(samovaR)
 
 data <- read_annotation_dir("data/test_annotations/")
-viz_annotation(data)
+gglist <- viz_annotation(data)
 }

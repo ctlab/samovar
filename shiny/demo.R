@@ -3,13 +3,13 @@ library(tidyverse)
 library(shiny)
 library(plotly)
 
-devtools::install_github("https://github.com/ctlab/")
+#devtools::install_github("https://github.com/ctlab/samovar")
 library(samovaR)
 
 # UI ----
 ui <- fluidPage (
   # head
-  h1("samovaR: Microbiome generator v.1.0"),
+  h1("samovaR: Microbiome generator v.1.8"),
   tags$hr(),
   img(src = "logo_compressed.png", align = "right"),
   textOutput("description"),
