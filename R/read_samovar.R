@@ -1,21 +1,40 @@
-#' Build samovar data object from file or environment
+#' Build samovar object from the abundance matrix
 #'
-#' @param data Data.frame or path to abundance file. Row names is using as species list, column names as sample list. Unique names required
-#' @param metadata Data.frame or path to metadata file
-#' @param ... Parameters processed by read.csv()
+#' @param data abundance matrix
+##' Row names: organisms/OTUs/ASVs
+##' Column names: samples
+#' @param metadata metadata data.frame in format: ADD, or FALSE
+#' @param ... data_samovar$rebuild options: min_sp, min_samp
 #' @export
 # Need tests!
 
-read_annotation_table <- function(data, metadata = F, ...) {
-  if (is.character(data)) data <- read.csv(data, header = T, row.names = 1, ...)
-  if (is.character(metadata)) metadata <- read.csv(metadata, header = T, row.names = 1, ...)
+table2samovar <- function(data, metadata = F, ...){
+  if(isFALSE(metadata)) metadata <- data.frame()
   data[is.na(data)] <- 0
   data_samovar = new("samovar_data",
                      data = data,
                      metadata = metadata,
                      run = colnames(data),
                      species = rownames(data))
-  data_samovar$rebuild
+  data_samovar$rebuild(...)
+}
+
+
+#' Build samovar data object from file or environment
+#'
+#' @param data path to abundance matrix
+##' Row names: organisms/OTUs/ASVs
+##' Column names: samples
+#' @param metadata Data.frame or path to metadata file
+#' @param ... Parameters processed by read.csv()
+#' @export
+# Need tests!
+
+read_samovar <- function(data, metadata = F, ...) {
+  if (is.character(data)) data <- read.csv(data, header = T, row.names = 1, ...)
+  if (is.character(metadata)) metadata <- read.csv(metadata, header = T, row.names = 1, ...)
+
+  data_samovar <- table2samovar(data, metadata, min_samp = 0, min_sp = 0)
 
   return(data_samovar)
 }
@@ -56,12 +75,42 @@ read_annotation_dir <- function(data_dir,  sample_name_position = 0, ...) {
 
 #' Process annotation data.frame to SamovaR
 #'
-#' @param data Processed abundance table. Row names: sequence IDs, column names: annotators; true for true annotation
+#' @param data Processed abundance table.
+##' Row names: sequence IDs,
+##' Column names:
+##' - annotators: (starting with `taxID_`);
+##' - `true`: for true annotation
+##' - `length`: length of sequence
+##' - sample
+##'
 #' @example R/examples/check_samovar.R
 #' @return list of samovar data objects
 #' @export
 
 
 annotation2samovar <- function(data) {
- return()
+  # fix colnames
+  colnames(data) <- colnames(data) %>%
+    stringr::str_remove("_[0-9]*$") %>%
+    stringr::str_replace("taxid", "taxID")
+
+  selected_columns <- (str_detect(colnames(data) , "^taxID_|^N_") &
+                         str_detect(colnames(data) , "confidence", negate = T)) %>%
+    which
+
+  # build samovar
+  res <- list()
+  for (colname in colnames(tmp)[selected_columns]) {
+    data_tmp <- data[,c(colname, "sample")] %>%
+      summarise(value = n(), .by = c(!!sym(colname), sample)) %>%
+      pivot_wider(values_from = value, names_from = !!sym(colname), id_cols = sample, values_fill = 0) %>%
+      column_to_rownames("sample")
+
+    data_samovar <- data_tmp %>%
+      table2samovar(min_samp = 0, min_sp = 0)
+
+    res[[colname]] <- data_samovar
+  }
+
+ return(res)
 }

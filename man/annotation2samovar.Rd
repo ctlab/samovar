@@ -7,7 +7,15 @@
 annotation2samovar(data)
 }
 \arguments{
-\item{data}{Processed abundance table. Row names: sequence IDs, column names: annotators; true for true annotation}
+\item{data}{Processed abundance table.
+Row names: sequence IDs,
+Column names:
+\itemize{
+\item annotators: (starting with \code{taxID_});
+\item \code{true}: for true annotation
+\item \code{length}: length of sequence
+\item sample
+}}
 }
 \value{
 list of samovar data objects
