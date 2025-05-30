@@ -4,35 +4,40 @@
 #'
 #' @slot metadata metadata DataFrame
 #' @slot run character
-#' @method bind GMrepo_run
-#' @method filter GMrepo_run
+#' @slot data data.frame
 #' @name GMrepo_run
 #' @rdname GMrepo_run
 #' @docType class
 #' @export
-
-setRefClass("GMrepo_run",
-  fields = list(
+setClass(
+  "GMrepo_run",
+  slots = list(
     metadata = "data.frame",
     run = "character",
     data = "data.frame"
-  ),
-  methods = list(
-    show = function() {
-      cat("GMrepo run object:")
-      cat(run, sep = "\n")
-    },
-    bind = function(GMrepo_run2) {
-      metadata <<- rbind(metadata, GMrepo_run2$metadata)
-      run <<- c(run, GMrepo_run2$run)
-    },
-    filter = function(field, value) {
-      tmp <- which(metadata[, field] == value)
-      metadata <<- metadata[tmp, ]
-      run <<- run[tmp]
-    }
   )
 )
+
+#' @export
+setMethod("show", "GMrepo_run", function(object) {
+  cat("GMrepo run object:")
+  cat(object@run, sep = "\n")
+})
+
+#' @export
+setMethod("bind", "GMrepo_run", function(object, GMrepo_run2) {
+  object@metadata <- rbind(object@metadata, GMrepo_run2@metadata)
+  object@run <- c(object@run, GMrepo_run2@run)
+  return(object)
+})
+
+#' @export
+setMethod("filter", "GMrepo_run", function(object, field, value) {
+  tmp <- which(object@metadata[, field] == value)
+  object@metadata <- object@metadata[tmp, ]
+  object@run <- object@run[tmp]
+  return(object)
+})
 
 # External runs data ----
 
@@ -40,59 +45,73 @@ setRefClass("GMrepo_run",
 #'
 #' @slot metadata metadata DataFrame
 #' @slot data data
-#' @slot run character, samle IDs
-#' @method bind samovar_run
-#' @method add_species samovar_run
-#' @method filter samovar_run
+#' @slot run character, sample IDs
+#' @slot cluster character
+#' @slot species character
 #' @name samovar_run
 #' @rdname samovar_run
 #' @docType class
 #' @export
-
-setRefClass("samovar_run",
-            fields = list(
-              metadata = "data.frame",
-              data = "data.frame",
-              run = "character",
-              cluster = "character",
-              species = "character"
-            ),
-            methods = list(
-              show = function() {
-                cat("Samovar run object, data:\n")
-                print(data %>% rownames_to_column("sp") %>% as_tibble)
-              },
-              bind = function(samovar_data2) {
-                metadata <<- rbind(metadata, samovar_data2$metadata)
-                run <<- c(run, samovar_data2$run)
-
-                new_species <- which( !(samovar_data2$species %in% species) )
-                species <<- c(species, samovar_data2$species[new_species])
-                cluster <<- c(cluster, samovar_data2$cluster[new_species])
-
-                data[samovar_data2$species[new_species],] <<- 0
-                data <<- cbind(data, samovar_data2$data)
-              },
-              new_sp = function(cluster_sp, sp, abundance, to_run = 1) {
-                new_species <- sp[!(sp %in% species)]
-                data[new_species,] <<- 0
-                data[sp,to_run] <<- abundance
-                cluster <<- c(cluster, rep(cluster_sp, length(sp)))
-                species <<- c(species, new_species)
-                data[is.na(data)] <<- 0
-              },
-              filter = function(field, value) {
-                tmp <- which(metadata[, field] == value)
-                metadata <<- metadata[tmp, ]
-                data <<- data[tmp,]
-                run <<- run[tmp]
-              },
-              get_cluster = function(cl) {
-                data[cluster == cl,]
-              },
-              export = function() return(data)
-            )
+setClass(
+  "samovar_run",
+  slots = list(
+    metadata = "data.frame",
+    data = "data.frame",
+    run = "character",
+    cluster = "character",
+    species = "character"
+  )
 )
+
+#' @export
+setMethod("show", "samovar_run", function(object) {
+  cat("Samovar run object, data:\n")
+  print(object@data %>% rownames_to_column("sp") %>% as_tibble)
+})
+
+#' @export
+setMethod("bind", "samovar_run", function(object, samovar_data2) {
+  object@metadata <- rbind(object@metadata, samovar_data2@metadata)
+  object@run <- c(object@run, samovar_data2@run)
+
+  new_species <- which(!(samovar_data2@species %in% object@species))
+  object@species <- c(object@species, samovar_data2@species[new_species])
+  object@cluster <- c(object@cluster, samovar_data2@cluster[new_species])
+
+  object@data[samovar_data2@species[new_species],] <- 0
+  object@data <- cbind(object@data, samovar_data2@data)
+  return(object)
+})
+
+#' @export
+setMethod("add_species", "samovar_run", function(object, cluster_sp, sp, abundance, to_run = 1) {
+  new_species <- sp[!(sp %in% object@species)]
+  object@data[new_species,] <- 0
+  object@data[sp,to_run] <- abundance
+  object@cluster <- c(object@cluster, rep(cluster_sp, length(sp)))
+  object@species <- c(object@species, new_species)
+  object@data[is.na(object@data)] <- 0
+  return(object)
+})
+
+#' @export
+setMethod("filter", "samovar_run", function(object, field, value) {
+  tmp <- which(object@metadata[, field] == value)
+  object@metadata <- object@metadata[tmp, ]
+  object@data <- object@data[tmp,]
+  object@run <- object@run[tmp]
+  return(object)
+})
+
+#' @export
+setMethod("get_cluster", "samovar_run", function(object, cl) {
+  return(object@data[object@cluster == cl,])
+})
+
+#' @export
+setMethod("export_data", "samovar_run", function(object) {
+  return(object@data)
+})
 
 # Samovar data ----
 
@@ -108,23 +127,13 @@ setRefClass("samovar_run",
 #' @slot max_value maximal value after scaling
 #' @slot cluster character vector, enumerated clusters for each species
 #' @slot cluster_size named numeric, cluster sizes per cluster
-#' @method bind samovar_data
-#' @method filter samovar_data
-#' @method rescale samovar_data
-#' @method rebuild samovar_data
-#' @method normalize samovar_data
-#' @method reverse_normalize samovar_data
-#' @method get samovar_data
-#' @method get_clean samovar_data
-#' @method cluster_n samovar_data
 #' @docType class
 #' @name samovar_data
 #' @rdname samovar_data
 #' @export
-
-
-setRefClass("samovar_data",
-  fields = list(
+setClass(
+  "samovar_data",
+  slots = list(
     metadata = "data.frame",
     data = "data.frame",
     run = "character",
@@ -135,191 +144,215 @@ setRefClass("samovar_data",
     max_value = 'numeric',
     cluster = 'character',
     cluster_size = 'numeric'
-  ),
-  methods = list(
-    show = function() {
-      cat("samovar_data object:\n")
-      cat(length(run), "samples\n")
-      cat(length(species), "species\n")
-      print(tibble(data))
-    },
-    bind = function(bind_with) {
-      if (class(bind_with) == "GMrepo_run") {
-        metadata <<- rbind(metadata, bind_with$metadata)
-        run <<- c(run, bind_with$run)
-        species <<- unique(species, bind_with$species)
-        data <<- data %>% cbind(bind_with$data)
-      } else if(class(bind_with) == "samovar_run") {
-        metadata <<- rbind(metadata, bind_with$metadata)
-        run <<- c(run, bind_with$run)
-        data <<- data %>% cbind(bind_with$data)
-
-        new_species <- which( !(bind_with$species %in% species) )
-        species <<- c(species, bind_with$species[new_species])
-        cluster <<- c(cluster, bind_with$cluster[new_species])
-        cluster_size <<- table(cluster)
-      }
-
-    },
-    filter = function(field, value) {
-      tmp <- which(metadata[, field] %in% value)
-      metadata <<- metadata[tmp, ]
-      data <<- data[tmp, ] %>%
-        subset(apply(1, sum, na.rm = T) > 0)
-      run <<- run[tmp]
-
-      if (is.character(cluster)) {
-        cluster <<- cluster[tmp]
-        warning("Clusters after filtration is not reassigned; may cause breaks in future steps")
-      }
-    },
-    rescale = function(scale_function = function(x) {
-                         x / sum(x)
-                       }) {
-      data[is.na(data)] <<- 0
-      data <<- apply(data, 2, scale_function) %>% as.data.frame()
-      min_value <<- 0
-      max_value <<- 1
-    },
-    normalize = function(normalization_function = normalization_function) {
-      data <<- apply(data, 2, normalization_function) %>% as.data.frame()
-      data[is.na(data)] <<- 0
-
-      # assign normalization and inverse functions
-      normalization_function <<- normalization_function
-
-      inverse <- function(f, lower, upper) {
-        function(y) {
-          uniroot((function(x) f(x) - y),
-                  lower = lower,
-                  upper = upper)[1] %>%
-            unlist() %>%
-            as.numeric()
-        }
-      }
-
-      reverse_normalization_function <<- inverse(function(x) normalization_function(x),
-        lower = 0, upper = 1)
-
-      min_value <<- normalization_function(min_value)
-      max_value <<- normalization_function(max_value)
-    },
-    reverse_normalize = function() {
-      data <<- apply(data, 2, reverse_normalization_function)
-    },
-    reverse_normalize_df = function(x) {
-      if(!is.null(reverse_normalization_function)) {
-        x[x < min_value] <- min_value
-        x[x > max_value] <- max_value
-
-        x <- x %>%
-          data.frame() %>%
-          apply(c(1,2), reverse_normalization_function) %>%
-          apply(2, function(line) {
-            if((sum(line)) > 1) {line/sum(line)} else{line}
-          }) %>%
-          data.frame()
-
-        x["unclassified",] <- apply(x, 2, function(x) 1 - sum(x) )
-      }
-      return(x)
-    },
-    rebuild = function(min_sp = 1, min_samp = 1) {
-      cat("Initial:", nrow(data), "x", ncol(data), "\n")
-      # filter
-      above0 <- function(x) sum(x > min_value)
-      data <<- data[apply(data, 1, above0) >= min_samp, ]
-      data <<- data[, apply(data, 2, above0) >= min_sp]
-
-      # rebuild
-      tmp <- which(species %in% rownames(data))
-      run <<- colnames(data)
-      species <<- rownames(data)
-      metadata <<- metadata[rownames(metadata) %in% run, ]
-      cat("After filtering:", nrow(data), "x", ncol(data), "\n")
-
-      if (length(cluster)>0) {
-        cluster <<- cluster[tmp]
-        warning("Clusters after filtration is dropped; may cause breaks in future steps")
-      }
-    },
-    get_clean = function(cl) {
-      df <- data[cluster == cl,]
-
-      #filter
-      df <- df[,apply(df,2, sum) > min_value]
-      return(df)
-    },
-    get = function(cl) {
-      df <- data[cluster == cl,]
-      return(df)
-    },
-    cluster_n = function() return(length(unique(cluster)))
   )
 )
 
+#' @export
+setMethod("show", "samovar_data", function(object) {
+  cat("samovar_data object:\n")
+  cat(length(object@run), "samples\n")
+  cat(length(object@species), "species\n")
+  print(tibble(object@data))
+})
 
-# Samovar base----
+#' @export
+setMethod("bind", "samovar_data", function(object, bind_with) {
+  if (class(bind_with) == "GMrepo_run") {
+    object@metadata <- rbind(object@metadata, bind_with@metadata)
+    object@run <- c(object@run, bind_with@run)
+    object@species <- unique(object@species, bind_with@species)
+    object@data <- object@data %>% cbind(bind_with@data)
+  } else if(class(bind_with) == "samovar_run") {
+    object@metadata <- rbind(object@metadata, bind_with@metadata)
+    object@run <- c(object@run, bind_with@run)
+    object@data <- object@data %>% cbind(bind_with@data)
+
+    new_species <- which(!(bind_with@species %in% object@species))
+    object@species <- c(object@species, bind_with@species[new_species])
+    object@cluster <- c(object@cluster, bind_with@cluster[new_species])
+    object@cluster_size <- table(object@cluster)
+  }
+  return(object)
+})
+
+#' @export
+setMethod("filter", "samovar_data", function(object, field, value) {
+  tmp <- which(object@metadata[, field] %in% value)
+  object@metadata <- object@metadata[tmp, ]
+  object@data <- object@data[tmp, ] %>%
+    subset(apply(1, sum, na.rm = T) > 0)
+  object@run <- object@run[tmp]
+
+  if (is.character(object@cluster)) {
+    object@cluster <- object@cluster[tmp]
+    warning("Clusters after filtration is not reassigned; may cause breaks in future steps")
+  }
+  return(object)
+})
+
+#' @export
+setMethod("rescale", "samovar_data", function(object, scale_function = function(x) {
+  x / sum(x)
+}) {
+  object@data[is.na(object@data)] <- 0
+  object@data <- apply(object@data, 2, scale_function) %>% as.data.frame()
+  object@min_value <- 0
+  object@max_value <- 1
+  return(object)
+})
+
+#' @export
+setMethod("normalize", "samovar_data", function(object, normalization_function = object@normalization_function) {
+  object@data <- apply(object@data, 2, normalization_function) %>% as.data.frame()
+  object@data[is.na(object@data)] <- 0
+
+  # assign normalization and inverse functions
+  object@normalization_function <- normalization_function
+
+  inverse <- function(f, lower, upper) {
+    function(y) {
+      uniroot((function(x) f(x) - y),
+              lower = lower,
+              upper = upper)[1] %>%
+        unlist() %>%
+        as.numeric()
+    }
+  }
+
+  object@reverse_normalization_function <- inverse(function(x) normalization_function(x),
+                                               lower = 0, upper = 1)
+
+  object@min_value <- normalization_function(object@min_value)
+  object@max_value <- normalization_function(object@max_value)
+  return(object)
+})
+
+#' @export
+setMethod("reverse_normalize", "samovar_data", function(object) {
+  object@data <- apply(object@data, 2, object@reverse_normalization_function)
+  return(object)
+})
+
+#' @export
+setMethod("reverse_normalize_df", "samovar_data", function(object, x) {
+  if(!is.null(object@reverse_normalization_function)) {
+    x[x < object@min_value] <- object@min_value
+    x[x > object@max_value] <- object@max_value
+
+    x <- x %>%
+      data.frame() %>%
+      apply(c(1,2), object@reverse_normalization_function) %>%
+      apply(2, function(line) {
+        if((sum(line)) > 1) {line/sum(line)} else{line}
+      }) %>%
+      data.frame()
+
+    x["unclassified",] <- apply(x, 2, function(x) 1 - sum(x) )
+  }
+  return(x)
+})
+
+#' @export
+setMethod("rebuild", "samovar_data", function(object, min_sp = 1, min_samp = 1) {
+  cat("Initial:", nrow(object@data), "x", ncol(object@data), "\n")
+  # filter
+  above0 <- function(x) sum(x > object@min_value)
+  object@data <- object@data[apply(object@data, 1, above0) >= min_samp, ]
+  object@data <- object@data[, apply(object@data, 2, above0) >= min_sp]
+
+  # rebuild
+  tmp <- which(object@species %in% rownames(object@data))
+  object@run <- colnames(object@data)
+  object@species <- rownames(object@data)
+  object@metadata <- object@metadata[rownames(object@metadata) %in% object@run, ]
+  cat("After filtering:", nrow(object@data), "x", ncol(object@data), "\n")
+
+  if (length(object@cluster)>0) {
+    object@cluster <- object@cluster[tmp]
+    warning("Clusters after filtration is dropped; may cause breaks in future steps")
+  }
+  return(object)
+})
+
+#' @export
+setMethod("get_clean", "samovar_data", function(object, cl) {
+  df <- object@data[object@cluster == cl,]
+  #filter
+  df <- df[,apply(df,2, sum) > object@min_value]
+  return(df)
+})
+
+#' @export
+setMethod("get_data", "samovar_data", function(object, cl) {
+  df <- object@data[object@cluster == cl,]
+  return(df)
+})
+
+#' @export
+setMethod("cluster_count", "samovar_data", function(object) {
+  return(length(unique(object@cluster)))
+})
+
+# Samovar base ----
 
 #' samovar base class
 #'
-#' @slot samovar_base samovar_data object
-#' @slot method method to obtain samovar_base
+#' @slot samovar_data samovar_data object
 #' @slot inner_cluster_graph_method list of graphs in matrix form of inner cluster connections
 #' @slot inter_cluster_graph_method list of graphs in matrix form of inter cluster connections
 #' @slot inner_cluster_graph_prob list of co-occurrence probabilities in matrix form of inner cluster members
 #' @slot inter_cluster_graph_prob list of co-occurrence probabilities in matrix form between clusters
-#' @slot properties concotion_pour() properties
-#' @method get_cluster samovar_base
-#' @method get_cluster_len samovar_base
-#' @method get_max_inner samovar_base
-#' @method get_max_inter samovar_base
+#' @slot preferences concotion_pour() properties
 #' @docType class
 #' @name samovar_base
 #' @rdname samovar_base
 #' @export
-
-setRefClass("samovar_base",
-  fields = list(
+setClass(
+  "samovar_base",
+  slots = list(
     samovar_data = 'samovar_data',
     inner_cluster_graph_method = 'list',
     inter_cluster_graph_method = 'matrix',
-    inner_cluster_graph_prob = 'list',
+    inner_cluster_graph_prob = 'matrix',
     inter_cluster_graph_prob = 'matrix',
     preferences = 'list'
-  ),
-  methods = list(
-    show = function() {
-      cat("Prepared samovar:")
-      cat("\nClusters:", samovar_data$cluster)
-      print(samovar_data)
-      print(as.data.frame(preferences) %>% t)
-    },
-    get_cluster = function(sp) {
-      samovar_data$cluster[samovar_data$species == sp] %>%
-        as.numeric()
-    },
-    get_cluster_len = function(cl) {
-      samovar_data$cluster_size[cl]
-    },
-    get_max_inter = function(predicted,
-                               type = "prob") {
-      if(type != "prob") {
-        df <- samovar$inter_cluster_graph_method
-      } else {
-        df <- inter_cluster_graph_prob
-      }
-      return(which.max.coord(df, predicted))
-    },
-    get_max_inner = function(cl, predicted,
-                              type = "prob") {
-      if(type != "prob") {
-        df <- inter_cluster_graph_method[[cl]]
-      } else {
-        df <- inner_cluster_graph_prob[[cl]]
-      }
-      return(which.max.coord(df, predicted))
-    }
-
   )
 )
+
+#' @export
+setMethod("show", "samovar_base", function(object) {
+  cat("Prepared samovar:")
+  cat("\nClusters:", object@samovar_data@cluster)
+  print(object@samovar_data)
+  print(as.data.frame(object@preferences) %>% t)
+})
+
+#' @export
+setMethod("get_cluster_info", "samovar_base", function(object, sp) {
+  return(as.numeric(object@samovar_data@cluster[object@samovar_data@species == sp]))
+})
+
+#' @export
+setMethod("get_cluster_length", "samovar_base", function(object, cl) {
+  return(object@samovar_data@cluster_size[cl])
+})
+
+#' @export
+setMethod("get_max_inter_cluster", "samovar_base", function(object, predicted, type = "prob") {
+  if(type != "prob") {
+    df <- object@inter_cluster_graph_method
+  } else {
+    df <- object@inter_cluster_graph_prob
+  }
+  return(which.max.coord(df, predicted))
+})
+
+#' @export
+setMethod("get_max_inner_cluster", "samovar_base", function(object, cl, predicted, type = "prob") {
+  if(type != "prob") {
+    df <- object@inter_cluster_graph_method[[cl]]
+  } else {
+    df <- object@inner_cluster_graph_prob[[cl]]
+  }
+  return(which.max.coord(df, predicted))
+})
