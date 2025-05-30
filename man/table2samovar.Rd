@@ -4,7 +4,7 @@
 \alias{table2samovar}
 \title{Build samovar object from the abundance matrix}
 \usage{
-table2samovar(data, metadata = F, ...)
+table2samovar(data, metadata = F, min_sp = 0, min_samp = 0)
 }
 \arguments{
 \item{data}{abundance matrix
@@ -13,8 +13,35 @@ Column names: samples}
 
 \item{metadata}{metadata data.frame in format: ADD, or FALSE}
 
-\item{...}{data_samovar$rebuild options: min_sp, min_samp}
+\item{min_sp}{data_samovar$rebuild() option, minimal number of species to filter. 0 by default}
+
+\item{min_samp}{data_samovar$rebuild() option, minimal number of species to filter. 0 by default}
+}
+\value{
+samovar object
 }
 \description{
 Build samovar object from the abundance matrix
+}
+\examples{
+library(samovaR)
+
+## build samovar directly from the table
+data <- matrix(
+  runif(25),
+  dimnames = list(
+    rownames = paste0("sp_", 1:5),
+    colnames = paste0("sample_", 1:5)
+  ),
+  nrow = 5)
+
+samovar_data <- table2samovar(data)
+print(samovar_data)
+
+# or read abundance table
+tf <- tempfile()
+write.csv(data, tf)
+
+samovar_data <- read_samovar(tf)
+print(samovar_data)
 }

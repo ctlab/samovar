@@ -13,6 +13,9 @@ read_annotation_dir(data_dir, sample_name_position = 0, ...)
 
 \item{...}{Parameters processed by read.csv()}
 }
+\value{
+samovar object
+}
 \description{
 Read annotations produced with samovar pipeline from the directory
 }
@@ -21,4 +24,6 @@ library(samovaR)
 
 data <- read_annotation_dir("data/test_annotations/")
 gglist <- viz_annotation(data)
+
+samovar_list <- annotation2samovar(data)
 }

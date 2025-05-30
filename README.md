@@ -1,5 +1,5 @@
 # SamovaR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
-### Artificial metagenome generation and automatic benchmarking
+### Automated re-profiling & benchmarking of metagenomic tools based on artificial data generation
 
 
 [![R package](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml)
@@ -26,33 +26,24 @@ chmod +x install.sh
 ./install.sh
 ```
 
-*Attention: the script automatically detects custom R library paths from `.Renviron` (R_LIBS) or `.Rprofile` (libPaths())*
+***Attention**: the script automatically detects custom R library paths from `.Renviron` (R_LIBS) or `.Rprofile` (libPaths())*
 
 ### Manual Installation
 
-Install R package:
+Install **R** package:
 
 ```r
-# If you have a custom library path, specify it:
-.libPaths('/path/to/your/R/library')
 devtools::install_github("https://github.com/ctlab/samovar/")
 ```
 
-Install python package:
+***Attention:*** *check that samovar can be loaded with* ```Rscript -e 'library(samovar)'```, *especially in case of several R versions installed*
+
+Install **python** package:
 
 ```bash
 git clone https://github.com/ctlab/samovar
 cd samovar
 pip install -e .
-```
-
-## Examples
-
-To check installation or dive into what SamovaR do, run
-
-```bash
-cd samovar
-bash workflow/pipeline.sh
 ```
 
 ## Components
@@ -106,19 +97,19 @@ graph TD
         Metagenomes --> C[Initial annotation]
         A3 --> C
         C --> E
-        A4 --> E[Metagenome generation]
         E --> F[Re-annotation]
         A4 --> F
+        A4 --> E[Metagenome generation]
     end
 
     subgraph Results
-        C --> C1[Cross-validation]
         F --> G1[Annotators scores]
         F --> ML
         subgraph Re-profiling
             C --> R
             ML --> R[Corrected results]
         end
+        C --> C1[Cross-validation]
     end
 
     style Input fill:#90ee9020,stroke:#333,stroke-width:2px
@@ -167,15 +158,9 @@ new_data <- samovar %>%
 
 <a src="https://github.com/ctlab/samovar/blob/main/samovaR_man.pdf">Documentation</a> for the **R package**
 
-#### Algorithm
-
-Summary
+#### Pipeline
 
 <img src="data/img/additional/algo.png" width = 50%>
-
-Details
-
-<img src="data/img/additional/details.png">
 
 ## References
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330

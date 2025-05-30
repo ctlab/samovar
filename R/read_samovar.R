@@ -4,19 +4,25 @@
 ##' Row names: organisms/OTUs/ASVs
 ##' Column names: samples
 #' @param metadata metadata data.frame in format: ADD, or FALSE
-#' @param ... data_samovar$rebuild options: min_sp, min_samp
+#' @param min_sp data_samovar$rebuild() option, minimal number of species to filter. 0 by default
+#' @param min_samp data_samovar$rebuild() option, minimal number of species to filter. 0 by default
+#' @example R/examples/load_samovar.R
+#' @return samovar object
 #' @export
 # Need tests!
 
-table2samovar <- function(data, metadata = F, ...){
+table2samovar <- function(data, metadata = F, min_sp = 0, min_samp = 0){
   if(isFALSE(metadata)) metadata <- data.frame()
+  data <- as.data.frame(data)
   data[is.na(data)] <- 0
   data_samovar = new("samovar_data",
                      data = data,
                      metadata = metadata,
                      run = colnames(data),
                      species = rownames(data))
-  data_samovar$rebuild(...)
+  data_samovar$rebuild(min_sp, min_samp)
+
+  return(data_samovar)
 }
 
 
@@ -27,7 +33,9 @@ table2samovar <- function(data, metadata = F, ...){
 ##' Column names: samples
 #' @param metadata Data.frame or path to metadata file
 #' @param ... Parameters processed by read.csv()
+#' @example R/examples/load_samovar.R
 #' @export
+#' @return samovar object
 # Need tests!
 
 read_samovar <- function(data, metadata = F, ...) {
@@ -47,6 +55,7 @@ read_samovar <- function(data, metadata = F, ...) {
 #' @importFrom dplyr bind_rows mutate
 #' @importFrom stringr str_split str_remove
 #' @example R/examples/check_samovar.R
+#' @return samovar object
 #' @export
 
 read_annotation_dir <- function(data_dir,  sample_name_position = 0, ...) {
@@ -100,7 +109,7 @@ annotation2samovar <- function(data) {
 
   # build samovar
   res <- list()
-  for (colname in colnames(tmp)[selected_columns]) {
+  for (colname in colnames(data)[selected_columns]) {
     data_tmp <- data[,c(colname, "sample")] %>%
       summarise(value = n(), .by = c(!!sym(colname), sample)) %>%
       pivot_wider(values_from = value, names_from = !!sym(colname), id_cols = sample, values_fill = 0) %>%
