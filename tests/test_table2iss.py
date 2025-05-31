@@ -155,8 +155,7 @@ def test_regenerate_metagenome():
         output_dir=output_dir,
         amount=[100, 200, 300],
         read_length=150,
-        sample_name="test_regenerated",
-        mode="direct"
+        sample_name="test_regenerated"
     )
     
     # Check if output files exist
@@ -198,8 +197,7 @@ def test_process_annotation_table():
         table_path=table_path,
         genome_dir=genome_dir,
         output_dir=reads_dir,
-        total_amount=1000,
-        mode="direct"
+        total_amount=1000
     )
     
     # Check if output files exist

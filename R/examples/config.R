@@ -6,10 +6,11 @@ tf <- tempfile()
 
 write_yaml(
   list(
-    metadata_filter = F,
     treshhold_amount = 10^(-5),
     plot_log = F,
-    min_cluster_size = 5
+    min_cluster_size = 5,
+    N = 5,
+    N_reads = 100
   ),
   tf
 )
@@ -30,5 +31,8 @@ samovar_data <- table2samovar(data)
 # Run with config
 config_samovar$samovar_data <- samovar_data
 samovar <- do.call(samovar_preprocess, config_samovar)
+samovar_new <- samovar_boil(samovar, N = config_samovar$N)
 
+new_data <- samovar_new$data * config_samovar$N_reads
 
+heatmap(as.matrix(new_data))

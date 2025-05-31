@@ -96,7 +96,8 @@ def generate_reads_genome(
                 --genomes {genome_file} \
                 --model {model} \
                 --output {output_file} \
-                --n_reads {amount}
+                --n_reads {amount} \
+                --fragment-length {read_length}
         """ 
 
         subprocess.run(cmd, shell=True)
@@ -140,7 +141,7 @@ def generate_reads_metagenome(
                 os.path.join(
                     output_dir, 
                     f"{sample_name}_{annotator_name}_{os.path.basename(genome_file).split('.')[0]}"), 
-                int(N), read_length)
+                int(N), read_length, model)
     
     # Merge all reads into a single file
     
@@ -164,25 +165,21 @@ def regenerate_metagenome(
     total_amount: int = None,
     sample_name: str = None,
     annotator_name: str = None,
-    model: str = "hiseq",
-    mode: str = "direct"
+    model: str = "hiseq"
 ) -> None:
     """
     Regenerate metagenome reads from a list of genome files.
     """
-    if mode == "direct":
-        generate_reads_metagenome(
-            genome_files = genome_files, 
-            output_dir = output_dir, 
-            amount = amount,
-            read_length = read_length, 
-            total_amount = total_amount, 
-            model = model, 
-            sample_name = sample_name,
-            annotator_name = annotator_name
-        )
-    elif mode == "samovar":
-        raise NotImplementedError("Samovar mode not implemented yet")
+    generate_reads_metagenome(
+        genome_files=genome_files,
+        output_dir=output_dir,
+        amount=amount,
+        read_length=read_length,
+        total_amount=total_amount,
+        model=model,
+        sample_name=sample_name,
+        annotator_name=annotator_name,
+    )
 
 def process_annotation_table(
     table_path: str,
@@ -239,6 +236,30 @@ def process_annotation_table(
             total_amount=total_amount,
             sample_name=sample_name,
             model=model,
-            mode=mode,
             annotator_name=annotator_name
         ) 
+
+def samovar_annotation_regenerate(
+    config_samovar: str,
+    annotation_dir: str,
+    output_dir: str = None
+) -> None:
+    """
+    Regenerate taxonomy tables to a SAMOVAR table.
+
+    Args:
+        config_samovar: Path to SAMOVAR config file
+        annotation_dir: Path to annotation directory
+        output_dir: Path to output directory
+    """
+    config_samovar_dict = yaml.load(open(config_samovar))
+    if output_dir is None:
+        output_dir = config_samovar_dict['output_dir']
+
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        R_path = json.load(open(os.path.join(here, '../build/config.json')))['R_path']
+    except:
+        R_path = "R"
+
+    subprocess.run(f"{R_path} workflow/annotation_regenerate.R {config_samovar} {annotation_dir} {output_dir}", shell=True)

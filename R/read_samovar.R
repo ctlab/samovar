@@ -21,6 +21,7 @@ table2samovar <- function(data, metadata = F, min_sp = 0, min_samp = 0){
                      run = colnames(data),
                      species = rownames(data))
   data_samovar$rebuild(min_sp, min_samp)
+  data_samovar$rescale()
 
   return(data_samovar)
 }
