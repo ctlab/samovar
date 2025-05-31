@@ -101,6 +101,7 @@ graph TD
         A4 --> F
         A4 --> E[Metagenome generation]
     end
+    A3 --> F
 
     subgraph Results
         F --> G1[Annotators scores]
@@ -184,7 +185,6 @@ graph LR
             direction LR
             ggplot
             plotly
-            tsne
             ggnewscale
         end
         
@@ -200,7 +200,8 @@ graph LR
         subgraph "Major"
             direction LR
             samova.R
-            snakemake
+            R::yaml
+            SnakeMake
             InSilicoSeq
         end
         
