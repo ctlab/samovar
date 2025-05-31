@@ -15,6 +15,6 @@ run_config: [
     "run_name": "kaiju",
     "type": "kaiju",
     "db_path": "/mnt/metagenomics/kaiju",
-    "db_name": "kaiju_db_fungi.fmi"
+    "db_name": "kaiju_db_progenomes.fmi"
   }
 ]

@@ -1,4 +1,5 @@
-library(samovar)
+library(samovaR)
+library(tidyverse)
 
 # Parse command line arguments
 args <- commandArgs(trailingOnly = TRUE)
@@ -11,6 +12,7 @@ types <- c("f1", "R2", "cv")
 
 # Parse arguments
 i <- 1
+csv_file <- NULL
 while (i <= length(args)) {
   if (args[i] == "--annotation_dir") {
     annotation_dir <- args[i + 1]

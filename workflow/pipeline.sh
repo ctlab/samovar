@@ -1,3 +1,18 @@
+# Setup
+set -e
+
+if [ -f build/config.json ]; then
+    PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' build/config.json | sed 's/"python_path": *"\(.*\)"/\1/')
+    R_PATH=$(grep -o '"r_path": *"[^"]*"' build/config.json | sed 's/"r_path": *"\(.*\)"/\1/')
+    R_LIB_PATH=$(grep -o '"r_lib_path": *"[^"]*"' build/config.json | sed 's/"r_lib_path": *"\(.*\)"/\1/')
+else
+    echo "SamovaR is not installed: check build/config.json"
+    exit 1
+fi
+
+out_dir="tests_outs"
+mkdir -p $out_dir
+
 # Generate reads with InSilicoSeq
 snakemake -s workflow/iss_test/Snakefile \
     --configfile workflow/iss_test/config.yaml \
@@ -11,8 +26,8 @@ if true; then
         --cores 1
 
     # Prepare databases
-    python workflow/database_prep/build_database_kraken2.py
-    python workflow/database_prep/build_database_kaiju.py
+    $PYTHON_PATH workflow/database_prep/build_database_kraken2.py
+    $PYTHON_PATH workflow/database_prep/build_database_kaiju.py
 fi
 
 # Run annotators on initial reads
@@ -21,12 +36,13 @@ snakemake -s workflow/annotators/Snakefile \
     --cores 1
 
 # Combine annotation tables
-python workflow/combine_annotation_tables.py \
+$PYTHON_PATH workflow/combine_annotation_tables.py \
     -i tests_outs/benchmarking/initial_reports \
     -o tests_outs/benchmarking/initial_annotations
 
 # Visualize annotations
-Rscript workflow/compare_annotations.R \
+$R_PATH -s -f "workflow/compare_annotations.R" \
+    --args \
     --annotation_dir tests_outs/benchmarking/initial_annotations \
     --output_dir tests_outs/benchmarking/initial_annotations_plots
 
@@ -52,25 +68,27 @@ snakemake -s workflow/annotators/Snakefile \
     --cores 1
 
 # Combine annotation tables
-python workflow/combine_annotation_tables.py \
+$PYTHON_PATH workflow/combine_annotation_tables.py \
     -i tests_outs/benchmarking/regenerated_reports \
     -o tests_outs/benchmarking/regenerated_annotations \
     -s 2
 
 # Visualize & combine results
-Rscript workflow/compare_annotations.R \
+$R_PATH -s -f "workflow/compare_annotations.R" \
+    --args \
     --annotation_dir tests_outs/benchmarking/regenerated_annotations \
     --output_dir tests_outs/benchmarking/regenerated_annotations_plots \
     --csv tests_outs/benchmarking/regenerated_annotations/combined_annotation_table.csv
 
 # Train and test ML
-python workflow/ML.py \
+$PYTHON_PATH workflow/ML.py \
     --reprofiling_dir tests_outs/benchmarking/initial_annotations \
     --validation_file tests_outs/benchmarking/regenerated_annotations/combined_annotation_table.csv \
     --output_dir tests_outs/benchmarking/reprofiled_annotations
 
 # Check reprofiled results
-Rscript workflow/compare_annotations.R \
+$R_PATH -s -f "workflow/compare_annotations.R" \
+    --args \
     --annotation_dir tests_outs/benchmarking/reprofiled_annotations \
     --output_dir tests_outs/benchmarking/reprofiled_annotations_plots \
     --csv tests_outs/benchmarking/reprofiled_annotations/combined_annotation_table.csv

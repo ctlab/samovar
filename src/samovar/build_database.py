@@ -66,6 +66,7 @@ def get_taxonomy_db(
             "-C",
             db_path + "/taxonomy"
         ]
+        print(extract_cmd)
         run_command(extract_cmd)
 
         logger.info(f"Taxonomy database downloaded and extracted to {db_path}/taxonomy")
