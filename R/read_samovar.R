@@ -115,7 +115,7 @@ annotation2samovar <- function(data) {
       pivot_wider(values_from = value, names_from = !!sym(colname), id_cols = sample, values_fill = 0) %>%
       column_to_rownames("sample")
 
-    data_samovar <- data_tmp %>%
+    data_samovar <- data_tmp %>% t %>%
       table2samovar(min_samp = 0, min_sp = 0)
 
     res[[colname]] <- data_samovar
