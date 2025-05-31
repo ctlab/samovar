@@ -43,7 +43,7 @@ samovar_preprocess <- function(
     ...
 ) {
   data <- teatree_trim(
-    data,
+    samovar_data,
     metadata_filter,
     treshhold_amount,
     treshhold_samples,

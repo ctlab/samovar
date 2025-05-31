@@ -1,5 +1,5 @@
 {
-    "r_path": "",
-    "python_path": "",
-    "r_lib_path": ""
+    "r_path": "/mnt/tank/opt/R/4.4.2/bin/R",
+    "python_path": "python",
+    "r_lib_path": "/nfs/home/dsmutin/R/x86_64-pc-linux-gnu-library/4.4"
 }

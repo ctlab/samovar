@@ -34,7 +34,8 @@ Imports:
     stringr,
     tibble,
     tidyr,
-    ggnewscale
+    ggnewscale,
+    yaml
 Suggests: 
     shiny,
     knitr,
