@@ -7,7 +7,8 @@
 tealeaves_pack(
   samovar_data,
   normalization_function = function(x) log10(x + 1),
-  plot_log = T
+  plot_log = T,
+  ...
 )
 }
 \arguments{
@@ -16,6 +17,8 @@ tealeaves_pack(
 \item{normalization_function}{Function using for rescaling}
 
 \item{plot_log}{Logical or path for log plots output}
+
+\item{...}{Additional arguments, passed}
 }
 \description{
 Scale species abundances

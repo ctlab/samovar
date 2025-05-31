@@ -12,7 +12,8 @@ concotion_pour(
   inter_model = "gaussian",
   minimal_cluster = 2,
   probability_calculation = "oriented",
-  cluster_connection = "mean"
+  cluster_connection = "mean",
+  ...
 )
 }
 \arguments{
@@ -27,6 +28,8 @@ concotion_pour(
 \item{inter_model}{Character, model processed by glm(). For glm mode only. quasipoisson by default}
 
 \item{cluster_connection}{Character (mean, median), or function. The way of cluster connection. If function, way of summarize all samples of species cluster}
+
+\item{...}{Additional arguments, passed}
 
 \item{network}{FALSE or graph that can be used for generation. To be implemented}
 

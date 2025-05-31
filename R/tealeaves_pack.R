@@ -3,6 +3,7 @@
 #' @param samovar_data Samovar data object to rescale
 #' @param normalization_function Function using for rescaling
 #' @param plot_log Logical or path for log plots output
+#' @param ... Additional arguments, passed
 #' @example R/examples/preprocessing.R
 # @importFrom plotly ggplotly
 #' @export
@@ -10,7 +11,8 @@
 tealeaves_pack = function(
     samovar_data,
     normalization_function = function(x) log10(x + 1),
-    plot_log = T
+    plot_log = T,
+    ...
 ) {
 
   data = samovar_data$copy()

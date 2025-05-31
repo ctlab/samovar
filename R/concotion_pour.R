@@ -20,6 +20,7 @@
 #' <br>If "compositional", calculated as
 #' <br>P(A|B) = P(A&B|B), and than sampled one of represented conditions of occurence
 #' @param cluster_connection Character (mean, median), or function. The way of cluster connection. If function, way of summarize all samples of species cluster
+#' @param ... Additional arguments, passed
 #' @example R/examples/preprocessing.R
 #' @export
 
@@ -31,7 +32,8 @@ concotion_pour <- function(
     inter_model = "gaussian",
     minimal_cluster = 2,
     probability_calculation = "oriented", # oriented or simple
-    cluster_connection = "mean" # mean_oriented, mean, simple or PCA
+    cluster_connection = "mean", # mean_oriented, mean, simple or PCA
+    ...
 ) {
   # Additional functions re-import
   prob_calc <- function(...) prob_calc_general(..., probability_calculation = probability_calculation)

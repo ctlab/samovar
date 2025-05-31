@@ -10,6 +10,7 @@
 #' @param min_cluster_size FALSE or minimum number of species per cluster
 #' @param max_cluster_size FALSE or minimum number of species per cluster
 #' @param plot_log Logical or path for log plots output
+#' @param ... Additional arguments, passed
 #' @importFrom distances distances
 #' @import scclust
 #' @importFrom plotly ggplotly
@@ -21,15 +22,17 @@ teabag_brew <- function(
     network = F,
     min_cluster_size = 10,
     max_cluster_size = 100,
-    plot_log = F) {
+    plot_log = F,
+    ...
+) {
 
   data <- samovar_data$copy()
 
   #make minimal sizes clusters
-    sc <- data$data %>%
-      distances::distances() %>%
-      sc_clustering(x, size_constraint = min_cluster_size) %>%
-      as.numeric()
+  sc <- data$data %>%
+    distances::distances() %>%
+    sc_clustering(x, size_constraint = min_cluster_size) %>%
+    as.numeric()
 
   # re-calculate maximum sizes clusters
   max_iter = 100

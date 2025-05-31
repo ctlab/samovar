@@ -6,16 +6,20 @@
 #' @param treshhold_samples Minimum number of representing samples to keep species.
 #' @param treshhold_species Minimum number of representing species to keep samples.
 #' @param drop_unclassified Drop unknown and unclassified ranks. True by default
+#' @param ... Additional arguments, passed
 #' @example R/examples/preprocessing.R
 #' @export
 
-teatree_trim <- function(samovar_data,
-                     metadata_filter = F,
-                     treshhold_amount = 10^(-5),
-                     treshhold_samples = 1,
-                     treshhold_species = 1,
-                     drop_species = F,
-                     drop_unclassified = T) {
+teatree_trim <- function(
+    samovar_data,
+    metadata_filter = F,
+    treshhold_amount = 10^(-5),
+    treshhold_samples = 1,
+    treshhold_species = 1,
+    drop_species = F,
+    drop_unclassified = T,
+    ...
+) {
 
   # init
   data <- samovar_data$copy()

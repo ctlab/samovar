@@ -11,7 +11,8 @@ teatree_trim(
   treshhold_samples = 1,
   treshhold_species = 1,
   drop_species = F,
-  drop_unclassified = T
+  drop_unclassified = T,
+  ...
 )
 }
 \arguments{
@@ -26,6 +27,8 @@ teatree_trim(
 \item{treshhold_species}{Minimum number of representing species to keep samples.}
 
 \item{drop_unclassified}{Drop unknown and unclassified ranks. True by default}
+
+\item{...}{Additional arguments, passed}
 }
 \description{
 Filter species and samples from samovar_data object

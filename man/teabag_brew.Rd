@@ -10,7 +10,8 @@ teabag_brew(
   network = F,
   min_cluster_size = 10,
   max_cluster_size = 100,
-  plot_log = F
+  plot_log = F,
+  ...
 )
 }
 \arguments{
@@ -21,6 +22,8 @@ teabag_brew(
 \item{max_cluster_size}{FALSE or minimum number of species per cluster}
 
 \item{plot_log}{Logical or path for log plots output}
+
+\item{...}{Additional arguments, passed}
 
 \item{data}{samovar data after preprocessing stages}
 
