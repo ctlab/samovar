@@ -9,6 +9,8 @@ import pandas as pd
 import subprocess
 from .genome_fetcher import fetch_genome
 from typing import List
+import yaml
+import json
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
     """
