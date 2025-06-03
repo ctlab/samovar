@@ -98,8 +98,7 @@ def generate_reads_genome(
                 --genomes {genome_file} \
                 --model {model} \
                 --output {output_file} \
-                --n_reads {amount} \
-                --fragment-length {read_length}
+                --n_reads {amount}
         """ 
 
         subprocess.run(cmd, shell=True)
@@ -258,16 +257,28 @@ def process_abundance_table(
         else:
             sample_name = "merged"
 
+    # Try to fetch missing genomes
+    available_genomes = []
     for taxid in abundance_table['taxid']:
         genome_file = get_genome_file(genome_dir, taxid)
         if genome_file is None:
-            fetch_genome(taxid, genome_dir, email, reference_only=True)
+            genome_file = fetch_genome(taxid, genome_dir, email, reference_only=True)
+        if genome_file is not None:
+            available_genomes.append((taxid, genome_file))
 
-    N_cols = [col for col in abundance_table.columns if 'n' in col.lower()]
+    # Raise error if no genomes are available
+    if not available_genomes:
+        raise RuntimeError("No genome files available for any taxid")
+
+    # Filter abundance table to only include available genomes
+    available_taxids = [taxid for taxid, _ in available_genomes]
+    filtered_table = abundance_table[abundance_table['taxid'].isin(available_taxids)]
+
+    N_cols = [col for col in filtered_table.columns if 'n' in col.lower()]
     for N_annotator in N_cols:
         annotator_name = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator).group(1)
-        amount = abundance_table[N_annotator].tolist()
-        taxid = abundance_table['taxid'].tolist()
+        amount = filtered_table[N_annotator].tolist()
+        taxid = filtered_table['taxid'].tolist()
         genome_files = [get_genome_file(genome_dir, taxid) for taxid in taxid]
         genome_files = [f for f in genome_files if f is not None]  # Filter out None values
         
@@ -282,22 +293,28 @@ def process_abundance_table(
             sample_name=sample_name,
             model=model,
             annotator_name=annotator_name
-        ) 
+        )
 
 def samovar_annotation_regenerate(
-    config_samovar: str,
     annotation_dir: str,
+    config_samovar: str = None,
     output_dir: str = None
 ) -> None:
     """
     Regenerate taxonomy tables to a SAMOVAR table.
 
     Args:
-        config_samovar: Path to SAMOVAR config file
+        config_samovar: Path to SAMOVAR config file in yaml format. Default if None.
         annotation_dir: Path to annotation directory
         output_dir: Path to output directory
     """
-    config_samovar_dict = yaml.load(open(config_samovar))
+    if config_samovar is None:
+        tmp_file = tempfile.mktemp()
+        with open(tmp_file, 'w') as f:
+            yaml
+        config_samovar = tmp_file
+
+    config_samovar_dict = json.load(open(config_samovar))
     if output_dir is None:
         output_dir = config_samovar_dict['output_dir']
 
