@@ -114,8 +114,7 @@ rule process_annotations:
                 reference_only=True,
                 model=MODEL,
                 read_length=READ_LENGTH,
-                sample_name=wildcards.sample,
-                mode="direct"
+                sample_name=wildcards.sample
                 )
             logger.info(f"Successfully processed annotations for sample {wildcards.sample}")
         

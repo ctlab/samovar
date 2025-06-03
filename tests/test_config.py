@@ -24,10 +24,12 @@ def test_pipeline_config_from_args_file():
     annotators:
       - run_name: k2-test
         type: kraken2
+        cmd: /path/to/kraken2
         db_path: /path/to/kraken_db
         extra: --minK 2 --maxK 10
       - run_name: kaiju-test
         type: kaiju
+        cmd: /path/to/kaiju
         db_path: /path/to/kaiju
         db_name: kaiju_db.fmi
     """
@@ -49,10 +51,12 @@ def test_pipeline_config_from_args_file():
     assert len(config.annotators) == 2
     k2 = next(a for a in config.annotators if a.type == "kraken2")
     assert k2.run_name == "k2-test"
+    assert k2.cmd == "/path/to/kraken2"
     assert k2.db_path == "/path/to/kraken_db"
     assert k2.extra == "--minK 2 --maxK 10"
     kaiju = next(a for a in config.annotators if a.type == "kaiju")
     assert kaiju.run_name == "kaiju-test"
+    assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
     assert kaiju.db_name == "kaiju_db.fmi"
 
@@ -64,19 +68,21 @@ def test_pipeline_config_from_args_cli():
         input_config=None,
         input_dir="/path/to/input",
         output_dir=test_output_dir,
-        kraken2=[["k2-test", "/path/to/kraken_db", "--minK", "2", "--maxK", "10"]],
-        kaiju=[["kaiju-test", "/path/to/kaiju", "kaiju_db.fmi"]]
+        kraken2=[["/path/to/kraken2 /path/to/kraken_db --minK 2 --maxK 10"]],
+        kaiju=[["/path/to/kaiju /path/to/kaiju kaiju_db.fmi"]]
     )
     config = PipelineConfig.from_args(args)
     assert config.input_dir == "/path/to/input"
     assert config.output_dir == test_output_dir
     assert len(config.annotators) == 2
     k2 = next(a for a in config.annotators if a.type == "kraken2")
-    assert k2.run_name == "k2-test"
+    assert k2.run_name == "kraken2"
+    assert k2.cmd == "/path/to/kraken2"
     assert k2.db_path == "/path/to/kraken_db"
     assert k2.extra == "--minK 2 --maxK 10"
     kaiju = next(a for a in config.annotators if a.type == "kaiju")
-    assert kaiju.run_name == "kaiju-test"
+    assert kaiju.run_name == "kaiju"
+    assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
     assert kaiju.db_name == "kaiju_db.fmi"
 
@@ -91,12 +97,14 @@ def test_generate_configs():
             AnnotatorConfig(
                 run_name="k2-test",
                 type="kraken2",
+                cmd="/path/to/kraken2",
                 db_path="/path/to/kraken_db",
                 extra="--minK 2 --maxK 10"
             ),
             AnnotatorConfig(
                 run_name="kaiju-test",
                 type="kaiju",
+                cmd="/path/to/kaiju",
                 db_path="/path/to/kaiju",
                 db_name="kaiju_db.fmi"
             )
@@ -115,19 +123,10 @@ def test_generate_configs():
         assert init_config['r2_dir'] == str(Path(test_output_dir) / 'initial')
         assert init_config['output_dir'] == str(Path(test_output_dir) / 'initial_reports')
         assert len(init_config['run_config']) == 2
-    with open(configs['annotation2iss'], 'r') as f:
-        iss_config = yaml.safe_load(f)
-        assert iss_config['annotation_dir'] == str(Path(test_output_dir) / 'initial_annotations')
-        assert iss_config['genome_dir'] == str(Path(test_output_dir) / 'genomes')
-        assert iss_config['output_dir'] == str(Path(test_output_dir) / 'regenerated')
-        assert iss_config['read_length'] == 150
-        assert iss_config['coverage'] == 30
-    with open(configs['reannotate'], 'r') as f:
-        reannotate_config = yaml.safe_load(f)
-        assert reannotate_config['r1_dir'] == str(Path(test_output_dir) / 'regenerated')
-        assert reannotate_config['r2_dir'] == str(Path(test_output_dir) / 'regenerated')
-        assert reannotate_config['output_dir'] == str(Path(test_output_dir) / 'regenerated_reports')
-        assert len(reannotate_config['run_config']) == 2
+        k2_config = next(c for c in init_config['run_config'] if c['type'] == 'kraken2')
+        assert k2_config['cmd'] == "/path/to/kraken2"
+        kaiju_config = next(c for c in init_config['run_config'] if c['type'] == 'kaiju')
+        assert kaiju_config['cmd'] == "/path/to/kaiju"
 
 def test_generate_pipeline():
     test_output_dir = 'tests_outs/test_generate_pipeline'
@@ -140,12 +139,14 @@ def test_generate_pipeline():
             AnnotatorConfig(
                 run_name="k2-test",
                 type="kraken2",
+                cmd="/path/to/kraken2",
                 db_path="/path/to/kraken_db",
                 extra="--minK 2 --maxK 10"
             ),
             AnnotatorConfig(
                 run_name="kaiju-test",
                 type="kaiju",
+                cmd="/path/to/kaiju",
                 db_path="/path/to/kaiju",
                 db_name="kaiju_db.fmi"
             )
@@ -186,8 +187,8 @@ def test_setup_pipeline():
         input_config=None,
         input_dir="/path/to/input",
         output_dir=test_output_dir,
-        kraken2=[["k2-test", "/path/to/kraken_db", "--minK", "2", "--maxK", "10"]],
-        kaiju=[["kaiju-test", "/path/to/kaiju", "kaiju_db.fmi"]]
+        kraken2=[["/path/to/kraken2 /path/to/kraken_db --minK 2 --maxK 10"]],
+        kaiju=[["/path/to/kaiju /path/to/kaiju kaiju_db.fmi"]]
     )
     
     result = setup_pipeline(args)

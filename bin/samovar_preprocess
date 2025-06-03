@@ -1,19 +1,52 @@
 #!/usr/bin/env python3
 
 import sys
+import argparse
 from pathlib import Path
 from samovar.config import setup_pipeline, parse_args
 
 def main():
     # Get the base parser
-    args = parse_args()
+    parser = argparse.ArgumentParser(description='SamovaR Pipeline Configuration')
+    
+    # Input source (mutually exclusive)
+    input_group = parser.add_mutually_exclusive_group(required=False)
+    input_group.add_argument('--input_config', help='Path to input configuration file', required=False)
+    input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
+    
+    # Output
+    parser.add_argument('--output_dir', default='tests_outs', help='Output directory', required=True)
+    
+    # Parse known args first to get output_dir
+    args, remaining = parser.parse_known_args()
     
     # Check if .generate exists in output_dir
     generate_dir = Path(args.output_dir) / ".generate"
     if generate_dir.exists():
         # Add input-dir argument if not already present
-        if "--input_dir" not in args:
+        if not args.input_dir:
             args.input_dir = str(Path(args.output_dir) / "initial")
+    
+    # Process remaining arguments to handle dynamic command arguments
+    cmd_args = {}
+    i = 0
+    while i < len(remaining):
+        if remaining[i].startswith('--'):
+            # Get the command name and value
+            cmd_name = remaining[i][2:]  # Remove '--' prefix
+            if i + 1 < len(remaining):
+                cmd_value = remaining[i + 1]
+                cmd_args[cmd_name] = cmd_value
+                i += 2
+            else:
+                print(f"Error: Missing value for argument {remaining[i]}")
+                sys.exit(1)
+        else:
+            i += 1
+    
+    # Add command arguments to args namespace
+    for cmd_name, cmd_value in cmd_args.items():
+        setattr(args, f'cmd_{cmd_name}', [[cmd_value]])
     
     result = setup_pipeline(args)
     print(f"Generated configs: {result['configs']}")

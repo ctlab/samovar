@@ -10,6 +10,7 @@ class AnnotatorConfig:
     run_name: str
     type: str
     db_path: str
+    cmd: str
     db_name: Optional[str] = None
     extra: Optional[str] = None
 
@@ -54,25 +55,93 @@ class PipelineConfig:
             config.output_dir = args.output_dir
 
         # Handle command line annotators
+        # Get all attributes that start with 'cmd_'
+        cmd_attrs = [attr for attr in dir(args) if attr.startswith('cmd_')]
+        
+        for attr in cmd_attrs:
+            if getattr(args, attr):
+                for cmd_config in getattr(args, attr):
+                    # Split the command string into parts
+                    parts = cmd_config[0].split()
+                    if len(parts) < 2:
+                        raise ValueError(f"Invalid command format for {attr}: {cmd_config[0]}")
+                    
+                    # First part is the command path
+                    cmd = parts[0]
+                    # Second part is the database path
+                    db_path = parts[1]
+                    # Any remaining parts are extra arguments
+                    extra = ' '.join(parts[2:]) if len(parts) > 2 else None
+                    
+                    # Extract type from command basename
+                    cmd_basename = os.path.basename(cmd)
+                    type_name = cmd_basename.split('.')[0]
+                    
+                    # Extract run name from attribute name (remove 'cmd_' prefix)
+                    run_name = attr[4:]
+                    
+                    config.annotators.append(AnnotatorConfig(
+                        run_name=run_name,
+                        type=type_name,
+                        cmd=cmd,
+                        db_path=db_path,
+                        extra=extra
+                    ))
+
+        # Handle legacy command line annotators
         if args.kraken2:
             for k2_config in args.kraken2:
-                name, db_path, *extra = k2_config[0].split()
+                # Split the command string into parts
+                parts = k2_config[0].split()
+                if len(parts) < 2:
+                    raise ValueError(f"Invalid command format for kraken2: {k2_config[0]}")
+                
+                # First part is the command path
+                cmd = parts[0]
+                # Second part is the database path
+                db_path = parts[1]
+                # Any remaining parts are extra arguments
+                extra = ' '.join(parts[2:]) if len(parts) > 2 else None
+                
+                # Extract type from command basename
+                cmd_basename = os.path.basename(cmd)
+                type_name = cmd_basename.split('.')[0]
+                
                 config.annotators.append(AnnotatorConfig(
-                    run_name=name,
-                    type='kraken2',
+                    run_name=type_name,
+                    type=type_name,
+                    cmd=cmd,
                     db_path=db_path,
-                    extra=' '.join(extra) if extra else None
+                    extra=extra
                 ))
 
         if args.kaiju:
             for kaiju_config in args.kaiju:
-                name, db_path, db_name, *extra = kaiju_config[0].split()
+                # Split the command string into parts
+                parts = kaiju_config[0].split()
+                if len(parts) < 3:  # kaiju needs at least cmd, db_path, and db_name
+                    raise ValueError(f"Invalid command format for kaiju: {kaiju_config[0]}")
+                
+                # First part is the command path
+                cmd = parts[0]
+                # Second part is the database path
+                db_path = parts[1]
+                # Third part is the database name
+                db_name = parts[2]
+                # Any remaining parts are extra arguments
+                extra = ' '.join(parts[3:]) if len(parts) > 3 else None
+                
+                # Extract type from command basename
+                cmd_basename = os.path.basename(cmd)
+                type_name = cmd_basename.split('.')[0]
+                
                 config.annotators.append(AnnotatorConfig(
-                    run_name=name,
-                    type='kaiju',
+                    run_name=type_name,
+                    type=type_name,
+                    cmd=cmd,
                     db_path=db_path,
-                    db_name=db_name if db_name else None,
-                    extra=' '.join(extra) if extra else None
+                    db_name=db_name,
+                    extra=extra
                 ))
 
         return config
@@ -93,6 +162,7 @@ class PipelineConfig:
                 {
                     'run_name': ann.run_name,
                     'type': ann.type,
+                    'cmd': ann.cmd,
                     'db_path': ann.db_path,
                     **({'db_name': ann.db_name} if ann.db_name else {}),
                     **({'extra': ann.extra} if ann.extra else {})
@@ -128,6 +198,7 @@ class PipelineConfig:
                 {
                     'run_name': ann.run_name,
                     'type': ann.type,
+                    'cmd': ann.cmd,
                     'db_path': ann.db_path,
                     **({'db_name': ann.db_name} if ann.db_name else {}),
                     **({'extra': ann.extra} if ann.extra else {})
@@ -249,14 +320,28 @@ def parse_args() -> argparse.Namespace:
     # Output
     parser.add_argument('--output_dir', default='tests_outs', help='Output directory', required=True)
     
-    # Annotators
-    parser.add_argument('--kraken2', nargs='+', action='append',
-                       help='Kraken2 configuration: run_name db_path [extra_args...]', required=False)
-
-    parser.add_argument('--kaiju', nargs='+', action='append',
-                       help='Kaiju configuration: run_name db_path db_name [extra_args...]', required=False)
+    # Add a dynamic command argument group
+    cmd_group = parser.add_argument_group('Command Arguments')
+    cmd_group.add_argument('--cmd_*', action='append', nargs=1, metavar='CMD',
+                          help='Command specification in format: "cmd_path db_path [extra_args...]"')
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Process command arguments
+    cmd_args = {}
+    for arg, value in vars(args).items():
+        if arg.startswith('cmd_'):
+            cmd_args[arg] = value
+    
+    # Remove the original cmd_* argument
+    if hasattr(args, 'cmd_*'):
+        delattr(args, 'cmd_*')
+    
+    # Add processed command arguments
+    for arg, value in cmd_args.items():
+        setattr(args, arg, value)
+    
+    return args
 
 def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     """Main function to set up the pipeline configuration"""

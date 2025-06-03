@@ -56,14 +56,14 @@ Example usage:
 samovar generate \
     --genome_dir $SAMOVAR/data/test_genomes/meta \
     --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
-    --output_dir samovar 
+    --output_dir samovar2 
 
 # Generate pipeline (for example, kraken2 + kaiju )
 ## specify --input_dir for real data
 samovar preprocess \
-    --output_dir samovar \
-    --kraken2 "kraken2 $DB_KRAKEN2" \
-    --kaiju "kaiju $DB_KAIJU"
+    --output_dir samovar2 \
+    --kraken2-test "kraken2 $DB_KRAKEN2" \
+    --kaiju-test "kaiju $DB_KAIJU"
 
 # Run the pipeline(s)
 samovar exec --output-dir samovar
