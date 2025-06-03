@@ -63,7 +63,8 @@ read_annotation_dir <- function(data_dir,  sample_name_position = 0, ...) {
   results <- tibble()
   for (data_path in dir(data_dir, pattern = ".csv$", full.names = T)) {
     sample_name <- (basename(data_path) %>%
-      stringr::str_split("\\."))[[1]][1:(sample_name_position+1)]
+      stringr::str_split("\\."))[[1]][1:(sample_name_position+1)] %>%
+      paste(., collapse = "_", sep = "_")
 
     tmp <- read.csv(data_path, ...) %>%
       mutate(sample = sample_name)

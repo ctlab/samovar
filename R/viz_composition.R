@@ -18,6 +18,8 @@ viz_composition <- function(data,
                             type = "column",
                             top = 15, interactive = F,
                             ggplot_add = F, bottom_legend = F) {
+  palette <- c("#FFFFFF","#FFFFFF", "#E7F09550", "#F5BFC7", "#90EE90", "#006400", "cadetblue", "darkblue")
+
   #configure
   data <- data %>% samovar2data
 
@@ -34,6 +36,7 @@ viz_composition <- function(data,
     }
   }
   data["other",] <- data %>% apply(2, function(x) 1 - sum(x))
+  data_raw <- data
 
   if(type == "tile") {
     sp <- rownames(data)
@@ -56,6 +59,24 @@ viz_composition <- function(data,
     mutate(sp = fct_inorder(sp),
            samples = fct_inorder(samples))
 
+  data$value[is.na(data$value)] <- min(data$value, na.rm = T)
+
+  data_raw <- data_raw %>%
+    reorder_df(reord_samples, dim = 2) %>%
+    reorder_df(reord_species, dim = 1) %>%
+    rownames_to_column("sp") %>%
+    pivot_longer(names_to = "samples", values_to = "raw_value", cols = -1) %>%
+    mutate(sp = fct_inorder(sp),
+           samples = fct_inorder(samples),
+           raw_value = ifelse(
+             raw_value < 0,
+             0,
+             raw_value
+           )
+    )
+
+  data <- left_join(data, data_raw, by = c("sp", "samples"))
+
   if(!isFALSE(bottom_legend)) data <- left_join(data, legend, by = "samples")
 
   #!!!!! add adjusting colors to other taxa
@@ -64,21 +85,24 @@ viz_composition <- function(data,
     ggplot() +
     theme_minimal() +
     xlab("") + ylab("") +
-    theme(legend.position = "bottom",
-          panel.grid = element_blank(),
-          axis.text.y = element_text(),
-          axis.text.x = element_text(angle = 90))
+    ggtitle("Composition, scaled values") +
+    theme(
+      legend.position = "bottom",
+      panel.grid = element_blank(),
+      axis.text.y = element_text(),
+      axis.text.x = element_text(angle = 90))
 
   if(type == "column") {
     gg <- gg +
-      geom_col(aes(x = samples, y = value, fill = sp)) +
-      scale_fill_viridis_d(direction = -1)
+      geom_col(aes(x = samples, y = value, fill = sp, text = raw_value)) +
+      scale_fill_viridis_d("scaled values", direction = -1)
 
   } else if(type == "tile") {
     gg <- gg +
-      geom_tile(aes(x = samples, fill = value, y = sp)) +
+      geom_tile(aes(x = samples, fill = value, y = sp, text = raw_value)) +
       #coord_flip() +
-      scale_fill_viridis_c(direction = -1)
+      scale_fill_viridis_c("scaled values", direction = -1)
+      #scale_fill_gradientn(colours = palette)
   }
 
 
