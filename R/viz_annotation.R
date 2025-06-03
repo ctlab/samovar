@@ -133,13 +133,13 @@ viz_annotation <- function(
             print(results[["F1"]])
           }
           if(!is.null(output_dir)) {
-            ggsave(results[["F1"]], filename = "F1.png", width = 5, height = 5*length(gglist))
+            ggsave(results[["F1"]], filename = paste0(output_dir, "/F1.png"), width = 5, height = 5*length(gglist))
           }
         } else {
           results[["F1"]] <- gglist
           if(!is.null(output_dir)) {
             for(i in 1:length(gglist)) {
-              ggsave(gglist[[i]], filename = paste0("F1_", names(gglist)[i], ".png"), width = 10, height = 10)
+              ggsave(gglist[[i]], filename = paste0(output_dir, "/F1_", names(gglist)[i], ".png"), width = 10, height = 10)
               if(plot) {
                 print(gglist[[i]])
               }
@@ -221,13 +221,13 @@ viz_annotation <- function(
             print(results[["R2"]])
           }
           if(!is.null(output_dir)) {
-            ggsave(results[["R2"]], filename = "R2.png", width = 5, height = 5*length(gglist))
+            ggsave(results[["R2"]], filename = paste0(output_dir, "/R2.png"), width = 5, height = 5*length(gglist))
           }
         } else {
           results[["R2"]] <- gglist
           if(!is.null(output_dir)) {
             for(i in 1:length(gglist)) {
-              ggsave(gglist[[i]], filename = paste0("R2_", names(gglist)[i], ".png"), width = 10, height = 10)
+              ggsave(gglist[[i]], filename = paste0(output_dir, "/R2_", names(gglist)[i], ".png"), width = 10, height = 10)
               if(plot) {
                 print(gglist[[i]])
               }
@@ -302,13 +302,13 @@ viz_annotation <- function(
         print(results[["CV"]])
       }
       if(!is.null(output_dir)) {
-        ggsave(results[["CV"]], filename = "cross-validation.png", width = 5, height = 5*length(gglist))
+        ggsave(results[["CV"]], filename = paste0(output_dir, "/CV.png"), width = 5, height = 5*length(gglist))
       }
     } else {
       results[["CV"]] <- gglist
       if(!is.null(output_dir)) {
         for(i in 1:length(gglist)) {
-          ggsave(gglist[[i]], filename = paste0("CV_", names(gglist)[i], ".png"), width = 10, height = 10)
+          ggsave(gglist[[i]], filename = paste0(output_dir, "/CV_", names(gglist)[i], ".png"), width = 10, height = 10)
           if(plot) {
             print(gglist[[i]])
           }
@@ -382,9 +382,9 @@ viz_annotation <- function(
         results[["confidence_true"]] <- ggpubr::ggarrange(plotlist = gglist2, ncol = 1)
       }
       if(!is.null(output_dir)) {
-        ggsave(results[["confidence"]], filename = "confidence.png", width = 5*length(gglist[[i]]$data$true), height = 10)
+        ggsave(results[["confidence"]], filename = paste0(output_dir, "/confidence.png"), width = 5*length(gglist[[i]]$data$true), height = 10)
         if("true" %in% colnames(data)) {
-          ggsave(results[["confidence_true"]], filename = "confidence_true.png", width = 10, height = 10)
+          ggsave(results[["confidence_true"]], filename = paste0(output_dir, "/confidence_true.png"), width = 10, height = 10)
         }
       }
       if(plot) {
@@ -394,9 +394,9 @@ viz_annotation <- function(
         }
       } else {
         for(i in 1:length(gglist)) {
-          ggsave(gglist[[i]], filename = paste0("confidence_", names(gglist)[i], ".png"), width = 10, height = 10)
+          ggsave(gglist[[i]], filename = paste0(output_dir, "/confidence_", names(gglist)[i], ".png"), width = 10, height = 10)
           if("true" %in% colnames(data)) {
-            ggsave(gglist2[[i]], filename = paste0("confidence_true_", names(gglist)[i], ".png"), width = 10, height = 10)
+            ggsave(gglist2[[i]], filename = paste0(output_dir, "/confidence_true_", names(gglist)[i], ".png"), width = 10, height = 10)
           }
           if(plot) {
             print(gglist[[i]])

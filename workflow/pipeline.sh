@@ -13,11 +13,6 @@ fi
 out_dir="tests_outs"
 mkdir -p $out_dir
 
-# Generate reads with InSilicoSeq
-snakemake -s workflow/iss_test/Snakefile \
-    --configfile workflow/iss_test/config.yaml \
-    --cores 1
-
 # optional: build custom databases
 if true; then
     # Subset genomes for database creation
@@ -28,6 +23,14 @@ if true; then
     # Prepare databases
     $PYTHON_PATH workflow/database_prep/build_database_kraken2.py
     $PYTHON_PATH workflow/database_prep/build_database_kaiju.py
+fi
+
+# optional: generate reads with InSilicoSeq for automated benchmarking;
+# otherwise, use real data
+if true; then
+    snakemake -s workflow/iss_test/Snakefile \
+        --configfile workflow/iss_test/config.yaml \
+        --cores 1
 fi
 
 # Run annotators on initial reads
