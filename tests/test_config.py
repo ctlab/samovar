@@ -31,7 +31,6 @@ def test_pipeline_config_from_args_file():
         type: kaiju
         cmd: /path/to/kaiju
         db_path: /path/to/kaiju
-        db_name: kaiju_db.fmi
     """
     with open(config_path, 'w') as f:
         f.write(config_content)
@@ -58,7 +57,6 @@ def test_pipeline_config_from_args_file():
     assert kaiju.run_name == "kaiju-test"
     assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
-    assert kaiju.db_name == "kaiju_db.fmi"
 
 def test_pipeline_config_from_args_cli():
     test_output_dir = 'tests_outs/test_pipeline_config_from_args_cli'
@@ -69,7 +67,7 @@ def test_pipeline_config_from_args_cli():
         input_dir="/path/to/input",
         output_dir=test_output_dir,
         kraken2=[["/path/to/kraken2 /path/to/kraken_db --minK 2 --maxK 10"]],
-        kaiju=[["/path/to/kaiju /path/to/kaiju kaiju_db.fmi"]]
+        kaiju=[["/path/to/kaiju /path/to/kaiju"]]
     )
     config = PipelineConfig.from_args(args)
     assert config.input_dir == "/path/to/input"
@@ -84,7 +82,6 @@ def test_pipeline_config_from_args_cli():
     assert kaiju.run_name == "kaiju"
     assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
-    assert kaiju.db_name == "kaiju_db.fmi"
 
 def test_generate_configs():
     test_output_dir = 'tests_outs/test_generate_configs'

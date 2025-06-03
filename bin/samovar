@@ -16,12 +16,15 @@ show_usage() {
     echo "  generate    Generate ISS test configuration and pipeline"
     echo "  preprocess  Generate main pipeline configuration"
     echo "  exec        Execute the pipeline(s)"
+    echo "  --- other ---"
+    echo "  build_database  Build Kaiju or Kraken2 database from config"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
-    echo "  samovar generate --genome_dir /path/to/genomes --output_dir ./output --host_genome /path/to/host.fna"
-    echo "  samovar preprocess --input_dir /path/to/input --output_dir ./output"
-    echo "  samovar exec --output_dir ./output"
+    echo "  samovar generate --genome_dir [...] --output_dir [...] --host_genome [...]"
+    echo "  samovar preprocess --input_dir [...] --output_dir [...]"
+    echo "  samovar exec --output_dir [...]"
+    echo "  samovar build_database --type kaiju --config_path [...] --db_path [...]"
 }
 
 # Parse command
@@ -41,6 +44,10 @@ case "$1" in
             set -- "$@" "--output_dir" "."
         fi
         samovar_exec "$@"
+        ;;
+    "build_database")
+        shift
+        "$(dirname "$0")/../workflow/database_prep/samovar_build_database.sh" "$@"
         ;;
     "help"|"")
         show_usage

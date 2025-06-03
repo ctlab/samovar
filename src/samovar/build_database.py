@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import List, Dict, Union
 from Bio import SeqIO
 from Bio.Seq import Seq
+import yaml
+from .fasta_processor import process_fasta_directories
 
 logging.basicConfig(
     level=logging.INFO,
@@ -336,3 +338,40 @@ def build_database_kaiju(
         os.remove(bwt_file)
     
     logger.info(f"Kaiju database successfully built at {db_path}")
+
+def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path: str = "tests_outs/db"):
+    """
+    Build database from config file.
+    
+    Args:
+        config_path: Path to config YAML file
+        db_type: Type of database to build ("kaiju" or "kraken2")
+        db_path: Path to store the database
+    """
+    # Load configuration
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Process input directories
+    file_taxid_map = process_fasta_directories(config['input_dir'])
+    
+    # Get lists of files and taxids
+    input_files = list(file_taxid_map.keys())
+    taxids = list(file_taxid_map.values())
+    
+    print(f"Processing {len(input_files)} files with taxids: {taxids}")
+    
+    # Build database based on type
+    if db_type == "kaiju":
+        for input_file, taxid in zip(input_files, taxids):
+            add_database_kaiju(input_file, taxid, db_path=db_path)
+        get_taxonomy_db(db_path=db_path)
+        build_database_kaiju(db_path=db_path, threads=1, protein=False)
+    elif db_type == "kraken2":
+        for input_file, taxid in zip(input_files, taxids):
+            add_database_kraken2(input_file, taxid, db_path=db_path)
+        get_taxonomy_db(db_path=db_path)
+        build_database_kraken2(db_path=db_path, threads=1, kmer_len=35, 
+                             minimizer_len=31, minimizer_spaces=7, skip_maps=True)
+    else:
+        raise ValueError(f"Unknown database type: {db_type}")

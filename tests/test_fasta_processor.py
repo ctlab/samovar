@@ -1,7 +1,10 @@
 import unittest
 import tempfile
 import os
-from samovar.fasta_processor import read_fasta, apply_mutations, preprocess_fasta
+from samovar.fasta_processor import read_fasta, apply_mutations, preprocess_fasta, process_fasta_directories
+import pytest
+from pathlib import Path
+import gzip
 
 class TestFastaProcessor(unittest.TestCase):
     def setUp(self):
@@ -74,6 +77,58 @@ GCTAGCTA"""
             # Check that at least one position is different
             self.assertTrue(any(a != b for a, b in zip(sequence, original_part)))
             self.assertEqual(len(sequence), 4)
+
+@pytest.fixture
+def test_dir(tmp_path):
+    """Create a temporary directory with test FASTA files."""
+    # Create test files
+    files = {
+        "123.fa": ">seq1\nATCG",
+        "456.fna": ">seq2\nGCTA",
+        "789.fasta": ">seq3\nTAGC",
+        "invalid.txt": "not a fasta file",
+        "abc.fa": ">seq4\nCGAT"  # non-numeric taxid
+    }
+    
+    # Create gzipped version of one file
+    gzipped_content = ">seq5\nATGC"
+    with gzip.open(tmp_path / "321.fa.gz", 'wt') as f:
+        f.write(gzipped_content)
+    
+    # Create regular files
+    for filename, content in files.items():
+        with open(tmp_path / filename, 'w') as f:
+            f.write(content)
+    
+    return tmp_path
+
+def test_process_fasta_directories(test_dir):
+    """Test processing of FASTA files from directories."""
+    result = process_fasta_directories([str(test_dir)])
+    
+    # Check that we got the expected files
+    expected_files = {
+        str(test_dir / "123.fa"): "123",
+        str(test_dir / "456.fna"): "456",
+        str(test_dir / "789.fasta"): "789",
+        str(test_dir / "321.fa"): "321"  # decompressed file
+    }
+    print (expected_files)
+    assert result == expected_files
+    
+    # Verify that gzipped file was decompressed
+    assert not (test_dir / "321.fa.gz").exists()
+    assert (test_dir / "321.fa").exists()
+
+def test_process_fasta_directories_nonexistent():
+    """Test handling of non-existent directory."""
+    result = process_fasta_directories(["/nonexistent/path"])
+    assert result == {}
+
+def test_process_fasta_directories_empty(tmp_path):
+    """Test handling of empty directory."""
+    result = process_fasta_directories([str(tmp_path)])
+    assert result == {}
 
 if __name__ == '__main__':
     unittest.main() 

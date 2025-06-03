@@ -89,60 +89,32 @@ class PipelineConfig:
                     ))
 
         # Handle legacy command line annotators
-        if args.kraken2:
-            for k2_config in args.kraken2:
-                # Split the command string into parts
-                parts = k2_config[0].split()
-                if len(parts) < 2:
-                    raise ValueError(f"Invalid command format for kraken2: {k2_config[0]}")
-                
-                # First part is the command path
-                cmd = parts[0]
-                # Second part is the database path
-                db_path = parts[1]
-                # Any remaining parts are extra arguments
-                extra = ' '.join(parts[2:]) if len(parts) > 2 else None
-                
-                # Extract type from command basename
-                cmd_basename = os.path.basename(cmd)
-                type_name = cmd_basename.split('.')[0]
-                
-                config.annotators.append(AnnotatorConfig(
-                    run_name=type_name,
-                    type=type_name,
-                    cmd=cmd,
-                    db_path=db_path,
-                    extra=extra
-                ))
-
-        if args.kaiju:
-            for kaiju_config in args.kaiju:
-                # Split the command string into parts
-                parts = kaiju_config[0].split()
-                if len(parts) < 3:  # kaiju needs at least cmd, db_path, and db_name
-                    raise ValueError(f"Invalid command format for kaiju: {kaiju_config[0]}")
-                
-                # First part is the command path
-                cmd = parts[0]
-                # Second part is the database path
-                db_path = parts[1]
-                # Third part is the database name
-                db_name = parts[2]
-                # Any remaining parts are extra arguments
-                extra = ' '.join(parts[3:]) if len(parts) > 3 else None
-                
-                # Extract type from command basename
-                cmd_basename = os.path.basename(cmd)
-                type_name = cmd_basename.split('.')[0]
-                
-                config.annotators.append(AnnotatorConfig(
-                    run_name=type_name,
-                    type=type_name,
-                    cmd=cmd,
-                    db_path=db_path,
-                    db_name=db_name,
-                    extra=extra
-                ))
+        for attr in dir(args):
+            if attr in ['kraken2', 'kaiju'] and getattr(args, attr):
+                for cmd_config in getattr(args, attr):
+                    # Split the command string into parts
+                    parts = cmd_config[0].split()
+                    if len(parts) < 2:
+                        raise ValueError(f"Invalid command format for {attr}: {cmd_config[0]}")
+                    
+                    # First part is the command path
+                    cmd = parts[0]
+                    # Second part is the database path
+                    db_path = parts[1]
+                    # Any remaining parts are extra arguments
+                    extra = ' '.join(parts[2:]) if len(parts) > 2 else None
+                    
+                    # Extract type from command basename
+                    cmd_basename = os.path.basename(cmd)
+                    type_name = cmd_basename.split('.')[0]
+                    
+                    config.annotators.append(AnnotatorConfig(
+                        run_name=type_name,
+                        type=type_name,
+                        cmd=cmd,
+                        db_path=db_path,
+                        extra=extra
+                    ))
 
         return config
 

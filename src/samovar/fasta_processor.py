@@ -75,6 +75,48 @@ def preprocess_fasta(input_file: str, output_file: str, mutation_rate: float, in
                 f.write(f"{new_header}\n")
                 f.write(f"{mutated_part}\n")
 
+def process_fasta_directories(directories: List[str]) -> dict:
+    """
+    Process FASTA files from input directories and extract taxids from filenames.
+    Handles various FASTA extensions and gzipped files.
+    
+    Args:
+        directories: List of directory paths containing FASTA files
+        
+    Returns:
+        Dictionary mapping input files to their taxids
+    """
+    result = {}
+    
+    for directory in directories:
+        dir_path = Path(directory)
+        if not dir_path.exists():
+            continue
+            
+        # Look for all possible FASTA files
+        for fasta_file in dir_path.glob("*.*"):
+            # Handle gzipped files first
+            if fasta_file.suffix.lower() == '.gz':
+                # Decompress the file
+                import subprocess
+                try:
+                    subprocess.run(['gzip', '-d', str(fasta_file)], check=True)
+                    # Update the file path to point to the decompressed file
+                    fasta_file = fasta_file.with_suffix('')
+                except subprocess.CalledProcessError:
+                    continue
+            
+            # Skip if not a FASTA file
+            if not fasta_file.suffix.lower() in ['.fa', '.fna', '.fasta', '.faa', '.frn']:
+                continue
+            
+            # Extract taxid from filename (assuming format like '12345.fa')
+            taxid = fasta_file.stem
+            if taxid.isdigit():
+                result[str(fasta_file)] = taxid
+    
+    return result
+
 def main():
     parser = argparse.ArgumentParser(description='Process FASTA files with mutations and splitting')
     parser.add_argument('input_file', help='Input FASTA file')

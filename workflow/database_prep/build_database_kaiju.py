@@ -1,25 +1,10 @@
-from samovar.build_database import build_database_kaiju, add_database_kaiju, get_taxonomy_db
+import argparse
+from samovar.build_database import build_database_from_config
 
-input_files = [
-    "data/test_genomes/meta/562.fna",
-    "data/test_genomes/meta/2886930.fna",
-    "data/test_genomes/meta/4932.fna",
-    "data/test_genomes/host/9606.fna"
-]
+parser = argparse.ArgumentParser(description='Build Kaiju database from config file')
+parser.add_argument('--config_path', "-c", help='Path to config YAML file')
+parser.add_argument('--db-path', "-o", default="tests_outs/kaiju_db", help='Path to store the database')
+args = parser.parse_args()
+    
+build_database_from_config(args.config_path, db_type="kaiju", db_path=args.db_path)
 
-taxids = [
-    "562",
-    "2886930",
-    "4932",
-    "9606"
-]
-
-# Add each genome to the database
-for input_file, taxid in zip(input_files, taxids):
-    add_database_kaiju(input_file, taxid, db_path="tests_outs/kaiju_db")
-
-# Get taxonomy database
-get_taxonomy_db(db_path="tests_outs/kaiju_db")
-
-# Build the final database
-build_database_kaiju(db_path="tests_outs/kaiju_db", threads=1, protein=False)
