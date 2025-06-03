@@ -56,12 +56,12 @@ Example usage:
 samovar generate \
     --genome_dir $SAMOVAR/data/test_genomes/meta \
     --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
-    --output_dir samovar2 
+    --output_dir samovar
 
 # Generate pipeline (for example, kraken2 + kaiju )
 ## specify --input_dir for real data
 samovar preprocess \
-    --output_dir samovar2 \
+    --output_dir samovar \
     --kraken2-test "kraken2 $DB_KRAKEN2" \
     --kaiju-test "kaiju $DB_KAIJU"
 
@@ -85,19 +85,18 @@ graph TD
             A1[FastQ files]
             A2([InSilicoSeq config])
         end
-        A3([Annotation config])
-        A4([Generation config])
+        A3([SAMOVAR config])
     end
 
     subgraph Processing
         Metagenomes --> C[Initial annotation]
         A3 --> C
+        A3 --> F
+        A3 --> E[Metagenome generation]
         C --> E
         E --> F[Re-annotation]
-        A4 --> F
-        A4 --> E[Metagenome generation]
     end
-    A3 --> F
+    
 
     subgraph Results
         F --> G1[Annotators scores]
