@@ -35,11 +35,19 @@ def apply_mutations(sequence: str, mutation_rate: float) -> str:
     nucleotides = ['A', 'T', 'G', 'C']
     mutated_sequence = list(sequence)
     
-    for i in range(len(mutated_sequence)):
-        if random.random() < mutation_rate:
-            # Get other nucleotides excluding current one
-            other_nucleotides = [n for n in nucleotides if n != mutated_sequence[i]]
-            mutated_sequence[i] = random.choice(other_nucleotides)
+    # If mutation rate is 1.0, ensure at least one mutation occurs
+    if mutation_rate == 1.0:
+        # Choose a random position to mutate
+        pos = random.randrange(len(mutated_sequence))
+        other_nucleotides = [n for n in nucleotides if n != mutated_sequence[pos]]
+        mutated_sequence[pos] = random.choice(other_nucleotides)
+    else:
+        # Normal mutation process
+        for i in range(len(mutated_sequence)):
+            if random.random() < mutation_rate:
+                # Get other nucleotides excluding current one
+                other_nucleotides = [n for n in nucleotides if n != mutated_sequence[i]]
+                mutated_sequence[i] = random.choice(other_nucleotides)
     
     return ''.join(mutated_sequence)
 

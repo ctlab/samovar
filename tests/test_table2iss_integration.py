@@ -49,7 +49,8 @@ def test_process_annotation_table():
         total_amount=1000,
         read_length=150,
         model="hiseq",
-        email="test@samovar.com"
+        email="test@samovar.com",
+        sample_name="test_table"
     )
     
     # Check if output files exist
