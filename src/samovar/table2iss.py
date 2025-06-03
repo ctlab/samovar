@@ -8,7 +8,7 @@ import glob
 import pandas as pd
 import subprocess
 from .genome_fetcher import fetch_genome
-from typing import List
+from typing import List, Union
 import yaml
 import json
 
@@ -192,11 +192,10 @@ def process_annotation_table(
     reference_only: bool = True,
     model: str = "hiseq",
     read_length: int = 150,
-    sample_name: str = None,
-    mode: str = "direct"
+    sample_name: str = None
 ) -> None:
     """
-    Process taxonomy table and generate simulated reads for each taxid.
+    Process taxonomy table and generate simulated reads for each taxid. Inherits from process_abundance_table.
     
     Args:
         table_path: Path to taxonomy table file
@@ -208,23 +207,67 @@ def process_annotation_table(
         model: Model to use for simulation with ISS
         sample_name: Name of the sample
         total_amount: Total number of reads to generate
-        mode: Mode to use for simulation. "Direct" to generate exactly same reads as in the table, "Samovar" to generate reads using Samova.R
     """
     # Read taxonomy table
-    annotation_table = parse_annotation_table(table_path)
+    abundance_table = parse_annotation_table(table_path)
+    process_abundance_table(
+        table=abundance_table,
+        genome_dir=genome_dir,
+        output_dir=output_dir,
+        total_amount=total_amount,
+        email=email,
+        reference_only=reference_only,
+        model=model,
+        read_length=read_length,
+        sample_name=sample_name
+    )
+        
+def process_abundance_table(
+    table: Union[str, pd.DataFrame],
+    genome_dir: str,
+    output_dir: str,
+    total_amount: int = None,
+    email: str = "test@samovar.com",
+    reference_only: bool = True,
+    model: str = "hiseq",
+    read_length: int = 150,
+    sample_name: str = None
+) -> None:
+    """
+    Process abundance table and generate simulated reads for each taxid.
+    
+    Args:
+        table: Path to taxonomy table file or pandas DataFrame
+        genome_dir: Directory containing genome files
+        output_dir: Directory to write output files
+        read_length: Length of reads to generate
+        email: Email for NCBI Entrez
+        reference_only: If True, only fetch reference genome
+        model: Model to use for simulation with ISS
+        sample_name: Name of the sample
+        total_amount: Total number of reads to generate
+    """
+    if isinstance(table, str):
+        abundance_table = pd.read_csv(table, sep=",")
+    else:
+        abundance_table = table
+    
     if sample_name is None:
-        sample_name = os.path.basename(table_path).split(".")[0]
+        if isinstance(table, str):
+            sample_name = os.path.basename(table).split(".")[0]
+        else:
+            sample_name = "merged"
 
-    for taxid in annotation_table['taxid']:
+    for taxid in abundance_table['taxid']:
         genome_file = get_genome_file(genome_dir, taxid)
         if genome_file is None:
             fetch_genome(taxid, genome_dir, email, reference_only=True)
 
-    N_cols = [col for col in annotation_table.columns if 'n' in col.lower()]
+    N_cols = [col for col in abundance_table.columns if 'n' in col.lower()]
     for N_annotator in N_cols:
         annotator_name = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator).group(1)
-        amount = annotation_table[N_annotator].tolist()
-        taxid = annotation_table['taxid'].tolist()
+        amount = abundance_table[N_annotator].tolist()
+        taxid = abundance_table['taxid'].tolist()
         genome_files = [get_genome_file(genome_dir, taxid) for taxid in taxid]
         genome_files = [f for f in genome_files if f is not None]  # Filter out None values
         
