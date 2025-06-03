@@ -35,7 +35,6 @@ samovar_preprocess <- function(
     inter_method = "glm",
     inner_model = "gaussian",
     inter_model = "gaussian",
-    minimal_cluster = 2,
     probability_calculation = "oriented",
     cluster_connection = "mean",
 
@@ -43,7 +42,7 @@ samovar_preprocess <- function(
     ...
 ) {
   data <- teatree_trim(
-    samovar_data,
+    samovar_data$copy(),
     metadata_filter,
     treshhold_amount,
     treshhold_samples,
@@ -54,14 +53,14 @@ samovar_preprocess <- function(
   )
 
   data <- tealeaves_pack(
-    data,
+    data$copy(),
     normalization_function,
     plot_log,
     ...
     )
 
   data <- teabag_brew(
-    data,
+    data$copy(),
     dist_function,
     network,
     min_cluster_size,
@@ -70,12 +69,11 @@ samovar_preprocess <- function(
     )
 
   data <- concotion_pour(
-    data,
+    data$copy(),
     inner_method,
     inter_method,
     inner_model,
     inter_model,
-    minimal_cluster,
     probability_calculation,
     cluster_connection,
     ...

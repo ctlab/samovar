@@ -30,7 +30,6 @@ concotion_pour <- function(
     inter_method = "glm",
     inner_model = "gaussian",
     inter_model = "gaussian",
-    minimal_cluster = 2,
     probability_calculation = "oriented", # oriented or simple
     cluster_connection = "mean", # mean_oriented, mean, simple or PCA
     ...
@@ -46,7 +45,20 @@ concotion_pour <- function(
 
   #df <- samovar_data$data
   min_value <- samovar_data$min_value
-  clust_list <- unique(samovar_data$cluster)
+  clust_list_raw <- unique(samovar_data$cluster)
+
+  # Remove clusters with 0 length
+  clust_list <- c()
+  for (clust in clust_list_raw){
+    cl_len <- NULL
+    suppressWarnings(
+      try({
+        df_cluster <- samovar_data$get_clean(clust)
+        cl_len <- nrow(df_cluster)
+      })
+    )
+    if(!is.null(cl_len)) clust_list <- c(clust_list, clust)
+  }
 
   ####
   ## Build -----
@@ -130,7 +142,6 @@ concotion_pour <- function(
       inter_method = inter_method,
       inner_model = inner_model,
       inter_model = inter_model,
-      minimal_cluster = minimal_cluster,
       probability_calculation = probability_calculation,
       cluster_connection = cluster_connection
     )

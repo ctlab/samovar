@@ -10,7 +10,6 @@ concotion_pour(
   inter_method = "glm",
   inner_model = "gaussian",
   inter_model = "gaussian",
-  minimal_cluster = 2,
   probability_calculation = "oriented",
   cluster_connection = "mean",
   ...
