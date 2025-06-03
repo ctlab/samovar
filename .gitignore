@@ -14,11 +14,10 @@ taxdump.tar.gz
 data/test_genomes/meta/9606.fna
 tests/test_that/*.pdf
 .Rhistory
-*.png
 .pytest_cache
 project
 .coverage*
 build/config.json
 Rplots.pdf
 samovar/
-samovar_out/
+samovar_*/
