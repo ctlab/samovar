@@ -11,6 +11,7 @@ from .genome_fetcher import fetch_genome
 from typing import List, Union
 import yaml
 import json
+import tempfile
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
     """
@@ -311,7 +312,13 @@ def samovar_annotation_regenerate(
     if config_samovar is None:
         tmp_file = tempfile.mktemp()
         with open(tmp_file, 'w') as f:
-            yaml
+            yaml.dump({
+                'threshold_amount': 1e-5,
+                'plot_log': False,
+                'min_cluster_size': 2,
+                'N': 10,
+                'N_reads': 1000
+            }, f)
         config_samovar = tmp_file
 
     config_samovar_dict = json.load(open(config_samovar))
