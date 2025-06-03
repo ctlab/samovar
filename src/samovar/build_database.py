@@ -50,23 +50,23 @@ def get_taxonomy_db(
         If taxonomy_path is None, the function will download the latest taxonomy database from NCBI.
         The downloaded file will be automatically extracted to the specified db_path.
     """
-    os.makedirs(db_path + "/taxonomy", exist_ok=True)
+    os.makedirs(db_path, exist_ok=True)
 
     if taxonomy_path is None:
         download_cmd =[
             "wget",
             "ftp://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
             "-P",
-            db_path + "/taxonomy"
+            db_path
         ]
         run_command(download_cmd)
 
         extract_cmd = [
             "tar",
             "-xzf",
-            db_path + "/taxonomy/taxdump.tar.gz",
+            db_path + "/taxdump.tar.gz",
             "-C",
-            db_path + "/taxonomy"
+            db_path
         ]
         print(extract_cmd)
         run_command(extract_cmd)
@@ -78,7 +78,7 @@ def get_taxonomy_db(
             "cp",
             "-r",
             taxonomy_path,
-            db_path + "/taxonomy"
+            db_path
         ]
         run_command(copy_cmd)
 
@@ -370,7 +370,7 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
     elif db_type == "kraken2":
         for input_file, taxid in zip(input_files, taxids):
             add_database_kraken2(input_file, taxid, db_path=db_path)
-        get_taxonomy_db(db_path=db_path)
+        get_taxonomy_db(db_path=db_path+"/taxonomy")
         build_database_kraken2(db_path=db_path, threads=1, kmer_len=35, 
                              minimizer_len=31, minimizer_spaces=7, skip_maps=True)
     else:

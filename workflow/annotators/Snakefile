@@ -68,12 +68,12 @@ rule kaiju:
     output:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
     params:
-        db = lambda wildcards: next(run['db_path'] for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        db_file = lambda wildcards: next(os.path.join(run['db_path'], run['db_name']) if run.get('db_name') else run['db_path'] if os.path.basename(run['db_path']).endswith('.fmi') else run['db_path']+"/*.fmi" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        db_nodes = lambda wildcards: next(run['db_nodes'] if run.get('db_nodes') else os.path.dirname(run['db_path'])+"/nodes.dmp" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "kaiju" for run in config['run_config'] if run['run_name'] == wildcards.run_name)
+        db = lambda wildcards: get_run_config(wildcards, 'db_path'),
+        db_file = lambda wildcards: get_db_file(wildcards),
+        db_nodes = lambda wildcards: get_run_config(wildcards, 'db_nodes', os.path.dirname(get_db_file(wildcards)) + "/nodes.dmp"),
+        threads = lambda wildcards: get_run_config(wildcards, 'threads', 1),
+        extra = lambda wildcards: get_run_config(wildcards, 'extra', ""),
+        cmd = lambda wildcards: get_run_config(wildcards, 'cmd', "kaiju")
     shell:
         """
         mkdir -p $(dirname {output.out})
@@ -115,3 +115,18 @@ rule metaphlan4:
         bzcat {output.out_bowtie} | \
             awk -F'\t' '{{print $1 "\t" $3}}' > {output.out}
         """
+
+def get_run_config(wildcards, field, default=None):
+    """Helper function to get run configuration value with optional default."""
+    return next((run.get(field, default) for run in config['run_config'] if run['run_name'] == wildcards.run_name), default)
+
+def get_db_file(wildcards):
+    """Helper function to get database file path with proper extension handling."""
+    run = next((run for run in config['run_config'] if run['run_name'] == wildcards.run_name), None)
+    if not run:
+        return None
+    if run.get('db_name'):
+        return os.path.join(run['db_path'], run['db_name'])
+    if os.path.basename(run['db_path']).endswith('.fmi'):
+        return run['db_path']
+    return run['db_path'] + "/*.fmi"

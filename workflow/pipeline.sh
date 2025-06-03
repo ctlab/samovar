@@ -16,7 +16,8 @@ mkdir -p $out_dir
 # optional: build custom databases
 if true; then
     # Subset genomes for database creation
-    snae workflow/database_prep/config.yaml \
+    snakemake -s workflow/database_prep/Snakefile \
+        --configfile workflow/database_prep/config.yaml \
         --cores 1
 
     # Prepare databases
