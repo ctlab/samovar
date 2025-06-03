@@ -1,5 +1,8 @@
 library(tidyverse)
-library(samovar)
+library(samovaR)
+
+# Get command line arguments
+args <- commandArgs(trailingOnly = TRUE)
 
 # Default values
 annotation_dir <- NULL
@@ -15,7 +18,7 @@ while (i <= length(args)) {
   } else if (args[i] == "--output_dir") {
     output_dir <- args[i + 1]
     i <- i + 2
-  } else if (args[i] == "--config_samovar") {
+  } else if (args[i] == "--config") {
     config_samovar <- args[i + 1]
     i <- i + 2
   } else {
@@ -31,8 +34,8 @@ if (is.null(config_samovar)) {
 }
 
 # Fix config
-if (!("N" %in% names(config)) ) N <- 1
-if (!("N_reads" %in% names(config)) ) N_reads <- 100
+if (!("N" %in% names(config)) ) config$N <- 1
+if (!("N_reads" %in% names(config)) ) config$N_reads <- 100
 if("output_dir" %in% names(config)) output_dir <- config$output_dir
 if("input_dir" %in% names(config)) input_dir <- config$input_dir
 
@@ -44,6 +47,8 @@ if (is.null(annotation_dir)) {
 # Create output directory if specified
 if (!is.null(output_dir)) {
   dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+} else {
+  output_dir = "."
 }
 
 # Process taxonomy tables to SAMOVAR tables
@@ -55,15 +60,25 @@ res <- list()
 for (i in 1:length(samovar_data_list)) {
   # Process SAMOVAR data object
   config$samovar_data <- samovar_data_list[[i]]$copy()
+
   samovar <- do.call(
     samovar_preprocess,
     config
   )
+
   new_data <- samovar_boil(samovar, N = config$N)
-  res[[ names(samovar_data_list)[i] ]] <- new_data$data * config$N_reads
+  
+  # Create the final dataframe with proper column names
+  result_df <- round(new_data$data * config$N_reads)
+  colnames(result_df)[1] <- "taxid"
+  colnames(result_df)[-1] <- paste0("N_", colnames(result_df)[-1])
+  
+  res[[ names(samovar_data_list)[i] ]] <- result_df
+  
   write.csv(
     res[[ names(samovar_data_list)[i] ]],
-    paste0(output_dir, "/", names(samovar_data_list)[i], ".csv")
+    paste0(output_dir, "/", names(samovar_data_list)[i], ".csv"),
+    row.names = FALSE
   )
 }
 

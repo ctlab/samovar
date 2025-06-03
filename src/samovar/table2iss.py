@@ -232,7 +232,7 @@ def process_abundance_table(
     model: str = "hiseq",
     read_length: int = 150,
     sample_name: str = None
-) -> None:
+) -> pd.DataFrame:
     """
     Process abundance table and generate simulated reads for each taxid.
     
@@ -246,6 +246,9 @@ def process_abundance_table(
         model: Model to use for simulation with ISS
         sample_name: Name of the sample
         total_amount: Total number of reads to generate
+        
+    Returns:
+        DataFrame containing the filtered abundance table with only available genomes
     """
     if isinstance(table, str):
         abundance_table = pd.read_csv(table, sep=",")
@@ -295,6 +298,8 @@ def process_abundance_table(
             model=model,
             annotator_name=annotator_name
         )
+    
+    return filtered_table
 
 def samovar_annotation_regenerate(
     annotation_dir: str,
@@ -315,20 +320,30 @@ def samovar_annotation_regenerate(
             yaml.dump({
                 'threshold_amount': 1e-5,
                 'plot_log': False,
-                'min_cluster_size': 2,
                 'N': 10,
                 'N_reads': 1000
             }, f)
         config_samovar = tmp_file
 
-    config_samovar_dict = json.load(open(config_samovar))
+    # Read config file as YAML
+    with open(config_samovar, 'r') as f:
+        config_samovar_dict = yaml.safe_load(f)
+
     if output_dir is None:
         output_dir = config_samovar_dict['output_dir']
 
     try:
         here = os.path.dirname(os.path.abspath(__file__))
-        R_path = json.load(open(os.path.join(here, '../build/config.json')))['R_path']
+        R_path = json.load(open(os.path.join(here, '../../build/config.json')))['r_path']
     except:
         R_path = "R"
 
-    subprocess.run(f"{R_path} workflow/annotation_regenerate.R {config_samovar} {annotation_dir} {output_dir}", shell=True)
+    annotation_regenerate = os.path.join(here, '../../workflow/annotation_regenerate.R')
+    cmd = f"{R_path} \
+        --vanilla -s -f {annotation_regenerate} \
+        --args \
+        --config {config_samovar} \
+        --annotation_dir {annotation_dir} \
+        --output_dir {output_dir}"
+
+    subprocess.run(cmd, shell=True)
