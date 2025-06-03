@@ -145,7 +145,7 @@ def train_models(df, test_size=0.2, random_state=42):
     
     return best_model, models, metrics, feature_cols
 
-def plot_roc_curves(models, X_test, y_test):
+def plot_roc_curves(models, X_test, y_test, output_dir='tests_outs'):
     """
     Plot ROC curves for all models.
     
@@ -153,6 +153,7 @@ def plot_roc_curves(models, X_test, y_test):
         models (dict): Dictionary of trained models
         X_test (pd.DataFrame): Test features
         y_test (np.array): Test target
+        output_dir (str): Directory to save the plot
     """
     plt.figure(figsize=(10, 6))
     
@@ -187,8 +188,8 @@ def plot_roc_curves(models, X_test, y_test):
     plt.legend(loc="lower right")
     
     # Save plot
-    os.makedirs('tests_outs', exist_ok=True)
-    plt.savefig('tests_outs/roc_comparison.png')
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(os.path.join(output_dir, 'roc_comparison.png'))
     plt.close()
 
 def predict_taxid(df, model_path=None, feature_cols=None):

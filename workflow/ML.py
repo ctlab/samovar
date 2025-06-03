@@ -63,8 +63,8 @@ print("\nGenerating ROC curves...")
 validation_df.columns = [col.lower() for col in validation_df.columns]
 X_test = validation_df[feature_cols]
 y_test = validation_df['true']
-plot_roc_curves(models, X_test, y_test)
-print("ROC curves saved to tests_outs/roc_comparison.png")
+plot_roc_curves(models, X_test, y_test, output_dir=args.output_dir)
+print(f"ROC curves saved to {args.output_dir}/roc_comparison.png")
 
 # Process each file in the reprofiling directory
 print("\nProcessing files for reprofiling...")
