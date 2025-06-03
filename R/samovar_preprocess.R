@@ -27,7 +27,7 @@ samovar_preprocess <- function(
     #teabag_brew
     dist_function = function(x) dist(x),
     network = F,
-    min_cluster_size = 10,
+    min_cluster_size = 2,
     max_cluster_size = 100,
 
     #concotion_pour
