@@ -56,7 +56,7 @@ class PipelineConfig:
         # Handle command line annotators
         if args.kraken2:
             for k2_config in args.kraken2:
-                name, db_path, *extra = k2_config
+                name, db_path, *extra = k2_config[0].split()
                 config.annotators.append(AnnotatorConfig(
                     run_name=name,
                     type='kraken2',
@@ -66,12 +66,12 @@ class PipelineConfig:
 
         if args.kaiju:
             for kaiju_config in args.kaiju:
-                name, db_path, db_name, *extra = kaiju_config
+                name, db_path, db_name, *extra = kaiju_config[0].split()
                 config.annotators.append(AnnotatorConfig(
                     run_name=name,
                     type='kaiju',
                     db_path=db_path,
-                    db_name=db_name,
+                    db_name=db_name if db_name else None,
                     extra=' '.join(extra) if extra else None
                 ))
 
@@ -242,18 +242,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='SamovaR Pipeline Configuration')
     
     # Input source (mutually exclusive)
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument('--input-config', help='Path to input configuration file')
-    input_group.add_argument('--input-dir', help='Directory containing input FASTQ files')
+    input_group = parser.add_mutually_exclusive_group(required=False)
+    input_group.add_argument('--input_config', help='Path to input configuration file', required=False)
+    input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
     
     # Output
-    parser.add_argument('--output-dir', default='tests_outs', help='Output directory')
+    parser.add_argument('--output_dir', default='tests_outs', help='Output directory', required=True)
     
     # Annotators
     parser.add_argument('--kraken2', nargs='+', action='append',
-                       help='Kraken2 configuration: run_name db_path [extra_args...]')
+                       help='Kraken2 configuration: run_name db_path [extra_args...]', required=False)
+
     parser.add_argument('--kaiju', nargs='+', action='append',
-                       help='Kaiju configuration: run_name db_path db_name [extra_args...]')
+                       help='Kaiju configuration: run_name db_path db_name [extra_args...]', required=False)
     
     return parser.parse_args()
 

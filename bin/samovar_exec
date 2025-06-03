@@ -1,0 +1,33 @@
+#!/bin/bash
+
+set -e
+
+# Parse arguments
+OUTPUT_DIR="."
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --output_dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: samovar_exec --output_dir /path/to/output"
+            exit 1
+            ;;
+    esac
+done
+
+# Check for .generate directory and run its pipeline if it exists
+if [ -d "$OUTPUT_DIR/.generate" ] && [ -f "$OUTPUT_DIR/.generate/generate.sh" ]; then
+    echo "Running ISS test generation pipeline..."
+    bash "$OUTPUT_DIR/.generate/generate.sh"
+fi
+
+# Check for .log directory and run its pipeline if it exists
+if [ -d "$OUTPUT_DIR/.log" ] && [ -f "$OUTPUT_DIR/.log/samovar.sh" ]; then
+    echo "Running main SamovaR pipeline..."
+    bash "$OUTPUT_DIR/.log/samovar.sh"
+fi
+
+echo "Pipeline execution completed." 

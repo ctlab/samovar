@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+
+import sys
+from samovar.iss_config import setup_iss_test
+
+def main():
+    result = setup_iss_test()
+    print(f"Generated config: {result['config']}")
+    print(f"Generated pipeline: {result['pipeline']}")
+
+if __name__ == "__main__":
+    main() 

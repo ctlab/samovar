@@ -45,37 +45,33 @@ git clone https://github.com/ctlab/samovar
 cd samovar
 pip install -e .
 ```
-
-## Components
-
-- **R** package `samova.R` for the artificial abundance table generation
-- **Python** + **bash** pipeline for the automated benchmarking
-
-## Project Structure
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
-graph LR
-    A[SamovaR] --> G1[Abundance table generation]
-    G1 --> B[R Package]
-    A --> G2[Automated re-profiling]
-    G2 --> C[snakemake + Python Pipeline]
-    G1 --> G[Shiny App]
-
-    B --> B1[R/]
-    B --> B2[man/]
-    B --> B3[vignettes/]
-
-    C --> C1[workflow/]
-    C --> C2[src/]
-
-    G --> H[shiny/]
-```
+***Attention:*** *most samovar usage require properly configurated file in build/config.json*
 
 ## Usage
 ### Cross-validation and re-profiling
 
-To run worklow, specify your config files and run:
+Example usage:
+```bash
+# Generate reads for benchmarking (skip for real data)
+samovar generate \
+    --genome_dir $SAMOVAR/data/test_genomes/meta \
+    --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
+    --output_dir samovar 
+
+# Generate pipeline (for example, kraken2 + kaiju )
+## specify --input_dir for real data
+samovar preprocess \
+    --output_dir samovar \
+    --kraken2 "kraken2 $DB_KRAKEN2" \
+    --kaiju "kaiju $DB_KAIJU"
+
+# Run the pipeline(s)
+samovar exec --output-dir samovar
+```
+
+Results and flexibility of the tool can be improved with specification of config files. Please folow wiki, or see {samovar_function} -h
+
+Manual example:
 ```bash
 cd samovar
 bash workflow/pipeline.sh
@@ -162,6 +158,33 @@ new_data <- samovar %>%
 #### Pipeline
 
 <img src="data/img/additional/algo.png" width = 50%>
+
+## Components
+
+- **R** package `samova.R` for the artificial abundance table generation
+- Pipeline for the automated benchmarking and re-profiling
+
+## Project Structure
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
+graph LR
+    A[SamovaR] --> G1[Abundance table generation]
+    G1 --> B[R Package]
+    A --> G2[Automated re-profiling]
+    G2 --> C[snakemake + Python Pipeline]
+    G1 --> G[Shiny App]
+
+    B --> B1[R/]
+    B --> B2[man/]
+    B --> B3[vignettes/]
+
+    C --> C1[workflow/]
+    C --> C2[src/]
+
+    G --> H[shiny/]
+```
+
 
 ## References
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330

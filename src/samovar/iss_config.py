@@ -94,19 +94,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='SamovaR ISS Test Configuration')
     
     # Required arguments
-    parser.add_argument('--genome-dir', required=True,
+    parser.add_argument('--genome_dir', required=True,
                        help='Directory containing reference genomes')
-    parser.add_argument('--output-dir', required=True,
+    parser.add_argument('--output_dir', required=True,
                        help='Output directory for generated files')
-    parser.add_argument('--host-genome', required=True,
+    parser.add_argument('--host_genome', required=True,
                        help='Path to host genome file')
     
     # Optional arguments with defaults
-    parser.add_argument('--n-samples', type=int, default=10,
+    parser.add_argument('--n_samples', type=int, default=10,
                        help='Number of samples to generate')
-    parser.add_argument('--total-reads', type=int, default=2000,
+    parser.add_argument('--total_reads', type=int, default=2000,
                        help='Total number of reads to generate')
-    parser.add_argument('--host-fraction', default="RANDOM",
+    parser.add_argument('--host_fraction', default="RANDOM",
                        help='Fraction of host reads')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed for reproducibility')

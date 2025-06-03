@@ -20,3 +20,4 @@ project
 .coverage*
 build/config.json
 Rplots.pdf
+samovar/

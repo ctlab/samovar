@@ -69,8 +69,8 @@ rule kaiju:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
     params:
         db = lambda wildcards: next(run['db_path'] for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        db_file = lambda wildcards: next(os.path.join(run['db_path'], run['db_name']) if run.get('db_name') else run['db_path']+"/*.fmi" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
-        db_nodes = lambda wildcards: next(run['db_nodes'] if run.get('db_nodes') else run['db_path']+"/nodes.dmp" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        db_file = lambda wildcards: next(os.path.join(run['db_path'], run['db_name']) if run.get('db_name') else run['db_path'] if os.path.basename(run['db_path']).endswith('.fmi') else run['db_path']+"/*.fmi" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        db_nodes = lambda wildcards: next(run['db_nodes'] if run.get('db_nodes') else os.path.dirname(run['db_path'])+"/nodes.dmp" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
         threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
         extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
         cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "kaiju" for run in config['run_config'] if run['run_name'] == wildcards.run_name)

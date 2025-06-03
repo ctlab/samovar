@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+
+import sys
+from pathlib import Path
+from samovar.config import setup_pipeline, parse_args
+
+def main():
+    # Get the base parser
+    args = parse_args()
+    
+    # Check if .generate exists in output_dir
+    generate_dir = Path(args.output_dir) / ".generate"
+    if generate_dir.exists():
+        # Add input-dir argument if not already present
+        if "--input_dir" not in args:
+            args.input_dir = str(Path(args.output_dir) / "initial")
+    
+    result = setup_pipeline(args)
+    print(f"Generated configs: {result['configs']}")
+    print(f"Generated pipeline: {result['pipeline']}")
+
+if __name__ == "__main__":
+    main() 

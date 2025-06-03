@@ -86,4 +86,33 @@ echo "Installing Python dependencies..."
 $PYTHON_PATH -m pip install --upgrade pip&> /dev/null
 $PYTHON_PATH -m pip install -e .
 
-echo "Installation complete!" 
+# Create necessary directories
+mkdir -p build
+mkdir -p bin
+
+# Make scripts executable
+chmod +x bin/samovar
+chmod +x bin/samovar_generate
+chmod +x bin/samovar_preprocess
+chmod +x bin/samovar_exec
+
+# Add bin directory to PATH in .bashrc if not already present
+if ! grep -q "export PATH=\$PATH:$(pwd)/bin" ~/.bashrc; then
+    echo "export PATH=\$PATH:$(pwd)/bin" >> ~/.bashrc
+    echo "Added SamovaR bin directory to PATH in ~/.bashrc"
+    echo "Please run 'source ~/.bashrc' or restart your terminal to update PATH"
+fi
+
+# Create config.json if it doesn't exist
+if [ ! -f build/config.json ]; then
+    echo "Creating build/config.json..."
+    cat > build/config.json << EOF
+{
+    "python_path": "$(which python3)",
+    "r_path": "$(which R)",
+    "r_lib_path": "$(R -e 'cat(.libPaths()[1])' 2>/dev/null)"
+}
+EOF
+fi
+
+echo "Installation completed successfully!" 

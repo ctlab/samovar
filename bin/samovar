@@ -1,0 +1,53 @@
+#!/bin/bash
+
+set -e
+
+# Check if we're in a SamovaR project directory
+if [ ! -f build/config.json ]; then
+    echo "Error: Not in a SamovaR project directory (build/config.json not found)"
+    exit 1
+fi
+
+# Function to show usage
+show_usage() {
+    echo "Usage: samovar [command] [options]"
+    echo ""
+    echo "Commands:"
+    echo "  generate    Generate ISS test configuration and pipeline"
+    echo "  preprocess  Generate main pipeline configuration"
+    echo "  exec        Execute the pipeline(s)"
+    echo "  help        Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  samovar generate --genome_dir /path/to/genomes --output_dir ./output --host_genome /path/to/host.fna"
+    echo "  samovar preprocess --input_dir /path/to/input --output_dir ./output"
+    echo "  samovar exec --output_dir ./output"
+}
+
+# Parse command
+case "$1" in
+    "generate")
+        shift
+        samovar_generate "$@"
+        ;;
+    "preprocess")
+        shift
+        samovar_preprocess "$@"
+        ;;
+    "exec")
+        shift
+        # If no output-dir is specified, use the current directory
+        if ! echo "$@" | grep -q -- "--output_dir"; then
+            set -- "$@" "--output_dir" "."
+        fi
+        samovar_exec "$@"
+        ;;
+    "help"|"")
+        show_usage
+        ;;
+    *)
+        echo "Error: Unknown command '$1'"
+        show_usage
+        exit 1
+        ;;
+esac 
