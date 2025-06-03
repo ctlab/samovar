@@ -95,6 +95,8 @@ chmod +x bin/samovar
 chmod +x bin/samovar_generate
 chmod +x bin/samovar_preprocess
 chmod +x bin/samovar_exec
+chmod +x workflow/database_prep/samovar_build_database.sh
+chmod +x workflow/database_prep/samovar_build_database.py
 
 # Add bin directory to PATH in .bashrc if not already present
 if ! grep -q "export PATH=\$PATH:$(pwd)/bin" ~/.bashrc; then
