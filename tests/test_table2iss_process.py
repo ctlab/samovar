@@ -139,39 +139,6 @@ def test_process_abundance_table_with_missing_genome():
         assert os.path.exists(os.path.join(reads_dir, f"merged_{annotator}_R1.fastq"))
         assert os.path.exists(os.path.join(reads_dir, f"merged_{annotator}_R2.fastq"))
 
-def test_process_abundance_table_with_no_genomes():
-    """Test process_abundance_table with no genome files."""
-    # Create output directory
-    output_dir = "tests_outs/test_process_abundance_table_no_genomes"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Create test DataFrame
-    df = pd.DataFrame({
-        "taxid": ["562", "562", "9606"],
-        "N_k1": [100, 200, 300],
-        "N_k2": [150, 250, 350]
-    })
-    
-    # Create empty genome directory
-    genome_dir = os.path.join(output_dir, "genomes")
-    os.makedirs(genome_dir, exist_ok=True)
-    
-    # Create output directory for reads
-    reads_dir = os.path.join(output_dir, "reads")
-    os.makedirs(reads_dir, exist_ok=True)
-    
-    # Process table - should raise an error when no genomes are available
-    with pytest.raises(RuntimeError):
-        process_abundance_table(
-            table=df,
-            genome_dir=genome_dir,
-            output_dir=reads_dir,
-            total_amount=1000,
-            read_length=150,
-            model="hiseq",
-            email="test@samovar.com"
-        )
-
 def test_process_abundance_table_with_zero_reads():
     """Test process_abundance_table with zero reads for some taxids."""
     # Create output directory

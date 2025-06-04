@@ -53,3 +53,47 @@ def test_fetch_genome_already_exists(test_output_dir):
     
     assert result1 == result2
     assert mtime1 == mtime2  # File should not have been modified
+
+def test_generate_random_taxids(test_output_dir):
+    """Test generating random taxids"""
+    from samovar.genome_fetcher import generate_random_taxids
+    
+    # Set up Entrez email
+    from Bio import Entrez
+    Entrez.email = "test@example.com"
+    
+    # Test default parameters
+    taxids = generate_random_taxids()
+    assert len(taxids) == 10
+    assert all(isinstance(taxid, str) for taxid in taxids)
+    assert len(set(taxids)) == len(taxids)  # Check uniqueness
+    
+    # Test custom parameters
+    taxids = generate_random_taxids(group="Archaea", N=5)
+    assert len(taxids) == 5
+    assert all(isinstance(taxid, str) for taxid in taxids)
+    assert len(set(taxids)) == len(taxids)  # Check uniqueness
+
+def test_generate_random_taxids_no_email():
+    """Test that function raises error when Entrez.email is not set"""
+    from samovar.genome_fetcher import generate_random_taxids
+    from Bio import Entrez
+    
+    # Remove email if it exists
+    if hasattr(Entrez, 'email'):
+        delattr(Entrez, 'email')
+    
+    with pytest.raises(ValueError, match="Entrez.email must be set"):
+        generate_random_taxids()
+
+def test_generate_random_taxids_invalid_group(test_output_dir):
+    """Test generating taxids for invalid group"""
+    from samovar.genome_fetcher import generate_random_taxids
+    
+    # Set up Entrez email
+    from Bio import Entrez
+    Entrez.email = "test@example.com"
+    
+    # Test with invalid group
+    taxids = generate_random_taxids(group="InvalidGroup123")
+    assert len(taxids) == 0

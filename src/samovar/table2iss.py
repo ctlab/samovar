@@ -67,7 +67,7 @@ def get_genome_file(genome_dir: str, taxid: str) -> str:
     Returns:
         Path to the genome file if found, None otherwise
     """
-    extensions = ['.fa', '.fna', '.fasta']
+    extensions = ['.fa', '.fna', '.fasta', '.fa.gz', '.fna.gz', '.fasta.gz']
     for ext in extensions:
         genome_file = os.path.join(genome_dir, f"{taxid}{ext}")
         if os.path.exists(genome_file):
