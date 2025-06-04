@@ -76,6 +76,7 @@ viz_composition <- function(data,
     )
 
   data <- left_join(data, data_raw, by = c("sp", "samples"))
+  data$value[data$raw_value == 0] <- min(data$value)
 
   if(!isFALSE(bottom_legend)) data <- left_join(data, legend, by = "samples")
 
@@ -101,8 +102,8 @@ viz_composition <- function(data,
     gg <- gg +
       geom_tile(aes(x = samples, fill = value, y = sp, text = raw_value)) +
       #coord_flip() +
-      scale_fill_viridis_c("scaled values", direction = -1)
-      #scale_fill_gradientn(colours = palette)
+      #scale_fill_viridis_c("scaled values", direction = -1)
+      scale_fill_gradientn(colours = palette)
   }
 
 
@@ -121,7 +122,12 @@ viz_composition <- function(data,
 
     plotly::ggplotly(gg)%>%
       plotly::layout(title="Composition",
-                     xaxis = list(title = '', showgrid = F),
+                     hoverlabel = list(
+                       bgcolor = "white",
+                       font = list(size = 12),
+                       align = "left"),
+                     hovertemplate = "<b>Sample:</b> %{x}<br><b>Taxa:</b> %{y}<br><b>Value:</b> %{text}<extra></extra>",
+                     xaxis = list(title = '', showgrid = F, showticklabels = F),
                      yaxis = list(title = '', showgrid = F))
 
   } else {
