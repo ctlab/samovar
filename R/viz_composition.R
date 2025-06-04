@@ -95,7 +95,14 @@ viz_composition <- function(data,
 
   if(type == "column") {
     gg <- gg +
-      geom_col(aes(x = samples, y = value, fill = sp, text = raw_value)) +
+      geom_col(aes(x = samples, y = value, fill = sp, 
+                   text = map(paste0(
+                     "<b>Sample:</b> ", samples, "<br>",
+                     "<b>Taxa:</b> ", "<i>", sp, "</i>", "<br>",
+                     "<b>Value:</b> ", value
+                   ),
+                   HTML
+                   )))) +
       scale_fill_viridis_d("scaled values", direction = -1)
 
   } else if(type == "tile") {
@@ -126,9 +133,8 @@ viz_composition <- function(data,
                        bgcolor = "white",
                        font = list(size = 12),
                        align = "left"),
-                     hovertemplate = "<b>Sample:</b> %{x}<br><b>Taxa:</b> %{y}<br><b>Value:</b> %{text}<extra></extra>",
                      xaxis = list(title = '', showgrid = F, showticklabels = F),
-                     yaxis = list(title = '', showgrid = F))
+                     yaxis = list(title = '', showgrid = F, tickfont = list(style = "italic")))
 
   } else {
     return(gg)
