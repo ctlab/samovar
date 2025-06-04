@@ -149,9 +149,19 @@ def generate_reads_metagenome(
     
     output_file_R1 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
     output_file_R2 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq")
-    cmd = f"""cat $(ls {output_dir}/{sample_name}_{annotator_name}_*_R1.fastq | grep -v ".iss.tmp.") >> {output_file_R1}
+    
+    # Check if there are any reads
+    if not glob.glob(os.path.join(output_dir, f"{sample_name}_{annotator_name}_*_R1.fastq")):
+        cmd = f"""
+        echo "" > {output_file_R1}
+        echo "" > {output_file_R2}
+        """
+    else:
+        cmd = f"""
+        cat $(ls {output_dir}/{sample_name}_{annotator_name}_*_R1.fastq | grep -v ".iss.tmp.") >> {output_file_R1}
         cat $(ls {output_dir}/{sample_name}_{annotator_name}_*_R2.fastq | grep -v ".iss.tmp.") >> {output_file_R2}
-    """ 
+        """ 
+        
     subprocess.run(cmd, shell=True)
 
     # Cleanup
