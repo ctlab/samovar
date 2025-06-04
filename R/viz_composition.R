@@ -95,14 +95,14 @@ viz_composition <- function(data,
 
   if(type == "column") {
     gg <- gg +
-      geom_col(aes(x = samples, y = value, fill = sp, 
+      geom_col(aes(x = samples, y = value, fill = sp,
                    text = map(paste0(
                      "<b>Sample:</b> ", samples, "<br>",
                      "<b>Taxa:</b> ", "<i>", sp, "</i>", "<br>",
                      "<b>Value:</b> ", value
                    ),
-                   HTML
-                   )))) +
+                   ~HTML(.)
+                   ))) +
       scale_fill_viridis_d("scaled values", direction = -1)
 
   } else if(type == "tile") {

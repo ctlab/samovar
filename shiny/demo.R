@@ -9,7 +9,7 @@ library(samovaR)
 # UI ----
 ui <- fluidPage (
   # head
-  h1("samovaR: Microbiome generator v.1.8"),
+  h1("samovaR: Microbiome generator v.0.9.0"),
   tags$hr(),
   img(src = "logo_compressed.png", align = "right"),
   textOutput("description"),
