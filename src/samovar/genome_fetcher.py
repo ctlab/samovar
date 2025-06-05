@@ -12,10 +12,41 @@ import random
 import gzip
 import shutil
 from tqdm import tqdm
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def _entrez_retry(func, max_retries=3, initial_delay=1):
+    """
+    Retry an Entrez function with exponential backoff.
+    
+    Args:
+        func: Function to retry
+        max_retries: Maximum number of retries
+        initial_delay: Initial delay in seconds
+        
+    Returns:
+        Result of the function call
+    """
+    delay = initial_delay
+    last_exception = None
+    
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            last_exception = e
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                if attempt < max_retries - 1:
+                    logger.warning(f"Rate limited, retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                continue
+            raise
+    
+    raise last_exception
 
 def fetch_genome(
     taxid: str,
@@ -138,9 +169,13 @@ def generate_random_taxids(group: str = "Bacteria", N: int = 10, silent: bool = 
         if not silent:
             logger.info(f"Searching with term: {search_term}")
         
-        handle = Entrez.esearch(db="assembly", term=search_term, retmax=1000)
-        record = Entrez.read(handle)
-        handle.close()
+        def search_func():
+            handle = Entrez.esearch(db="assembly", term=search_term, retmax=1000)
+            record = Entrez.read(handle)
+            handle.close()
+            return record
+            
+        record = _entrez_retry(search_func)
         
         if not silent:
             logger.info(f"Found {len(record['IdList'])} assemblies")
@@ -156,9 +191,13 @@ def generate_random_taxids(group: str = "Bacteria", N: int = 10, silent: bool = 
         # Get assembly details for each ID to extract taxids
         taxids = set()
         for assembly_id in record["IdList"]:
-            handle = Entrez.esummary(db="assembly", id=assembly_id)
-            summary = Entrez.read(handle)
-            handle.close()
+            def summary_func():
+                handle = Entrez.esummary(db="assembly", id=assembly_id)
+                summary = Entrez.read(handle)
+                handle.close()
+                return summary
+                
+            summary = _entrez_retry(summary_func)
             
             # Check if this assembly has a RefSeq FTP path
             doc_summary = summary["DocumentSummarySet"]["DocumentSummary"][0]
