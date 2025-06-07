@@ -4,10 +4,13 @@ import glob
 
 configfile: "config.yaml"
 
+# Specify rule order to resolve ambiguity
+ruleorder: generate_host_reads > generate_metagenome_reads
+
 # Initialize genomes list if it's empty
 if not config['genomes']:
-    genome_files = glob.glob(os.path.join(config['genome_dir'], "*.fna"))
-    config['genomes'] = [os.path.basename(g).replace('.fna', '') for g in genome_files]
+    genome_files = glob.glob(os.path.join(config['genome_dir'], "*"))
+    config['genomes'] = [os.path.basename(g) for g in genome_files]
     print(f"Found genomes: {config['genomes']}")
 
 # Set base seed from config
@@ -24,7 +27,7 @@ for sample in SAMPLES:
     OUTPUT_FILES.append(f"{config['output_dir']}/{sample}_full_R1.fastq")
     OUTPUT_FILES.append(f"{config['output_dir']}/{sample}_full_R2.fastq")
 
-# Main rule to generate all samples - MUST BE FIRST RULE
+# Main rule to generate all samples
 rule all:
     input:
         OUTPUT_FILES,
@@ -84,7 +87,7 @@ rule generate_host_reads:
 # Rule to generate reads for a single genome
 rule generate_metagenome_reads:
     input:
-        genome = lambda wildcards: f"{config['genome_dir']}/{wildcards.genome}.fna"
+        genome = lambda wildcards: os.path.join(config['genome_dir'], wildcards.genome)
     output:
         r1 = f"{config['output_dir']}/.tmp/{{sample}}_{{genome}}_R1.fastq",
         r2 = f"{config['output_dir']}/.tmp/{{sample}}_{{genome}}_R2.fastq"
