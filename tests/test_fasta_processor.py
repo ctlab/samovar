@@ -52,7 +52,7 @@ GCTAGCTA"""
             
         # Check if output contains expected number of sequences
         # Each input sequence should be split into 2 parts (50% each)
-        self.assertEqual(content.count('>test-'), 4)
+        self.assertEqual(content.count('>test'), 4)
         
         # Check if sequences are properly split
         sequences = content.split('>')[1:]  # Skip empty first element

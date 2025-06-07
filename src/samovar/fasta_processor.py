@@ -71,7 +71,7 @@ def preprocess_fasta(input_file: str, output_file: str, mutation_rate: float, in
                 mutated_part = apply_mutations(part, mutation_rate)
                 
                 # Write to output file
-                new_header = f">{input_filename}-{i+1}-{j//include_length + 1}"
+                new_header = f">{input_filename}|taxid:{input_filename}|{i+1}|{j//include_length + 1}"
                 f.write(f"{new_header}\n")
                 f.write(f"{mutated_part}\n")
 

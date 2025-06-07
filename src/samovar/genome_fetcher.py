@@ -288,7 +288,7 @@ def main():
                 continue
         
         # Step 4: Preprocess FASTA
-        output_path = output_dir / f"{taxid}_processed.fasta"
+        output_path = output_dir / f"{taxid}-processed.fasta"
         try:
             preprocess_fasta(
                 input_file=genome_path,
@@ -306,7 +306,7 @@ def main():
     if not args.silent:
         logger.info("Cleaning up intermediate files...")
     for file in output_dir.glob("*"):
-        if not file.name.endswith("_processed.fasta"):
+        if not file.name.endswith("-processed.fasta"):
             try:
                 file.unlink()
                 if not args.silent:
