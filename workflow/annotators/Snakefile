@@ -18,6 +18,16 @@ def get_annotator_outputs():
                                 run_name=run['run_name'],
                                 sample=get_samples(),
                                 ext=['kraken2.report', 'kraken2.out']))
+        elif run['type'] == 'kraken':
+            outputs.extend(expand(os.path.join(config['output_dir'], f"{{sample}}_{{run_name}}.{{ext}}"),
+                                run_name=run['run_name'],
+                                sample=get_samples(),
+                                ext=['kraken.out']))
+        elif run['type'] == 'krakenuniq':
+            outputs.extend(expand(os.path.join(config['output_dir'], f"{{sample}}_{{run_name}}.{{ext}}"),
+                                run_name=run['run_name'],
+                                sample=get_samples(),
+                                ext=['krakenuniq.out']))
         elif run['type'] == 'kaiju':
             outputs.extend(expand(os.path.join(config['output_dir'], f"{{sample}}_{{run_name}}.{{ext}}"),
                                 run_name=run['run_name'],
@@ -56,6 +66,52 @@ rule kraken2:
             --threads {params.threads} \
             --paired {input.r1} {input.r2} \
             --report {output.report} \
+            --output {output.out} \
+            {params.extra}
+        """
+
+# Kraken rule
+rule kraken:
+    input:
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq",
+        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq"
+    output:
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken.out"
+    params:
+        db = lambda wildcards: next(run['db_path'] for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "kraken" for run in config['run_config'] if run['run_name'] == wildcards.run_name)
+    shell:
+        """
+        mkdir -p $(dirname {output.out})
+        {params.cmd} \
+            --db {params.db} \
+            --threads {params.threads} \
+            --paired {input.r1} {input.r2} \
+            --output {output.out} \
+            {params.extra}
+        """
+
+# KrakenUnique rule
+rule krakenuniq:
+    input:
+        r1 = lambda wildcards: f"{config['r1_dir']}/{wildcards.sample}_R1.fastq",
+        r2 = lambda wildcards: f"{config['r2_dir']}/{wildcards.sample}_R2.fastq"
+    output:
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.krakenuniq.out"
+    params:
+        db = lambda wildcards: next(run['db_path'] for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        threads = lambda wildcards: next(run['threads'] if run.get('threads') else 1 for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        extra = lambda wildcards: next(run['extra'] if run.get('extra') else "" for run in config['run_config'] if run['run_name'] == wildcards.run_name),
+        cmd = lambda wildcards: next(run['cmd'] if run.get('cmd') else "kraken" for run in config['run_config'] if run['run_name'] == wildcards.run_name)
+    shell:
+        """
+        mkdir -p $(dirname {output.out})
+        {params.cmd} \
+            --db {params.db} \
+            --threads {params.threads} \
+            --paired {input.r1} {input.r2} \
             --output {output.out} \
             {params.extra}
         """
