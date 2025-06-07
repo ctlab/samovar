@@ -49,7 +49,7 @@ def _entrez_retry(func, max_retries=3, initial_delay=1):
     raise last_exception
 
 def fetch_genome(
-    taxid: str,
+    taxid: str|int,
     output_folder: str,
     email: str,
     reference_only: bool = True,
@@ -68,6 +68,8 @@ def fetch_genome(
     Returns:
         Optional[str]: Path to downloaded genome file or None if failed
     """
+    if isinstance(taxid, str):
+        taxid = taxid.split(".")[0]
     # Set up Entrez
     Entrez.email = email
     

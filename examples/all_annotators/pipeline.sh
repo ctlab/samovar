@@ -22,17 +22,16 @@ python -m samovar.genome_fetcher \
 samovar generate \
     --genome_dir $output_dir/.genomes \
     --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
+    --n_samples 3 \
     --output_dir $output_dir
 
 # Prepare run config
 samovar preprocess \
-    #--input_dir tests/data/reads \
     --output_dir $output_dir \
     --kraken2 "kraken2 $DB_KRAKEN2" \
     --kaiju "kaiju $DB_KAIJU" \
     --kraken "kraken $DB_KRAKEN" \
     --krakenuniq "krakenuniq $DB_KRAKEN"
-
 
 # Run samovar
 samovar exec --output_dir $output_dir

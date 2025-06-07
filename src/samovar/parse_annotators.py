@@ -135,6 +135,7 @@ READ_FUNCTIONS = {
     "kraken1": read_kraken1_raw,
     "kraken2": read_kraken2_raw,
     "krakenunique": read_krakenu_raw,
+    "krakenuniq": read_krakenu_raw,
     "krakenu": read_krakenu_raw,
     "metaphlan": read_metaphlan_raw,
     "mpa": read_metaphlan_raw,
@@ -473,8 +474,8 @@ def match_annotation(annotation_name:str) -> str:
             return "kraken1"
         elif arg == "kraken2":
             return "kraken2"
-        elif arg == "krakenunique":
-            return "krakenunique"
+        elif arg == "krakenuniq":
+            return "krakenuniq"
         elif arg == "krakenu":
             return "krakenu"
         elif arg == "metaphlan":
