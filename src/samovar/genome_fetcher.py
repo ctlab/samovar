@@ -13,6 +13,7 @@ import gzip
 import shutil
 from tqdm import tqdm
 import time
+from samovar.fasta_processor import preprocess_fasta
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -48,7 +49,7 @@ def _entrez_retry(func, max_retries=3, initial_delay=1):
     
     raise last_exception
 
-def fetch_genome(
+def fetch_genome_raw(
     taxid: str|int,
     output_folder: str,
     email: str,
@@ -149,6 +150,44 @@ def fetch_genome(
             logger.error(f"Error fetching genome for taxid {taxid}: {str(e)}")
         return None
 
+def fetch_genome(
+    taxid: str|int,
+    output_folder: str,
+    email: str,
+    reference_only: bool = True,
+    silent: bool = False
+    ) -> Optional[str]:
+    
+    if isinstance(taxid, str):
+        taxid = taxid.split(".")[0]
+    
+    genome_path = fetch_genome_raw(taxid, output_folder, email, reference_only, silent)
+    if genome_path is None:
+        return None
+    if genome_path.endswith(".gz"):
+        try:
+            with (
+                gzip.open(genome_path, "rb") as f_in,
+                open(genome_path[:-3], "wb") as f_out,
+            ):
+                shutil.copyfileobj(f_in, f_out)
+            logger.info(f"Unzipped {genome_path} to {genome_path[:-3]}")
+            genome_path = genome_path[:-3]
+        except Exception as e:
+            logger.error(f"Failed to unzip {genome_path}: {str(e)}")
+
+    output_path = os.path.join(output_folder, f"{taxid}-processed.fasta")
+    try:
+        preprocess_fasta(
+            input_file=genome_path,
+            output_file=str(output_path),
+            mutation_rate=0.0,
+            include_percent=100.0,
+        )
+        logger.info(f"Successfully processed genome for taxid {taxid}")
+    except Exception as e:
+        logger.error(f"Failed to process genome for taxid {taxid}: {str(e)}")
+
 def generate_random_taxids(group: str = "Bacteria", N: int = 10, silent: bool = False) -> list[str]:
     """
     Generate a list of random taxids for a given taxonomic group.
@@ -230,8 +269,6 @@ def generate_random_taxids(group: str = "Bacteria", N: int = 10, silent: bool = 
 def main():
     """Main function to process genomes from random taxids."""
     import argparse
-    import subprocess
-    from samovar.fasta_processor import preprocess_fasta
     
     parser = argparse.ArgumentParser(description='Process genomes from random taxids')
     parser.add_argument('--group', type=str, default='Bacteria',
@@ -275,36 +312,8 @@ def main():
             if not args.silent:
                 logger.warning(f"Failed to fetch genome for taxid {taxid}")
             continue
-            
-        # Step 3: Un-gzip if needed
-        if genome_path.endswith('.gz'):
-            try:
-                with gzip.open(genome_path, 'rb') as f_in, open(genome_path[:-3], 'wb') as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-                if not args.silent:
-                    logger.info(f"Unzipped {genome_path} to {genome_path[:-3]}")
-                genome_path = genome_path[:-3]
-            except Exception as e:
-                if not args.silent:
-                    logger.error(f"Failed to unzip {genome_path}: {str(e)}")
-                continue
-        
-        # Step 4: Preprocess FASTA
-        output_path = output_dir / f"{taxid}-processed.fasta"
-        try:
-            preprocess_fasta(
-                input_file=genome_path,
-                output_file=str(output_path),
-                mutation_rate=0.0,
-                include_percent=100.0
-            )
-            if not args.silent:
-                logger.info(f"Successfully processed genome for taxid {taxid}")
-        except Exception as e:
-            if not args.silent:
-                logger.error(f"Failed to process genome for taxid {taxid}: {str(e)}")
     
-    # Step 5: Cleanup - remove all files except processed FASTA files
+    # Step 3: Cleanup - remove all files except processed FASTA files
     if not args.silent:
         logger.info("Cleaning up intermediate files...")
     for file in output_dir.glob("*"):

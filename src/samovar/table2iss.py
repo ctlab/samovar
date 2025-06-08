@@ -67,7 +67,9 @@ def get_genome_file(genome_dir: str, taxid: str) -> str:
     Returns:
         Path to the genome file if found, None otherwise
     """
-    extensions = ['.fa', '.fna', '.fasta', '.fa.gz', '.fna.gz', '.fasta.gz']
+    extensions = ['-processed.fa', '-processed.fna', '-processed.fasta',
+                  '.fa', '.fna', '.fasta', '.fa.gz', '.fna.gz', '.fasta.gz']
+    
     for ext in extensions:
         genome_file = os.path.join(genome_dir, f"{taxid}{ext}")
         if os.path.exists(genome_file):
@@ -282,18 +284,28 @@ def process_abundance_table(
 
     # Raise error if no genomes are available
     if not available_genomes:
-        raise RuntimeError("No genome files available for any taxid")
+        file=os.path.join(output_dir, f"{sample_name}_R1.fastq")
+        with open(file, "w") as f:
+            f.write("")
+        file=os.path.join(output_dir, f"{sample_name}_R2.fastq")
+        with open(file, "w") as f:
+            f.write("")
+        
+        raise Warning("No genome files available for any taxid")
 
     # Filter abundance table to only include available genomes
     available_taxids = [taxid for taxid, _ in available_genomes]
     filtered_table = abundance_table[abundance_table['taxid'].isin(available_taxids)]
+    print(filtered_table)
 
     N_cols = [col for col in filtered_table.columns if 'n' in col.lower()]
+    print(N_cols)
     for N_annotator in N_cols:
         annotator_name = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator).group(1)
         amount = filtered_table[N_annotator].tolist()
         taxid = filtered_table['taxid'].tolist()
         genome_files = [get_genome_file(genome_dir, taxid) for taxid in taxid]
+        print(genome_files)
         genome_files = [f for f in genome_files if f is not None]  # Filter out None values
         
         os.makedirs(output_dir, exist_ok=True)
