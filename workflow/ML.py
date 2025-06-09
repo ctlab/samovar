@@ -9,6 +9,9 @@ def process_sample(sample_file, output_dir, model=None, label_encoder=None):
     print(f"Processing {sample_file}...")
     df = pd.read_csv(sample_file)
     
+    # Fill NaN values with 0 in all columns
+    df = df.fillna(0)
+    
     # Make predictions
     result_df = predict_taxid(df, model_path=None if model is None else model)
     
@@ -43,6 +46,9 @@ validation_df = validation_df.dropna(subset=['true'])
 dropped_rows = initial_rows - len(validation_df)
 print(f"\nDropped {dropped_rows} rows with NaN in 'true' column")
 print(f"Remaining rows for training: {len(validation_df)}")
+
+# Fill NaN values with 0 in all other columns
+validation_df = validation_df.fillna(0)
 
 # Train model
 print("\nTraining model on validation data...")
