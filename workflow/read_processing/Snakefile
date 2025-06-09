@@ -1,0 +1,30 @@
+rule all:
+    input:
+        expand("{{out_dir}}/regenerated/{sample}_R1.fastq", sample=config["samples"]),
+        expand("{{out_dir}}/regenerated/{sample}_R2.fastq", sample=config["samples"])
+
+rule sort_paired_reads:
+    input:
+        r1 = "{{out_dir}}/regenerated/{sample}_R1.fastq",
+        r2 = "{{out_dir}}/regenerated/{sample}_R2.fastq"
+    output:
+        r1 = "{{out_dir}}/regenerated/{sample}_R1.fastq.sorted",
+        r2 = "{{out_dir}}/regenerated/{sample}_R2.fastq.sorted"
+    shell:
+        """
+        paste <(paste - - - - < {input.r1}) <(paste - - - - < {input.r2}) | sort -k1,1 | tr '\t' '\n' > {output.r1}
+        paste <(paste - - - - < {input.r1}) <(paste - - - - < {input.r2}) | sort -k1,1 | tr '\t' '\n' > {output.r2}
+        """
+
+rule move_sorted_reads:
+    input:
+        r1 = "{{out_dir}}/regenerated/{sample}_R1.fastq.sorted",
+        r2 = "{{out_dir}}/regenerated/{sample}_R2.fastq.sorted"
+    output:
+        r1 = "{{out_dir}}/regenerated/{sample}_R1.fastq",
+        r2 = "{{out_dir}}/regenerated/{sample}_R2.fastq"
+    shell:
+        """
+        mv {input.r1} {output.r1}
+        mv {input.r2} {output.r2}
+        """ 

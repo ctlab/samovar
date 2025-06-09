@@ -91,10 +91,7 @@ mkdir -p build
 mkdir -p bin
 
 # Make scripts executable
-chmod +x bin/samovar
-chmod +x bin/samovar_generate
-chmod +x bin/samovar_preprocess
-chmod +x bin/samovar_exec
+chmod +x bin/*
 chmod +x workflow/database_prep/samovar_build_database.sh
 chmod +x workflow/database_prep/samovar_build_database.py
 

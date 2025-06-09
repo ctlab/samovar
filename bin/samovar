@@ -16,6 +16,7 @@ show_usage() {
     echo "  generate    Generate ISS test configuration and pipeline"
     echo "  preprocess  Generate main pipeline configuration"
     echo "  exec        Execute the pipeline(s)"
+    echo "  tools       Various utility tools"
     echo "  --- other ---"
     echo "  build_database  Build Kaiju or Kraken2 database from config"
     echo "  help        Show this help message"
@@ -24,6 +25,7 @@ show_usage() {
     echo "  samovar generate --genome_dir [...] --output_dir [...] --host_genome [...]"
     echo "  samovar preprocess --input_dir [...] --output_dir [...]"
     echo "  samovar exec --output_dir [...]"
+    echo "  samovar tools --sort --output_dir [...]"
     echo "  samovar build_database --type kaiju --config_path [...] --db_path [...]"
 }
 
@@ -45,6 +47,20 @@ case "$1" in
         fi
         samovar_exec "$@"
         ;;
+    "tools")
+        shift
+        case "$1" in
+            "--sort")
+                shift
+                "$(dirname "$0")/samovar_sort_reads" "$@"
+                ;;
+            *)
+                echo "Error: Unknown tool '$1'"
+                echo "Available tools: --sort"
+                exit 1
+                ;;
+        esac
+        ;;
     "build_database")
         shift
         "$(dirname "$0")/../workflow/database_prep/samovar_build_database.sh" "$@"
@@ -57,4 +73,4 @@ case "$1" in
         show_usage
         exit 1
         ;;
-esac 
+esac

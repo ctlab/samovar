@@ -239,10 +239,17 @@ snakemake -s workflow/annotation2iss/Snakefile \\
     --cores 1
 
 # Clean up
-find $out_dir/regenerated -type f -empty -delete
-rm $out_dir/regenerated/*_*_*_R*.fastq
-rm $out_dir/regenerated/*_abundance*
-rm $out_dir/regenerated/*iss.tmp*
+try {{
+    find $out_dir/regenerated -type f -empty -delete
+    rm $out_dir/regenerated/*processed*
+    rm $out_dir/regenerated/*_abundance*
+    rm $out_dir/regenerated/*iss.tmp*
+}} || {{
+    echo "Warning: Some cleanup operations failed"
+}}
+
+# Sort paired-end reads to ensure matching order
+samovar tools --sort $out_dir
 
 # Run annotators on new reads set
 snakemake -s workflow/annotators/Snakefile \\
