@@ -276,6 +276,7 @@ def process_abundance_table(
     # Try to fetch missing genomes
     available_genomes = []
     for taxid in abundance_table['taxid']:
+        taxid = str(taxid).split(".")[0]
         genome_file = get_genome_file(genome_dir, taxid)
         if genome_file is None:
             genome_file = fetch_genome(taxid, genome_dir, email, reference_only=True)
@@ -292,20 +293,19 @@ def process_abundance_table(
             f.write("")
         
         raise Warning("No genome files available for any taxid")
+        return None
 
     # Filter abundance table to only include available genomes
-    available_taxids = [taxid for taxid, _ in available_genomes]
+    available_taxids = [str(taxid).split(".")[0] for taxid, _ in available_genomes]
+    abundance_table['taxid'] = abundance_table['taxid'].astype(str).str.split(".").str[0]
     filtered_table = abundance_table[abundance_table['taxid'].isin(available_taxids)]
-    print(filtered_table)
-
+    
     N_cols = [col for col in filtered_table.columns if 'n' in col.lower()]
-    print(N_cols)
     for N_annotator in N_cols:
         annotator_name = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator).group(1)
         amount = filtered_table[N_annotator].tolist()
         taxid = filtered_table['taxid'].tolist()
         genome_files = [get_genome_file(genome_dir, taxid) for taxid in taxid]
-        print(genome_files)
         genome_files = [f for f in genome_files if f is not None]  # Filter out None values
         
         os.makedirs(output_dir, exist_ok=True)
