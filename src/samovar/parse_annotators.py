@@ -9,9 +9,8 @@ import pandas as pd
 import os
 import re
 from ete3 import NCBITaxa
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 import sqlite3
-import mmap
 
 # Initialize NCBI taxonomy database
 ncbi = NCBITaxa()
@@ -187,10 +186,15 @@ class Annotation:
         for path, tool_type in file_path_type.items():
             df = READ_FUNCTIONS.get(tool_type)(path).set_index("seq").astype({"taxID": 'string'})
             df.columns = [f"{col}_{tool_type}_{self.id}" for col in df.columns]
+            
+            # Check for duplicate indices
+            if df.index.duplicated().any():
+                df = df[~df.index.duplicated(keep='first')]
+            
             try:
                 self.DataFrame = pd.concat([self.DataFrame, df], axis=1)
             except:
-                raise ValueError(f"Error concatenating {path}; check sample names. Sample names should be unique")
+                raise ValueError(f"Error concatenating {path}")
             self.id += 1
 
         # Extract true annotations if pattern provided
@@ -364,8 +368,9 @@ class Annotation:
             DataFrame with exported annotations
         """
         df_return = self.DataFrame.loc[:, [col for col in self.DataFrame if col.startswith('taxID')]]
-        lencol = [col for col in self.DataFrame if col.startswith('len')][0]
-        df_return['length'] = self.DataFrame.loc[:, lencol].to_list()
+        lencol = [col for col in self.DataFrame if col.startswith('len')]
+        if len(lencol) > 0:
+            df_return['length'] = self.DataFrame.loc[:, lencol[0]].to_list()
         df_return["true"] = self.true_annotation
         if file is not None:
             df_return.to_csv(file)
