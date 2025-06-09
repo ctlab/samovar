@@ -147,7 +147,7 @@ def train_models(df, test_size=0.2, random_state=42):
 
 def plot_roc_curves(models, X_test, y_test, output_dir='tests_outs'):
     """
-    Plot ROC curves for all models.
+    Plot ROC curves for all models using micro-averaging.
     
     Args:
         models (dict): Dictionary of trained models
@@ -157,27 +157,18 @@ def plot_roc_curves(models, X_test, y_test, output_dir='tests_outs'):
     """
     plt.figure(figsize=(10, 6))
     
-    # Get unique classes
-    classes = np.unique(y_test)
-    
     for name, model in models.items():
-        # Get prediction probabilities directly from the model
+        # Get prediction probabilities
         y_score = model.predict_proba(X_test)
         
-        # Calculate ROC for each class
-        fpr = dict()
-        tpr = dict()
-        roc_auc = dict()
+        # Convert to binary classification using micro-averaging
+        y_binary = pd.get_dummies(y_test).values
+        fpr, tpr, _ = roc_curve(y_binary.ravel(), y_score.ravel())
+        roc_auc = auc(fpr, tpr)
         
-        for i, class_label in enumerate(classes):
-            # Convert to binary classification for this class
-            y_binary = (y_test == class_label).astype(int)
-            fpr[i], tpr[i], _ = roc_curve(y_binary, y_score[:, i])
-            roc_auc[i] = auc(fpr[i], tpr[i])
-            
-            # Plot ROC curve for this class
-            plt.plot(fpr[i], tpr[i], 
-                    label=f'{name} (Class {class_label}, AUC = {roc_auc[i]:.2f})')
+        # Plot ROC curve for this model
+        plt.plot(fpr, tpr, 
+                label=f'{name} (AUC = {roc_auc:.2f})')
     
     plt.plot([0, 1], [0, 1], 'k--')
     plt.xlim([0.0, 1.0])
