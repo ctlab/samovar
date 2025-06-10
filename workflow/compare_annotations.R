@@ -9,7 +9,7 @@ annotation_dir <- NULL
 show_top <- 10
 output_dir <- NULL
 types <- c("f1", "R2", "cv")
-
+split <- F
 # Parse arguments
 i <- 1
 csv_file <- NULL
@@ -26,6 +26,9 @@ while (i <= length(args)) {
   } else if (args[i] == "--csv") {
     csv_file <- args[i + 1]
     i <- i + 2
+  } else if (args[i] == "--split") {
+    split <- T
+    i <- i + 1
   } else {
     i <- i + 1
   }
@@ -49,7 +52,8 @@ results <- viz_annotation(
   data = data,
   type = types,
   show_top = show_top,
-  output_dir = output_dir
+  output_dir = output_dir,
+  split = split
 )
 
 if (!is.null(csv_file)) {

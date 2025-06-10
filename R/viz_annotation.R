@@ -20,6 +20,7 @@
 #' @param show_top integer. Number of top annotations to show.
 #' @param output_dir character. Directory to save the plots. If NULL, plots are not saved.
 #' @param plot logical. If TRUE, plots are printed.
+#' @param split logical. If TRUE, plots are split into separate files.
 #' @return list of ggplot objects
 #' @importFrom tibble tibble
 #' @importFrom dplyr mutate_all mutate summarise group_by %>% sym
@@ -37,7 +38,8 @@ viz_annotation <- function(
     type = c("f1", "R2", "cv", "conf"),
     show_top = 10,
     output_dir = NULL,
-    plot = T
+    plot = T,
+    split = T
 ) {
 
   if (!is.null(output_dir)) {
@@ -127,7 +129,7 @@ viz_annotation <- function(
           gglist[[tmp_name]] <- gg
         }
 
-        if(require(ggpubr,quietly = T)) {
+        if(require(ggpubr,quietly = T) & !split) {
           results[["F1"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
           if(plot) {
             print(results[["F1"]])
@@ -215,7 +217,7 @@ viz_annotation <- function(
           }
         }
 
-        if(require(ggpubr,quietly = T)) {
+        if(require(ggpubr,quietly = T) & !split) {
           results[["R2"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
           if(plot) {
             print(results[["R2"]])
@@ -296,8 +298,8 @@ viz_annotation <- function(
       }
     }
 
-    if(require(ggpubr,quietly = T)) {
-      results[["CV"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
+    if(require(ggpubr,quietly = T) & !split) {
+      results[["CV"]] <- ggpubr::ggarrange(plotlist = gglist, ncol =1)
       if(plot) {
         print(results[["CV"]])
       }
@@ -376,7 +378,7 @@ viz_annotation <- function(
         gglist2[[paste(tmp_name, "confidence", "true")]] <- gg2
       }
     }
-    if(require(ggpubr,quietly = T)) {
+    if(require(ggpubr,quietly = T) & !split) {
       results[["confidence"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
       if("true" %in% colnames(data)) {
         results[["confidence_true"]] <- ggpubr::ggarrange(plotlist = gglist2, ncol = 1)

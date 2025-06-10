@@ -9,7 +9,8 @@ viz_annotation(
   type = c("f1", "R2", "cv", "conf"),
   show_top = 10,
   output_dir = NULL,
-  plot = T
+  plot = T,
+  split = T
 )
 }
 \arguments{
@@ -40,6 +41,8 @@ Column names:
 \item{output_dir}{character. Directory to save the plots. If NULL, plots are not saved.}
 
 \item{plot}{logical. If TRUE, plots are printed.}
+
+\item{split}{logical. If TRUE, plots are split into separate files.}
 }
 \value{
 list of ggplot objects
