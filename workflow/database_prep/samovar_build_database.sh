@@ -7,7 +7,7 @@ show_usage() {
     echo "Usage: samovar build_database [options]"
     echo ""
     echo "Options:"
-    echo "  --type TYPE       Type of database to build (kaiju or kraken2)"
+    echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique)"
     echo "  --config_path PATH Path to config YAML file"
     echo "  --db_path PATH    Path to store the database"
     echo ""
@@ -50,8 +50,8 @@ if [ -z "$type" ] || [ -z "$config_path" ] || [ -z "$db_path" ]; then
 fi
 
 # Validate database type
-if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ]; then
-    echo "Error: --type must be either 'kaiju' or 'kraken2'"
+if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ] && [ "$type" != "krakenunique" ]; then
+    echo "Error: --type must be either 'kaiju', 'kraken2', 'kraken', or 'krakenunique'"
     show_usage
     exit 1
 fi

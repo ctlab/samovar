@@ -10,6 +10,7 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 import yaml
 from .fasta_processor import process_fasta_directories
+from .fasta_processor import preprocess_fasta
 
 logging.basicConfig(
     level=logging.INFO,
@@ -339,13 +340,118 @@ def build_database_kaiju(
     
     logger.info(f"Kaiju database successfully built at {db_path}")
 
+def process_fasta_krakenunique(input_file: str, taxid: str, genome_name: str, db_path: str) -> tuple[str, str]:
+    """Process FASTA file for KrakenUniq database building.
+    
+    This function preprocesses a FASTA file and creates a genomes.map file entry.
+    
+    Args:
+        input_file (str): Path to the input FASTA file.
+        taxid (str): Taxonomy ID to be added to sequence headers.
+        genome_name (str): Name of the genome/assembly.
+        db_path (str): Path to the database directory.
+    
+    Returns:
+        tuple[str, str]: Paths to the processed FASTA file and genomes.map file.
+    """
+    # Preprocess the FASTA file
+    processed_fasta = os.path.join(db_path, os.path.basename(input_file))
+    preprocess_fasta(input_file, processed_fasta, mutation_rate=0, include_percent=100)
+    
+    # Create genomes.map entry
+    map_file = os.path.join(db_path, "genomes.map")
+    with open(map_file, 'a') as map_out:
+        for record in SeqIO.parse(processed_fasta, "fasta"):
+            # Get sequence ID (header without '>' up to first space)
+            seq_id = record.id.split()[0]
+            # Write to genomes.map
+            map_out.write(f"{seq_id}\t{taxid}\t{genome_name}\n")
+    
+    return processed_fasta, map_file
+
+def add_database_krakenunique(
+    input_file: str,
+    taxid: str,
+    genome_name: str,
+    db_path: str = "krakenuniq_db"
+) -> None:
+    """Add sequences to the KrakenUniq database library.
+    
+    This function processes a FASTA file and adds its sequences to the KrakenUniq database library
+    with proper taxonomy IDs and creates a genomes.map file.
+    
+    Args:
+        input_file (str): Path to the input FASTA file.
+        taxid (str): Taxonomy ID to associate with the sequences.
+        genome_name (str): Name of the genome/assembly.
+        db_path (str, optional): Path to the KrakenUniq database. Defaults to "krakenuniq_db".
+    
+    Raises:
+        FileNotFoundError: If the input file does not exist.
+    """
+    # Create database directory if it doesn't exist
+    os.makedirs(db_path, exist_ok=True)
+    
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    # Process the input file
+    process_fasta_krakenunique(input_file, taxid, genome_name, db_path)
+    
+    logger.info(f"Sequences successfully added to KrakenUniq database at {db_path}")
+
+def build_database_krakenunique(
+    db_path: str = "krakenuniq_db",
+    threads: int = 1
+) -> None:
+    """Build a custom KrakenUniq database from the library of sequences.
+    
+    This function builds a KrakenUniq database using the sequences that have been added to the library.
+    
+    Args:
+        db_path (str, optional): Path to the database directory. Defaults to "krakenuniq_db".
+        threads (int, optional): Number of threads to use for building. Defaults to 1.
+    
+    Note:
+        Building a large database can be memory-intensive and time-consuming.
+    """
+    # Check if krakenuniq is installed
+    try:
+        subprocess.run(['which', 'krakenuniq-build'], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        raise RuntimeError("krakenuniq-build not found. Please install KrakenUniq first.")
+
+    # Check if jellyfish is installed
+    try:
+        jellyfish_path = subprocess.run(['which', 'jellyfish'], check=True, capture_output=True, text=True).stdout.strip()
+    except subprocess.CalledProcessError:
+        raise RuntimeError("jellyfish not found. Please install Jellyfish first.")
+
+    # Set up environment variables
+    env = os.environ.copy()
+    env['JELLYFISH_BIN'] = jellyfish_path
+
+    build_cmd = [
+        "krakenuniq-build",
+        "--db", db_path,
+        "--threads", str(threads),
+        "--taxids-for-genomes",
+        "--taxids-for-sequences"
+    ]
+    
+    # Run command with modified environment
+    logger.info(f"Running command: {' '.join(build_cmd)}")
+    result = subprocess.run(build_cmd, check=True, text=True, env=env)
+    
+    logger.info(f"KrakenUniq database successfully built at {db_path}")
+
 def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path: str = "tests_outs/db"):
     """
     Build database from config file.
     
     Args:
         config_path: Path to config YAML file
-        db_type: Type of database to build ("kaiju" or "kraken2")
+        db_type: Type of database to build ("kaiju", "kraken2", or "krakenunique")
         db_path: Path to store the database
     """
     # Load configuration
@@ -373,5 +479,17 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
         get_taxonomy_db(db_path=db_path+"/taxonomy")
         build_database_kraken2(db_path=db_path, threads=1, kmer_len=35, 
                              minimizer_len=31, minimizer_spaces=7, skip_maps=True)
+    elif db_type == "krakenunique":
+        # Create output directory
+        os.makedirs(db_path, exist_ok=True)
+        # Get taxonomy database
+        get_taxonomy_db(db_path=db_path)
+        # Add each genome to the database
+        for input_file, taxid in zip(input_files, taxids):
+            # Use filename as genome name
+            genome_name = os.path.basename(input_file)
+            add_database_krakenunique(input_file, taxid, genome_name, db_path=db_path)
+        # Build the database
+        build_database_krakenunique(db_path=db_path, threads=1)
     else:
         raise ValueError(f"Unknown database type: {db_type}")
