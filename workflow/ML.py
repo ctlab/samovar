@@ -4,8 +4,16 @@ import pandas as pd
 from samovar.parse_annotators import Annotation, match_annotation
 from samovar.reprofiling import train_models, predict_taxid, save_model, plot_roc_curves
 
-def process_sample(sample_file, output_dir, model=None, label_encoder=None):
-    """Process a single sample with the trained model."""
+def process_sample(sample_file, output_dir, model=None, label_encoder=None, classify_unclassified=False):
+    """Process a single sample with the trained model.
+    
+    Args:
+        sample_file (str): Path to the sample file
+        output_dir (str): Directory to save output
+        model: Trained model to use for prediction
+        label_encoder: Label encoder for the model
+        classify_unclassified (bool): If False, sequences with all taxid fields = 0 will not be classified
+    """
     print(f"Processing {sample_file}...")
     df = pd.read_csv(sample_file)
     
@@ -14,6 +22,13 @@ def process_sample(sample_file, output_dir, model=None, label_encoder=None):
     
     # Make predictions
     result_df = predict_taxid(df, model_path=None if model is None else model)
+    
+    # If classify_unclassified is False, set prediction to 0 for sequences with all taxid fields = 0
+    if not classify_unclassified:
+        taxid_cols = [col for col in df.columns if col.startswith('taxid_')]
+        unclassified_mask = (df[taxid_cols] == 0).all(axis=1)
+        result_df.loc[unclassified_mask, 'taxid_SAMOVAR'] = 0
+        result_df.loc[unclassified_mask, 'taxid_SAMOVAR_confidence'] = 0
     
     # Save results
     output_file = os.path.join(output_dir, f"{os.path.basename(sample_file).split('.')[0]}_reprofiled.csv")
@@ -28,6 +43,8 @@ parser.add_argument("--validation_file", "-v", type=str, required=True,
                     help="File containing validation data")
 parser.add_argument("--output_dir", "-o", type=str, required=True,
                     help="Directory to save output files")
+parser.add_argument("--classify-unclassified", action="store_true",
+                    help="If set, will attempt to classify sequences that have all taxid fields = 0")
 args = parser.parse_args()
 
 # Create output directory if it doesn't exist
@@ -80,4 +97,5 @@ for filename in os.listdir(args.reprofiling_dir):
         process_sample(
             sample_file, 
             args.output_dir, 
-            model=best_model)
+            model=best_model,
+            classify_unclassified=args.classify_unclassified)
