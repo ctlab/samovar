@@ -16,6 +16,14 @@ DUMMY_TOOL_NAMES = {
     "random",
 }
 
+# Thin CLI wrappers that already append ``-p <tool>`` and forward custom.sh flags.
+CUSTOM_WRAPPER_SCRIPTS = {
+    "custom.sh",
+    "centrifuge.sh",
+    "metauto.sh",
+    "assembly_hybrid.sh",
+}
+
 
 class BaseAnnotator:
     """Base class for taxonomic annotators.
@@ -288,6 +296,17 @@ class KrakenUniqAnnotator(BaseAnnotator):
         return df[["seq", "taxID"]]
 
 
+def _cmd_is_custom_wrapper(cmd: str) -> bool:
+    """True if ``cmd`` already points at custom.sh or a tool-specific wrapper."""
+    if not cmd:
+        return False
+    text = str(cmd)
+    if "custom.sh" in text:
+        return True
+    token = text.split()[-1]
+    return os.path.basename(token) in CUSTOM_WRAPPER_SCRIPTS
+
+
 class CustomAnnotator(BaseAnnotator):
     """Generic Annotator class for any tool handled by custom.sh."""
 
@@ -310,17 +329,20 @@ class CustomAnnotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
-        cmd = (
-            f"{self.cmd} "
+        # ``--centrifuge "centrifuge $DB"`` stores the binary as cmd; custom.sh
+        # is the router that translates -i/-I/-d/-o/-p into the native CLI.
+        cmd = self.cmd if _cmd_is_custom_wrapper(self.cmd) else self.default_cmd
+        extra = self.extra or ""
+        return (
+            f"{cmd} "
             f"-i {input_r1} "
             f"-I {input_r2} "
             f"-d {self.db_path} "
             f"-o {out_file} "
             f"-p {self.tool_name} "
             f"-t {self.threads} "
-            f"{self.extra}"
+            f"{extra}"
         )
-        return cmd
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
         # Safe reading for empty files

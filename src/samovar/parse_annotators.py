@@ -15,6 +15,7 @@ import pickle
 from pathlib import Path
 
 from samovar.annotators_wrapper import get_annotator_instance
+from samovar.taxonomy_engine import NCBITaxonomyParser
 
 # `ete3` imports its webplugin unconditionally, and the webplugin imports the
 # stdlib `cgi` module. Python 3.13 removed `cgi`, so importing ete3 fails
@@ -445,16 +446,8 @@ def _load_nodes_cache(nodes_path: str) -> Dict[int, tuple]:
         with open(cache_file, "rb") as fh:
             return pickle.load(fh)
 
-    tree = {}
-    with open(nodes_path, "r", encoding="utf-8", errors="ignore") as fh:
-        for line in fh:
-            parts = line.split("\t|\t")
-            if len(parts) < 3:
-                continue
-            taxid = int(parts[0].strip())
-            parent = int(parts[1].strip())
-            rank = parts[2].strip()
-            tree[taxid] = (parent, rank)
+    parser = NCBITaxonomyParser(nodes_path)
+    tree = parser.tree
 
     with open(cache_file, "wb") as fh:
         pickle.dump(tree, fh, protocol=pickle.HIGHEST_PROTOCOL)
@@ -733,6 +726,9 @@ READ_FUNCTIONS = {
     "constant": read_custom_raw,
     "random": read_custom_raw,
     "custom": read_custom_raw,
+    "centrifuge": read_custom_raw,
+    "metauto": read_custom_raw,
+    "assembly_hybrid": read_custom_raw,
 }
 
 
@@ -1071,6 +1067,9 @@ def match_annotation(annotation_name:str) -> Optional[str]:
         "constant9606": "constant9606",
         "constant": "constant",
         "random": "random",
+        "centrifuge": "centrifuge",
+        "metauto": "metauto",
+        "assembly_hybrid": "assembly_hybrid",
     }
     if arg in aliases:
         return aliases[arg]
