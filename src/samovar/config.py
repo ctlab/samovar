@@ -97,6 +97,9 @@ class PipelineConfig:
                     dummy_aliases = {"dummy", "dummy9606", "constant9606", "constant", "random"}
                     if run_name.lower() in dummy_aliases or type_name.lower() in dummy_aliases:
                         type_name = "constant9606"
+                    # Konstantaza CLI: --custom-test "metauto /path/to/db"
+                    if run_name.lower() in {"custom", "custom-test", "custom_test"}:
+                        run_name = type_name
                     
                     config.annotators.append(AnnotatorConfig(
                         run_name=run_name,
@@ -313,10 +316,20 @@ $R_PATH -s -f "workflow/compare_annotations.R" \\
     --show_top 0
 
 # Train and test ML
+if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
+    echo "[INFO] Extracting per-read features for ML ensemble..."
+    cat $out_dir/initial/*_R1.fastq > $out_dir/combined_temporary_R1.fastq
+    $PYTHON_PATH src/annotators/fastq_annotator.py $out_dir/combined_temporary_R1.fastq -o $out_dir/features.tsv --chunk_size 50000
+    rm -f $out_dir/combined_temporary_R1.fastq
+    FEATURE_ARG="--features $out_dir/features.tsv"
+else
+    FEATURE_ARG=""
+fi
 $PYTHON_PATH workflow/ML.py \\
     --reprofiling_dir $out_dir/initial_annotations \\
     --validation_file $out_dir/regenerated_annotations/combined_annotation_table.csv \\
-    --output_dir $out_dir/reprofiled_annotations
+    --output_dir $out_dir/reprofiled_annotations \\
+    $FEATURE_ARG
 
 # Check reprofiled results
 $R_PATH -s -f "workflow/compare_annotations.R" \\
