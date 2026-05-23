@@ -26,6 +26,26 @@ def _tool_name_from_column(col: str) -> Optional[str]:
     return tool
 
 
+def merge_read_features(df: pd.DataFrame, features_df: pd.DataFrame) -> pd.DataFrame:
+    """Join per-read features (fastq_annotator) onto an annotation table."""
+    if features_df is None or features_df.empty:
+        return df
+    feats = features_df.copy()
+    if "read_id" in feats.columns and "seq" not in feats.columns:
+        feats = feats.rename(columns={"read_id": "seq"})
+    if "seq" not in df.columns or "seq" not in feats.columns:
+        return df
+    return pd.merge(df, feats, on="seq", how="left")
+
+
+def load_read_features(path: Optional[str]) -> Optional[pd.DataFrame]:
+    """Load a TSV/CSV of per-read features, or None if missing."""
+    if not path or not os.path.exists(path):
+        return None
+    sep = "\t" if path.endswith((".tsv", ".txt")) else ","
+    return pd.read_csv(path, sep=sep)
+
+
 def annotator_taxid_columns(df: pd.DataFrame) -> list:
     """Return annotator taxid columns, ignoring SAMOVAR outputs and confidence."""
     return [col for col in df.columns if _tool_name_from_column(col) is not None]
@@ -93,6 +113,13 @@ def preprocess_data(df):
     if 'length' not in df.columns:
         df['length'] = 0
     df['length'] = pd.to_numeric(df['length'], errors='coerce').fillna(0).astype(int)
+
+    # Optional biological features from fastq_annotator (gc, shannon, kmer_pca_*, …)
+    skip = {"true", "length"}
+    for col in df.columns:
+        if col in skip or col.startswith("taxid_"):
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     
     # Convert true to numeric and handle NaN values
     if 'true' in df.columns:
