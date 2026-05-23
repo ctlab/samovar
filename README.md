@@ -1,241 +1,108 @@
-# SamovaR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
-### Automated re-profiling & benchmarking of metagenomic tools based on artificial data generation
+# SamovaR: Advanced Metagenomic Benchmarking and ML Re-profiling Ensemble
 
+> **Attribution and Code Authorship Notice:** > This repository is a fork and extension of the original [SamovaR project by ctlab](https://github.com/ctlab/samovar). The core artificial metagenome generation algorithms belong to the original authors. 
+> 
+> **My specific contributions to this project include:**
+> * **Architectural Refactoring:** Transitioning the pipeline to an Object-Oriented Programming paradigm (developing the `BaseAnnotator` class and specific adapters).
+> * **Universal Wrapper:** Developing `custom.sh` to seamlessly integrate any third-party taxonomic classifier.
+> * **Tool Integration:** Adding support for Centrifuge (FM-index), Metauto (Custom Deep Learning AutoEncoder), and a Hybrid Assembly-Mapping pipeline (MEGAHIT + Bowtie2 + Kraken2).
+> * **Biological Feature Extraction:** Implementing scripts to extract physical read properties (GC-content, sequence length, k-mer distributions).
+> * **ML Ensemble:** Developing a Machine Learning pipeline that acts as a voting classifier to correct and re-profile metagenomic annotations.
 
-[![R package](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml)
-[![python package](https://github.com/ctlab/samovar/actions/workflows/python-package.yml/badge.svg)](https://github.com/ctlab/samovar/actions/workflows/python-package.yaml)
+## Project Structure and Specific Contributions
+To implement the ML-ensemble and new annotators, the original monolithic architecture was heavily refactored. The following key files were created or significantly modified as part of my work:
 
-There is a fundamental problem in modern ***metagenomics***: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. 
+* **Mock Community Generation:**
+  * `generate_mock_community.sh`: Created to synthesize a highly complex artificial community comprising exactly 10 bacteria, 10 archaea, 10 eukaryotes, and 10 viruses. This was specifically designed to stress-test annotators and prove the ML ensemble's efficacy on difficult data.
+* **Environment and Setup:**
+  * `environment.yml` (Strict dependency management)
+* **OOP Core and Parsers:**
+  * `src/samovar/parse_annotators.py` (Refactored to OOP)
+  * `src/samovar/annotators_wrapper.py` (New wrapper class)
+  * `src/samovar/taxonomy_engine.py` (New taxonomy standardization logic)
+* **Adapters and Custom Wrappers:**
+  * `src/annotators/custom.sh` (The universal tool router)
+  * `src/annotators/centrifuge.sh`, `src/annotators/metauto.sh`, `src/annotators/assembly_hybrid.sh` (Tool-specific logic)
+  * `src/annotators/metauto.py`, `src/annotators/fastq_annotator.py` (Python logic and DL integration)
+* **Workflow and Data Formatting:**
+  * `workflow/annotators/Snakefile` (Refactored to support the dynamic addition of custom annotators)
+  * `workflow/combine_annotation_tables.py` and `workflow/compare_annotations.R` (Significantly modified to ensure correct data format standardization and matrix generation)
+* **Machine Learning Engine:**
+  * `workflow/ML.py` (Feature extraction and training pipeline)
+  * `models/samovar_ensemble.joblib` (Trained voting classifier)
 
-The use of golden practice and open code, while allowing data to be analyzed reproducibly, locks scientists into a single, far from perfect approach, with its own bias.
+## Conceptual Background
+The fundamental problem in metagenomic analysis is the lack of objective truth in real environmental samples. Running different annotation tools yields contradictory taxonomic profiles. 
 
-Therefore, we propose an approach that utilizes de novo generation of the artificial metagenomes - `SamovaR`.
+Our core hypothesis is based on the concept of **ML Ensembles**. Different algorithms excel in different parts of the n-dimensional feature space. For example, Kraken excels at classifying well-known bacteria, Kaiju is better suited for Archaea and Eukaryota, while MetaPhlAn is highly accurate on human gut microbiomes. 
 
-## Installation
+Instead of relying on a single tool, SamovaR aggregates predictions. Even a weak annotator can improve the ensemble's overall quality if it correctly classifies a specific, previously mishandled subset of the data. 
 
-### Quick Installation
+### How it Works
+1. Real reads are initially annotated.
+2. An artificial metagenome (with a known ground truth) is generated based on these profiles.
+3. The artificial reads are re-annotated by the same tools.
+4. A Machine Learning model (voting classifier) is trained on the discrepancies between the annotators predictions and the ground truth, incorporating extracted physical features of the reads.
+5. The trained model is applied to correct the final profile.
 
-<b><font color="red">Warning:</font></b> beta
+## System Requirements
+* **OS:** Linux (Ubuntu 20.04+ recommended)
+* **CPU:** 8+ cores (highly recommended for MEGAHIT assembly and Deep Learning tasks)
+* **RAM:** 32GB minimum (required for large databases and ML training)
+* **Environment:** Python 3.9+, Bash, and Conda.
 
-Use installation script:
+## Installation Instructions
+To ensure full reproducibility, all dependencies are managed via Conda.
 
 ```bash
-git clone https://github.com/ctlab/samovar
+git clone git@github.com:Konstantaza/samovar.git
 cd samovar
-chmod +x install.sh
-./install.sh
-```
 
-***Attention**: the script automatically detects custom R library paths from `.Renviron` (R_LIBS) or `.Rprofile` (libPaths())*
+# Create and activate the environment
+conda env create -f environment.yml
+conda activate full_samovar_env
 
-### Manual Installation
+## Architecture and Custom Annotators
+To allow the pipeline to work with any third-party software, the `BaseAnnotator` class standardizes data formats and provides a unified interface.
 
-Install **R** package:
+To act as a bridge for new tools, the `src/annotators/custom.sh` script was created. As a Proof of Concept, we integrated three fundamentally different algorithms:
+1.  **Centrifuge:** An FM-index based annotator looking for exact matches.
+2.  **Metauto (DL):** A custom neural network utilizing an AutoEncoder to extract hidden patterns from k-mer frequencies.
+3.  **Assembly-Hybrid:** A pipeline that assembles reads into contigs (`MEGAHIT`), classifies the contigs (`Kraken2`), maps the original reads back to the contigs (`Bowtie2`), and projects the taxonomy back to the individual reads.
 
-```r
-devtools::install_github("https://github.com/ctlab/samovar/")
-```
-
-***Attention:*** *check that samovar can be loaded with* ```Rscript -e 'library(samovar)'```, *especially in case of several R versions installed*
-
-Install **python** package:
-
+### Running the Pipeline
 ```bash
-git clone https://github.com/ctlab/samovar
-cd samovar
-pip install -e .
-```
-***Attention:*** *most samovar usage require properly configurated file in build/config.json*
-
-## Usage
-### Cross-validation and re-profiling
-
-Example usage:
-```bash
-# Generate reads for benchmarking (skip for real data)
-samovar generate \
-    --genome_dir $SAMOVAR/data/test_genomes/meta \
-    --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
-    --output_dir samovar
-
-# Generate pipeline (for example, kraken2 + kaiju )
-## specify --input_dir for real data
 samovar preprocess \
-    --output_dir samovar \
-    --kraken2-test "kraken2 $DB_KRAKEN2" \
-    --kaiju-test "kaiju $DB_KAIJU"
-
-# Run the pipeline(s)
-samovar exec --output-dir samovar
+    --output_dir samovar_out \
+    --custom-test "metauto /path/to/db" \
+    --custom-test "centrifuge /path/to/db" \
+    --custom-test "assembly_hybrid /path/to/kraken_db" \
+    --threads 16
 ```
 
-Results and flexibility of the tool can be improved with specification of config files. Please folow wiki, or see {samovar_function} -h
+## Results & Biological Validation
+To push the limits of the metagenomic annotators, we generated a highly complex artificial mock community (10 Bacteria, 10 Archaea, 10 Eukaryotes, and 10 Viruses).
+*(Note: Complete R-generated visual reports can be found in the root directory file `Rplots.pdf`)*.
 
-Manual example:
-```bash
-cd samovar
-bash workflow/pipeline.sh
-```
+### Annotator Discrepancies
+Single algorithms have different blind spots and generate non-overlapping errors. For instance, reads that Centrifuge classifies confidently might be completely unclassified by Metauto, and vice versa. 
 
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
-graph TD
-    subgraph Input
-        subgraph Metagenomes
-            A1[FastQ files]
-            A2([InSilicoSeq config])
-        end
-        A3([SAMOVAR config])
-    end
+* **Cross-Validation Agreement (Metauto vs Centrifuge):**
+  *Located in: `tests_outs/benchmarking/initial_annotations_plots/`*
+  
+  ![Agreement Matrix](tests_outs/benchmarking/initial_annotations_plots/CV_metauto%20vs%20centrifuge.png)
 
-    subgraph Processing
-        Metagenomes --> C[Initial annotation]
-        A3 --> C
-        A3 --> F
-        A3 --> E[Metagenome generation]
-        C --> E
-        E --> F[Re-annotation]
-    end
-    
+### ML Ensemble Performance
+The ML ensemble (RandomForest/AdaBoost) successfully aggregates weak predictions and biological features. While individual baseline tools may struggle on highly complex communities, the voting classifier effectively compensates for individual errors.
 
-    subgraph Results
-        F --> G1[Annotators scores]
-        F --> ML
-        subgraph Re-profiling
-            C --> R
-            ML --> R[Corrected results]
-        end
-        C --> C1[Cross-validation]
-    end
+* **F1-Score Comparison:**
+  *Located in: `tests_outs/benchmarking/ml_results_plots/`*
+  
+  ![F1 Score: SamovaR](tests_outs/benchmarking/ml_results_plots/F1_samovar.png)
 
-    style Input fill:#90ee9020,stroke:#333,stroke-width:2px
-    style Metagenomes fill:#b2ee9020,stroke:#333,stroke-width:2px
-    style Processing fill:#ee90bf20,stroke:#333,stroke-width:2px
-    style Results fill:#90d8ee20,stroke:#333,stroke-width:2px
-    style Re-profiling fill:#90a4ee20,stroke:#333,stroke-width:2px
-```
+* **ROC-AUC Performance:**
+  *Located in: `tests_outs/benchmarking/ml_results/`*
+  
+  ![ROC Curve](tests_outs/benchmarking/ml_results/roc_comparison.png)
 
-### Artificial metagenome reneration
-Basic usage described in <a href="./vignettes">**vignettes**</a> and <a href="https://github.com/ctlab/samovar/wiki">**wiki**</a>
-
-You can also try the generator with <a href="https://dsmutin.shinyapps.io/samovaR/">**web** shiny app</a>
-
-
-#### R generation
-
-<a href="https://github.com/ctlab/samovar/blob/main/samovaR.pdf">See description</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
-
-``` r
-library(samovaR)
-
-# download data
-teatree <- GMrepo_type2data(number_to_process = 2000)
-
-# filter
-tealeaves <- teatree %>%
-  teatree_trim(treshhold_species = 3, treshhold_samples = 3, treshhold_amount = 10^(-3))
-
-# normalizing
-teabag <- tealeaves %>%
-  tealeaves_pack()
-
-# clustering
-concotion <- teabag %>%
-  teabag_brew(min_cluster_size = 4, max_cluster_size = 6)
-
-# building samovar
-samovar <- concotion %>%
-  concotion_pour()
-
-# generating new data
-new_data <- samovar %>%
-  samovar_boil(n = 100)
-```
-
-<a src="https://github.com/ctlab/samovar/blob/main/samovaR_man.pdf">Documentation</a> for the **R package**
-
-#### Pipeline
-
-<img src="data/img/additional/algo.png" width = 50%>
-
-## Components
-
-- **R** package `samova.R` for the artificial abundance table generation
-- Pipeline for the automated benchmarking and re-profiling
-
-## Project Structure
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
-graph LR
-    A[SamovaR] --> G1[Abundance table generation]
-    G1 --> B[R Package]
-    A --> G2[Automated re-profiling]
-    G2 --> C[snakemake + Python Pipeline]
-    G1 --> G[Shiny App]
-
-    B --> B1[R/]
-    B --> B2[man/]
-    B --> B3[vignettes/]
-
-    C --> C1[workflow/]
-    C --> C2[src/]
-
-    G --> H[shiny/]
-```
-
-
-## References
-- Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
-
-
-## Dependencies
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
-graph LR
-    subgraph "R Package Dependencies"
-        subgraph "Main"
-            direction LR
-            tidyverse
-            scclust
-            Matrix
-            methods
-        end
-        
-        subgraph "Visualization"
-            direction LR
-            ggplot
-            plotly
-            ggnewscale
-        end
-        
-        subgraph "API"
-            direction LR
-            httr
-            jsonlite
-            xml2
-        end
-    end
-    
-    subgraph "Automated Benchmarking"
-        subgraph "Major"
-            direction LR
-            samova.R
-            R::yaml
-            SnakeMake
-            InSilicoSeq
-        end
-        
-        subgraph "Python packages"
-            direction LR
-            numpy
-            pandas
-            requests
-            ete3
-            scikit-learn
-        end
-    end
-    
-    linkStyle default stroke:#000
-```
+**Conclusion:** The classification by voting using the ML-ensemble significantly increases metrics like ROC-AUC and stabilizes the cross-validation process, extracting maximum information from the metagenomic data even when single tools fail.
