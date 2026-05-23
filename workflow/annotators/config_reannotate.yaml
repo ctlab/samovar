@@ -4,17 +4,26 @@ r2_dir: "tests_outs/benchmarking/regenerated"
 output_dir: "tests_outs/benchmarking/regenerated_reports"
 
 # Run names
-# issue2fix: run name can not contain "_"
 run_config: [
   {
-    "run_name": "k2-custom",
-    "type": "kraken2",
-    "db_path": "tests_outs/kraken_db"
+    "run_name": "metauto-dl",
+    "type": "metauto",
+    "db_path": "models/model.pt",
+    "extra": "metauto",
+    "threads": 16
   },
   {
-    "run_name": "kaiju",
-    "type": "kaiju",
-    "db_path": "/mnt/metagenomics/kaiju",
-    "db_name": "kaiju_db_progenomes.fmi"
+    "run_name": "centrifuge-run",
+    "type": "centrifuge",
+    "db_path": "db/centrifuge/custom_idx",
+    "extra": "centrifuge",
+    "threads": 16
+  },
+  {
+    "run_name": "assembly-pipeline",
+    "type": "assembly_hybrid",
+    "db_path": "db/kraken2",
+    "extra": "assembly_hybrid",
+    "threads": 16
   }
 ]

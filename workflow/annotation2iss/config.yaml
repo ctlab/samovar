@@ -8,4 +8,4 @@ email: "test@samovar.com"
 
 # Read simulation parameters
 read_length: 150
-coverage: 30 
+coverage: 30

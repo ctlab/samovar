@@ -77,11 +77,19 @@ rule generate_host_reads:
     shell:
         """
         mkdir -p {params.outdir}
-        iss generate \
-            --genomes {params.host_genome} \
-            --model {params.model} \
-            --output {params.outdir}/{wildcards.sample}_host \
-            --n_reads {params.n_reads}
+        
+        # Bypass InSilicoSeq multithreading bug for 1 or 2 reads
+        if [ "{params.n_reads}" -le 2 ]; then
+            echo "" > {output.r1}
+            echo "" > {output.r2}
+        else
+            iss generate \
+                --genomes {params.host_genome} \
+                --model {params.model} \
+                --output {params.outdir}/{wildcards.sample}_host \
+                --n_reads {params.n_reads} \
+                --cpus 1
+        fi
         """
 
 # Rule to generate reads for a single genome
@@ -98,11 +106,19 @@ rule generate_metagenome_reads:
     shell:
         """
         mkdir -p {params.outdir}
-        iss generate \
-            --genomes {input.genome} \
-            --model {params.model} \
-            --output {params.outdir}/{wildcards.sample}_{wildcards.genome} \
-            --n_reads {params.n_reads}
+        
+        # Bypass InSilicoSeq multithreading bug for 1 or 2 reads
+        if [ "{params.n_reads}" -le 2 ]; then
+            echo "" > {output.r1}
+            echo "" > {output.r2}
+        else
+            iss generate \
+                --genomes {input.genome} \
+                --model {params.model} \
+                --output {params.outdir}/{wildcards.sample}_{wildcards.genome} \
+                --n_reads {params.n_reads} \
+                --cpus 1
+        fi
         """
 
 # Rule to concatenate all reads for a sample - this generates the final output files

@@ -7,11 +7,12 @@ import re
 import glob
 import pandas as pd
 import subprocess
-from .genome_fetcher import fetch_genome
-from typing import List, Union
+import warnings
 import yaml
 import json
 import tempfile
+from typing import List, Union
+from .genome_fetcher import fetch_genome
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
     """
@@ -25,7 +26,7 @@ def parse_annotation_table(table_path: str) -> pd.DataFrame:
         the count of occurrences for that annotation method
     """
     # Read the input table
-    df = pd.read_csv(table_path, sep=",")
+    df = pd.read_csv(table_path, sep="\t")
     
     # Get all taxid columns (they contain 'taxid' in their name)
     taxid_cols = [col for col in df.columns if 'taxid' in col.lower()]
@@ -35,8 +36,7 @@ def parse_annotation_table(table_path: str) -> pd.DataFrame:
     
     # For each taxid column, calculate counts
     for col in taxid_cols:
-        # Get the annotation name from the column name (e.g., 'k1' from 'taxID_k1')
-        ann_name = col.split('_')[-2]
+        ann_name = col.lower().replace('taxid_', '')
         
         # Count occurrences of each taxid
         taxid_counts = df.groupby(col).size().reset_index()
@@ -85,25 +85,16 @@ def generate_reads_genome(
 ) -> None:
     """
     Generate simulated reads from a genome file.
-    
-    Args:
-        genome_file: Path to genome FASTA file
-        output_file: Path to output FASTQ file
-        amount: Number of reads to generate
-        read_length: Length of reads to generate
-        model: Model to use for simulation
     """
-    
     if genome_file is not None and os.path.exists(genome_file):
-
         cmd = f"""
             iss generate \
                 --genomes {genome_file} \
                 --model {model} \
                 --output {output_file} \
-                --n_reads {amount}
+                --n_reads {amount} \
+                --cpus 1
         """ 
-
         subprocess.run(cmd, shell=True)
 
 def generate_reads_metagenome(
@@ -118,18 +109,7 @@ def generate_reads_metagenome(
 ) -> None:
     """
     Generate simulated reads from a metagenome.
-    
-    Args:
-        genome_dir: Directory containing genome files
-        output_dir: Path to output FASTQ file
-        read_length: Length of reads to generate
-        amount: Number of reads to generate
-        total_amount: Total number of reads to generate
-        annotator_name: Name of the annotator
-        sample_name: Name of the sample
-        model: Model to use for simulation with ISS
     """
-    
     if total_amount is not None:
         amount = [int(N/sum(amount) * total_amount) for N in amount]
     else:
@@ -140,36 +120,38 @@ def generate_reads_metagenome(
 
     for genome_file, N in zip(genome_files, amount):
         if N > 0:
-            generate_reads_genome(
-                genome_file, 
-                os.path.join(
-                    output_dir, 
-                    f"{sample_name}_{annotator_name}_{os.path.basename(genome_file).split('.')[0]}"), 
-                int(N), read_length, model)
+            output_prefix = os.path.join(
+                output_dir, 
+                f"{sample_name}_{annotator_name}_{os.path.basename(genome_file).split('.')[0]}"
+            )
+            
+            if N <= 2:
+                with open(f"{output_prefix}_R1.fastq", "w") as f1, open(f"{output_prefix}_R2.fastq", "w") as f2:
+                    f1.write("")
+                    f2.write("")
+            else:
+                generate_reads_genome(genome_file, output_prefix, int(N), read_length, model)
     
     # Merge all reads into a single file
-    
     output_file_R1 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
     output_file_R2 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq")
-    
-    # Check if there are any reads
-    if not glob.glob(os.path.join(output_dir, f"{sample_name}_{annotator_name}_*_R1.fastq")):
-        cmd = f"""
-        echo "" > {output_file_R1}
-        echo "" > {output_file_R2}
-        """
-    else:
-        cmd = f"""
-        cat $(ls {output_dir}/{sample_name}_{annotator_name}_*_R1.fastq | grep -v ".iss.tmp.") >> {output_file_R1}
-        cat $(ls {output_dir}/{sample_name}_{annotator_name}_*_R2.fastq | grep -v ".iss.tmp.") >> {output_file_R2}
-        """ 
-        
-    subprocess.run(cmd, shell=True)
+    valid_r1 = [f for f in glob.glob(os.path.join(output_dir, f"{sample_name}_{annotator_name}_*_R1.fastq")) if ".iss.tmp." not in f]
+    valid_r2 = [f for f in glob.glob(os.path.join(output_dir, f"{sample_name}_{annotator_name}_*_R2.fastq")) if ".iss.tmp." not in f]
 
-    # Cleanup
+    if not valid_r1:
+        subprocess.run(f'echo "" > {output_file_R1}', shell=True)
+        subprocess.run(f'echo "" > {output_file_R2}', shell=True)
+    else:
+        subprocess.run(f'cat {" ".join(valid_r1)} >> {output_file_R1}', shell=True)
+        subprocess.run(f'cat {" ".join(valid_r2)} >> {output_file_R2}', shell=True)
+
+    # Cleanup (Removed the duplicated buggy block)
     for file in glob.glob(os.path.join(output_dir, f"{annotator_name}*")):
         if not os.path.basename(file).startswith("full"):
-            os.remove(file)
+            try:
+                os.remove(file)
+            except OSError:
+                pass
 
 def regenerate_metagenome(
     genome_files: List[str],
@@ -208,19 +190,7 @@ def process_annotation_table(
 ) -> None:
     """
     Process taxonomy table and generate simulated reads for each taxid. Inherits from process_abundance_table.
-    
-    Args:
-        table_path: Path to taxonomy table file
-        genome_dir: Directory containing genome files
-        output_dir: Directory to write output files
-        read_length: Length of reads to generate
-        email: Email for NCBI Entrez
-        reference_only: If True, only fetch reference genome
-        model: Model to use for simulation with ISS
-        sample_name: Name of the sample
-        total_amount: Total number of reads to generate
     """
-    # Read taxonomy table
     abundance_table = parse_annotation_table(table_path)
     process_abundance_table(
         table=abundance_table,
@@ -247,23 +217,9 @@ def process_abundance_table(
 ) -> pd.DataFrame:
     """
     Process abundance table and generate simulated reads for each taxid.
-    
-    Args:
-        table: Path to taxonomy table file or pandas DataFrame
-        genome_dir: Directory containing genome files
-        output_dir: Directory to write output files
-        read_length: Length of reads to generate
-        email: Email for NCBI Entrez
-        reference_only: If True, only fetch reference genome
-        model: Model to use for simulation with ISS
-        sample_name: Name of the sample
-        total_amount: Total number of reads to generate
-        
-    Returns:
-        DataFrame containing the filtered abundance table with only available genomes
     """
     if isinstance(table, str):
-        abundance_table = pd.read_csv(table, sep=",")
+        abundance_table = pd.read_csv(table, sep="\t")
     else:
         abundance_table = table
     
@@ -275,24 +231,31 @@ def process_abundance_table(
 
     # Try to fetch missing genomes
     available_genomes = []
+    print(f"DEBUG: Processing taxids from table: {abundance_table['taxid'].unique()}")
     for taxid in abundance_table['taxid']:
         taxid = str(taxid).split(".")[0]
         genome_file = get_genome_file(genome_dir, taxid)
         if genome_file is None:
+            print(f"DEBUG: Genome {taxid} not found in {genome_dir}, fetching...")
             genome_file = fetch_genome(taxid, genome_dir, email, reference_only=True)
         if genome_file is not None:
+            print(f"DEBUG: Found genome for {taxid}: {genome_file}")
             available_genomes.append((taxid, genome_file))
+        else:
+            print(f"DEBUG: Still could not find/fetch genome for {taxid}")
 
-    # Raise error if no genomes are available
+    # [FIX]: Use warnings.warn instead of raise Warning so it actually returns None
     if not available_genomes:
-        file=os.path.join(output_dir, f"{sample_name}_R1.fastq")
-        with open(file, "w") as f:
+        print("DEBUG: available_genomes is empty!")
+        os.makedirs(output_dir, exist_ok=True)
+        file_r1 = os.path.join(output_dir, f"{sample_name}_R1.fastq")
+        with open(file_r1, "w") as f:
             f.write("")
-        file=os.path.join(output_dir, f"{sample_name}_R2.fastq")
-        with open(file, "w") as f:
+        file_r2 = os.path.join(output_dir, f"{sample_name}_R2.fastq")
+        with open(file_r2, "w") as f:
             f.write("")
         
-        raise Warning("No genome files available for any taxid")
+        warnings.warn("No genome files available for any taxid")
         return None
 
     # Filter abundance table to only include available genomes
@@ -305,8 +268,8 @@ def process_abundance_table(
         annotator_name = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator).group(1)
         amount = filtered_table[N_annotator].tolist()
         taxid = filtered_table['taxid'].tolist()
-        genome_files = [get_genome_file(genome_dir, taxid) for taxid in taxid]
-        genome_files = [f for f in genome_files if f is not None]  # Filter out None values
+        genome_files = [get_genome_file(genome_dir, t) for t in taxid]
+        genome_files = [f for f in genome_files if f is not None]
         
         os.makedirs(output_dir, exist_ok=True)
         
@@ -330,11 +293,6 @@ def samovar_annotation_regenerate(
 ) -> None:
     """
     Regenerate taxonomy tables to a SAMOVAR table.
-
-    Args:
-        config_samovar: Path to SAMOVAR config file in yaml format. Default if None.
-        annotation_dir: Path to annotation directory
-        output_dir: Path to output directory
     """
     if config_samovar is None:
         tmp_file = tempfile.mktemp()
@@ -347,7 +305,6 @@ def samovar_annotation_regenerate(
             }, f)
         config_samovar = tmp_file
 
-    # Read config file as YAML
     with open(config_samovar, 'r') as f:
         config_samovar_dict = yaml.safe_load(f)
 

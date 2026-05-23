@@ -1,22 +1,42 @@
-generate_docs_pdf.R
-.Rproj.user
-vignettes/Rplots.pdf
-tests/__pycache__
-.coverage
-.snakemake
-tests_outs/
-tests_outs*
-src/samovar/__pycache__
-src/__pycache__
-.vscode
-taxdump.tar.gz
-.Rprofile
-data/test_genomes/meta/9606.fna
-tests/test_that/*.pdf
+# Databases 
+/db
+/tests_outs/kaiju_db/
+/tests_outs/kraken_db/
+/taxdump.tar.gz
+
+# FASTQ and FASTA files 
+/genomes/mock_community/*.fa
+/tests_outs/benchmarking/initial/*.fastq
+/tests_outs/benchmarking/regenerated/*.fastq
+/tests/data/reads/*.fastq
+/tests_outs/benchmarking/combined_temporary_R1.fastq
+/tests/data/reads/*.vcf
+
+# Caches & R
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
 .Rhistory
-.pytest_cache
-project
-.coverage*
-build/config.json
+.RData
+.Ruserdata
 Rplots.pdf
-samovar_*/
+/r_library/
+
+# ML Models (CRITICAL)
+/models/*.pt
+/models/*.joblib
+
+# Heavy Result Tables & Features 
+/tests_outs/benchmarking/features.tsv
+/tests_outs/benchmarking/initial_annotations/*.csv
+/tests_outs/benchmarking/regenerated_annotations/*.csv
+/tests_outs/benchmarking/ml_results/*.csv
+/tests_outs/benchmarking/initial_reports/*.out
+/tests_outs/benchmarking/regenerated_reports/*.out
+/tests_outs/benchmarking/genomes/
+
+# Temp
+centrifuge_report.tsv
+/build/config.json
+.snakemake/

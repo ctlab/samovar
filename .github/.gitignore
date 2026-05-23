@@ -1,1 +1,63 @@
 *.html
+# ========================
+# Databases 
+# ========================
+/db
+/tests_outs/kaiju_db/
+/tests_outs/kraken_db/
+/taxdump.tar.gz
+
+# ========================
+# FASTQ and FASTA files 
+# ========================
+/genomes/mock_community/*.fa
+/tests_outs/benchmarking/initial/*.fastq
+/tests_outs/benchmarking/regenerated/*.fastq
+/tests/data/reads/*.fastq
+/tests_outs/benchmarking/combined_temporary_R1.fastq
+
+# ========================
+# Python Caches
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# ========================
+# R Caches & Compiled Libraries
+# ========================
+.Rhistory
+.RData
+.Ruserdata
+Rplots.pdf
+/r_library/
+
+# ========================
+# Temporary & Stray Files
+# ========================
+centrifuge_report.tsv
+/build/config.json
+
+# ========================
+# ML Models 
+# ========================
+/models/*.pt
+/models/*.joblib
+
+# ========================
+#  Heavy Result Tables & Features 
+# ========================
+/tests_outs/benchmarking/features.tsv
+/tests_outs/benchmarking/initial_annotations/*.csv
+/tests_outs/benchmarking/regenerated_annotations/*.csv
+/tests_outs/benchmarking/ml_results/*.csv
+/tests_outs/benchmarking/initial_reports/*.out
+/tests_outs/benchmarking/regenerated_reports/*.out
+/tests_outs/benchmarking/genomes/
+
+# ========================
+# Extra FASTQ files
+# ========================
+/tests/data/reads/*.fastq
+/tests/data/reads/*.vcf

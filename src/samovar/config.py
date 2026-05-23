@@ -220,7 +220,7 @@ fi
 # Run annotators on initial reads
 snakemake -s workflow/annotators/Snakefile \\
     --configfile {configs['init_annotator']} \\
-    --cores 1
+    --cores 16
 
 # Combine annotation tables
 $PYTHON_PATH workflow/combine_annotation_tables.py \\
@@ -233,25 +233,22 @@ $R_PATH -s -f "workflow/compare_annotations.R" \\
     --annotation_dir $out_dir/initial_annotations \\
     --output_dir $out_dir/initial_annotations_plots
 
-# Add pre-downloaded genomes to the genome directory
+# Add pre-downloaded genomes and mock community to the genome directory
 mkdir -p $out_dir/genomes
-cp data/test_genomes/meta/* $out_dir/genomes
-cp data/test_genomes/host/* $out_dir/genomes
+cp data/test_genomes/meta/* $out_dir/genomes 2>/dev/null || true
+cp data/test_genomes/host/* $out_dir/genomes 2>/dev/null || true
+cp genomes/mock_community/*.fa $out_dir/genomes 2>/dev/null || true
 
 # Translate annotation table to new reads set
 snakemake -s workflow/annotation2iss/Snakefile \\
     --configfile {configs['annotation2iss']} \\
-    --cores 1
+    --cores 16
 
-# Clean up
-try {{
-    find $out_dir/regenerated -type f -empty -delete
-    rm $out_dir/regenerated/*processed*
-    rm $out_dir/regenerated/*_abundance*
-    rm $out_dir/regenerated/*iss.tmp*
-}} || {{
-    echo "Warning: Some cleanup operations failed"
-}}
+# Clean up (Fixed Bash syntax)
+find $out_dir/regenerated -type f -empty -delete 2>/dev/null || true
+rm -f $out_dir/regenerated/*processed* 2>/dev/null || true
+rm -f $out_dir/regenerated/*_abundance* 2>/dev/null || true
+rm -f $out_dir/regenerated/*iss.tmp* 2>/dev/null || true
 
 # Sort paired-end reads to ensure matching order
 samovar tools --sort $out_dir
@@ -259,7 +256,7 @@ samovar tools --sort $out_dir
 # Run annotators on new reads set
 snakemake -s workflow/annotators/Snakefile \\
     --configfile {configs['reannotate']} \\
-    --cores 1
+    --cores 16
 
 # Combine annotation tables
 $PYTHON_PATH workflow/combine_annotation_tables.py \\
@@ -274,10 +271,17 @@ $R_PATH -s -f "workflow/compare_annotations.R" \\
     --output_dir $out_dir/regenerated_annotations_plots \\
     --csv $out_dir/regenerated_annotations/combined_annotation_table.csv
 
+# Extract biological features for ML ensemble
+echo "[INFO] Extracting features for ML..."
+cat $out_dir/initial/*_R1.fastq > $out_dir/combined_temporary_R1.fastq
+$PYTHON_PATH src/annotators/fastq_annotator.py $out_dir/combined_temporary_R1.fastq -o $out_dir/features.tsv --chunk_size 50000
+rm $out_dir/combined_temporary_R1.fastq
+
 # Train and test ML
 $PYTHON_PATH workflow/ML.py \\
     --reprofiling_dir $out_dir/initial_annotations \\
     --validation_file $out_dir/regenerated_annotations/combined_annotation_table.csv \\
+    --features $out_dir/features.tsv \\
     --output_dir $out_dir/reprofiled_annotations
 
 # Check reprofiled results

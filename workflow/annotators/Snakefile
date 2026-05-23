@@ -12,43 +12,60 @@ configfile: "config_init.yaml"
 # Get all samples from input directories
 def get_samples():
     r1_files = glob.glob(os.path.join(config['r1_dir'], "*_R1.fastq"))
+    logger.info(f"FILES MATCHED BY GLOB: {r1_files}")
     return [os.path.basename(f).replace('_R1.fastq', '') for f in r1_files]
 
 SAMPLES = get_samples()
 
-# Initialize annotator instances once during DAG generation
+# Initialize annotator instances and thread counts once during DAG generation
 ANNOTATORS = {}
+THREADS = {}
 for run_conf in config.get('run_config', []):
     run_name = run_conf['run_name']
     tool_type = run_conf['type']
-    ANNOTATORS[run_name] = get_annotator_instance(tool_type, run_conf, config)
-
-
-# Get all annotator outputs needed
-def get_all_expected_outputs():
-    """Generate a list of all expected output files across all annotators."""
-    outputs = []
     
-    # Iterate over the dictionary of instantiated annotator objects
+    ANNOTATORS[run_name] = get_annotator_instance(tool_type, run_conf, config)
+    THREADS[run_name] = run_conf.get('threads', 1)
+
+def get_all_expected_outputs():
+    outputs = []
     for run_name, annotator in ANNOTATORS.items():
-        
-        # Iterate over each biological sample
         for sample in SAMPLES:
-            
-            # Delegate the path generation to the specific annotator class
             expected_files = annotator.get_expected_outputs(sample, config['output_dir'])
-            
-            # Add the generated paths to our flat master list
             outputs.extend(expected_files)
-            
     return outputs
 
-# Main rule defining the target files for the pipeline
 rule all:
     input:
         get_all_expected_outputs()
 
+# ==========================================
+# UNIVERSAL RULE FOR ALL CUSTOM TOOLS
+# ==========================================
+rule custom_tool:
+    input:
+        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
+        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+    output:
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.custom_{{tool_name}}.out"
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
+    params:
+        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, input.r2, [output.out]
+        )
+    shell:
+        """
+        mkdir -p $(dirname {output.out})
+        mkdir -p $(dirname {log})
+        {params.cmd} 2> {log}
+        """
 
+# ==========================================
+# NATIVE TOOLS
+# ==========================================
 rule kraken2:
     input:
         r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
@@ -56,6 +73,10 @@ rule kraken2:
     output:
         report = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.report",
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.out"
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
             input.r1, input.r2, [output.report, output.out]
@@ -63,55 +84,8 @@ rule kraken2:
     shell:
         """
         mkdir -p $(dirname {output.report})
-        {params.cmd}
-        """
-
-rule custom:
-    input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
-    output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.custom.out"
-    params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
-        )
-    shell:
-        """
-        mkdir -p $(dirname {output.out})
-        {params.cmd}
-        """
-
-rule kraken:
-    input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
-    output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken.out"
-    params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
-        )
-    shell:
-        """
-        mkdir -p $(dirname {output.out})
-        {params.cmd}
-        """
-
-rule krakenuniq:
-    input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
-    output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.krakenuniq.out"
-    params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
-        )
-    shell:
-        """
-        mkdir -p $(dirname {output.out})
-        {params.cmd}
+        mkdir -p $(dirname {log})
+        {params.cmd} 2> {log}
         """
 
 rule kaiju:
@@ -120,6 +94,10 @@ rule kaiju:
         r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
     output:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
             input.r1, input.r2, [output.out]
@@ -127,7 +105,8 @@ rule kaiju:
     shell:
         """
         mkdir -p $(dirname {output.out})
-        {params.cmd}
+        mkdir -p $(dirname {log})
+        {params.cmd} 2> {log}
         """
 
 rule metaphlan4:
@@ -138,6 +117,10 @@ rule metaphlan4:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.out",
         raw = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.raw",
         bowtie = f"{config['output_dir']}/{{sample}}_{{run_name}}.bowtie2.bz2"
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
             input.r1, input.r2, [output.out, output.raw, output.bowtie]
@@ -145,5 +128,49 @@ rule metaphlan4:
     shell:
         """
         mkdir -p $(dirname {output.out})
-        {params.cmd}
+        mkdir -p $(dirname {log})
+        {params.cmd} 2> {log}
         """
+
+rule kraken:
+    input:
+        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
+        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+    output:
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken.out"
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
+    params:
+        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, input.r2, [output.out]
+        )
+    shell:
+        """
+        mkdir -p $(dirname {output.out})
+        mkdir -p $(dirname {log})
+        {params.cmd} 2> {log}
+        """
+
+rule krakenuniq:
+    input:
+        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
+        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+    output:
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.krakenuniq.out"
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
+    params:
+        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, input.r2, [output.out]
+        )
+    shell:
+        """
+        mkdir -p $(dirname {output.out})
+        mkdir -p $(dirname {log})
+        {params.cmd} 2> {log}
+        """
+
