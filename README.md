@@ -87,7 +87,7 @@ samovar preprocess \
     --threads 16
 ```
 
-## Results & Biological Validation
+## Results and Validation
 To push the limits of the metagenomic annotators, we generated a highly complex artificial mock community 
 (10 Bacteria, 10 Archaea, 10 Eukaryotes, and 10 Viruses).
 *(Note: Complete R-generated visual reports can be found in the root directory file `Rplots.pdf`)*.
