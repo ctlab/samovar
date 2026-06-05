@@ -154,6 +154,28 @@ new_data <- samovar %>%
 
 <a src="https://github.com/ctlab/samovar/blob/main/samovaR_man.pdf">Documentation</a> for the **R package**
 
+#### Custom annotators (OOP wrapper)
+
+Unknown tools are routed through `CustomAnnotator` → `src/annotators/custom.sh`. Built-in custom routes:
+
+| `-p` / `--tool` | What it runs |
+|-----------------|--------------|
+| `dummy` / `constant9606` | assign taxID 9606 to every read |
+| `centrifuge` | Centrifuge FM-index (`-x DB`) |
+| `metauto` | k-mer autoencoder (`src/annotators/metauto.py`) |
+| `assembly_hybrid` | MEGAHIT → Bowtie2 → Kraken2 on contigs |
+
+```bash
+samovar prepare --output_dir samovar_out \
+    --kaiju "kaiju $DB_KAIJU" \
+    --centrifuge "centrifuge $DB_CENTRIFUGE" \
+    --custom-test "metauto $DB_METAUTO"
+```
+
+Thin wrappers (`src/annotators/centrifuge.sh`, `metauto.sh`, `assembly_hybrid.sh`) forward the same `custom.sh` flags. Per-read features for the ML ensemble can be extracted with `src/annotators/fastq_annotator.py` and passed as `workflow/ML.py --features features.tsv`, or by setting `SAMOVAR_ML_FEATURES=1` before `samovar exec`.
+
+Taxonomic rank collapse for plots uses ete3, with `src/samovar/taxonomy_engine.py` (`NCBITaxonomyParser`) as a lightweight `nodes.dmp` fallback.
+
 #### Pipeline
 
 <img src="data/img/additional/algo.png" width = 50%>
@@ -187,6 +209,8 @@ graph LR
 
 ## References
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
+
+Custom-annotator OOP wrappers, Centrifuge / Metauto / assembly-hybrid routes, `taxonomy_engine`, and FASTQ feature extraction: Konstantin Yamschikov (Bioinformatic Institute, ITMO).
 
 
 ## Dependencies
