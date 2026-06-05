@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 
-import os
 import argparse
+import gzip
+import os
+from collections import Counter
+from itertools import product
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from itertools import product
-from collections import Counter
 from sklearn.preprocessing import LabelEncoder
-import gzip
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 # ----------------------------
 # FASTA / FASTQ readers
@@ -56,7 +58,7 @@ def build_kmer_index(k):
 def seq_to_vec(seq, k, kmer_index):
     vec = np.zeros(len(kmer_index))
     for i in range(len(seq) - k + 1):
-        kmer = seq[i:i+k]
+        kmer = seq[i : i + k]
         if kmer in kmer_index:
             vec[kmer_index[kmer]] += 1
     if vec.sum() > 0:
@@ -72,21 +74,15 @@ class AutoEncoder(nn.Module):
         super().__init__()
 
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.ReLU(),
-            nn.Linear(512, latent_dim)
+            nn.Linear(input_dim, 512), nn.ReLU(), nn.Linear(512, latent_dim)
         )
 
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 512),
-            nn.ReLU(),
-            nn.Linear(512, input_dim)
+            nn.Linear(latent_dim, 512), nn.ReLU(), nn.Linear(512, input_dim)
         )
 
         self.classifier = nn.Sequential(
-            nn.Linear(latent_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, n_classes)
+            nn.Linear(latent_dim, 128), nn.ReLU(), nn.Linear(128, n_classes)
         )
 
     def forward(self, x):
@@ -127,7 +123,9 @@ def train(input_dir, out_model, k=4, epochs=10):
     X = torch.tensor(X, dtype=torch.float32).to(DEVICE)
     y_enc = torch.tensor(y_enc).to(DEVICE)
 
-    model = AutoEncoder(X.shape[1], latent_dim=64, n_classes=len(le.classes_)).to(DEVICE)
+    model = AutoEncoder(X.shape[1], latent_dim=64, n_classes=len(le.classes_)).to(
+        DEVICE
+    )
 
     opt = optim.Adam(model.parameters(), lr=1e-3)
     mse = nn.MSELoss()
@@ -151,12 +149,15 @@ def train(input_dir, out_model, k=4, epochs=10):
 
         print(f"Epoch {epoch}: loss={loss.item():.4f}")
 
-    torch.save({
-        "model": model.state_dict(),
-        "k": k,
-        "kmer_index": kmer_index,
-        "label_encoder": le
-    }, out_model)
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "k": k,
+            "kmer_index": kmer_index,
+            "label_encoder": le,
+        },
+        out_model,
+    )
 
     print(f"[SUCCESS] Saved model: {out_model}")
 
@@ -171,7 +172,7 @@ def work(fastq_dir, model_path):
     k = checkpoint["k"]
     kmer_index = checkpoint["kmer_index"]
     le = checkpoint["label_encoder"]
-    
+
     model = AutoEncoder(len(kmer_index), 64, len(le.classes_)).to(DEVICE)
     model.load_state_dict(checkpoint["model"])
     model.eval()
@@ -179,7 +180,9 @@ def work(fastq_dir, model_path):
     print("[INFO] Processing reads...")
 
     for fname in os.listdir(fastq_dir):
-        if not (fname.endswith(".fastq") or fname.endswith(".fq") or fname.endswith(".gz")):
+        if not (
+            fname.endswith(".fastq") or fname.endswith(".fq") or fname.endswith(".gz")
+        ):
             continue
 
         path = os.path.join(fastq_dir, fname)
@@ -212,7 +215,9 @@ def work(fastq_dir, model_path):
 # CLI
 # ----------------------------
 def main():
-    parser = argparse.ArgumentParser(prog="metauto", description="Metagenomic AutoEncoder Classifier")
+    parser = argparse.ArgumentParser(
+        prog="metauto", description="Metagenomic AutoEncoder Classifier"
+    )
 
     sub = parser.add_subparsers(dest="cmd")
 
