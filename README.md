@@ -56,6 +56,7 @@ Instead of relying on a single tool, SamovaR aggregates predictions. Even a weak
 To ensure full reproducibility, all dependencies are managed via Conda.
 
 ```bash
+# Clone a repository
 git clone git@github.com:Konstantaza/samovar.git
 cd samovar
 
@@ -65,6 +66,7 @@ conda activate full_samovar_env
 
 # Generating test data
 bash generate_mock_community.sh
+```
 
 # Architecture and Custom Annotators
 To allow the pipeline to work with any third-party software, 
@@ -110,7 +112,7 @@ While individual baseline tools struggle on highly complex communities (e.g., st
 * **F1-Score Comparison:**
   *Located in: `tests_outs/benchmarking/ml_results_plots/`*
   
-  ![F1 Score: SamovaR](tests_outs/benchmarking/ml_results_plots/F1_samovar.png)
+  ![F1 Score: SamovaR](tests_outs/benchmarking/ml_results_plots/F1_centrifuge.png)
   
   > **Observation:** The ensemble approach demonstrates a robust F1-score improvement compared to the varying baseline metrics of individual annotators on the same mock community.
 
@@ -120,3 +122,17 @@ While individual baseline tools struggle on highly complex communities (e.g., st
   ![ROC Curve](tests_outs/benchmarking/ml_results/roc_comparison.png)
 
 **Conclusion:** The classification by voting using the ML-ensemble provides higher ROC-AUC metrics compared to raw baseline predictions and stabilizes the cross-validation process, extracting more accurate information from the metagenomic data even when single tools fail.
+
+## Authors
+
+- Konstantin Yamschikov
+
+**Supervisor**: Daniil Smutin
+
+**Institution**: Bioinformatic Institute, ITMO
+
+---
+
+## Contact
+
+- Konstantin Yamschikov: amsikovkonstantin@gmail.com
