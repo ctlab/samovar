@@ -1,63 +1,79 @@
 import os
 import re
-import pandas as pd
-from typing import List, Dict, Optional
 import sqlite3
+from typing import Dict, List, Optional
+
+import pandas as pd
+
 
 class BaseAnnotator:
     """Base class for taxonomic annotators.
-    
-    This class provides a unified interface for generating execution commands 
+
+    This class provides a unified interface for generating execution commands
     for Snakemake and parsing the resulting output files into a standardized format.
     """
-    
+
     def __init__(self, run_config: Dict, config: Dict):
         """Initialize the annotator with run-specific and global configurations.
-        
+
         Args:
-            run_config: Dictionary containing settings for this specific run 
+            run_config: Dictionary containing settings for this specific run
                         (e.g., db_path, threads, extra flags).
             config: The global Snakemake configuration dictionary.
         """
         self.run_config = run_config
         self.config = config
-        
+
         # Extract common parameters shared across all annotation tools
         self.run_name = run_config.get("run_name", "unknown_run")
         self.db_path = run_config.get("db_path", "")
         self.threads = run_config.get("threads", 1)
         self.extra = run_config.get("extra", "")
-        
+
         # Use custom command if provided in config, otherwise fall back to the tool's default
         self.cmd = run_config.get("cmd", self.default_cmd)
 
     @property
     def default_cmd(self) -> str:
-        raise NotImplementedError("Method default_cmd must be implemented in child class")
+        raise NotImplementedError(
+            "Method default_cmd must be implemented in child class"
+        )
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
-        raise NotImplementedError("Method get_expected_outputs must be implemented in child class")
+        raise NotImplementedError(
+            "Method get_expected_outputs must be implemented in child class"
+        )
 
-    def get_snakemake_shell_cmd(self, input_r1: str, input_r2: str, outputs: List[str]) -> str:
-        raise NotImplementedError("Method get_snakemake_shell_cmd must be implemented in child class")
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        raise NotImplementedError(
+            "Method get_snakemake_shell_cmd must be implemented in child class"
+        )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
-        raise NotImplementedError("Method parse_output must be implemented in child class")
-    
+        raise NotImplementedError(
+            "Method parse_output must be implemented in child class"
+        )
+
 
 class Kraken2Annotator(BaseAnnotator):
     """Annotator class for Kraken2 taxonomic classifier."""
-    
+
     @property
     def default_cmd(self) -> str:
         return "kraken2"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
-        report_file = os.path.join(output_dir, f"{sample}_{self.run_name}.kraken2.report")
+        report_file = os.path.join(
+            output_dir, f"{sample}_{self.run_name}.kraken2.report"
+        )
         out_file = os.path.join(output_dir, f"{sample}_{self.run_name}.kraken2.out")
         return [report_file, out_file]
 
-    def get_snakemake_shell_cmd(self, input_r1: str, input_r2: str, outputs: List[str]) -> str:
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
         report_file, out_file = outputs
         cmd = (
             f"{self.cmd} "
@@ -74,20 +90,20 @@ class Kraken2Annotator(BaseAnnotator):
     def parse_output(self, file_path: str) -> pd.DataFrame:
         df = pd.read_table(file_path, header=None)
         df.columns = ["classified", "seq", "taxa", "length", "k-mer"]
-        
+
         def extract_taxid(taxa_string):
             if pd.isna(taxa_string):
                 return "0"
-            match = re.search(r'(?<=taxid )[0-9]*', str(taxa_string))
+            match = re.search(r"(?<=taxid )[0-9]*", str(taxa_string))
             return match.group(0) if match else "0"
-            
+
         df["taxID"] = df["taxa"].apply(extract_taxid)
         return df[["seq", "taxID"]]
 
 
 class KaijuAnnotator(BaseAnnotator):
     """Annotator class for Kaiju taxonomic classifier."""
-    
+
     @property
     def default_cmd(self) -> str:
         return "kaiju"
@@ -96,17 +112,19 @@ class KaijuAnnotator(BaseAnnotator):
         out_file = os.path.join(output_dir, f"{sample}_{self.run_name}.kaiju.out")
         return [out_file]
 
-    def get_snakemake_shell_cmd(self, input_r1: str, input_r2: str, outputs: List[str]) -> str:
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
         out_file = outputs[0]
-        if self.run_config.get('db_name'):
-            db_file_path = os.path.join(self.db_path, self.run_config['db_name'])
-        elif self.db_path.endswith('.fmi'):
+        if self.run_config.get("db_name"):
+            db_file_path = os.path.join(self.db_path, self.run_config["db_name"])
+        elif self.db_path.endswith(".fmi"):
             db_file_path = self.db_path
         else:
             db_file_path = os.path.join(self.db_path, "*.fmi")
-            
+
         default_nodes = os.path.join(os.path.dirname(db_file_path), "nodes.dmp")
-        db_nodes = self.run_config.get('db_nodes', default_nodes)
+        db_nodes = self.run_config.get("db_nodes", default_nodes)
 
         cmd = (
             f"{self.cmd} "
@@ -124,7 +142,7 @@ class KaijuAnnotator(BaseAnnotator):
         df = pd.read_table(file_path, header=None)
         df.columns = ["classified", "seq", "taxID"]
         return df[["seq", "taxID"]]
-    
+
 
 class MetaPhlanAnnotator(BaseAnnotator):
     """Annotator class for the MetaPhlAn taxonomic classifier."""
@@ -139,7 +157,9 @@ class MetaPhlanAnnotator(BaseAnnotator):
         bowtie_file = os.path.join(output_dir, f"{sample}_{self.run_name}.bowtie2.bz2")
         return [out_file, raw_file, bowtie_file]
 
-    def get_snakemake_shell_cmd(self, input_r1: str, input_r2: str, outputs: List[str]) -> str:
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
         out_file, raw_file, bowtie_file = outputs
         cmd = (
             f"{self.cmd} "
@@ -172,20 +192,21 @@ class MetaPhlanAnnotator(BaseAnnotator):
         df = pd.read_table(file_path, header=None)
         df.columns = ["seq", "taxID"]
         db_mapping = self._get_db_mapping()
-        
+
         if db_mapping:
+
             def extract_ref_id(tax_string: str) -> Optional[str]:
                 if pd.isna(tax_string):
                     return None
-                match = re.search(r'M\d+-c\d+', str(tax_string))
+                match = re.search(r"M\d+-c\d+", str(tax_string))
                 return match.group(0) if match else None
 
             df["ref_id"] = df["taxID"].apply(extract_ref_id)
             df["taxID"] = df["ref_id"].map(db_mapping).fillna("0")
             df = df.drop(columns=["ref_id"])
-            
+
         return df[["seq", "taxID"]]
-    
+
 
 class Kraken1Annotator(BaseAnnotator):
     """Annotator class for the original Kraken (Kraken 1) classifier."""
@@ -198,7 +219,9 @@ class Kraken1Annotator(BaseAnnotator):
         out_file = os.path.join(output_dir, f"{sample}_{self.run_name}.kraken.out")
         return [out_file]
 
-    def get_snakemake_shell_cmd(self, input_r1: str, input_r2: str, outputs: List[str]) -> str:
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
         out_file = outputs[0]
         cmd = (
             f"{self.cmd} "
@@ -227,7 +250,9 @@ class KrakenUniqAnnotator(BaseAnnotator):
         out_file = os.path.join(output_dir, f"{sample}_{self.run_name}.krakenuniq.out")
         return [out_file]
 
-    def get_snakemake_shell_cmd(self, input_r1: str, input_r2: str, outputs: List[str]) -> str:
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
         out_file = outputs[0]
         cmd = (
             f"{self.cmd} "
@@ -247,7 +272,7 @@ class KrakenUniqAnnotator(BaseAnnotator):
 
 class CustomAnnotator(BaseAnnotator):
     """Generic Annotator class for any tool handled by custom.sh."""
-    
+
     def __init__(self, run_config: Dict, config: Dict, tool_name: str):
         super().__init__(run_config, config)
         self.tool_name = tool_name
@@ -257,10 +282,14 @@ class CustomAnnotator(BaseAnnotator):
         return "bash src/annotators/custom.sh"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
-        out_file = os.path.join(output_dir, f"{sample}_{self.run_name}.custom_{self.tool_name}.out")
+        out_file = os.path.join(
+            output_dir, f"{sample}_{self.run_name}.custom_{self.tool_name}.out"
+        )
         return [out_file]
 
-    def get_snakemake_shell_cmd(self, input_r1: str, input_r2: str, outputs: List[str]) -> str:
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
         out_file = outputs[0]
         cmd = (
             f"{self.cmd} "
@@ -268,9 +297,9 @@ class CustomAnnotator(BaseAnnotator):
             f"-I {input_r2} "
             f"-d {self.db_path} "
             f"-o {out_file} "
-            f"-p {self.tool_name} "  
-            f"-t {self.threads} "    
-            f"{self.extra}"          
+            f"-p {self.tool_name} "
+            f"-t {self.threads} "
+            f"{self.extra}"
         )
         return cmd
 
@@ -286,10 +315,12 @@ class CustomAnnotator(BaseAnnotator):
             return pd.DataFrame(columns=["seq", "taxID"])
 
 
-def get_annotator_instance(tool_type: str, run_config: Dict, config: Dict) -> BaseAnnotator:
+def get_annotator_instance(
+    tool_type: str, run_config: Dict, config: Dict
+) -> BaseAnnotator:
     """Factory function to instantiate the correct annotator class."""
     tool = tool_type.lower()
-    
+
     native_tools = {
         "kraken2": Kraken2Annotator,
         "kaiju": KaijuAnnotator,
@@ -300,11 +331,11 @@ def get_annotator_instance(tool_type: str, run_config: Dict, config: Dict) -> Ba
         "kraken": Kraken1Annotator,
         "kraken1": Kraken1Annotator,
         "krakenuniq": KrakenUniqAnnotator,
-        "krakenu": KrakenUniqAnnotator
+        "krakenu": KrakenUniqAnnotator,
     }
 
     if tool in native_tools:
         return native_tools[tool](run_config, config)
-    
+
     # Send any unknown tool to custom.sh
     return CustomAnnotator(run_config, config, tool_name=tool_type)
