@@ -88,7 +88,7 @@ samovar preprocess \
 ```
 
 ## Results and Validation
-To push the limits of the metagenomic annotators, we generated a highly complex artificial mock community 
+To push the limits of the metagenomic annotators, we generated a complex artificial mock community 
 (10 Bacteria, 10 Archaea, 10 Eukaryotes, and 10 Viruses).
 *(Note: Complete R-generated visual reports can be found in the root directory file `Rplots.pdf`)*.
 
@@ -100,22 +100,23 @@ For instance, reads that Centrifuge classifies confidently might be completely u
   *Located in: `tests_outs/benchmarking/initial_annotations_plots/`*
   
   ![Agreement Matrix](tests_outs/benchmarking/initial_annotations_plots/CV_metauto%20vs%20centrifuge.png)
+  
+  > **Note on axes:** The numbers represent specific NCBI Taxonomic IDs. For example, **0** stands for "Unclassified" (unrecognized reads), **562** represents *Escherichia coli*, and **1280** represents *Staphylococcus aureus*. The off-diagonal values clearly illustrate the direct contradictions between the standalone tools.
 
 ### ML Ensemble Performance
-The ML ensemble (RandomForest/AdaBoost) successfully aggregates weak predictions and biological features. 
-While individual baseline tools may struggle on highly complex communities, 
-the voting classifier effectively compensates for individual errors.
+The ML ensemble (RandomForest/AdaBoost) aggregates weak predictions and biological features. 
+While individual baseline tools struggle on highly complex communities (e.g., standalone Metauto and Assembly-Hybrid showed substantial classification gaps in this dataset), the voting classifier helps compensate for these individual errors.
 
 * **F1-Score Comparison:**
   *Located in: `tests_outs/benchmarking/ml_results_plots/`*
   
   ![F1 Score: SamovaR](tests_outs/benchmarking/ml_results_plots/F1_samovar.png)
+  
+  > **Observation:** The ensemble approach demonstrates a robust F1-score improvement compared to the varying baseline metrics of individual annotators on the same mock community.
 
 * **ROC-AUC Performance:**
   *Located in: `tests_outs/benchmarking/ml_results/`*
   
   ![ROC Curve](tests_outs/benchmarking/ml_results/roc_comparison.png)
 
-**Conclusion:** The classification by voting using the ML-ensemble significantly increases metrics 
-like ROC-AUC and stabilizes the cross-validation process, extracting maximum information from the metagenomic data 
-even when single tools fail.
+**Conclusion:** The classification by voting using the ML-ensemble provides higher ROC-AUC metrics compared to raw baseline predictions and stabilizes the cross-validation process, extracting more accurate information from the metagenomic data even when single tools fail.
