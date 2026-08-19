@@ -182,8 +182,17 @@ def build_database_kraken2(
         "--kmer-len", str(kmer_len),
         "--minimizer-len", str(minimizer_len),
         "--minimizer-spaces", str(minimizer_spaces),
-        "--skip-maps"
     ]
+    # `--skip-maps` is not available in all kraken2-build versions.
+    if skip_maps:
+        try:
+            help_out = subprocess.run(
+                ["kraken2-build", "--help"], check=True, capture_output=True, text=True
+            ).stdout
+            if "--skip-maps" in help_out:
+                build_cmd.append("--skip-maps")
+        except Exception:
+            pass
     run_command(build_cmd)
     
     # Clean up intermediate files

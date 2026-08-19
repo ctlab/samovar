@@ -3,5 +3,5 @@ library(tidyverse)
 test_that("Samova.R: vizualization", {
   gg <- concotion %>%
     viz_composition()
-  expect_equal(class(gg), c("gg", "ggplot"))
+  expect_s3_class(gg, "ggplot")
 })

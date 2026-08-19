@@ -47,14 +47,28 @@ if (!is.null(output_dir)) {
 # Read and process data
 data <- read_annotation_dir(annotation_dir)
 
-# Generate visualizations
-results <- viz_annotation(
-  data = data,
-  type = types,
-  show_top = show_top,
-  output_dir = output_dir,
-  split = split
-)
+# `cv` plots require at least two annotators; with one annotator the internal
+# plot list is empty and ggpubr raises subscript errors.
+tax_cols <- names(data)[grepl("^taxID_", names(data))]
+annotators <- unique(sapply(strsplit(tax_cols, "_"), function(x) if (length(x) >= 2) x[2] else NA))
+annotators <- annotators[!is.na(annotators)]
+if (length(annotators) < 2) {
+  types <- setdiff(types, "cv")
+}
+
+# Generate visualizations (best-effort: do not break pipeline on plot-only errors)
+results <- tryCatch({
+  viz_annotation(
+    data = data,
+    type = types,
+    show_top = show_top,
+    output_dir = output_dir,
+    split = split
+  )
+}, error = function(e) {
+  warning(sprintf("Skipping visualization due to error: %s", conditionMessage(e)))
+  NULL
+})
 
 if (!is.null(csv_file)) {
   write.csv(data, csv_file, row.names = FALSE)

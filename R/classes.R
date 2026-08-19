@@ -28,7 +28,7 @@ setRefClass("GMrepo_run",
     },
     filter = function(field, value) {
       tmp <- which(metadata[, field] == value)
-      metadata <<- metadata[tmp, ]
+      metadata <<- metadata[tmp, , drop = FALSE]
       run <<- run[tmp]
     }
   )
@@ -83,7 +83,7 @@ setRefClass("samovar_run",
               },
               filter = function(field, value) {
                 tmp <- which(metadata[, field] == value)
-                metadata <<- metadata[tmp, ]
+                metadata <<- metadata[tmp, , drop = FALSE]
                 data <<- data[tmp,]
                 run <<- run[tmp]
               },
@@ -163,7 +163,7 @@ setRefClass("samovar_data",
     },
     filter = function(field, value) {
       tmp <- which(metadata[, field] %in% value)
-      metadata <<- metadata[tmp, ]
+      metadata <<- metadata[tmp, , drop = FALSE]
       data <<- data[tmp, ] %>%
         subset(apply(1, sum, na.rm = T) > 0)
       run <<- run[tmp]
@@ -228,14 +228,14 @@ setRefClass("samovar_data",
       cat("Initial:", nrow(data), "x", ncol(data), "\n")
       # filter
       above0 <- function(x) sum(x > min_value)
-      data <<- data[apply(data, 1, above0) >= min_samp, ]
-      data <<- data[, apply(data, 2, above0) >= min_sp]
+      data <<- data[apply(data, 1, above0) >= min_samp, , drop = FALSE]
+      data <<- data[, apply(data, 2, above0) >= min_sp, drop = FALSE]
 
       # rebuild
       tmp <- which(species %in% rownames(data))
       run <<- colnames(data)
       species <<- rownames(data)
-      metadata <<- metadata[rownames(metadata) %in% run, ]
+      metadata <<- metadata[rownames(metadata) %in% run, , drop = FALSE]
       cat("After filtering:", nrow(data), "x", ncol(data), "\n")
 
       if (length(cluster)>0) {

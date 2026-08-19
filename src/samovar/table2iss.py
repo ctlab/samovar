@@ -12,6 +12,7 @@ from typing import List, Union
 import yaml
 import json
 import tempfile
+import warnings
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
     """
@@ -283,16 +284,23 @@ def process_abundance_table(
         if genome_file is not None:
             available_genomes.append((taxid, genome_file))
 
-    # Raise error if no genomes are available
+    N_cols = [col for col in abundance_table.columns if 'n' in col.lower()]
+
+    # Gracefully handle all-unclassified/unknown samples.
     if not available_genomes:
-        file=os.path.join(output_dir, f"{sample_name}_R1.fastq")
-        with open(file, "w") as f:
-            f.write("")
-        file=os.path.join(output_dir, f"{sample_name}_R2.fastq")
-        with open(file, "w") as f:
-            f.write("")
-        
-        raise Warning("No genome files available for any taxid")
+        if not N_cols:
+            N_cols = ["N_any"]
+        for N_annotator in N_cols:
+            match = re.search(r'N_(.*?)(?:_[0-9]*)?$', N_annotator)
+            annotator_name = match.group(1) if match else "any"
+            file=os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
+            with open(file, "w") as f:
+                f.write("\n")
+            file=os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq")
+            with open(file, "w") as f:
+                f.write("\n")
+
+        warnings.warn("No genome files available for any taxid; emitted empty FASTQ files")
         return None
 
     # Filter abundance table to only include available genomes

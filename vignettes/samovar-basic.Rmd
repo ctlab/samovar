@@ -22,7 +22,7 @@ library(tidyverse)
 
 Download and vizualize data from GMrepo
 ```{r API}
-teatree <- GMrepo_type2data(number_to_process = 1500)
+teatree <- GMrepo_type2data_or_example(number_to_process = 1500)
 viz_composition(teatree, type = "tile", interactive = F, top = 10)
 ```
 
