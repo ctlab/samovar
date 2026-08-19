@@ -212,6 +212,18 @@ def _sanitize_seqid(seq_id: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in seq_id)[:80]
 
 
+def kaiju_protein_id(taxid: str, accession: str = "") -> str:
+    """Kaiju reads taxid as the integer after the last ``_`` in the FASTA id.
+
+    Use ``{accession}_{taxid}``. A bare numeric id also works.
+    """
+    taxid = str(taxid).split(".")[0]
+    acc = _sanitize_seqid(accession).strip("_") if accession else ""
+    if not acc:
+        return taxid
+    return f"{acc}_{taxid}"
+
+
 def _parse_gff_attributes(attr_field: str) -> dict:
     attrs = {}
     if "ID=" in attr_field or "Parent=" in attr_field or "protein_id=" in attr_field:
@@ -282,7 +294,7 @@ def translate_cds_from_gff(fasta_path: str, gff_path: str, taxid: str, min_aa: i
         protein = str(cds[:trim].translate(to_stop=True)).replace("*", "").replace("X", "")
         if len(protein) < min_aa:
             continue
-        records.append(SeqRecord(Seq(protein), id=str(taxid), description=""))
+        records.append(SeqRecord(Seq(protein), id=kaiju_protein_id(taxid, protein_id), description=""))
     return records
 
 
@@ -290,13 +302,14 @@ def nucleotide_to_frame_records(input_file: str, taxid: str) -> List[SeqRecord]:
     """One 6-frame translation per contig with stops stored as X.
 
     Kaiju-mkbwt treats ``*`` as the sequence terminator, so leftover stop
-    symbols in the protein FASTA break the index. Headers must be the taxid
-    alone: ``>9606`` works, ``>9606_contig`` is stored as taxid 0.
+    symbols in the protein FASTA break the index. Headers must end with
+    ``_{taxid}`` (Kaiju reads the integer after the last underscore).
     """
     records: List[SeqRecord] = []
     taxid = str(taxid).split(".")[0]
-    for nucl in SeqIO.parse(input_file, "fasta"):
+    for seq_index, nucl in enumerate(SeqIO.parse(input_file, "fasta")):
         seq = str(nucl.seq).upper().replace("U", "T")
+        strand_i = 0
         for strand_seq in (Seq(seq), Seq(seq).reverse_complement()):
             for frame in range(3):
                 frame_seq = strand_seq[frame:]
@@ -306,7 +319,14 @@ def nucleotide_to_frame_records(input_file: str, taxid: str) -> List[SeqRecord]:
                 aa = str(frame_seq.translate()).replace("*", "X")
                 if not aa:
                     continue
-                records.append(SeqRecord(Seq(aa), id=taxid, description=""))
+                records.append(
+                    SeqRecord(
+                        Seq(aa),
+                        id=kaiju_protein_id(taxid, f"c{seq_index}s{strand_i}f{frame}"),
+                        description="",
+                    )
+                )
+            strand_i += 1
     return records
 
 
@@ -327,7 +347,9 @@ def nucleotide_to_orf_records(input_file: str, taxid: str, min_aa: int = 15) -> 
                     orf = orf.replace("X", "")
                     if len(orf) < min_aa:
                         continue
-                    records.append(SeqRecord(Seq(orf), id=taxid, description=""))
+                    records.append(
+                        SeqRecord(Seq(orf), id=kaiju_protein_id(taxid, f"orf{len(records)}"), description="")
+                    )
     return records
 
 
@@ -363,12 +385,12 @@ def process_fasta_kaiju(input_file: str,
                        min_aa: int = 30) -> str:
     """Process FASTA into a Kaiju protein library.
 
-    Kaiju indexes proteins and reads taxid as the first integer in the FASTA header.
-    Nucleotide genomes are converted via:
+    Kaiju indexes proteins and reads taxid as the integer after the last ``_``
+    in the FASTA header (``{accession}_{taxid}``). Nucleotide genomes become:
       1. sibling `.faa` proteome, or
       2. sibling GFF/GTF CDS translation, or
       3. downloaded NCBI proteome / GFF, or
-      4. 6-frame ORF translation (offline fallback).
+      4. 6-frame translations of the provided FASTA.
     """
     taxid = str(taxid).split(".")[0]
     temp_fasta = tempfile.NamedTemporaryFile(mode='w', suffix='.faa', delete=False)
@@ -382,7 +404,7 @@ def process_fasta_kaiju(input_file: str,
             aa = str(rec.seq).replace("*", "").replace("X", "")
             if len(aa) < min_aa:
                 continue
-            records.append(SeqRecord(Seq(aa), id=taxid, description=""))
+            records.append(SeqRecord(Seq(aa), id=kaiju_protein_id(taxid, rec.id), description=""))
     else:
         kind, annot_path = find_local_proteome_or_gff(input_file, taxid)
         if kind is None and fetch_missing:
@@ -400,7 +422,7 @@ def process_fasta_kaiju(input_file: str,
                 aa = str(rec.seq).replace("*", "").replace("X", "")
                 if len(aa) < min_aa:
                     continue
-                records.append(SeqRecord(Seq(aa), id=taxid, description=""))
+                records.append(SeqRecord(Seq(aa), id=kaiju_protein_id(taxid, rec.id), description=""))
         elif kind == "gff":
             records.extend(translate_cds_from_gff(input_file, annot_path, taxid, min_aa=min_aa))
 
@@ -491,6 +513,8 @@ def build_database_kaiju(
     # First build the BWT
     mkbwt_cmd = [
         "kaiju-mkbwt",
+        "-n", str(threads),
+        "-a", "ACDEFGHIKLMNPQRSTVWYX",
         "-o", base_name,
         library_file,
     ]

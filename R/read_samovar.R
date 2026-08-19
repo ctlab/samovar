@@ -64,6 +64,9 @@ read_samovar <- function(data, metadata = F, ...) {
 read_annotation_dir <- function(data_dir,  sample_name_position = 0, ...) {
   results <- tibble()
   for (data_path in dir(data_dir, pattern = ".csv$", full.names = T)) {
+    if (grepl("^combined_annotation_table", basename(data_path))) {
+      next
+    }
     sample_name <- (basename(data_path) %>%
       stringr::str_split("\\."))[[1]][1:(sample_name_position+1)] %>%
       paste(., collapse = "_", sep = "_")
@@ -74,7 +77,21 @@ read_annotation_dir <- function(data_dir,  sample_name_position = 0, ...) {
     # fix colnames
     colnames(tmp) <- colnames(tmp) %>%
       stringr::str_remove("_[0-9]*$") %>%
-      stringr::str_replace("taxid", "taxID")
+      stringr::str_replace("taxid", "taxID") %>%
+      stringr::str_replace("\\.\\.\\.[0-9]+$", "")
+
+    # Coalesce duplicate annotator columns created by bind_rows name repair
+    nms <- colnames(tmp)
+    for (nm in unique(nms[duplicated(nms)])) {
+      idx <- which(nms == nm)
+      coalesced <- tmp[[idx[1]]]
+      for (j in idx[-1]) {
+        coalesced <- dplyr::coalesce(coalesced, tmp[[j]])
+      }
+      tmp[[idx[1]]] <- coalesced
+      tmp <- tmp[, -idx[-1], drop = FALSE]
+      nms <- colnames(tmp)
+    }
 
     results <- dplyr::bind_rows(
       results,

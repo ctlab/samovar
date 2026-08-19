@@ -9,35 +9,50 @@ import matplotlib.pyplot as plt
 import joblib
 import os
 import re
+from typing import Optional
 from collections import Counter
+
+def _tool_name_from_column(col: str) -> Optional[str]:
+    """Extract annotator name from taxid/taxID column labels."""
+    name = str(col).lower()
+    if "confidence" in name:
+        return None
+    match = re.search(r"taxid[_./]*([a-z][a-z0-9]*)", name)
+    if not match:
+        return None
+    tool = match.group(1)
+    if tool in {"samovar", "true", "length", "sample"}:
+        return None
+    return tool
+
+
+def annotator_taxid_columns(df: pd.DataFrame) -> list:
+    """Return annotator taxid columns, ignoring SAMOVAR outputs and confidence."""
+    return [col for col in df.columns if _tool_name_from_column(col) is not None]
+
 
 def standardize_taxid_columns(df):
     """
     Standardize taxID column names to format taxid_[toolname].
     Example: taxID_kaiju_1 -> taxid_kaiju
-    
-    Args:
-        df (pd.DataFrame): Input dataframe
-        
-    Returns:
-        pd.DataFrame: Dataframe with standardized column names
+    Duplicate columns for the same tool (taxID_kaiju...2) are coalesced.
     """
     df = df.copy()
-    # Find all taxID columns
-    taxid_cols = [col for col in df.columns if col.lower().startswith('taxid_')]
-    
-    # Create mapping for new column names
-    new_names = {}
-    for col in taxid_cols:
-        # Extract tool name using regex
-        match = re.search(r'taxid_([^_]+)', col.lower())
-        if match:
-            tool_name = match.group(1)
-            new_name = f'taxid_{tool_name}'
-            new_names[col] = new_name
-    
-    # Rename columns
-    df = df.rename(columns=new_names)
+    grouped = {}
+    for col in list(df.columns):
+        tool = _tool_name_from_column(col)
+        if tool is None:
+            continue
+        grouped.setdefault(tool, []).append(col)
+
+    for tool, cols in grouped.items():
+        new_name = f"taxid_{tool}"
+        numeric = df[cols].apply(pd.to_numeric, errors="coerce")
+        coalesced = numeric.bfill(axis=1).iloc[:, 0]
+        drop_cols = [c for c in cols if c != new_name]
+        if drop_cols:
+            df = df.drop(columns=drop_cols)
+        df[new_name] = coalesced
     return df
 
 def preprocess_data(df):
@@ -231,29 +246,40 @@ def predict_taxid(df, model_path=None, feature_cols=None):
         # Train new model if no model provided
         model, _, _, feature_cols = train_models(df_processed)
     
-    # Make predictions using the same feature order as training
-    X = df_processed[feature_cols]
+    # Align columns with the fitted model (sample tables can differ from validation).
+    if hasattr(model, "feature_names_in_"):
+        feature_cols = list(model.feature_names_in_)
+    X = df_processed.reindex(columns=feature_cols, fill_value=0)
     predictions = model.predict(X)
     probabilities = model.predict_proba(X)
-    
-    # Get the most common non-zero prediction for each row
+
+    annotator_cols = annotator_taxid_columns(X)
     final_predictions = []
     final_confidences = []
-    
+
     for i, pred in enumerate(predictions):
-        # Get all non-zero taxID values for this row
-        taxid_values = [val for val in X.iloc[i] if val > 0 and str(val).startswith('taxid_')]
-        
-        if not taxid_values:  # If no non-zero taxIDs
-            final_predictions.append(pred)  # Use model prediction
-            final_confidences.append(np.max(probabilities[i]))  # Use model confidence
+        votes = []
+        for col in annotator_cols:
+            try:
+                value = int(X.iloc[i][col])
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                votes.append(value)
+
+        confidence = float(np.max(probabilities[i]))
+        if votes:
+            top_value, top_count = Counter(votes).most_common(1)[0]
+            # Unanimous annotators keep their vote; otherwise use the model.
+            if top_count == len(votes):
+                final_predictions.append(top_value)
+                final_confidences.append(1.0 if len(votes) > 1 else confidence)
+            else:
+                final_predictions.append(int(pred))
+                final_confidences.append(confidence)
         else:
-            # Count occurrences of each non-zero taxID
-            counts = Counter(taxid_values)
-            most_common = counts.most_common(1)[0][0]
-            
-            final_predictions.append(most_common)
-            final_confidences.append(0.0)  # Set confidence to 0 for these cases
+            final_predictions.append(int(pred))
+            final_confidences.append(confidence)
     
     # Create a mapping from processed index to original index
     processed_to_original = dict(zip(range(len(df_processed)), df_processed.index))

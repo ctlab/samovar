@@ -2,7 +2,7 @@ import argparse
 import os
 import pandas as pd
 from samovar.parse_annotators import Annotation, match_annotation
-from samovar.reprofiling import train_models, predict_taxid, save_model, plot_roc_curves
+from samovar.reprofiling import train_models, predict_taxid, save_model, plot_roc_curves, annotator_taxid_columns, preprocess_data
 
 def process_sample(sample_file, output_dir, model=None, label_encoder=None, classify_unclassified=False):
     """Process a single sample with the trained model.
@@ -25,10 +25,12 @@ def process_sample(sample_file, output_dir, model=None, label_encoder=None, clas
     
     # If classify_unclassified is False, set prediction to 0 for sequences with all taxid fields = 0
     if not classify_unclassified:
-        taxid_cols = [col for col in df.columns if col.startswith('taxid_')]
-        unclassified_mask = (df[taxid_cols] == 0).all(axis=1)
-        result_df.loc[unclassified_mask, 'taxid_SAMOVAR'] = 0
-        result_df.loc[unclassified_mask, 'taxid_SAMOVAR_confidence'] = 0
+        taxid_cols = annotator_taxid_columns(df)
+        if taxid_cols:
+            numeric = df[taxid_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+            unclassified_mask = (numeric == 0).all(axis=1)
+            result_df.loc[unclassified_mask, "taxid_SAMOVAR"] = 0
+            result_df.loc[unclassified_mask, "taxid_SAMOVAR_confidence"] = 0
     
     # Save results
     output_file = os.path.join(output_dir, f"{os.path.basename(sample_file).split('.')[0]}_reprofiled.csv")
@@ -91,9 +93,9 @@ print(f"\nBest model saved to {model_path}")
 
 # Plot ROC curves
 print("\nGenerating ROC curves...")
-validation_df.columns = [col.lower() for col in validation_df.columns]
-X_test = validation_df[feature_cols]
-y_test = validation_df['true']
+processed_validation = preprocess_data(validation_df.copy())
+X_test = processed_validation.reindex(columns=feature_cols, fill_value=0)
+y_test = processed_validation['true']
 plot_roc_curves(models, X_test, y_test, output_dir=args.output_dir)
 print(f"ROC curves saved to {args.output_dir}/roc_comparison.png")
 

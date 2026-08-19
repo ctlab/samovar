@@ -103,7 +103,7 @@ def test_build_from_config_invokes_kaiju_indexers(tmp_path):
     library = db_path / "library.faa"
     assert library.exists()
     content = library.read_text()
-    assert content.startswith(">562")
+    assert "_562" in content or content.startswith(">562")
     assert "*" not in content.replace(">\n", "")
 
 

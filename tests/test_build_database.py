@@ -8,6 +8,7 @@ from Bio.SeqRecord import SeqRecord
 
 from samovar.build_database import (
     find_local_proteome_or_gff,
+    kaiju_protein_id,
     nucleotide_to_orf_records,
     process_fasta_kaiju,
     process_fasta_kraken2,
@@ -15,11 +16,21 @@ from samovar.build_database import (
 )
 
 
+def test_kaiju_protein_id_puts_taxid_last():
+    assert kaiju_protein_id("9606") == "9606"
+    assert kaiju_protein_id("9606", "NP_1").endswith("_9606")
+    assert kaiju_protein_id("562", "acc").rsplit("_", 1)[-1] == "562"
+
+
 def _write_fasta(path, records):
     SeqIO.write(records, path, "fasta")
 
 
-def test_process_fasta_kaiju_protein_headers_start_with_taxid(tmp_path):
+def _taxid_from_kaiju_header(seq_id: str) -> str:
+    return seq_id.rsplit("_", 1)[-1]
+
+
+def test_process_fasta_kaiju_protein_headers_end_with_taxid(tmp_path):
     faa = tmp_path / "562.faa"
     _write_fasta(
         faa,
@@ -29,7 +40,7 @@ def test_process_fasta_kaiju_protein_headers_start_with_taxid(tmp_path):
     recs = list(SeqIO.parse(out, "fasta"))
     os.remove(out)
     assert recs
-    assert recs[0].id == "562"
+    assert _taxid_from_kaiju_header(recs[0].id) == "562"
     assert "*" not in str(recs[0].seq)
 
 
@@ -41,7 +52,7 @@ def test_process_fasta_kaiju_orfs_from_nucleotide(tmp_path):
     recs = list(SeqIO.parse(out, "fasta"))
     os.remove(out)
     assert recs
-    assert all(rec.id == "562" for rec in recs)
+    assert all(_taxid_from_kaiju_header(rec.id) == "562" for rec in recs)
     assert all("*" not in str(rec.seq) for rec in recs)
     assert any("MEFG" in str(rec.seq) or str(rec.seq) == "MEFG" for rec in recs)
 
@@ -55,7 +66,7 @@ def test_translate_cds_from_gff(tmp_path):
     )
     recs = translate_cds_from_gff(str(fna), str(gff), "9606", min_aa=2)
     assert len(recs) == 1
-    assert recs[0].id == "9606"
+    assert _taxid_from_kaiju_header(recs[0].id) == "9606"
     assert str(recs[0].seq) == "MEF"
 
 
@@ -70,7 +81,7 @@ def test_process_fasta_kaiju_uses_sibling_faa(tmp_path):
     out = process_fasta_kaiju(str(fna), "123", fetch_missing=False, min_aa=3)
     recs = list(SeqIO.parse(out, "fasta"))
     os.remove(out)
-    assert recs[0].id == "123"
+    assert _taxid_from_kaiju_header(recs[0].id) == "123"
     assert str(recs[0].seq) == "MKKLL"
 
 
