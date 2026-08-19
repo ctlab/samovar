@@ -95,6 +95,15 @@ chmod +x bin/*
 chmod +x workflow/database_prep/samovar_build_database.sh
 chmod +x workflow/database_prep/samovar_build_database.py
 
+# Build the C++ annotation sort-merge combiner
+echo "Building C++ annotation combiner..."
+if command -v g++ &> /dev/null; then
+    make -C src/cpp
+    chmod +x bin/samovar_combine_annotations
+else
+    echo "Warning: g++ not found; annotation merge will try to compile on first use."
+fi
+
 # Add bin directory to PATH in .bashrc if not already present
 if ! grep -q "export PATH=\$PATH:$(pwd)/bin" ~/.bashrc; then
     echo "export PATH=\$PATH:$(pwd)/bin" >> ~/.bashrc
