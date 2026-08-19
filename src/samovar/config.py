@@ -61,15 +61,15 @@ class PipelineConfig:
         for attr in cmd_attrs:
             if getattr(args, attr):
                 for cmd_config in getattr(args, attr):
-                    # Split the command string into parts
+                    # Split the command string into parts (db is optional for dummy/custom tools)
                     parts = cmd_config[0].split()
-                    if len(parts) < 2:
+                    if len(parts) < 1:
                         raise ValueError(f"Invalid command format for {attr}: {cmd_config[0]}")
                     
                     # First part is the command path
                     cmd = parts[0]
-                    # Second part is the database path
-                    db_path = parts[1]
+                    # Second part is the database path (optional)
+                    db_path = parts[1] if len(parts) > 1 else "."
                     # Any remaining parts are extra arguments
                     extra = ' '.join(parts[2:]) if len(parts) > 2 else None
                     
@@ -79,6 +79,9 @@ class PipelineConfig:
                     
                     # Extract run name from attribute name (remove 'cmd_' prefix)
                     run_name = attr[4:]
+                    dummy_aliases = {"dummy", "dummy9606", "constant9606", "constant", "random"}
+                    if run_name.lower() in dummy_aliases or type_name.lower() in dummy_aliases:
+                        type_name = "constant9606"
                     
                     config.annotators.append(AnnotatorConfig(
                         run_name=run_name,
@@ -90,26 +93,29 @@ class PipelineConfig:
 
         # Handle legacy command line annotators
         for attr in dir(args):
-            if attr in ['kraken2', 'kaiju'] and getattr(args, attr):
+            if attr in ['kraken2', 'kaiju', 'dummy'] and getattr(args, attr):
                 for cmd_config in getattr(args, attr):
-                    # Split the command string into parts
+                    # Split the command string into parts (db is optional for dummy)
                     parts = cmd_config[0].split()
-                    if len(parts) < 2:
+                    if len(parts) < 1:
                         raise ValueError(f"Invalid command format for {attr}: {cmd_config[0]}")
                     
                     # First part is the command path
                     cmd = parts[0]
-                    # Second part is the database path
-                    db_path = parts[1]
+                    # Second part is the database path (optional)
+                    db_path = parts[1] if len(parts) > 1 else "."
                     # Any remaining parts are extra arguments
                     extra = ' '.join(parts[2:]) if len(parts) > 2 else None
                     
                     # Extract type from command basename
                     cmd_basename = os.path.basename(cmd)
                     type_name = cmd_basename.split('.')[0]
+                    dummy_aliases = {"dummy", "dummy9606", "constant9606", "constant", "random"}
+                    if attr == "dummy" or type_name.lower() in dummy_aliases:
+                        type_name = "constant9606"
                     
                     config.annotators.append(AnnotatorConfig(
-                        run_name=type_name,
+                        run_name=type_name if attr != "dummy" else "dummy",
                         type=type_name,
                         cmd=cmd,
                         db_path=db_path,

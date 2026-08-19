@@ -51,7 +51,10 @@ def parse_annotation_table(table_path: str) -> pd.DataFrame:
     
     # Fill NaN values with 0
     result = result.fillna(0)
-    
+
+    if result.empty or "taxid" not in result.columns:
+        return pd.DataFrame(columns=["taxid"])
+
     # Convert taxid to string
     result['taxid'] = result['taxid'].astype(str)
     

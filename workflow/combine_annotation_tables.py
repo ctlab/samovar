@@ -13,12 +13,17 @@ args = parser.parse_args()
 def split_sample_name(sample_name: str) -> str:
     return "_".join(sample_name.split("_")[i] for i in range(args.split_sample_name))
 
-# Get sample names
-sample_files = set([split_sample_name(gr) for gr in os.listdir(args.input_dir)])
+# Get sample names from *.out files only (ignore logs/ and other sidecar files)
+entries = [
+    name
+    for name in os.listdir(args.input_dir)
+    if name.endswith(".out") and os.path.isfile(os.path.join(args.input_dir, name))
+]
+sample_files = set(split_sample_name(gr) for gr in entries)
 
 # Process each sample
 for sample in sample_files:
-    files = [gr for gr in os.listdir(args.input_dir) if split_sample_name(gr) == sample]
+    files = [gr for gr in entries if split_sample_name(gr) == sample]
     files = [os.path.join(args.input_dir, f) for f in files]
 
     annotation_dict = {}
@@ -27,6 +32,10 @@ for sample in sample_files:
         if tool is None:
             continue
         annotation_dict[file] = tool
+
+    if not annotation_dict:
+        print(f"Skipping {sample}: no parseable annotation outputs")
+        continue
 
     # Create annotation object
     ann = Annotation(annotation_dict, args.true_annotation)

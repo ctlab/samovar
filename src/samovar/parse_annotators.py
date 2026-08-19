@@ -14,6 +14,8 @@ import sqlite3
 import pickle
 from pathlib import Path
 
+from samovar.annotators_wrapper import get_annotator_instance
+
 # `ete3` imports its webplugin unconditionally, and the webplugin imports the
 # stdlib `cgi` module. Python 3.13 removed `cgi`, so importing ete3 fails
 # unless we provide a tiny compatibility shim.
@@ -290,6 +292,11 @@ def read_metaphlan_raw(file_path: str, db_path: Optional[str] = None) -> pd.Data
     return df
 
 
+def read_custom_raw(file_path: str) -> pd.DataFrame:
+    """Read custom annotator output (seq, taxID)."""
+    return _read_table_or_empty(file_path, ["seq", "taxID"])
+
+
 # Dictionary mapping tool names to their respective read functions
 READ_FUNCTIONS = {
     "kraken": read_kraken1_raw,
@@ -301,8 +308,23 @@ READ_FUNCTIONS = {
     "metaphlan": read_metaphlan_raw,
     "mpa": read_metaphlan_raw,
     "mp4": read_metaphlan_raw,
-    "kaiju": read_kaiju_raw
+    "kaiju": read_kaiju_raw,
+    "dummy": read_custom_raw,
+    "dummy9606": read_custom_raw,
+    "constant9606": read_custom_raw,
+    "constant": read_custom_raw,
+    "random": read_custom_raw,
+    "custom": read_custom_raw,
 }
+
+
+def read_tool_output(file_path: str, tool_type: str) -> pd.DataFrame:
+    """Read an annotator file via native parsers or the OOP wrapper."""
+    reader = READ_FUNCTIONS.get(tool_type)
+    if reader is not None:
+        return reader(file_path)
+    annotator = get_annotator_instance(tool_type, run_config={}, config={})
+    return annotator.parse_output(file_path)
 
 
 def read_annotation(file_path_type: Dict[str, str], trimmed: bool = True) -> pd.DataFrame:
@@ -317,7 +339,7 @@ def read_annotation(file_path_type: Dict[str, str], trimmed: bool = True) -> pd.
     """
     res = pd.DataFrame()
     for path, tool_type in file_path_type.items():
-        df = READ_FUNCTIONS.get(tool_type)(path).set_index("seq")
+        df = read_tool_output(path, tool_type).set_index("seq")
         if trimmed:
             df = df[["taxID"]]
         tool_name = tool_type.split("_")[-1].split(".")[0]
@@ -346,7 +368,7 @@ class Annotation:
         
         # Read and combine all annotation files
         for path, tool_type in file_path_type.items():
-            df = READ_FUNCTIONS.get(tool_type)(path).set_index("seq").astype({"taxID": 'string'})
+            df = read_tool_output(path, tool_type).set_index("seq").astype({"taxID": 'string'})
             df.columns = [f"{col}_{tool_type}_{self.id}" for col in df.columns]
             
             # Check for duplicate indices
@@ -359,7 +381,10 @@ class Annotation:
                 raise ValueError(f"Error concatenating {path}")
             self.id += 1
 
+        self.DataFrame = self.DataFrame.fillna("0")
+
         # Extract true annotations if pattern provided
+        self.true_annotation = []
         if get_true_annotation is not None:
             self.true_annotation = []
             for i in self.DataFrame.index:
@@ -611,41 +636,39 @@ class ExpandAnnotation:
         """
         return self.rank_annotation[rank]
 
-def match_annotation(annotation_name:str) -> str:
+def match_annotation(annotation_name:str) -> Optional[str]:
     """Match annotation name to tool name.
-    
-    Args:
-        annotation_name: Annotation name
-        
-    Returns:
-        Tool name  
+
+    Recognizes native `*.<tool>.out` files and custom outputs
+    `*.custom_<tool>.out` from CustomAnnotator / ConstantTaxidAnnotator.
     """
     annotation_name = os.path.basename(annotation_name)
-    if annotation_name.endswith(".out"):
-        arg = annotation_name.split(".")[-2]
-    
-        if arg == "kraken":
-            return "kraken"
-        elif arg == "kraken1":
-            return "kraken1"
-        elif arg == "kraken2":
-            return "kraken2"
-        elif arg == "krakenuniq":
-            return "krakenuniq"
-        elif arg == "krakenu":
-            return "krakenu"
-        elif arg == "metaphlan":
-            return "metaphlan"
-        elif arg == "metaphlan4":
-            return "metaphlan"
-        elif arg == "mpa":
-            return "metaphlan"
-        elif arg == "mp4":
-            return "metaphlan"
-        elif arg == "kaiju":
-            return "kaiju"
-        else:
-            raise ValueError(f"Annotation name {annotation_name} not found. Check the input: file extention should be like sample_metainfo.annotator.out")
-    else:
+    if not annotation_name.endswith(".out"):
         print("Skipping", annotation_name)
         return None
+
+    arg = annotation_name.split(".")[-2]
+    if arg.startswith("custom_"):
+        return arg[len("custom_"):]
+
+    aliases = {
+        "kraken": "kraken",
+        "kraken1": "kraken1",
+        "kraken2": "kraken2",
+        "krakenuniq": "krakenuniq",
+        "krakenu": "krakenu",
+        "metaphlan": "metaphlan",
+        "metaphlan4": "metaphlan",
+        "mpa": "metaphlan",
+        "mp4": "metaphlan",
+        "kaiju": "kaiju",
+        "dummy": "dummy",
+        "dummy9606": "dummy9606",
+        "constant9606": "constant9606",
+        "constant": "constant",
+        "random": "random",
+    }
+    if arg in aliases:
+        return aliases[arg]
+    # Unknown .out files are treated as custom tools (two-column seq/taxID).
+    return arg

@@ -89,9 +89,10 @@ def preprocess_data(df):
         # Convert to numeric
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
-    # Convert length to int if present
-    if 'length' in df.columns:
-        df['length'] = pd.to_numeric(df['length'], errors='coerce').fillna(0).astype(int)
+    # Convert length to int if present; dummy/custom tables often omit it
+    if 'length' not in df.columns:
+        df['length'] = 0
+    df['length'] = pd.to_numeric(df['length'], errors='coerce').fillna(0).astype(int)
     
     # Convert true to numeric and handle NaN values
     if 'true' in df.columns:
@@ -230,25 +231,19 @@ def predict_taxid(df, model_path=None, feature_cols=None):
     if feature_cols is None:
         feature_cols = sorted([col for col in df_processed.columns 
                              if col not in ['seq', 'true']])
-    
-    # Ensure all required features are present
-    required_features = ['length'] + [col for col in feature_cols if col.startswith('taxid_')]
-    missing_features = [f for f in required_features if f not in df_processed.columns]
-    if missing_features:
-        raise ValueError(f"Missing required features: {missing_features}")
-    
+
     # Load or use provided model
     if isinstance(model_path, str) and os.path.exists(model_path):
         model = joblib.load(model_path)
     elif model_path is not None:
-        model = model_path  # Use provided model object
+        model = model_path
     else:
-        # Train new model if no model provided
         model, _, _, feature_cols = train_models(df_processed)
-    
-    # Align columns with the fitted model (sample tables can differ from validation).
+
     if hasattr(model, "feature_names_in_"):
         feature_cols = list(model.feature_names_in_)
+    if "length" not in df_processed.columns:
+        df_processed["length"] = 0
     X = df_processed.reindex(columns=feature_cols, fill_value=0)
     predictions = model.predict(X)
     probabilities = model.predict_proba(X)
