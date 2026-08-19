@@ -26,4 +26,4 @@ samovaR.Rproj
 setup.py
 pyproject.toml
 workflow/
-^\.github$
+^vignettes/samovar-ML\.Rmd$

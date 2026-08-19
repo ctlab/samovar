@@ -74,12 +74,12 @@ echo "Detected R library path: $R_LIB_PATH"
 
 # Install R dependencies
 echo "Installing R dependencies..."
-$R_PATH --quiet -e "if (!require('remotes', lib='$R_LIB_PATH')) install.packages('remotes', repos='https://cloud.r-project.org/', lib='$R_LIB_PATH')"&> /dev/null
-$R_PATH --quiet -e "if (!require('samovaR', lib='$R_LIB_PATH')) library(remotes, lib='$R_LIB_PATH'); remotes::install_deps(dependencies = TRUE, lib='$R_LIB_PATH')"&> /dev/null
+$R_PATH --quiet -e "if (!require('remotes', lib='$R_LIB_PATH')) install.packages('remotes', repos='https://cloud.r-project.org/', lib='$R_LIB_PATH')" &> /dev/null
+$R_PATH --quiet -e "if (!require('samovaR', lib='$R_LIB_PATH')) library(remotes, lib='$R_LIB_PATH'); remotes::install_deps(dependencies = TRUE, lib='$R_LIB_PATH')" &> /dev/null
 
 # Install R package
 echo "Installing R package..."
-$R_PATH --quiet -e "library(remotes, lib='$R_LIB_PATH'); remotes::install_local('.', lib='$R_LIB_PATH')"&> /dev/null
+$R_PATH --quiet -e "library(remotes, lib='$R_LIB_PATH'); remotes::install_local('.', lib='$R_LIB_PATH')" &> /dev/null
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
@@ -114,4 +114,4 @@ if [ ! -f build/config.json ]; then
 EOF
 fi
 
-echo "Installation completed successfully!" 
+echo "Installation completed successfully!"

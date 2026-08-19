@@ -28,6 +28,16 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install flake8 pytest pytest-cov
         pip install -e .[dev]
+    - name: Create local config
+      run: |
+        mkdir -p build
+        cat > build/config.json <<EOF
+        {
+            "python_path": "$(which python3)",
+            "r_path": "$(which R || echo /usr/bin/R)",
+            "r_lib_path": "/usr/local/lib/R/site-library"
+        }
+        EOF
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
@@ -36,4 +46,4 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       run: |
-        pytest -k "not test_table2iss_samovar"
+        pytest

@@ -1,0 +1,5 @@
+{
+    "python_path": "/usr/bin/python3",
+    "r_path": "/usr/bin/R",
+    "r_lib_path": "/usr/local/lib/R/site-library"
+}

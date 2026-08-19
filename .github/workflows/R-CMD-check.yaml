@@ -39,13 +39,24 @@ jobs:
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::rcmdcheck
+          extra-packages: any::rcmdcheck, any::testthat
           needs: check
+
+      - name: Create local config
+        run: |
+          mkdir -p build
+          cat > build/config.json <<EOF
+          {
+              "python_path": "$(which python3 || echo /usr/bin/python3)",
+              "r_path": "$(which R)",
+              "r_lib_path": "$(Rscript -e 'cat(.libPaths()[1])')"
+          }
+          EOF
 
       - uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
-          args: 'c("--no-manual","--no-examples")'
+          args: 'c("--no-manual","--no-examples","--no-build-vignettes")'
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           error-on: '"error"'
           check-dir: '"check"'
