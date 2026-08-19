@@ -13,7 +13,8 @@ from samovar.parse_annotators import (
     Annotation,
     RankAnnotation,
     ExpandAnnotation,
-    parse_metaphlan_db
+    parse_metaphlan_db,
+    extract_true_taxid,
 )
 
 
@@ -50,6 +51,19 @@ def krakenu_file(test_data_dir):
 def metaphlan_file(test_data_dir):
     """Return path to MetaPhlAn test file."""
     return os.path.join(test_data_dir, "metaphlan4.log")
+
+
+def test_extract_true_taxid_from_headers():
+    """True taxID must not collapse to 0 when taxid: is missing from a contig."""
+    pattern = r"(?<=taxid:)[0-9]*"
+    assert extract_true_taxid("Hsap.fna|taxid:9606|-NC_000001.11_0_0", pattern) == "9606"
+    assert extract_true_taxid("Ecoli.fna|taxid:562|-NC_000913.3_0_0", pattern) == "562"
+    assert extract_true_taxid("Scer.fna|taxid:4932|-NC_001133.9_0_0", pattern) == "4932"
+    # Yeast chromosomes II+ were stored without taxid: in the header.
+    assert extract_true_taxid("Scer.fna-NC_001134.8_0_0", pattern) == "4932"
+    assert extract_true_taxid("Scer.fna-NC_001139.9_1_1/1", pattern) == "4932"
+    assert extract_true_taxid("taxid:562_0_0/1", pattern) == "562"
+    assert extract_true_taxid("random_read", pattern) == ""
 
 
 def test_read_kaiju_raw(kaiju_file):

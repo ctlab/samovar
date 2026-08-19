@@ -6,7 +6,7 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument("--input_dir", "-i", type=str, required=True)
 parser.add_argument("--output_dir", "-o", type=str, required=False)
-parser.add_argument("--true_annotation", "-t", type=str, required=False, default="(?<=taxid:)[0-9]*")
+parser.add_argument("--true_annotation", "-t", type=str, required=False, default="(?<=taxid:)[0-9]+")
 parser.add_argument("--split_sample_name", "-s", type=int, required=False, default=1)
 args = parser.parse_args()
 

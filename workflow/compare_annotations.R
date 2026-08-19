@@ -44,6 +44,32 @@ if (!is.null(output_dir)) {
   dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 }
 
+# Installed samovaR may concatenate every CSV in the directory, including a
+# previously written combined_annotation_table.csv. Hide those files so they
+# cannot be mixed back into the plot (that is how true taxID 0 reappeared).
+combined_files <- list.files(
+  annotation_dir,
+  pattern = "^combined_annotation_table.*\\.csv$",
+  full.names = TRUE
+)
+combined_hidden <- character()
+for (f in combined_files) {
+  hidden <- paste0(f, ".plotbak")
+  if (file.rename(f, hidden)) {
+    combined_hidden <- c(combined_hidden, hidden)
+  }
+}
+on.exit({
+  for (hidden in combined_hidden) {
+    orig <- sub("\\.plotbak$", "", hidden)
+    if (file.exists(hidden) && !file.exists(orig)) {
+      file.rename(hidden, orig)
+    } else if (file.exists(hidden)) {
+      unlink(hidden)
+    }
+  }
+}, add = TRUE)
+
 # Read and process data
 data <- read_annotation_dir(annotation_dir)
 

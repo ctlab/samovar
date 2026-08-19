@@ -35,8 +35,41 @@ except ModuleNotFoundError as exc:
     else:
         raise
 
-# Lazily initialize NCBI taxonomy database to avoid expensive work during
-# module import (this also makes unit test collection faster).
+# Common ISS / test-genome prefixes when headers omit `taxid:`.
+_TRUE_TAXID_PREFIXES = {
+    "scer.fna": "4932",
+    "ecoli.fna": "562",
+    "hsap.fna": "9606",
+    "phix.fna": "2886930",
+}
+
+
+def extract_true_taxid(seq_id: str, pattern: Optional[str] = None) -> str:
+    """Extract a true taxID from a read/sequence identifier.
+
+    Prefers an explicit `taxid:<digits>` token. The default lookbehind pattern
+    `(?<=taxid:)[0-9]*` can match an empty string, and some yeast contigs in
+    the test genomes were stored as `Scer.fna-NC_...` without `taxid:`.
+    """
+    seq_id = "" if seq_id is None else str(seq_id)
+    if pattern:
+        match = re.search(pattern, seq_id)
+        if match:
+            token = match.group(0)
+            if token:
+                return token
+
+    match = re.search(r"taxid:([0-9]+)", seq_id, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    lower = seq_id.lower()
+    for prefix, taxid in _TRUE_TAXID_PREFIXES.items():
+        if lower.startswith(prefix) or f"|{prefix}" in lower:
+            return taxid
+    return ""
+
+
 ncbi = None
 _taxonomy_parent_rank = None
 
@@ -386,13 +419,10 @@ class Annotation:
         # Extract true annotations if pattern provided
         self.true_annotation = []
         if get_true_annotation is not None:
-            self.true_annotation = []
-            for i in self.DataFrame.index:
-                match = re.search(get_true_annotation, i)
-                if match:
-                    self.true_annotation.append(match.group(0))
-                else:
-                    self.true_annotation.append("")
+            self.true_annotation = [
+                extract_true_taxid(seq_id, get_true_annotation)
+                for seq_id in self.DataFrame.index
+            ]
             print("True annotations extracted")
 
         # Get unique annotations and ranks

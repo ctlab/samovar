@@ -16,9 +16,11 @@ def process_sample(sample_file, output_dir, model=None, label_encoder=None, clas
     """
     print(f"Processing {sample_file}...")
     df = pd.read_csv(sample_file)
-    
-    # Fill NaN values with 0 in all columns
-    df = df.fillna(0)
+
+    # Fill missing predictor fields with 0, but never coerce missing true
+    # taxIDs to 0 (0 means unclassified, not "unknown truth").
+    fill_cols = [c for c in df.columns if c != "true"]
+    df[fill_cols] = df[fill_cols].fillna(0)
     
     # Make predictions
     result_df = predict_taxid(df, model_path=None if model is None else model)
@@ -66,8 +68,9 @@ dropped_rows = initial_rows - len(validation_df)
 print(f"\nDropped {dropped_rows} rows with NaN in 'true' column")
 print(f"Remaining rows for training: {len(validation_df)}")
 
-# Fill NaN values with 0 in all other columns
-validation_df = validation_df.fillna(0)
+# Fill NaN values with 0 in predictors only; do not coerce missing true taxIDs to 0.
+fill_cols = [c for c in validation_df.columns if c != "true"]
+validation_df[fill_cols] = validation_df[fill_cols].fillna(0)
 
 # Train model
 print("\nTraining model on validation data...")
