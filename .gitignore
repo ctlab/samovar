@@ -20,9 +20,12 @@ Rplots.pdf
 vignettes/Rplots.pdf
 tests/test_that/*.pdf
 
-taxdump.tar.gz
+data/test_genomes/**/*.faa
+data/test_genomes/**/*.gff
+data/test_genomes/**/*.gtf
 src/samovar.egg-info/
 hs_err_pid*.log
 build/config.json
 project/
 generate_docs_pdf.R
+taxdump.tar.gz

@@ -49,6 +49,100 @@ def _entrez_retry(func, max_retries=3, initial_delay=1):
     
     raise last_exception
 
+def _normalize_taxid(taxid: str | int) -> str:
+    taxid = str(taxid)
+    return taxid.split(".")[0]
+
+
+def _assembly_ftp_path(taxid: str | int, email: str, silent: bool = False) -> Optional[str]:
+    """Return RefSeq (preferred) or GenBank FTP path for a taxid assembly."""
+    taxid = _normalize_taxid(taxid)
+    Entrez.email = email
+    search_term = f"txid{taxid}[Organism:exp] AND \"complete genome\"[filter] AND \"latest refseq\"[filter]"
+    if not silent:
+        logger.info(f"Searching with term: {search_term}")
+
+    handle = Entrez.esearch(db="assembly", term=search_term, retmax=1)
+    record = Entrez.read(handle)
+    handle.close()
+    if not record["IdList"]:
+        if not silent:
+            logger.warning(f"No genome found for taxid {taxid}")
+        return None
+
+    assembly_id = record["IdList"][0]
+    handle = Entrez.esummary(db="assembly", id=assembly_id)
+    summary = Entrez.read(handle)
+    handle.close()
+    doc = summary["DocumentSummarySet"]["DocumentSummary"][0]
+    ftp_path = doc.get("FtpPath_RefSeq") or doc.get("FtpPath_GenBank")
+    if not ftp_path and not silent:
+        logger.warning(f"No FTP path found for taxid {taxid}")
+    return ftp_path or None
+
+
+def _download_assembly_file(
+    taxid: str | int,
+    output_folder: str,
+    email: str,
+    suffix: str,
+    dest_name: str,
+    silent: bool = False,
+) -> Optional[str]:
+    """Download an NCBI assembly file (suffix like '_protein.faa.gz') and gunzip it."""
+    taxid = _normalize_taxid(taxid)
+    output_path = Path(output_folder)
+    output_path.mkdir(parents=True, exist_ok=True)
+    dest = output_path / dest_name
+    if dest.exists():
+        return str(dest)
+    gz_dest = Path(str(dest) + ".gz")
+    try:
+        ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
+        if not ftp_path:
+            return None
+        asm_name = os.path.basename(ftp_path)
+        url = f"{ftp_path}/{asm_name}{suffix}".replace("ftp://", "https://")
+        if not silent:
+            logger.info(f"Downloading {url}")
+        urllib.request.urlretrieve(url, gz_dest)
+        with gzip.open(gz_dest, "rb") as f_in, open(dest, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        try:
+            gz_dest.unlink()
+        except OSError:
+            pass
+        return str(dest)
+    except Exception as e:
+        if not silent:
+            logger.error(f"Failed to download {suffix} for taxid {taxid}: {e}")
+        return None
+
+
+def fetch_proteome(
+    taxid: str | int,
+    output_folder: str,
+    email: str,
+    silent: bool = False,
+) -> Optional[str]:
+    """Download NCBI protein FASTA (`_protein.faa.gz`) for a taxid."""
+    return _download_assembly_file(
+        taxid, output_folder, email, "_protein.faa.gz", f"{_normalize_taxid(taxid)}.faa", silent
+    )
+
+
+def fetch_gff(
+    taxid: str | int,
+    output_folder: str,
+    email: str,
+    silent: bool = False,
+) -> Optional[str]:
+    """Download NCBI genomic GFF (`_genomic.gff.gz`) for a taxid."""
+    return _download_assembly_file(
+        taxid, output_folder, email, "_genomic.gff.gz", f"{_normalize_taxid(taxid)}.gff", silent
+    )
+
+
 def fetch_genome_raw(
     taxid: str|int,
     output_folder: str,
@@ -58,93 +152,32 @@ def fetch_genome_raw(
     ) -> Optional[str]:
     """
     Fetch genome from NCBI for a given taxid.
-    
-    Args:
-        taxid (str): NCBI taxonomy ID
-        output_folder (str): Path to output folder
-        email (str): Email for NCBI Entrez
-        reference_only (bool): If True, only fetch reference genome
-        silent (bool): If True, suppress logging output
-        
-    Returns:
-        Optional[str]: Path to downloaded genome file or None if failed
     """
-    if isinstance(taxid, str):
-        taxid = taxid.split(".")[0]
-    # Set up Entrez
+    taxid = _normalize_taxid(taxid)
     Entrez.email = email
-    
-    # Create output folder if it doesn't exist
+
     output_path = Path(output_folder)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Check if genome already exists
-    # Try to match any of .fa.gz, .fna.gz, .fasta.gz
-    possible_exts = [".fa.gz", ".fna.gz", ".fasta.gz"]
+
+    possible_exts = [".fa.gz", ".fna.gz", ".fasta.gz", ".fa", ".fna", ".fasta"]
     for ext in possible_exts:
         candidate = output_path / f"{taxid}{ext}"
         if candidate.exists():
-            genome_path = candidate
-            break
-    else:
-        # Default to .fna.gz for download if not present
-        genome_path = output_path / f"{taxid}.fna.gz"
-    if genome_path.exists():
-        if not silent:
-            logger.info(f"Genome for taxid {taxid} already exists at {genome_path}")
-        return str(genome_path)
-    
+            if not silent:
+                logger.info(f"Genome for taxid {taxid} already exists at {candidate}")
+            return str(candidate)
+
+    genome_path = output_path / f"{taxid}.fna.gz"
     try:
-        # Search for genome assembly with complete genome
-        search_term = f"txid{taxid}[Organism:exp] AND \"complete genome\"[filter] AND \"latest refseq\"[filter]"
-        if not silent:
-            logger.info(f"Searching with term: {search_term}")
-            
-        handle = Entrez.esearch(db="assembly", term=search_term, retmax=1)
-        record = Entrez.read(handle)
-        handle.close()
-        
-        if not record["IdList"]:
-            if not silent:
-                logger.warning(f"No genome found for taxid {taxid}")
-            return None
-            
-        # Get assembly details
-        assembly_id = record["IdList"][0]
-        handle = Entrez.esummary(db="assembly", id=assembly_id)
-        summary = Entrez.read(handle)
-        handle.close()
-        
-        # Get FTP path - prefer RefSeq path
-        ftp_path = summary["DocumentSummarySet"]["DocumentSummary"][0].get("FtpPath_RefSeq")
+        ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
         if not ftp_path:
-            ftp_path = summary["DocumentSummarySet"]["DocumentSummary"][0].get("FtpPath_GenBank")
-            
-        if not ftp_path:
-            if not silent:
-                logger.warning(f"No FTP path found for taxid {taxid}")
             return None
-            
-        # Construct download URL
         asm_name = os.path.basename(ftp_path)
-        url = f"{ftp_path}/{asm_name}_genomic.fna.gz"
-        
-        # Convert FTP URL to HTTP URL
-        http_url = url.replace('ftp://', 'https://')
-        
-        # Download and save
-        try:
-            if not silent:
-                logger.info(f"Downloading genome from {http_url}")
-            urllib.request.urlretrieve(http_url, genome_path)
-            if not silent:
-                logger.info(f"Successfully downloaded genome for taxid {taxid}")
-            return str(genome_path)
-        except Exception as e:
-            if not silent:
-                logger.error(f"Failed to download genome for taxid {taxid}: {str(e)}")
-            return None
-            
+        http_url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
+        if not silent:
+            logger.info(f"Downloading genome from {http_url}")
+        urllib.request.urlretrieve(http_url, genome_path)
+        return str(genome_path)
     except Exception as e:
         if not silent:
             logger.error(f"Error fetching genome for taxid {taxid}: {str(e)}")

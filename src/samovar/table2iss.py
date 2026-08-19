@@ -278,6 +278,8 @@ def process_abundance_table(
     available_genomes = []
     for taxid in abundance_table['taxid']:
         taxid = str(taxid).split(".")[0]
+        if taxid in {"0", "nan", "None", ""}:
+            continue
         genome_file = get_genome_file(genome_dir, taxid)
         if genome_file is None:
             genome_file = fetch_genome(taxid, genome_dir, email, reference_only=True)

@@ -5,12 +5,14 @@ import subprocess
 import logging
 import tempfile
 from pathlib import Path
-from typing import List, Dict, Union
+from typing import List, Dict, Optional, Tuple, Union
 from Bio import SeqIO
 from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
 import yaml
 from .fasta_processor import process_fasta_directories
 from .fasta_processor import preprocess_fasta
+from .genome_fetcher import fetch_gff, fetch_proteome
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +54,11 @@ def get_taxonomy_db(
         The downloaded file will be automatically extracted to the specified db_path.
     """
     os.makedirs(db_path, exist_ok=True)
+    existing_nodes = Path(db_path) / "nodes.dmp"
+    existing_nested = Path(db_path) / "taxonomy" / "nodes.dmp"
+    if existing_nodes.exists() or existing_nested.exists():
+        logger.info(f"Taxonomy already present under {db_path}; skipping download")
+        return
 
     if taxonomy_path is None:
         download_cmd =[
@@ -69,10 +76,9 @@ def get_taxonomy_db(
             "-C",
             db_path
         ]
-        print(extract_cmd)
         run_command(extract_cmd)
 
-        logger.info(f"Taxonomy database downloaded and extracted to {db_path}/taxonomy")
+        logger.info(f"Taxonomy database downloaded and extracted to {db_path}")
     
     else:
         copy_cmd = [
@@ -103,11 +109,12 @@ def process_fasta_kraken2(input_file: str,
         The function creates a temporary file that should be cleaned up by the caller.
     """
     temp_fasta = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False)
-    
+    records = []
     for i, record in enumerate(SeqIO.parse(input_file, "fasta")):
         record.id = f"seq{i}|kraken:taxid|{taxid}"
-
-    SeqIO.write(record, temp_fasta, "fasta")
+        record.description = ""
+        records.append(record)
+    SeqIO.write(records, temp_fasta.name, "fasta")
     temp_fasta.close()
     return temp_fasta.name
 
@@ -201,69 +208,225 @@ def build_database_kraken2(
     
     logger.info(f"Database successfully built at {db_path}")
 
+def _sanitize_seqid(seq_id: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in seq_id)[:80]
+
+
+def _parse_gff_attributes(attr_field: str) -> dict:
+    attrs = {}
+    if "ID=" in attr_field or "Parent=" in attr_field or "protein_id=" in attr_field:
+        for part in attr_field.strip().split(";"):
+            if "=" in part:
+                key, value = part.split("=", 1)
+                attrs[key.strip()] = value.strip().strip('"')
+        return attrs
+    for part in attr_field.strip().split(";"):
+        part = part.strip()
+        if " " in part:
+            key, value = part.split(" ", 1)
+            attrs[key.strip()] = value.strip().strip('"')
+    return attrs
+
+
+def translate_cds_from_gff(fasta_path: str, gff_path: str, taxid: str, min_aa: int = 10) -> List[SeqRecord]:
+    """Translate CDS features from GFF/GTF using a nucleotide FASTA."""
+    sequences = SeqIO.to_dict(SeqIO.parse(fasta_path, "fasta"))
+    cds_groups: Dict[str, list] = {}
+    with open(gff_path) as handle:
+        for line in handle:
+            if not line or line.startswith("#"):
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 9:
+                continue
+            seqid, _source, ftype, start, end, _score, strand, phase, attrs = fields[:9]
+            if ftype.upper() not in {"CDS", "CDS_FEATURE"}:
+                continue
+            parsed = _parse_gff_attributes(attrs)
+            protein_id = (
+                parsed.get("protein_id")
+                or parsed.get("ID")
+                or parsed.get("Parent")
+                or parsed.get("transcript_id")
+                or f"{seqid}:{start}-{end}"
+            )
+            try:
+                phase_i = int(phase) if phase not in {".", ""} else 0
+            except ValueError:
+                phase_i = 0
+            cds_groups.setdefault(protein_id, []).append(
+                (seqid, int(start), int(end), strand, phase_i)
+            )
+
+    records: List[SeqRecord] = []
+    for protein_id, parts in cds_groups.items():
+        strand = parts[0][3]
+        ordered = sorted(parts, key=lambda x: x[1], reverse=(strand == "-"))
+        cds = Seq("")
+        for seqid, start, end, feat_strand, phase in ordered:
+            record = sequences.get(seqid)
+            if record is None:
+                record = next((s for s in sequences.values() if seqid in s.id), None)
+            if record is None:
+                cds = Seq("")
+                break
+            chunk = record.seq[start - 1:end]
+            if feat_strand == "-":
+                chunk = chunk.reverse_complement()
+            if phase:
+                chunk = chunk[phase:]
+            cds += chunk
+        trim = (len(cds) // 3) * 3
+        if trim < 3:
+            continue
+        protein = str(cds[:trim].translate(to_stop=True)).replace("*", "").replace("X", "")
+        if len(protein) < min_aa:
+            continue
+        records.append(SeqRecord(Seq(protein), id=str(taxid), description=""))
+    return records
+
+
+def nucleotide_to_frame_records(input_file: str, taxid: str) -> List[SeqRecord]:
+    """One 6-frame translation per contig with stops stored as X.
+
+    Kaiju-mkbwt treats ``*`` as the sequence terminator, so leftover stop
+    symbols in the protein FASTA break the index. Headers must be the taxid
+    alone: ``>9606`` works, ``>9606_contig`` is stored as taxid 0.
+    """
+    records: List[SeqRecord] = []
+    taxid = str(taxid).split(".")[0]
+    for nucl in SeqIO.parse(input_file, "fasta"):
+        seq = str(nucl.seq).upper().replace("U", "T")
+        for strand_seq in (Seq(seq), Seq(seq).reverse_complement()):
+            for frame in range(3):
+                frame_seq = strand_seq[frame:]
+                frame_seq = frame_seq[: (len(frame_seq) // 3) * 3]
+                if len(frame_seq) < 3:
+                    continue
+                aa = str(frame_seq.translate()).replace("*", "X")
+                if not aa:
+                    continue
+                records.append(SeqRecord(Seq(aa), id=taxid, description=""))
+    return records
+
+
+def nucleotide_to_orf_records(input_file: str, taxid: str, min_aa: int = 15) -> List[SeqRecord]:
+    """Translate nucleotide FASTA in 6 frames (stop-free ORFs, taxid-only headers)."""
+    records: List[SeqRecord] = []
+    taxid = str(taxid).split(".")[0]
+    for nucl in SeqIO.parse(input_file, "fasta"):
+        seq = str(nucl.seq).upper().replace("U", "T")
+        for strand_seq in (Seq(seq), Seq(seq).reverse_complement()):
+            for frame in range(3):
+                frame_seq = strand_seq[frame:]
+                frame_seq = frame_seq[: (len(frame_seq) // 3) * 3]
+                if len(frame_seq) < 3:
+                    continue
+                aa = str(frame_seq.translate())
+                for orf in aa.split("*"):
+                    orf = orf.replace("X", "")
+                    if len(orf) < min_aa:
+                        continue
+                    records.append(SeqRecord(Seq(orf), id=taxid, description=""))
+    return records
+
+
+def find_local_proteome_or_gff(input_file: str, taxid: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return ('protein'|'gff', path) for a sibling annotation file if present."""
+    path = Path(input_file)
+    parent = path.parent
+    candidates_faa = [
+        path.with_suffix(".faa"),
+        parent / f"{taxid}.faa",
+        parent / f"{path.stem}.faa",
+    ]
+    for cand in candidates_faa:
+        if cand.exists():
+            return "protein", str(cand)
+    candidates_gff = []
+    for ext in (".gff", ".gff3", ".gtf"):
+        candidates_gff.extend(
+            [path.with_suffix(ext), parent / f"{taxid}{ext}", parent / f"{path.stem}{ext}"]
+        )
+    for cand in candidates_gff:
+        if cand.exists():
+            return "gff", str(cand)
+    return None, None
+
+
 def process_fasta_kaiju(input_file: str, 
                        taxid: str,
                        db_path: str = "kaiju_db",
-                       protein: bool = False) -> str:
-    """Process FASTA file for Kaiju database building.
-    
-    This function reads a FASTA file and either keeps it as is (if protein=True)
-    or translates nucleotide sequences to protein sequences in all three frames (if protein=False).
-    It also adds taxonomy IDs to the sequence headers.
-    
-    Args:
-        input_file (str): Path to the input FASTA file.
-        taxid (str): Taxonomy ID to be added to sequence headers.
-        db_path (str, optional): Path to the database directory. Defaults to "kaiju_db".
-        protein (bool, optional): Whether the input is already protein sequences. Defaults to False.
-    
-    Returns:
-        str: Path to the temporary processed FASTA file.
-    
-    Note:
-        The function creates a temporary file that should be cleaned up by the caller.
-        For nucleotide sequences, it generates three frames per sequence.
+                       protein: bool = False,
+                       email: str = "test@samovar.com",
+                       fetch_missing: bool = True,
+                       min_aa: int = 30) -> str:
+    """Process FASTA into a Kaiju protein library.
+
+    Kaiju indexes proteins and reads taxid as the first integer in the FASTA header.
+    Nucleotide genomes are converted via:
+      1. sibling `.faa` proteome, or
+      2. sibling GFF/GTF CDS translation, or
+      3. downloaded NCBI proteome / GFF, or
+      4. 6-frame ORF translation (offline fallback).
     """
-    temp_fasta = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False)
-    
-    if protein:
-        # If input is already protein, just copy the file with modified headers
-        for record in SeqIO.parse(input_file, "fasta"):
-            record.id = f"{record.id}|taxid|{taxid}"
-            SeqIO.write(record, temp_fasta, "fasta")
-    else:
-        # Translate nucleotide sequences to protein in all three frames
-        for record in SeqIO.parse(input_file, "fasta"):
-            # Trim sequence to multiple of 3 to avoid partial codons
-            seq_len = len(record.seq)
-            trim_len = (seq_len // 3) * 3
-            trimmed_seq = record.seq[:trim_len]
-            
-            # Create three frames
-            for frame in range(3):
-                # Get the frame sequence
-                frame_seq = trimmed_seq[frame:]
-                # Trim to multiple of 3
-                frame_trim_len = (len(frame_seq) // 3) * 3
-                frame_seq = frame_seq[:frame_trim_len]
-                
-                # Translate the sequence
-                protein_seq = str(frame_seq.translate())
-                
-                # Create new record with translated sequence and taxid
-                new_record = record
-                new_record.seq = Seq(protein_seq)
-                new_record.id = f"{record.id}_frame{frame+1}|taxid|{taxid}"
-                SeqIO.write(new_record, temp_fasta, "fasta")
-    
+    taxid = str(taxid).split(".")[0]
+    temp_fasta = tempfile.NamedTemporaryFile(mode='w', suffix='.faa', delete=False)
     temp_fasta.close()
+    records: List[SeqRecord] = []
+
+    suffix = Path(input_file).suffix.lower()
+    is_protein = protein or suffix == ".faa"
+    if is_protein:
+        for rec in SeqIO.parse(input_file, "fasta"):
+            aa = str(rec.seq).replace("*", "").replace("X", "")
+            if len(aa) < min_aa:
+                continue
+            records.append(SeqRecord(Seq(aa), id=taxid, description=""))
+    else:
+        kind, annot_path = find_local_proteome_or_gff(input_file, taxid)
+        if kind is None and fetch_missing:
+            cache_dir = str(Path(db_path) / "proteomes")
+            proteome = fetch_proteome(taxid, cache_dir, email, silent=False)
+            if proteome:
+                kind, annot_path = "protein", proteome
+            else:
+                gff = fetch_gff(taxid, cache_dir, email, silent=False)
+                if gff:
+                    kind, annot_path = "gff", gff
+
+        if kind == "protein":
+            for rec in SeqIO.parse(annot_path, "fasta"):
+                aa = str(rec.seq).replace("*", "").replace("X", "")
+                if len(aa) < min_aa:
+                    continue
+                records.append(SeqRecord(Seq(aa), id=taxid, description=""))
+        elif kind == "gff":
+            records.extend(translate_cds_from_gff(input_file, annot_path, taxid, min_aa=min_aa))
+
+        # Index 6-frame translations of the provided nucleotide file so reads
+        # simulated from that FASTA can still be classified.
+        records.extend(nucleotide_to_frame_records(input_file, taxid))
+        if kind is None:
+            logger.warning(
+                "No proteome/GFF CDS found for %s (taxid %s); using 6-frame translations",
+                input_file,
+                taxid,
+            )
+
+    if not records:
+        raise ValueError(f"No protein sequences produced for {input_file} (taxid {taxid})")
+
+    SeqIO.write(records, temp_fasta.name, "fasta")
     return temp_fasta.name
 
 def add_database_kaiju(
     input_file: str,
     taxid: str,
     db_path: str = "kaiju_db",
-    protein: bool = False
+    protein: bool = False,
+    email: str = "test@samovar.com",
+    fetch_missing: bool = True,
 ) -> None:
     """Add sequences to the Kaiju database library.
     
@@ -286,7 +449,9 @@ def add_database_kaiju(
         raise FileNotFoundError(f"Input file not found: {input_file}")
     
     # Process the input file
-    processed_file = process_fasta_kaiju(input_file, taxid, db_path, protein)
+    processed_file = process_fasta_kaiju(
+        input_file, taxid, db_path, protein, email=email, fetch_missing=fetch_missing
+    )
     
     # Append to the library file
     library_file = os.path.join(db_path, "library.faa")
@@ -330,8 +495,16 @@ def build_database_kaiju(
         library_file,
     ]
     run_command(mkbwt_cmd)
-    
-    # Then build the FM-index
+
+    bwt_file = f"{base_name}.bwt"
+    if not os.path.exists(bwt_file) and os.path.exists(f"{base_name}.fmi"):
+        logger.info("kaiju-mkbwt already produced an FM-index; skipping kaiju-mkfmi")
+        return
+    if not os.path.exists(bwt_file):
+        raise FileNotFoundError(
+            f"kaiju-mkbwt did not write {bwt_file}. Check kaiju-mkbwt output and disk space."
+        )
+
     mkfmi_cmd = [
         "kaiju-mkfmi",
         base_name
@@ -469,6 +642,17 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
     
     # Process input directories
     file_taxid_map = process_fasta_directories(config['input_dir'])
+    preferred = {}
+    for path, taxid in file_taxid_map.items():
+        prev = preferred.get(taxid)
+        if prev is None:
+            preferred[taxid] = path
+            continue
+        # Prefer nucleotide genomes so proteome + ORF indexing can both run.
+        nucleotide = (".fna", ".fa", ".fasta", ".fna.gz")
+        if path.endswith(nucleotide) and not prev.endswith(nucleotide):
+            preferred[taxid] = path
+    file_taxid_map = {path: taxid for taxid, path in preferred.items()}
     
     # Get lists of files and taxids
     input_files = list(file_taxid_map.keys())
@@ -478,8 +662,17 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
     
     # Build database based on type
     if db_type == "kaiju":
+        library_file = os.path.join(db_path, "library.faa")
+        if os.path.exists(library_file):
+            os.remove(library_file)
         for input_file, taxid in zip(input_files, taxids):
-            add_database_kaiju(input_file, taxid, db_path=db_path)
+            add_database_kaiju(
+                input_file,
+                taxid,
+                db_path=db_path,
+                protein=str(input_file).endswith(".faa"),
+                fetch_missing=True,
+            )
         get_taxonomy_db(db_path=db_path)
         build_database_kaiju(db_path=db_path, threads=1, protein=False)
     elif db_type == "kraken2":

@@ -13,20 +13,19 @@ show_usage() {
     echo "Usage: samovar [command] [options]"
     echo ""
     echo "Commands:"
-    echo "  generate    Generate ISS test configuration and pipeline"
-    echo "  preprocess  Generate main pipeline configuration"
+    echo "  prepare     Generate main pipeline configuration (alias: preprocess)"
+    echo "  build       Build Kaiju or Kraken2 database from config (alias: build_database)"
     echo "  exec        Execute the pipeline(s)"
+    echo "  generate    Generate ISS test configuration and pipeline"
     echo "  tools       Various utility tools"
-    echo "  --- other ---"
-    echo "  build_database  Build Kaiju or Kraken2 database from config"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
     echo "  samovar generate --genome_dir [...] --output_dir [...] --host_genome [...]"
-    echo "  samovar preprocess --input_dir [...] --output_dir [...]"
+    echo "  samovar prepare --input_dir [...] --output_dir [...]"
+    echo "  samovar build --type kaiju --config_path [...] --db_path [...]"
     echo "  samovar exec --output_dir [...]"
     echo "  samovar tools --sort --output_dir [...]"
-    echo "  samovar build_database --type kaiju --config_path [...] --db_path [...]"
 }
 
 # Parse command
@@ -35,7 +34,7 @@ case "$1" in
         shift
         samovar_generate "$@"
         ;;
-    "preprocess")
+    "prepare"|"preprocess")
         shift
         samovar_preprocess "$@"
         ;;
@@ -61,7 +60,7 @@ case "$1" in
                 ;;
         esac
         ;;
-    "build_database")
+    "build"|"build_database")
         shift
         "$(dirname "$0")/../workflow/database_prep/samovar_build_database.sh" "$@"
         ;;
