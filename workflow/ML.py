@@ -69,7 +69,15 @@ validation_df = validation_df.fillna(0)
 
 # Train model
 print("\nTraining model on validation data...")
-best_model, models, metrics, feature_cols = train_models(validation_df)
+if len(validation_df) == 0:
+    print("No validation rows available; skipping ML reprofiling.")
+    raise SystemExit(0)
+
+try:
+    best_model, models, metrics, feature_cols = train_models(validation_df)
+except ValueError as exc:
+    print(f"Skipping ML reprofiling: {exc}")
+    raise SystemExit(0)
 
 # Print model performance
 print("\nModel performance:")

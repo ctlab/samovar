@@ -1,5 +1,5 @@
 # set path
-cd samovar
+#cd samovar
 SAMOVAR=./
 output_dir="samovar_toy"
 
@@ -21,11 +21,13 @@ include_percent: 70.0 # reads from 70% of genome will be included in the metagen
 
 ### build databases
 samovar build_database --type kraken2 --config_path $output_dir/.database/config.yaml --db_path $output_dir/.database/kraken2_db
+samovar build_database --type kaiju --config_path $output_dir/.database/config.yaml --db_path $output_dir/.database/kaiju_db
+
 
 ## or fetch databases
-mkdir -p $output_dir/.database/kaiju_db
-wget -O $output_dir/.database/kaiju_db/kaiju_fungi.tar.gz https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_fungi_2024-08-16.tgz
-tar -xzf $output_dir/.database/kaiju_db/kaiju_fungi.tar.gz -C $output_dir/.database/kaiju_db
+#mkdir -p $output_dir/.database/kaiju_db
+#wget -O $output_dir/.database/kaiju_db/kaiju_fungi.tar.gz https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_fungi_2024-08-16.tgz
+#tar -xzf $output_dir/.database/kaiju_db/kaiju_fungi.tar.gz -C $output_dir/.database/kaiju_db
 
 # Prepare generation config
 samovar generate \

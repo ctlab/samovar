@@ -21,8 +21,10 @@ if true; then
         --cores 1
 
     # Prepare databases
-    $PYTHON_PATH workflow/database_prep/build_database_kraken2.py
-    $PYTHON_PATH workflow/database_prep/build_database_kaiju.py
+    $PYTHON_PATH workflow/database_prep/build_database_kraken2.py \
+        --config_path workflow/database_prep/config.yaml
+    $PYTHON_PATH workflow/database_prep/build_database_kaiju.py \
+        --config_path workflow/database_prep/config.yaml
 fi
 
 # optional: generate reads with InSilicoSeq for automated benchmarking;

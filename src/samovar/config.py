@@ -211,6 +211,12 @@ fi
 
 out_dir="{base_dir}"
 mkdir -p $out_dir
+mkdir -p $out_dir/initial $out_dir/initial_reports $out_dir/regenerated $out_dir/regenerated_reports
+
+# Link/copy source reads into output initial/ when input_dir is provided.
+if [ -n "{self.input_dir}" ] && [ -d "{self.input_dir}" ]; then
+    ln -sf $(readlink -f {self.input_dir}/*_R*.fastq) $out_dir/initial/ 2>/dev/null || cp {self.input_dir}/*_R*.fastq $out_dir/initial/
+fi
 
 # Run annotators on initial reads
 snakemake -s workflow/annotators/Snakefile \\
@@ -239,17 +245,22 @@ snakemake -s workflow/annotation2iss/Snakefile \\
     --cores 1
 
 # Clean up
-try {{
-    find $out_dir/regenerated -type f -empty -delete
-    rm $out_dir/regenerated/*processed*
-    rm $out_dir/regenerated/*_abundance*
-    rm $out_dir/regenerated/*iss.tmp*
+{{
+    find $out_dir/regenerated -type f -empty -delete || true
+    rm -f $out_dir/regenerated/*processed* || true
+    rm -f $out_dir/regenerated/*_abundance* || true
+    rm -f $out_dir/regenerated/*iss.tmp* || true
 }} || {{
     echo "Warning: Some cleanup operations failed"
 }}
 
+if ! ls $out_dir/regenerated/*_R1.fastq >/dev/null 2>&1; then
+    echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
+    exit 0
+fi
+
 # Sort paired-end reads to ensure matching order
-samovar tools --sort $out_dir
+bin/samovar tools --sort --output_dir $out_dir
 
 # Run annotators on new reads set
 snakemake -s workflow/annotators/Snakefile \\

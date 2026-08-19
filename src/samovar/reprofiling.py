@@ -103,10 +103,17 @@ def train_models(df, test_size=0.2, random_state=42):
     """
     # Preprocess the data first
     df_processed = preprocess_data(df)
-    
+    if df_processed.empty:
+        raise ValueError("No training rows available after preprocessing")
+
     # Select features for training (exclude seq and true)
     feature_cols = sorted([col for col in df_processed.columns 
                          if col not in ['seq', 'true']])
+
+    if 'length' not in feature_cols:
+        df_processed['length'] = 0
+        feature_cols.append('length')
+        feature_cols = sorted(feature_cols)
     
     # Ensure all required features are present
     required_features = ['length'] + [col for col in feature_cols if col.startswith('taxid_')]
@@ -119,8 +126,11 @@ def train_models(df, test_size=0.2, random_state=42):
     y = df_processed['true']
     
     # Split data
+    split_kwargs = {"test_size": test_size, "random_state": random_state}
+    if len(y.unique()) > 1:
+        split_kwargs["stratify"] = y
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
+        X, y, **split_kwargs
     )
     
     # Initialize models
