@@ -2,8 +2,8 @@
 ### Automated re-profiling & benchmarking of metagenomic tools based on artificial data generation
 
 
-[![R package](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml)
-[![python package](https://github.com/ctlab/samovar/actions/workflows/python-package.yml/badge.svg)](https://github.com/ctlab/samovar/actions/workflows/python-package.yaml)
+[![R package](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml/badge.svg?branch=main)](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml)
+[![python package](https://github.com/ctlab/samovar/actions/workflows/python-package.yml/badge.svg?branch=main)](https://github.com/ctlab/samovar/actions/workflows/python-package.yml)
 
 There is a fundamental problem in modern ***metagenomics***: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. 
 

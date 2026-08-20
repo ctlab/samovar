@@ -7,9 +7,9 @@ __pycache__/
 .snakemake/
 tests_outs/
 tests_outs*/
-samovar_*/
-samovar/
-samovar2/
+/samovar_*/
+/samovar/
+/samovar2/
 debug/
 
 .vscode/
