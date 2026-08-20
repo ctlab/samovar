@@ -31,11 +31,12 @@ jobs:
     - name: Create local config
       run: |
         mkdir -p build
+        # Prefer a real R on PATH; leave "R" so the Python wrapper can resolve/skip cleanly.
         cat > build/config.json <<EOF
         {
             "python_path": "$(which python3)",
-            "r_path": "$(which R || echo /usr/bin/R)",
-            "r_lib_path": "/usr/local/lib/R/site-library"
+            "r_path": "$(command -v R || echo R)",
+            "r_lib_path": ""
         }
         EOF
     - name: Lint with flake8

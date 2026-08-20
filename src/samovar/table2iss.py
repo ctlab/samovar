@@ -902,6 +902,39 @@ def generate_iss_test_samples(
     shutil.rmtree(pool_dir, ignore_errors=True)
     return outputs
 
+def _resolve_r_executable() -> Tuple[str, Optional[str]]:
+    """Resolve R binary and optional library path from build/config.json / PATH."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(here, "../../build/config.json")
+    configured = "R"
+    r_lib_path = None
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            cfg = json.load(handle)
+        configured = (cfg.get("r_path") or "R").strip() or "R"
+        lib = (cfg.get("r_lib_path") or "").strip()
+        r_lib_path = lib or None
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+        pass
+
+    if os.path.isabs(configured) and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured, r_lib_path
+
+    found = shutil.which(configured)
+    if found:
+        return found, r_lib_path
+
+    for fallback in ("R", "Rscript"):
+        found = shutil.which(fallback)
+        if found:
+            return found, r_lib_path
+
+    raise FileNotFoundError(
+        f"R executable not found ({configured!r}). "
+        "Install R, put it on PATH, or set build/config.json 'r_path'."
+    )
+
+
 def samovar_annotation_regenerate(
     annotation_dir: str,
     config_samovar: str = None,
@@ -933,18 +966,40 @@ def samovar_annotation_regenerate(
     if output_dir is None:
         output_dir = config_samovar_dict['output_dir']
 
+    here = os.path.dirname(os.path.abspath(__file__))
+    annotation_regenerate = os.path.abspath(
+        os.path.join(here, "../../workflow/annotation_regenerate.R")
+    )
+    if not os.path.isfile(annotation_regenerate):
+        raise FileNotFoundError(
+            f"annotation_regenerate.R not found at {annotation_regenerate}"
+        )
+
+    r_path, r_lib_path = _resolve_r_executable()
+    os.makedirs(output_dir, exist_ok=True)
+    env = os.environ.copy()
+    if r_lib_path:
+        env["R_LIBS"] = r_lib_path
+        env["R_LIBS_USER"] = r_lib_path
+
+    cmd = [
+        r_path,
+        "--vanilla",
+        "-s",
+        "-f",
+        annotation_regenerate,
+        "--args",
+        "--config",
+        str(config_samovar),
+        "--annotation_dir",
+        str(annotation_dir),
+        "--output_dir",
+        str(output_dir),
+    ]
     try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        R_path = json.load(open(os.path.join(here, '../../build/config.json')))['r_path']
-    except:
-        R_path = "R"
-
-    annotation_regenerate = os.path.join(here, '../../workflow/annotation_regenerate.R')
-    cmd = f"{R_path} \
-        --vanilla -s -f {annotation_regenerate} \
-        --args \
-        --config {config_samovar} \
-        --annotation_dir {annotation_dir} \
-        --output_dir {output_dir}"
-
-    subprocess.run(cmd, shell=True)
+        subprocess.run(cmd, check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "samovar_annotation_regenerate failed while running R "
+            f"(exit {exc.returncode}). Command: {' '.join(cmd)}"
+        ) from exc
