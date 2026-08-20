@@ -66,7 +66,7 @@ samovar preprocess \
     --kaiju-test "kaiju $DB_KAIJU"
 
 # Run the pipeline(s)
-samovar exec --output-dir samovar
+samovar exec --output_dir samovar
 ```
 
 Results and flexibility of the tool can be improved with specification of config files. Please folow wiki, or see {samovar_function} -h
