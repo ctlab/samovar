@@ -1,12 +1,18 @@
 library(samovaR)
 library(tidyverse)
 
+# Prefer in-repo viz_annotation.R when present (dev tree / editable installs)
+local_viz <- file.path(getwd(), "R", "viz_annotation.R")
+if (file.exists(local_viz)) {
+  source(local_viz)
+}
+
 # Parse command line arguments
 args <- commandArgs(trailingOnly = TRUE)
 
 # Default values
 annotation_dir <- NULL
-show_top <- 10
+show_top <- 0
 output_dir <- NULL
 types <- c("f1", "R2", "cv")
 split <- F
@@ -89,6 +95,7 @@ results <- tryCatch({
     type = types,
     show_top = show_top,
     output_dir = output_dir,
+    plot = FALSE,
     split = split
   )
 }, error = function(e) {

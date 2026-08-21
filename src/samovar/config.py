@@ -253,7 +253,8 @@ $PYTHON_PATH workflow/combine_annotation_tables.py \\
 $R_PATH -s -f "workflow/compare_annotations.R" \\
     --args \\
     --annotation_dir $out_dir/initial_annotations \\
-    --output_dir $out_dir/initial_annotations_plots
+    --output_dir $out_dir/initial_annotations_plots \\
+    --show_top 0
 
 # Add pre-downloaded genomes to the genome directory
 mkdir -p $out_dir/genomes
@@ -299,7 +300,8 @@ $R_PATH -s -f "workflow/compare_annotations.R" \\
     --args \\
     --annotation_dir $out_dir/regenerated_annotations \\
     --output_dir $out_dir/regenerated_annotations_plots \\
-    --csv $out_dir/regenerated_annotations/combined_annotation_table.csv
+    --csv $out_dir/regenerated_annotations/combined_annotation_table.csv \\
+    --show_top 0
 
 # Train and test ML
 $PYTHON_PATH workflow/ML.py \\
@@ -312,7 +314,8 @@ $R_PATH -s -f "workflow/compare_annotations.R" \\
     --args \\
     --annotation_dir $out_dir/reprofiled_annotations \\
     --output_dir $out_dir/reprofiled_annotations_plots \\
-    --csv $out_dir/reprofiled_annotations/combined_annotation_table.csv
+    --csv $out_dir/reprofiled_annotations/combined_annotation_table.csv \\
+    --show_top 0
 """
         
         with open(pipeline_path, 'w') as f:

@@ -52,7 +52,7 @@ viz_annotation <- function(
   labels_10 <- function(x) {
     ifelse(x == 0, "0",
            ifelse(x == 1, "10",
-                  parse(text = paste0("10^", x))))
+                  paste0("10^", x)))
   }
 
   results <- list()
@@ -81,8 +81,14 @@ viz_annotation <- function(
             mutate_all(as.character)
 
           tmp[!(unlist(tmp[,tmp_name]) %in%
-                  c(unique(tmp$true),"0")),
+                  c(unique(as.character(tmp$true)), "0")),
               tmp_name] <- "other"
+
+          # Keep every true taxid on both axes (zeros included), plus 0/other
+          true_levels <- sort(unique(as.character(tmp$true)))
+          pred_levels <- unique(c(true_levels, "0", "other"))
+          tmp$true <- factor(as.character(tmp$true), levels = true_levels)
+          tmp[[tmp_name]] <- factor(as.character(tmp[[tmp_name]]), levels = pred_levels)
 
           tmp_table <- tmp %>%
             table() %>%
@@ -103,24 +109,35 @@ viz_annotation <- function(
 
           caption_text <- sprintf("F1-score: %.3f", f1_score)
 
-          # Visualize
-          gg <- tmp_table %>%
-            mutate(N = ifelse(Freq > 0, Freq, "")) %>%
-            ggplot(aes(y = .data[[tmp_name]], true %>% fct_rev)) +
-            geom_tile(aes(fill = log10(Freq+1))) +
-            geom_tile(aes(color = rect), fill = "transparent", show.legend = F, linewidth = 1) +
+          n_true <- length(true_levels)
+          n_pred <- length(pred_levels)
+
+          # Visualize — put labels in the data; avoid piping fct_rev inside aes
+          plot_df <- tmp_table %>%
+            mutate(
+              N = ifelse(Freq > 0, as.character(Freq), ""),
+              pred_is_unclassified = as.character(.data[[tmp_name]]) == "0",
+              true_lab = forcats::fct_rev(true)
+            )
+
+          gg <- ggplot(plot_df, aes(y = .data[[tmp_name]], x = true_lab)) +
+            geom_tile(aes(fill = log10(Freq + 1))) +
+            geom_tile(aes(color = rect), fill = "transparent", show.legend = FALSE, linewidth = 1) +
             scale_color_manual(values = c(`TRUE` = "gray", `FALSE` = "transparent")) +
             scale_fill_gradientn(
               NULL,
               colours = palette_F1,
               labels = labels_10
             ) +
-
             ggnewscale::new_scale_color() +
-            geom_text(aes(label = N, color = .data[[tmp_name]] == 0), show.legend = F) +
+            geom_text(aes(label = N, color = pred_is_unclassified), show.legend = FALSE, size = 2.2) +
             scale_color_manual(values = c(`TRUE` = "brown", `FALSE` = "black")) +
             theme_minimal() +
-            theme(panel.grid = element_blank()) +
+            theme(
+              panel.grid = element_blank(),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
+              axis.text.y = element_text(size = 7)
+            ) +
             coord_equal() +
             xlab("True taxID") + ylab("Predicted taxID") +
             labs(caption = caption_text) +
@@ -129,24 +146,42 @@ viz_annotation <- function(
           gglist[[tmp_name]] <- gg
         }
 
-        if(require(ggpubr,quietly = T) & !split) {
-          results[["F1"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
-          if(plot) {
-            print(results[["F1"]])
+        n_taxa_max <- max(10, length(true_levels) + 2)
+        panel_w <- max(5, 0.4 * n_taxa_max)
+        panel_h <- panel_w
+
+        # Prefer per-annotator F1 panels when many taxa (ggarrange+cowplot can choke)
+        results[["F1"]] <- gglist
+        if (!is.null(output_dir)) {
+          for (i in seq_along(gglist)) {
+            w <- max(8, 0.42 * n_taxa_max)
+            ggsave(
+              gglist[[i]],
+              filename = paste0(output_dir, "/F1_", names(gglist)[i], ".png"),
+              width = w,
+              height = w,
+              limitsize = FALSE
+            )
           }
-          if(!is.null(output_dir)) {
-            ggsave(results[["F1"]], filename = paste0(output_dir, "/F1.png"), width = 5, height = 5*length(gglist))
+          # Also try a stacked overview; ignore failures
+          if (require(ggpubr, quietly = TRUE) && !split) {
+            tryCatch({
+              stacked <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
+              results[["F1"]] <- stacked
+              ggsave(
+                stacked,
+                filename = paste0(output_dir, "/F1.png"),
+                width = max(8, 0.42 * n_taxa_max),
+                height = max(8, 0.42 * n_taxa_max) * length(gglist),
+                limitsize = FALSE
+              )
+            }, error = function(e) {
+              warning(sprintf("Could not write stacked F1.png: %s", conditionMessage(e)))
+            })
           }
-        } else {
-          results[["F1"]] <- gglist
-          if(!is.null(output_dir)) {
-            for(i in 1:length(gglist)) {
-              ggsave(gglist[[i]], filename = paste0(output_dir, "/F1_", names(gglist)[i], ".png"), width = 10, height = 10)
-              if(plot) {
-                print(gglist[[i]])
-              }
-            }
-          }
+        }
+        if (plot) {
+          for (gg in gglist) print(gg)
         }
       } else if (t %in% c("r2","R2")) {
         gglist <- list()
@@ -264,31 +299,45 @@ viz_annotation <- function(
             tmp[!(tmp[,tmp_name2] %in% s), tmp_name2] <- "other"
 
             tmp <- tmp %>%
-              summarise(Freq = sum(Freq), .by = c(all_of(c(tmp_name1, tmp_name2)))) %>%
-              mutate(N = ifelse(Freq > 0, Freq, ""))
+              summarise(Freq = sum(Freq), .by = c(all_of(c(tmp_name1, tmp_name2))))
           }
+
+          tmp <- tmp %>%
+            mutate(N = ifelse(Freq > 0, as.character(Freq), ""))
 
           tmp$rect <- as.character(tmp[,tmp_name1]) == as.character(tmp[,tmp_name2])
 
+          n_cv <- length(unique(c(as.character(tmp[[tmp_name1]]), as.character(tmp[[tmp_name2]]))))
+          label_tiles <- n_cv <= 12
+
           gg <- tmp %>%
-            ggplot(aes(y = .data[[tmp_name1]], .data[[tmp_name2]] %>% fct_rev)) +
+            ggplot(aes(y = .data[[tmp_name1]], x = forcats::fct_rev(.data[[tmp_name2]]))) +
             geom_tile(aes(fill = log10(Freq+1))) +
             geom_tile(aes(color = rect), fill = "transparent", show.legend = F, linewidth = 1) +
-            geom_text(aes(label = N)) +
             scale_color_manual(values = c(`TRUE` = "gray", `FALSE` = "transparent")) +
             scale_fill_gradientn(
               NULL,
               colours = palette_F1,
               labels = labels_10
-            ) +
-            ggnewscale::new_scale_color() +
-            geom_text(aes(label = N, color =
-                            (.data[[tmp_name1]] == 0) |
-                            (.data[[tmp_name2]] == 0)
-                          ), show.legend = F) +
-            scale_color_manual(values = c(`TRUE` = "brown", `FALSE` = "black")) +
+            )
+
+          if (label_tiles) {
+            gg <- gg +
+              ggnewscale::new_scale_color() +
+              geom_text(aes(label = N, color =
+                              (as.character(.data[[tmp_name1]]) == "0") |
+                              (as.character(.data[[tmp_name2]]) == "0")
+                            ), show.legend = F, size = 2.2) +
+              scale_color_manual(values = c(`TRUE` = "brown", `FALSE` = "black"))
+          }
+
+          gg <- gg +
             theme_minimal() +
-            theme(panel.grid = element_blank()) +
+            theme(
+              panel.grid = element_blank(),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
+              axis.text.y = element_text(size = 7)
+            ) +
             coord_equal() +
             xlab(tmp_name2) + ylab(tmp_name1) +
             ggtitle(paste(tmp_name1, "vs", tmp_name2))
@@ -298,25 +347,35 @@ viz_annotation <- function(
       }
     }
 
-    if(require(ggpubr,quietly = T) & !split) {
-      results[["CV"]] <- ggpubr::ggarrange(plotlist = gglist, ncol =1)
-      if(plot) {
-        print(results[["CV"]])
+    results[["CV"]] <- gglist
+    if (!is.null(output_dir)) {
+      for (i in seq_along(gglist)) {
+        safe <- gsub("[^A-Za-z0-9._-]+", "_", names(gglist)[i])
+        ggsave(
+          gglist[[i]],
+          filename = paste0(output_dir, "/CV_", safe, ".png"),
+          width = 12,
+          height = 12,
+          limitsize = FALSE
+        )
       }
-      if(!is.null(output_dir)) {
-        ggsave(results[["CV"]], filename = paste0(output_dir, "/CV.png"), width = 5, height = 5*length(gglist))
-      }
-    } else {
-      results[["CV"]] <- gglist
-      if(!is.null(output_dir)) {
-        for(i in 1:length(gglist)) {
-          ggsave(gglist[[i]], filename = paste0(output_dir, "/CV_", names(gglist)[i], ".png"), width = 10, height = 10)
-          if(plot) {
-            print(gglist[[i]])
-          }
-        }
+      if (require(ggpubr, quietly = TRUE) && !split) {
+        tryCatch({
+          stacked <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
+          results[["CV"]] <- stacked
+          ggsave(
+            stacked,
+            filename = paste0(output_dir, "/CV.png"),
+            width = 8,
+            height = 8 * max(1, length(gglist)),
+            limitsize = FALSE
+          )
+        }, error = function(e) {
+          warning(sprintf("Could not write stacked CV.png: %s", conditionMessage(e)))
+        })
       }
     }
+    if (plot) for (gg in gglist) print(gg)
   }
 
   if ((("confidence" %in% type)|("conf" %in% type))&
