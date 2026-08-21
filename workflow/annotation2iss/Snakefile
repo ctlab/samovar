@@ -19,6 +19,8 @@ EMAIL = config["email"]
 READ_LENGTH = config["read_length"]
 COVERAGE = config["coverage"]
 MODEL = config.get("model", "hiseq")
+MAX_GENOMES = config.get("max_genomes", None)
+CORES = int(config.get("cores", 2))
 
 # Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -86,6 +88,8 @@ rule process_annotations:
         email = EMAIL,
         model = MODEL,
         read_length = READ_LENGTH,
+        max_genomes = MAX_GENOMES,
+        cpus = CORES,
     run:
         try:
             process_annotation_tables(
@@ -96,6 +100,8 @@ rule process_annotations:
                 reference_only=True,
                 model=params.model,
                 read_length=params.read_length,
+                max_genomes=params.max_genomes,
+                cpus=params.cpus,
             )
             logger.info(
                 "Generated a full metagenome per annotator and split it into %s samples",

@@ -15,6 +15,7 @@ class ISSTestConfig:
     host_fraction: str = "RANDOM"
     seed: int = 42
     model: str = "hiseq"
+    cores: int = 1
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'ISSTestConfig':
@@ -26,7 +27,8 @@ class ISSTestConfig:
             total_reads=args.total_reads if args.total_reads is not None else 2000,
             host_fraction=args.host_fraction if args.host_fraction is not None else "RANDOM",
             seed=args.seed if args.seed is not None else 42,
-            model=args.model if args.model is not None else "hiseq"
+            model=args.model if args.model is not None else "hiseq",
+            cores=args.cores if getattr(args, 'cores', None) is not None else 1
         )
 
     def generate_config(self, base_dir: str) -> str:
@@ -46,6 +48,7 @@ class ISSTestConfig:
             'host_fraction': self.host_fraction,
             'seed': self.seed,
             'model': self.model,
+            'cores': self.cores,
             'genomes': []  # Will be automatically populated
         }
         
@@ -82,7 +85,7 @@ mkdir -p $out_dir
 # Generate reads with InSilicoSeq
 snakemake -s workflow/iss_test/Snakefile \\
     --configfile {config_path} \\
-    --cores 1
+    --cores {self.cores}
 """
         
         with open(pipeline_path, 'w') as f:
@@ -112,6 +115,8 @@ def parse_args() -> argparse.Namespace:
                        help='Random seed for reproducibility')
     parser.add_argument('--model', default="hiseq",
                        help='Sequencing model to use')
+    parser.add_argument('--cores', type=int, default=1,
+                       help='Number of cores for snakemake')
     
     return parser.parse_args()
 

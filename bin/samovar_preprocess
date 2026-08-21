@@ -16,6 +16,9 @@ def main():
     
     # Output
     parser.add_argument('--output_dir', default='tests_outs', help='Output directory', required=True)
+    parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
+    parser.add_argument('--max_genomes', type=int, default=50,
+                        help='Max taxids to fetch for annotation2iss (top by abundance)')
     
     # Parse known args first to get output_dir
     args, remaining = parser.parse_known_args()

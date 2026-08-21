@@ -561,9 +561,12 @@ def _resolve_genomes_for_taxids(
     genome_dir: str,
     email: str,
     reference_only: bool,
+    max_genomes: Optional[int] = None,
 ) -> Dict[str, str]:
     available = {}
     for taxid in taxids:
+        if max_genomes is not None and len(available) >= max_genomes:
+            break
         taxid = str(taxid).split(".")[0]
         if taxid in SKIP_TAXIDS or taxid in available:
             continue
@@ -692,11 +695,16 @@ def process_annotation_tables(
     sample_names: Optional[Sequence[str]] = None,
     cpus: int = 2,
     seed: Optional[int] = None,
+    max_genomes: Optional[int] = None,
 ) -> None:
     """
     Generate one full metagenome per annotator, then split reads into samples.
 
     This is much faster than calling ISS once per sample (and per genome).
+
+    Args:
+        max_genomes: If set, only resolve/fetch the top-N taxids by total
+            abundance across samples (critical for large public DBs).
     """
     table_paths = list(table_paths)
     if sample_names is None:
@@ -716,16 +724,24 @@ def process_annotation_tables(
         sample_tables[sample_name] = table
 
     annotator_cols: Dict[str, str] = {}
-    all_taxids = set()
+    taxid_totals: Dict[str, int] = {}
     for table in sample_tables.values():
         for col in _n_columns(table):
             annotator_cols[_annotator_from_n_col(col)] = col
-        if not table.empty and "taxid" in table.columns:
-            all_taxids.update(table["taxid"].astype(str))
+            if not table.empty and "taxid" in table.columns:
+                for taxid, n_reads in zip(table["taxid"].astype(str), table[col]):
+                    taxid_totals[taxid] = taxid_totals.get(taxid, 0) + int(n_reads)
+
+    # Prefer abundant taxa when capping genome downloads
+    ranked_taxids = sorted(taxid_totals, key=taxid_totals.get, reverse=True)
 
     annotators = list(annotator_cols.keys()) or ["any"]
     available_genomes = _resolve_genomes_for_taxids(
-        all_taxids, genome_dir, email, reference_only
+        ranked_taxids,
+        genome_dir,
+        email,
+        reference_only,
+        max_genomes=max_genomes,
     )
     if not available_genomes:
         _emit_empty_for_annotators(output_dir, sample_names, annotators)
@@ -849,7 +865,8 @@ def generate_iss_test_samples(
         generate_reads_metagenome(
             genome_files=genome_files,
             output_dir=pool_dir,
-            amount=[total_meta] * len(genome_files),
+            amount=[1] * len(genome_files),
+            total_amount=total_meta,
             sample_name="meta",
             annotator_name="full",
             model=model,

@@ -23,6 +23,8 @@ class PipelineConfig:
     read_length: int = 150
     coverage: int = 30
     email: str = "test@samovar.com"
+    cores: int = 1
+    max_genomes: int = 50
 
     def __post_init__(self):
         if self.annotators is None:
@@ -31,6 +33,10 @@ class PipelineConfig:
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
         config = cls()
+        config.cores = getattr(args, 'cores', 1) or 1
+        config.max_genomes = getattr(args, 'max_genomes', 50)
+        if config.max_genomes is None:
+            config.max_genomes = 50
         
         # Handle input source
         if args.input_config:
@@ -142,6 +148,7 @@ class PipelineConfig:
                     'type': ann.type,
                     'cmd': ann.cmd,
                     'db_path': ann.db_path,
+                    'threads': self.cores,
                     **({'db_name': ann.db_name} if ann.db_name else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }
@@ -160,7 +167,9 @@ class PipelineConfig:
             'output_dir': str(base_path / 'regenerated'),
             'email': self.email,
             'read_length': self.read_length,
-            'coverage': self.coverage
+            'coverage': self.coverage,
+            'max_genomes': getattr(self, 'max_genomes', 50),
+            'cores': self.cores,
         }
         annotation2iss_path = configs_dir / 'config_annotation2iss.yaml'
         with open(annotation2iss_path, 'w') as f:
@@ -178,6 +187,7 @@ class PipelineConfig:
                     'type': ann.type,
                     'cmd': ann.cmd,
                     'db_path': ann.db_path,
+                    'threads': self.cores,
                     **({'db_name': ann.db_name} if ann.db_name else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }
@@ -219,15 +229,20 @@ out_dir="{base_dir}"
 mkdir -p $out_dir
 mkdir -p $out_dir/initial $out_dir/initial_reports $out_dir/regenerated $out_dir/regenerated_reports
 
-# Link/copy source reads into output initial/ when input_dir is provided.
+# Link/copy source reads into output initial/ when input_dir is provided
+# and is not already the destination (generate→preprocess sets input_dir=initial).
 if [ -n "{self.input_dir}" ] && [ -d "{self.input_dir}" ]; then
-    ln -sf $(readlink -f {self.input_dir}/*_R*.fastq) $out_dir/initial/ 2>/dev/null || cp {self.input_dir}/*_R*.fastq $out_dir/initial/
+    src_dir=$(readlink -f "{self.input_dir}")
+    dst_dir=$(readlink -f "$out_dir/initial")
+    if [ "$src_dir" != "$dst_dir" ]; then
+        ln -sf $(readlink -f {self.input_dir}/*_R*.fastq) $out_dir/initial/ 2>/dev/null || cp {self.input_dir}/*_R*.fastq $out_dir/initial/
+    fi
 fi
 
 # Run annotators on initial reads
 snakemake -s workflow/annotators/Snakefile \\
     --configfile {configs['init_annotator']} \\
-    --cores 1
+    --cores {self.cores}
 
 # Combine annotation tables
 $PYTHON_PATH workflow/combine_annotation_tables.py \\
@@ -248,7 +263,7 @@ cp data/test_genomes/host/* $out_dir/genomes
 # Translate annotation table to new reads set
 snakemake -s workflow/annotation2iss/Snakefile \\
     --configfile {configs['annotation2iss']} \\
-    --cores 1
+    --cores {self.cores}
 
 # Clean up
 {{
@@ -271,7 +286,7 @@ bin/samovar tools --sort --output_dir $out_dir
 # Run annotators on new reads set
 snakemake -s workflow/annotators/Snakefile \\
     --configfile {configs['reannotate']} \\
-    --cores 1
+    --cores {self.cores}
 
 # Combine annotation tables
 $PYTHON_PATH workflow/combine_annotation_tables.py \\
