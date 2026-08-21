@@ -20,6 +20,7 @@ from samovar.parse_annotators import (
     remap_taxid_dataframe,
     canonical_taxid,
     ensure_taxid_rank_map,
+    ensure_taxid_name_map,
     read_taxid_rank_table,
     rank_map_column,
 )
@@ -226,6 +227,17 @@ def test_ensure_taxid_rank_map_reuses_cache(tmp_path, monkeypatch):
     assert mapping["999999"] == "42"
     assert rank_map_column("genus") == "genera_taxid"
     assert rank_map_column("species") == "species_taxid"
+
+
+def test_ensure_taxid_name_map_writes_pipe_table(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    cache = tmp_path / "taxid_names.tsv"
+    mapping = ensure_taxid_name_map(["562", "561", "0"], cache_path=str(cache))
+    assert "coli" in mapping["562"].lower() or mapping["562"] == "Escherichia coli"
+    assert mapping["561"] in {"Escherichia", mapping["561"]}
+    text = cache.read_text()
+    assert text.splitlines()[0] == "taxid|name"
+    assert "562|" in text
 
 
 def test_rank_annotation_class():

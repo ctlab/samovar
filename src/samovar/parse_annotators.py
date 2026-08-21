@@ -269,6 +269,121 @@ def ensure_taxid_rank_map(taxids, rank: str, cache_path=None) -> Dict[str, str]:
     return mapping
 
 
+def default_name_map_path() -> Path:
+    return _cache_dir() / "taxid_name_map.tsv"
+
+
+_FALLBACK_NAMES = {
+    9606: "Homo sapiens",
+    9605: "Homo",
+    562: "Escherichia coli",
+    561: "Escherichia",
+    511145: "Escherichia coli str. K-12 substr. MG1655",
+    4932: "Saccharomyces cerevisiae",
+    4930: "Saccharomyces",
+    2886930: "Escherichia phage phiX174",
+}
+
+
+def ensure_taxid_name_map(taxids, cache_path=None) -> Dict[str, str]:
+    """Resolve scientific names via ete3 and cache ``taxid|name`` rows."""
+    paths = []
+    if cache_path:
+        paths.append(Path(cache_path))
+    try:
+        global_path = default_name_map_path()
+        if not cache_path or Path(cache_path).resolve() != global_path.resolve():
+            paths.append(global_path)
+    except Exception:
+        pass
+
+    mapping: Dict[str, str] = {}
+    for path in paths:
+        mapping.update(_read_taxid_name_table(path))
+
+    added = False
+    missing = []
+    for taxid in taxids:
+        key = canonical_taxid(taxid)
+        if key == "0":
+            mapping[key] = "0"
+            continue
+        if key in mapping and mapping[key] not in {"", "0"}:
+            continue
+        missing.append(key)
+
+    if missing:
+        translated: Dict[int, str] = {}
+        try:
+            ids = [int(t) for t in missing]
+            translated = _get_ncbi().get_taxid_translator(ids) or {}
+        except Exception:
+            translated = {}
+        for key in missing:
+            name = None
+            try:
+                name = translated.get(int(key))
+            except (TypeError, ValueError):
+                name = None
+            if not name:
+                try:
+                    name = _FALLBACK_NAMES.get(int(key))
+                except (TypeError, ValueError):
+                    name = None
+            mapping[key] = name if name else key
+            added = True
+
+    requested = {canonical_taxid(t) for t in taxids if canonical_taxid(t) != "0"}
+    local_path = Path(cache_path).resolve() if cache_path else None
+    for path in paths:
+        if local_path and path.resolve() == local_path:
+            subset = {k: v for k, v in mapping.items() if canonical_taxid(k) in requested}
+            _write_taxid_name_table(path, subset)
+        elif added or not path.exists():
+            _write_taxid_name_table(path, mapping)
+    return mapping
+
+
+def _read_taxid_name_table(path) -> Dict[str, str]:
+    table = Path(path)
+    if not table.exists():
+        return {}
+    mapping: Dict[str, str] = {}
+    with table.open(encoding="utf-8") as handle:
+        for i, line in enumerate(handle):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "|" not in line:
+                continue
+            src, _, name = line.partition("|")
+            src = src.strip()
+            name = name.strip()
+            if i == 0 and src.lower() in {"taxid", "tax_id"}:
+                continue
+            if not src or not name:
+                continue
+            mapping[canonical_taxid(src)] = name
+    return mapping
+
+
+def _write_taxid_name_table(path, mapping: Dict[str, str]) -> None:
+    table = Path(path)
+    table.parent.mkdir(parents=True, exist_ok=True)
+    rows = {}
+    for key, value in mapping.items():
+        src = canonical_taxid(key)
+        if src == "0" or not value:
+            continue
+        rows[src] = str(value).replace("|", "/")
+    tmp = table.with_suffix(table.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        handle.write("taxid|name\n")
+        for src in sorted(rows, key=lambda x: (len(x), x)):
+            handle.write(f"{src}|{rows[src]}\n")
+    tmp.replace(table)
+
+
 def remap_taxid_dataframe(
     df: pd.DataFrame,
     rank: str = DEFAULT_TAX_RANK,
