@@ -1,32 +1,45 @@
-# set path
-cd samovar
-SAMOVAR=./
-output_dir="samovar_out"
+#!/usr/bin/env bash
+set -euo pipefail
 
-# create output directory
-mkdir -p $output_dir/.database
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../common.sh
+source "${SCRIPT_DIR}/../common.sh"
+cd "$SAMOVAR"
+samovar_setup_env
 
-# fetch databases
-# correct with https://benlangmead.github.io/aws-indexes/k2
-wget -O $output_dir/.database/kraken_minusb.tar.gz https://genome-idx.s3.amazonaws.com/kraken/k2_minusb_20250402.tar.gz
-wget -O $output_dir/.database/kraken_standard_8.tar.gz https://genome-idx.s3.amazonaws.com/kraken/k2_minusb_20250402.tar.gz
-wget -O $output_dir/.database/kraken_standard_16.tar.gz https://genome-idx.s3.amazonaws.com/kraken/k2_minusb_20250402.tar.gz
-wget -O $output_dir/.database/kraken_pluspf_8.tar.gz https://genome-idx.s3.amazonaws.com/kraken/k2_minusb_20250402.tar.gz
-wget -O $output_dir/.database/kraken_pluspfp_8.tar.gz https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_08gb_20250402.tar.gz
+output_dir="${SAMOVAR_OUTDIR:-samovar_out}"
+mkdir -p "$output_dir/.database"
 
-tar -xzf $output_dir/.database/*.tar.gz
+# Public Kraken2 indexes (override any URL via K2_*_URL). See:
+# https://benlangmead.github.io/aws-indexes/k2
+K2_MINUSB_URL="${K2_MINUSB_URL:-https://genome-idx.s3.amazonaws.com/kraken/k2_minusb_20250402.tar.gz}"
+K2_STANDARD_8_URL="${K2_STANDARD_8_URL:-https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08gb_20250402.tar.gz}"
+K2_STANDARD_16_URL="${K2_STANDARD_16_URL:-https://genome-idx.s3.amazonaws.com/kraken/k2_standard_16gb_20250402.tar.gz}"
+K2_PLUSPF_8_URL="${K2_PLUSPF_8_URL:-https://genome-idx.s3.amazonaws.com/kraken/k2_pluspf_08gb_20250402.tar.gz}"
+K2_PLUSPFP_8_URL="${K2_PLUSPFP_8_URL:-https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_08gb_20250402.tar.gz}"
 
-# Prepare generation config
+declare -A K2_URLS=(
+  [minusb]="$K2_MINUSB_URL"
+  [standard_8]="$K2_STANDARD_8_URL"
+  [standard_16]="$K2_STANDARD_16_URL"
+  [pluspf_8]="$K2_PLUSPF_8_URL"
+  [pluspfp_8]="$K2_PLUSPFP_8_URL"
+)
+
+preprocess_args=()
+for name in minusb standard_8 standard_16 pluspf_8 pluspfp_8; do
+  dest="$output_dir/.database/kraken2_${name}"
+  samovar_fetch_archive "${K2_URLS[$name]}" "$dest" "hash.k2d"
+  preprocess_args+=(--kraken2-"${name}" "kraken2 ${dest}")
+done
+
 samovar generate \
-    --genome_dir $SAMOVAR/data/test_genomes/meta \
-    --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
-    --output_dir $output_dir
+    --genome_dir "$SAMOVAR/data/test_genomes/meta" \
+    --host_genome "$SAMOVAR/data/test_genomes/host/9606.fna" \
+    --output_dir "$output_dir"
 
-# Prepare run config
 samovar preprocess \
-    --output_dir $output_dir \
-    --kraken2-test "kraken2 $output_dir/.database/kraken2_db" \
-    --kaiju-test "kaiju $output_dir/.database/kaiju_db"
+    --output_dir "$output_dir" \
+    "${preprocess_args[@]}"
 
-# Run samovar
-samovar exec --output_dir $output_dir
+samovar exec --output_dir "$output_dir"

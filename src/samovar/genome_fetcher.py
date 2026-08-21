@@ -19,6 +19,15 @@ from samovar.fasta_processor import preprocess_fasta
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def default_entrez_email() -> str:
+    """NCBI Entrez contact email from the environment (never a personal default)."""
+    for key in ("NCBI_EMAIL", "ENTREZ_EMAIL", "SAMOVAR_EMAIL"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    return "anonymous@example.com"
+
 def _entrez_retry(func, max_retries=8, initial_delay=2):
     """
     Retry an Entrez function with exponential backoff.
@@ -359,8 +368,8 @@ def main():
                       help='Taxonomic group to sample from (default: Bacteria)')
     parser.add_argument('--N', type=int, default=10,
                       help='Number of genomes to process (default: 10)')
-    parser.add_argument('--email', type=str, default="dsmutin@gmail.com",
-                      help='Email for NCBI Entrez')
+    parser.add_argument('--email', type=str, default=None,
+                      help='Email for NCBI Entrez (default: NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL, else anonymous@example.com)')
     parser.add_argument('--output-dir', type=str, default='genomes',
                       help='Output directory for genomes (default: genomes)')
     parser.add_argument('--silent', action='store_true',
@@ -369,6 +378,7 @@ def main():
                       help='Skip assemblies larger than this many MB (0 disables)')
     
     args = parser.parse_args()
+    args.email = args.email or default_entrez_email()
     
     # Create output directory
     output_dir = Path(args.output_dir)

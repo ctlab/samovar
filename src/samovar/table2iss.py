@@ -9,7 +9,7 @@ import gzip
 import random
 import pandas as pd
 import subprocess
-from .genome_fetcher import fetch_genome
+from .genome_fetcher import fetch_genome, default_entrez_email
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 import yaml
 import json
@@ -523,7 +523,7 @@ def process_annotation_table(
     genome_dir: str,
     output_dir: str,
     total_amount: int = None,
-    email: str = "test@samovar.com",
+    email: Optional[str] = None,
     reference_only: bool = True,
     model: str = "hiseq",
     read_length: int = 150,
@@ -543,6 +543,7 @@ def process_annotation_table(
         sample_name: Name of the sample
         total_amount: Total number of reads to generate
     """
+    email = email or default_entrez_email()
     abundance_table = parse_annotation_table(table_path)
     process_abundance_table(
         table=abundance_table,
@@ -603,7 +604,7 @@ def process_abundance_table(
     genome_dir: str,
     output_dir: str,
     total_amount: int = None,
-    email: str = "test@samovar.com",
+    email: Optional[str] = None,
     reference_only: bool = True,
     model: str = "hiseq",
     read_length: int = 150,
@@ -636,6 +637,8 @@ def process_abundance_table(
             sample_name = os.path.basename(table).split(".")[0]
         else:
             sample_name = "merged"
+
+    email = email or default_entrez_email()
 
     if "taxid" not in abundance_table.columns:
         _emit_empty_for_annotators(output_dir, [sample_name], ["any"])
@@ -688,7 +691,7 @@ def process_annotation_tables(
     genome_dir: str,
     output_dir: str,
     total_amount: int = None,
-    email: str = "test@samovar.com",
+    email: Optional[str] = None,
     reference_only: bool = True,
     model: str = "hiseq",
     read_length: int = 150,
@@ -707,6 +710,7 @@ def process_annotation_tables(
             abundance across samples (critical for large public DBs).
     """
     table_paths = list(table_paths)
+    email = email or default_entrez_email()
     if sample_names is None:
         sample_names = [os.path.basename(path).split(".")[0] for path in table_paths]
     else:

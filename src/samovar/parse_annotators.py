@@ -88,10 +88,21 @@ def _get_ncbi() -> "NCBITaxa":
     return ncbi
 
 
+def _cache_dir() -> Path:
+    """Cache directory for taxonomy maps (XDG or SAMOVAR_CACHE_DIR)."""
+    override = os.environ.get("SAMOVAR_CACHE_DIR")
+    if override:
+        path = Path(override)
+    else:
+        xdg = os.environ.get("XDG_CACHE_HOME")
+        path = Path(xdg) / "samovar" if xdg else Path.home() / ".cache" / "samovar"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _load_nodes_cache(nodes_path: str) -> Dict[int, tuple]:
     """Load parent/rank map from nodes.dmp with filesystem cache."""
-    cache_dir = Path.home() / ".cache" / "samovar"
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = _cache_dir()
     stat = os.stat(nodes_path)
     cache_key = f"{nodes_path}:{int(stat.st_mtime)}:{stat.st_size}"
     cache_name = f"nodes_{abs(hash(cache_key))}.pkl"
@@ -119,21 +130,30 @@ def _load_nodes_cache(nodes_path: str) -> Dict[int, tuple]:
 
 
 def _discover_nodes_path() -> Optional[str]:
-    """Best-effort discovery for nodes.dmp in typical SamovaR DB paths."""
+    """Find nodes.dmp from the environment, not from machine-specific paths.
+
+    Lookup order:
+      1. ``SAMOVAR_NODES_DMP`` — exact file
+      2. ``SAMOVAR_NODES_SEARCH`` — colon-separated files or directories to scan
+    """
     env_path = os.environ.get("SAMOVAR_NODES_DMP")
     if env_path and os.path.exists(env_path):
         return env_path
 
-    candidates = [
-        "tests_outs/kraken_db/taxonomy/nodes.dmp",
-        "tests_outs/kraken_db_test/taxonomy/nodes.dmp",
-        "tests_outs/kaiju_db/taxonomy/nodes.dmp",
-        "tests_outs/kaiju_db_test/taxonomy/nodes.dmp",
-        "/mnt/metagenomics/kaiju/nodes.dmp",
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
+    extra = os.environ.get("SAMOVAR_NODES_SEARCH", "")
+    for raw in extra.split(":"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        if os.path.isfile(raw) and os.path.basename(raw) == "nodes.dmp":
+            return raw
+        if os.path.isdir(raw):
+            for candidate in (
+                os.path.join(raw, "nodes.dmp"),
+                os.path.join(raw, "taxonomy", "nodes.dmp"),
+            ):
+                if os.path.exists(candidate):
+                    return candidate
     return None
 
 
@@ -193,19 +213,49 @@ def _resolve_taxid_by_rank(taxid: str, rank_name: str) -> Optional[str]:
     return None
 
 
-def parse_metaphlan_db(db_path: str) -> Dict[str, str]:
+def resolve_metaphlan_db_file(
+    db_path: str, db_name: Optional[str] = None
+) -> str:
+    """Resolve a MetaPhlAn SQLite mapping file from a path or directory.
+
+    ``db_path`` may be the ``.db`` file itself. Otherwise ``db_name`` (config)
+    or the sole ``*.db`` under the directory is used.
+    """
+    if os.path.isfile(db_path):
+        return db_path
+    if db_name:
+        db_file = os.path.join(db_path, db_name)
+        if not os.path.exists(db_file):
+            raise FileNotFoundError(f"MetaPhlAn database not found at {db_file}")
+        return db_file
+    if not os.path.isdir(db_path):
+        raise FileNotFoundError(f"MetaPhlAn database not found at {db_path}")
+    matches = sorted(Path(db_path).glob("*.db"))
+    if not matches:
+        raise FileNotFoundError(
+            f"No *.db MetaPhlAn mapping file under {db_path}; "
+            "pass db_path as the file or set db_name in the annotator config"
+        )
+    if len(matches) > 1:
+        raise FileNotFoundError(
+            f"Multiple *.db files under {db_path}; set db_name in the annotator config"
+        )
+    return str(matches[0])
+
+
+def parse_metaphlan_db(
+    db_path: str, db_name: Optional[str] = None
+) -> Dict[str, str]:
     """Parse MetaPhlAn database to map reference IDs to NCBI taxIDs.
     
     Args:
-        db_path: Path to MetaPhlAn database directory
+        db_path: Path to MetaPhlAn database directory or SQLite file
+        db_name: Optional filename inside ``db_path``
         
     Returns:
         Dictionary mapping MetaPhlAn reference IDs to NCBI taxIDs
     """
-    # MetaPhlAn uses a SQLite database
-    db_file = os.path.join(db_path, "mpa_v30_CHOCOPhlAn_201901_species_map.db")
-    if not os.path.exists(db_file):
-        raise FileNotFoundError(f"MetaPhlAn database not found at {db_file}")
+    db_file = resolve_metaphlan_db_file(db_path, db_name=db_name)
         
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()

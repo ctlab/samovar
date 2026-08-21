@@ -15,6 +15,8 @@ from samovar.parse_annotators import (
     ExpandAnnotation,
     parse_metaphlan_db,
     extract_true_taxid,
+    _discover_nodes_path,
+    resolve_metaphlan_db_file,
 )
 
 
@@ -265,3 +267,23 @@ def test_read_metaphlan_with_db(test_data_dir):
     # Cleanup
     os.remove(db_file)
     os.rmdir(db_dir)
+
+
+def test_resolve_metaphlan_db_file_db_name_and_file(tmp_path):
+    db_file = tmp_path / "custom_map.db"
+    db_file.write_bytes(b"")
+    assert resolve_metaphlan_db_file(str(tmp_path), db_name="custom_map.db") == str(db_file)
+    assert resolve_metaphlan_db_file(str(db_file)) == str(db_file)
+
+
+def test_discover_nodes_path_from_env(tmp_path, monkeypatch):
+    nodes = tmp_path / "nodes.dmp"
+    nodes.write_text("1\t|\t1\t|\tno rank\t|\n")
+    monkeypatch.delenv("SAMOVAR_NODES_DMP", raising=False)
+    monkeypatch.delenv("SAMOVAR_NODES_SEARCH", raising=False)
+    assert _discover_nodes_path() is None
+    monkeypatch.setenv("SAMOVAR_NODES_DMP", str(nodes))
+    assert _discover_nodes_path() == str(nodes)
+    monkeypatch.delenv("SAMOVAR_NODES_DMP")
+    monkeypatch.setenv("SAMOVAR_NODES_SEARCH", str(tmp_path))
+    assert _discover_nodes_path() == str(nodes)

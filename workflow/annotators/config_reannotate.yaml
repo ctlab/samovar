@@ -5,6 +5,7 @@ output_dir: "tests_outs/benchmarking/regenerated_reports"
 
 # Run names
 # issue2fix: run name can not contain "_"
+# Database dirs are produced by workflow/pipeline.sh (build_database_*).
 run_config: [
   {
     "run_name": "k2-custom",
@@ -14,7 +15,6 @@ run_config: [
   {
     "run_name": "kaiju",
     "type": "kaiju",
-    "db_path": "/mnt/metagenomics/kaiju",
-    "db_name": "kaiju_db_progenomes.fmi"
+    "db_path": "tests_outs/kaiju_db"
   }
 ]

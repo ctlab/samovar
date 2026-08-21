@@ -1,27 +1,28 @@
 # exec
 # snakemake -s workflow/annotators/Snakefile --configfile tests/configs/annotation.yaml --cores 1
-
+#
+# Point db_path at databases you built or downloaded (see examples/).
+# Override by copying this file; nothing here should be a cluster-specific path.
 
 # Input directories
 r1_dir: "tests/data/reads"
 r2_dir: "tests/data/reads"
 output_dir: "tests_outs/workflows/annotation/initial_reports"
 
-# Change to your own databases
 run_config:
 - cmd: kaiju
-  db_path: /mnt/metagenomics/kaiju/kaiju_db_refseq.fmi
+  db_path: tests_outs/kaiju_db
   run_name: kaiju
   type: kaiju
 - cmd: kraken
-  db_path: /mnt/metagenomics/kraken/minikraken_4GB_oct2017
+  db_path: tests_outs/kraken_db
   run_name: kraken
   type: kraken
 - cmd: kraken2
-  db_path: /mnt/metagenomics/kraken2/db_standard_03_2023
+  db_path: tests_outs/kraken_db
   run_name: kraken2
   type: kraken2
 - cmd: krakenuniq
-  db_path: /mnt/metagenomics/kraken/minikraken_4GB_oct2017
+  db_path: tests_outs/krakenuniq_db
   run_name: krakenuniq
   type: krakenuniq

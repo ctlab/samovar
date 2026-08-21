@@ -2,6 +2,7 @@ import os
 import re
 import sqlite3
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -188,7 +189,14 @@ class MetaPhlanAnnotator(BaseAnnotator):
     def _get_db_mapping(self) -> Dict[str, str]:
         if not self.db_path:
             return {}
-        db_file = os.path.join(self.db_path, "mpa_v30_CHOCOPhlAn_201901_species_map.db")
+        from samovar.parse_annotators import resolve_metaphlan_db_file
+
+        try:
+            db_file = resolve_metaphlan_db_file(
+                self.db_path, db_name=self.run_config.get("db_name")
+            )
+        except FileNotFoundError:
+            return {}
         if not os.path.exists(db_file):
             return {}
         conn = sqlite3.connect(db_file)
@@ -289,7 +297,8 @@ class CustomAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return "bash src/annotators/custom.sh"
+        script = Path(__file__).resolve().parent.parent / "annotators" / "custom.sh"
+        return f"bash {script}"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         out_file = os.path.join(
@@ -338,7 +347,7 @@ class ConstantTaxidAnnotator(CustomAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        script = os.path.join("src", "annotators", "constant9606.py")
+        script = Path(__file__).resolve().parent.parent / "annotators" / "constant9606.py"
         return f"{sys.executable} {script}"
 
     def get_snakemake_shell_cmd(

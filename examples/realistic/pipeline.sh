@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve SamovaR repo root from this script's location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SAMOVAR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=../common.sh
+source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
+samovar_setup_env
 
-output_dir="samovar_realistic"
+output_dir="${SAMOVAR_OUTDIR:-samovar_realistic}"
 mkdir -p "$output_dir/.genomes" "$output_dir/.database" "$output_dir/.log"
-
-# Prefer conda tools (kraken2, kaiju, iss, snakemake) when available
-CONDA_BIN="${CONDA_PREFIX:-/nfs/home/dsmutin/miniconda3}/bin"
-export PATH="${SAMOVAR}/bin:${CONDA_BIN}:${PATH}"
 
 # ---------------------------------------------------------------------------
 # 0. Download 21 raw genomes (3 per NCBI Organism group) into .genomes
@@ -30,16 +27,15 @@ else
         mkdir -p "$tmp_dir"
 
         echo "Fetching 3 genomes for ${org_group}..."
-        # Sequential fetch avoids NCBI 429; prefer genomes <=100MB for practicality
         python -m samovar.genome_fetcher \
             --output-dir "$tmp_dir" \
             --N 3 \
             --group "$org_group" \
             --max-genome-mb 100 \
+            --email "$NCBI_EMAIL" \
             --silent
         sleep 2
 
-        # Flatten into .genomes (avoid clobbering same taxids across groups)
         shopt -s nullglob
         for f in "${tmp_dir}"/*-processed.fasta; do
             base="$(basename "$f")"
@@ -58,50 +54,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Download small real databases into .database/
+# 1. Public indexes into .database/ (or SAMOVAR_KAIJU_DB / SAMOVAR_KRAKEN2_DB)
 # ---------------------------------------------------------------------------
 KAIJU_DB_DIR="${output_dir}/.database/kaiju_db"
 KRAKEN2_DB_DIR="${output_dir}/.database/kraken2_db"
-# Prefer shared RefSeq Kaiju index when present (avoids huge RVDB / re-download).
-KAIJU_LOCAL_REFSEQ="/mnt/tank/scratch/partition-metagenomics/databases/kaiju/refseq_2024aug"
+KAIJU_INDEX_URL="${KAIJU_INDEX_URL:-https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_ref_2024-08-14.tgz}"
+KRAKEN2_INDEX_URL="${KRAKEN2_INDEX_URL:-https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20260626.tar.gz}"
 
-if [[ -f "${KAIJU_LOCAL_REFSEQ}/kaiju_db_refseq.fmi" ]]; then
-    echo "Using local Kaiju RefSeq DB: ${KAIJU_LOCAL_REFSEQ}"
-    mkdir -p "$KAIJU_DB_DIR"
-    # Symlink so preprocess/exec paths stay under output_dir/.database
-    ln -sfn "${KAIJU_LOCAL_REFSEQ}/kaiju_db_refseq.fmi" "${KAIJU_DB_DIR}/kaiju_db_refseq.fmi"
-    ln -sfn "${KAIJU_LOCAL_REFSEQ}/nodes.dmp" "${KAIJU_DB_DIR}/nodes.dmp"
-    ln -sfn "${KAIJU_LOCAL_REFSEQ}/names.dmp" "${KAIJU_DB_DIR}/names.dmp"
-elif ! find "$KAIJU_DB_DIR" -name '*.fmi' 2>/dev/null | grep -q .; then
-    ## fetch Kaiju RefSeq-ref index (toy-style download)
-    mkdir -p "$KAIJU_DB_DIR"
-    wget -O "$KAIJU_DB_DIR/kaiju_refseq_ref.tar.gz" \
-        "https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_ref_2024-08-14.tgz"
-    tar -xzf "$KAIJU_DB_DIR/kaiju_refseq_ref.tar.gz" -C "$KAIJU_DB_DIR"
-    rm -f "$KAIJU_DB_DIR/kaiju_refseq_ref.tar.gz"
+samovar_use_or_fetch_db "${SAMOVAR_KAIJU_DB:-}" "$KAIJU_DB_DIR" "$KAIJU_INDEX_URL" "*.fmi"
+if [[ -n "${SAMOVAR_KRAKEN2_DB:-}" ]]; then
+    samovar_use_or_fetch_db "$SAMOVAR_KRAKEN2_DB" "$KRAKEN2_DB_DIR" "$KRAKEN2_INDEX_URL" "hash.k2d"
 else
-    echo "Kaiju DB already present under ${KAIJU_DB_DIR}; skipping download"
-fi
-
-if [[ ! -f "${KRAKEN2_DB_DIR}/hash.k2d" ]]; then
-    mkdir -p "$KRAKEN2_DB_DIR"
-    kraken_tgz="${output_dir}/.database/k2_standard_08_GB_20260626.tar.gz"
-    wget -O "$kraken_tgz" \
-        "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20260626.tar.gz"
-    tar -xzf "$kraken_tgz" -C "$KRAKEN2_DB_DIR"
-    # Some archives nest contents one level deeper; hoist if needed
-    if [[ ! -f "${KRAKEN2_DB_DIR}/hash.k2d" ]]; then
-        nested="$(find "$KRAKEN2_DB_DIR" -name 'hash.k2d' -print -quit)"
-        if [[ -n "$nested" ]]; then
-            nested_dir="$(dirname "$nested")"
-            shopt -s dotglob nullglob
-            mv "${nested_dir}"/* "$KRAKEN2_DB_DIR"/
-            shopt -u dotglob nullglob
-        fi
-    fi
-    rm -f "$kraken_tgz"
-else
-    echo "Kraken2 DB already present under ${KRAKEN2_DB_DIR}; skipping download"
+    samovar_fetch_archive "$KRAKEN2_INDEX_URL" "$KRAKEN2_DB_DIR" "hash.k2d"
 fi
 
 KAIJU_FMI="$(find -L "$KAIJU_DB_DIR" -name '*.fmi' -print -quit)"
@@ -120,7 +84,7 @@ samovar generate \
     --n_samples 10 \
     --total_reads 100000 \
     --output_dir "$output_dir" \
-    --cores 32
+    --cores "${SAMOVAR_CORES:-32}"
 
 # ---------------------------------------------------------------------------
 # 3. Preprocess with kraken2 + kaiju (downloaded DBs)
@@ -129,29 +93,33 @@ samovar preprocess \
     --output_dir "$output_dir" \
     --kraken2-test "kraken2 ${KRAKEN2_DB_DIR}" \
     --kaiju-test "kaiju ${KAIJU_DB_PATH}" \
-    --cores 32
+    --cores "${SAMOVAR_CORES:-32}"
 
 # ---------------------------------------------------------------------------
-# 4. Submit Slurm exec job (32 CPUs, 0 GPUs, partition main)
+# 4. Submit Slurm exec job (override partition/mem via env)
 # ---------------------------------------------------------------------------
+SLURM_PARTITION="${SLURM_PARTITION:-main}"
+SLURM_CPUS="${SLURM_CPUS:-32}"
+SLURM_MEM="${SLURM_MEM:-250G}"
+SLURM_TIME="${SLURM_TIME:-48:00:00}"
 SLURM_SCRIPT="${output_dir}/.log/slurm_exec.sh"
 cat > "$SLURM_SCRIPT" << SBATCH_EOF
 #!/bin/bash
 #SBATCH --job-name=samovar_realistic
-#SBATCH --partition=main
-#SBATCH --cpus-per-task=32
+#SBATCH --partition=${SLURM_PARTITION}
+#SBATCH --cpus-per-task=${SLURM_CPUS}
 #SBATCH --ntasks=1
-#SBATCH --mem=250G
-#SBATCH --time=48:00:00
+#SBATCH --mem=${SLURM_MEM}
+#SBATCH --time=${SLURM_TIME}
 #SBATCH --output=${output_dir}/.log/slurm_exec_%j.out
 #SBATCH --error=${output_dir}/.log/slurm_exec_%j.err
 
 set -euo pipefail
 cd "${SAMOVAR}"
-CONDA_BIN="${CONDA_PREFIX:-/nfs/home/dsmutin/miniconda3}/bin"
-export PATH="${SAMOVAR}/bin:\${CONDA_BIN}:\${PATH}"
-export SAMOVAR_CORES=32
+export PATH="${SAMOVAR}/bin:\${CONDA_PREFIX:+\${CONDA_PREFIX}/bin:}\${PATH}"
+export SAMOVAR_CORES=${SLURM_CPUS}
 export PYTHONPATH="${SAMOVAR}/src:\${PYTHONPATH:-}"
+export NCBI_EMAIL="${NCBI_EMAIL}"
 
 samovar exec --output_dir "${output_dir}"
 SBATCH_EOF
@@ -159,3 +127,4 @@ SBATCH_EOF
 chmod +x "$SLURM_SCRIPT"
 JOBID="$(sbatch --parsable "$SLURM_SCRIPT")"
 echo "Submitted Slurm job: ${JOBID}"
+echo "$JOBID" > "${output_dir}/.log/slurm_jobid.txt"

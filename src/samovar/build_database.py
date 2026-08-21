@@ -12,7 +12,7 @@ from Bio.SeqRecord import SeqRecord
 import yaml
 from .fasta_processor import process_fasta_directories
 from .fasta_processor import preprocess_fasta
-from .genome_fetcher import fetch_gff, fetch_proteome
+from .genome_fetcher import fetch_gff, fetch_proteome, default_entrez_email
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +52,7 @@ def get_taxonomy_db(
     Note:
         If taxonomy_path is None, the function will download the latest taxonomy database from NCBI.
         The downloaded file will be automatically extracted to the specified db_path.
+        Override the URL with SAMOVAR_TAXDUMP_URL.
     """
     os.makedirs(db_path, exist_ok=True)
     existing_nodes = Path(db_path) / "nodes.dmp"
@@ -61,9 +62,13 @@ def get_taxonomy_db(
         return
 
     if taxonomy_path is None:
+        taxdump_url = os.environ.get(
+            "SAMOVAR_TAXDUMP_URL",
+            "https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
+        )
         download_cmd =[
             "wget",
-            "ftp://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
+            taxdump_url,
             "-P",
             db_path
         ]
@@ -380,7 +385,7 @@ def process_fasta_kaiju(input_file: str,
                        taxid: str,
                        db_path: str = "kaiju_db",
                        protein: bool = False,
-                       email: str = "test@samovar.com",
+                       email: Optional[str] = None,
                        fetch_missing: bool = True,
                        min_aa: int = 30) -> str:
     """Process FASTA into a Kaiju protein library.
@@ -392,6 +397,7 @@ def process_fasta_kaiju(input_file: str,
       3. downloaded NCBI proteome / GFF, or
       4. 6-frame translations of the provided FASTA.
     """
+    email = email or default_entrez_email()
     taxid = str(taxid).split(".")[0]
     temp_fasta = tempfile.NamedTemporaryFile(mode='w', suffix='.faa', delete=False)
     temp_fasta.close()
@@ -447,7 +453,7 @@ def add_database_kaiju(
     taxid: str,
     db_path: str = "kaiju_db",
     protein: bool = False,
-    email: str = "test@samovar.com",
+    email: Optional[str] = None,
     fetch_missing: bool = True,
 ) -> None:
     """Add sequences to the Kaiju database library.

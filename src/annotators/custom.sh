@@ -1,7 +1,7 @@
 #!/bin/bash
-
-# Exit immediately if a command exits with a non-zero status
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 trap 'rm -rf "$TMP_DIR"' EXIT
 # Default threads
@@ -51,7 +51,7 @@ case "$TOOL" in
   # ----------------------------------------
   "dummy"|"dummy9606"|"constant9606"|"constant"|"random")
     echo "[INFO] Starting constant-taxID dummy classifier (9606)..."
-    python src/annotators/constant9606.py -i "$R1" -I "$R2" -o "$OUT" --taxid 9606
+    python "$SCRIPT_DIR/constant9606.py" -i "$R1" -I "$R2" -o "$OUT" --taxid 9606
     ;;
 
   # ----------------------------------------
@@ -66,7 +66,7 @@ case "$TOOL" in
     ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq"
 
     # Run the python script
-    python src/annotators/metauto.py work "$FQ_DIR" "$DB"
+    python "$SCRIPT_DIR/metauto.py" work "$FQ_DIR" "$DB"
 
     # Concat output TSVs, remove headers, and take only seq and taxID (columns 1 and 2)
     cat "$FQ_DIR"/*.tsv | grep -v "^seq" | awk -F'\t' '{print $1 "\t" $2}' > "$OUT"

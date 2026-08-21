@@ -5,6 +5,13 @@ from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
 
+def _default_email() -> str:
+    for key in ("NCBI_EMAIL", "ENTREZ_EMAIL", "SAMOVAR_EMAIL"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    return "anonymous@example.com"
+
 @dataclass
 class AnnotatorConfig:
     run_name: str
@@ -22,13 +29,15 @@ class PipelineConfig:
     annotators: List[AnnotatorConfig] = None
     read_length: int = 150
     coverage: int = 30
-    email: str = "test@samovar.com"
+    email: str = None
     cores: int = 1
     max_genomes: int = 50
 
     def __post_init__(self):
         if self.annotators is None:
             self.annotators = []
+        if not self.email:
+            self.email = _default_email()
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
