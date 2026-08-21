@@ -7,7 +7,12 @@ import os
 import subprocess
 from pathlib import Path
 
-from samovar.parse_annotators import _resolve_taxid_by_rank
+from samovar.parse_annotators import (
+    DEFAULT_TAX_RANK,
+    ensure_taxid_rank_map,
+    canonical_taxid,
+    taxid_value_columns,
+)
 
 
 def repo_root() -> Path:
@@ -41,15 +46,18 @@ def ensure_combine_binary() -> Path:
     return binary
 
 
-def apply_species_level_csv(path: str, level: str = "species") -> None:
-    """Rewrite taxID_* columns to the requested rank without loading the table."""
+def apply_rank_level_csv(path: str, level: str = DEFAULT_TAX_RANK, cache_path: str = None) -> None:
+    """Rewrite a CSV copy's taxID columns using the cached rank map.
+
+    Do not use this on combined annotation tables used for genome fetch.
+    """
     src = Path(path)
     with src.open(newline="") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
             return
         fieldnames = list(reader.fieldnames)
-        tax_cols = [c for c in fieldnames if c.startswith("taxID")]
+        tax_cols = taxid_value_columns(fieldnames)
         unique = set()
         for row in reader:
             for col in tax_cols:
@@ -57,13 +65,7 @@ def apply_species_level_csv(path: str, level: str = "species") -> None:
                 if value:
                     unique.add(value)
 
-    taxid_map = {}
-    for taxid in unique:
-        if taxid in {"0", "", "nan", "None"}:
-            taxid_map[taxid] = "0" if taxid != "" else ""
-            continue
-        ranked = _resolve_taxid_by_rank(taxid, level)
-        taxid_map[taxid] = ranked if ranked is not None else taxid
+    taxid_map = ensure_taxid_rank_map(unique, level, cache_path)
 
     tmp = src.with_suffix(src.suffix + ".tmp")
     with src.open(newline="") as fin, tmp.open("w", newline="") as fout:
@@ -73,9 +75,15 @@ def apply_species_level_csv(path: str, level: str = "species") -> None:
         for row in reader:
             for col in tax_cols:
                 value = row.get(col) or "0"
-                row[col] = taxid_map.get(value, value)
+                key = canonical_taxid(value)
+                row[col] = taxid_map.get(value, taxid_map.get(key, key))
             writer.writerow(row)
     tmp.replace(src)
+
+
+def apply_species_level_csv(path: str, level: str = DEFAULT_TAX_RANK) -> None:
+    """Backward-compatible alias for :func:`apply_rank_level_csv`."""
+    apply_rank_level_csv(path, level=level)
 
 
 def combine_with_cpp(

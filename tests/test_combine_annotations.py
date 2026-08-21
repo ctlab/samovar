@@ -11,6 +11,7 @@ import pytest
 
 from samovar.parse_annotators import Annotation, extract_true_taxid
 from samovar.combine_tables import (
+    apply_rank_level_csv,
     apply_species_level_csv,
     combine_with_cpp,
     ensure_combine_binary,
@@ -162,6 +163,27 @@ def test_python_wrapper_species_pass(tmp_path):
     df = pd.read_csv(csv_path)
     mapped = str(int(df.loc[0, "taxID_kaiju_0"]))
     assert mapped in {"511145", "562"}
+
+
+def test_python_wrapper_genus_helper_does_not_change_combine_output(tmp_path):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_kaiju(reports / "1_kaiju.kaiju.out", [("seq|taxid:511145|", "511145")])
+    combine_with_cpp(str(reports), str(out), split_n=1, chunk_rows=1000)
+    csv_path = out / "1.annotation.csv"
+    df = pd.read_csv(csv_path)
+    assert str(int(df.loc[0, "taxID_kaiju_0"])) == "511145"
+    assert str(int(df.loc[0, "true"])) == "511145"
+    copy = tmp_path / "viz.csv"
+    copy.write_text(csv_path.read_text())
+    apply_rank_level_csv(str(copy), level="genus", cache_path=str(tmp_path / "taxid_genera_map.tsv"))
+    mapped = pd.read_csv(copy)
+    assert str(int(mapped.loc[0, "taxID_kaiju_0"])) == "561"
+    assert str(int(pd.read_csv(csv_path).loc[0, "taxID_kaiju_0"])) == "511145"
+    cache = (tmp_path / "taxid_genera_map.tsv").read_text()
+    assert "taxid|genera_taxid" in cache
+    assert "511145|561" in cache
 
 
 def test_matches_pandas_annotation_on_fixture_logs(tmp_path, combiner):

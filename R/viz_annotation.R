@@ -1,3 +1,72 @@
+#' Collapse taxIDs to an NCBI rank via a cached ``taxid|genera_taxid`` table.
+#'
+#' Original annotation tables are not modified. Lookups go through Python ete3
+#' and are stored in ``cache_file`` (and the user cache) for reuse.
+#'
+#' @param data annotation table with ``taxID_*`` / ``taxid_*`` and optional ``true``.
+#' @param rank NCBI rank (default ``genus``). ``none`` / ``exact`` keeps original IDs.
+#' @param python optional python executable. Falls back to ``PYTHON_PATH`` then ``python3``.
+#' @param cache_file path to a pipe-separated ``taxid|genera_taxid`` table.
+#' @return the same table with taxIDs remapped in memory, or the original table if remapping fails.
+#' @export
+remap_annotation_rank <- function(data, rank = "genus", python = NULL, cache_file = NULL) {
+  if (is.null(data) || is.null(rank) || !nzchar(as.character(rank)[1])) {
+    return(data)
+  }
+  rank <- as.character(rank)[1]
+  if (tolower(rank) %in% c("none", "exact", "taxid", "raw", "off", "false")) {
+    return(data)
+  }
+
+  py <- python
+  if (is.null(py) || !nzchar(py)) py <- Sys.getenv("PYTHON_PATH", unset = "")
+  if (!nzchar(py)) py <- Sys.which("python3")
+  if (!nzchar(py)) py <- Sys.which("python")
+  if (!nzchar(py)) {
+    warning("Python not found; using exact taxIDs instead of rank=", rank)
+    return(data)
+  }
+
+  tmp_in <- tempfile(fileext = ".csv")
+  tmp_out <- tempfile(fileext = ".csv")
+  tmp_py <- tempfile(fileext = ".py")
+  on.exit(unlink(c(tmp_in, tmp_out, tmp_py)), add = TRUE)
+  utils::write.csv(data, tmp_in, row.names = FALSE)
+  cache_py <- if (is.null(cache_file) || !nzchar(cache_file)) {
+    "None"
+  } else {
+    shQuote(cache_file, type = "sh")
+  }
+  writeLines(
+    c(
+      "import pandas as pd",
+      "from samovar.parse_annotators import remap_taxid_dataframe",
+      sprintf("df = pd.read_csv(%s)", shQuote(tmp_in, type = "sh")),
+      sprintf(
+        "remap_taxid_dataframe(df, rank=%s, cache_path=%s).to_csv(%s, index=False)",
+        shQuote(rank, type = "sh"),
+        cache_py,
+        shQuote(tmp_out, type = "sh")
+      )
+    ),
+    tmp_py
+  )
+  status <- suppressWarnings(system2(py, tmp_py, stdout = TRUE, stderr = TRUE))
+  ok <- is.null(attr(status, "status")) || identical(attr(status, "status"), 0L)
+  if (!ok || !file.exists(tmp_out) || !file.info(tmp_out)$size) {
+    warning(
+      sprintf(
+        "Could not remap taxIDs to rank=%s via ete3 (%s); using exact taxIDs. %s",
+        rank,
+        py,
+        paste(status, collapse = "\n")
+      )
+    )
+    return(data)
+  }
+  utils::read.csv(tmp_out, check.names = FALSE, stringsAsFactors = FALSE)
+}
+
 #' Visualize annotation results
 #'
 #' @param data Processed abundance table.
@@ -21,6 +90,9 @@
 #' @param output_dir character. Directory to save the plots. If NULL, plots are not saved.
 #' @param plot logical. If TRUE, plots are printed.
 #' @param split logical. If TRUE, plots are split into separate files.
+#' @param rank NCBI rank used to regroup taxIDs before F1 / R2 / CV (default genus).
+#'   Use ``none`` to compare exact taxIDs. Lookup uses ete3 via Python and is
+#'   cached as ``taxid|genera_taxid`` next to the plots; source tables are unchanged.
 #' @return list of ggplot objects
 #' @importFrom tibble tibble
 #' @importFrom dplyr mutate_all mutate summarise group_by %>% sym
@@ -39,7 +111,8 @@ viz_annotation <- function(
     show_top = 10,
     output_dir = NULL,
     plot = T,
-    split = T
+    split = T,
+    rank = "genus"
 ) {
 
   if (!is.null(output_dir)) {
@@ -56,6 +129,27 @@ viz_annotation <- function(
   }
 
   results <- list()
+
+  cache_file <- NULL
+  if (!is.null(output_dir) && !is.null(rank) &&
+      !tolower(as.character(rank)[1]) %in% c("none", "exact", "taxid", "raw", "off", "false", "")) {
+    rank_key <- tolower(as.character(rank)[1])
+    cache_name <- if (rank_key %in% c("genus", "genera", "g")) {
+      "taxid_genera_map.tsv"
+    } else {
+      sprintf("taxid_%s_map.tsv", rank_key)
+    }
+    cache_file <- file.path(output_dir, cache_name)
+  }
+  data <- remap_annotation_rank(data, rank = rank, cache_file = cache_file)
+  rank_used <- if (is.null(rank) || tolower(as.character(rank)[1]) %in%
+                   c("none", "exact", "taxid", "raw", "off", "false", "")) {
+    NULL
+  } else {
+    as.character(rank)[1]
+  }
+  taxid_xlab <- if (is.null(rank_used)) "True taxID" else sprintf("True taxID (%s)", rank_used)
+  taxid_ylab <- if (is.null(rank_used)) "Predicted taxID" else sprintf("Predicted taxID (%s)", rank_used)
 
   selected_columns <- (str_detect(colnames(data) , "^taxID_|^N_") &
                          str_detect(colnames(data) , "confidence", negate = T)) %>%
@@ -107,7 +201,11 @@ viz_annotation <- function(
 
           if(is.na(f1_score)) f1_score<- 0
 
-          caption_text <- sprintf("F1-score: %.3f", f1_score)
+          caption_text <- if (is.null(rank_used)) {
+            sprintf("F1-score: %.3f", f1_score)
+          } else {
+            sprintf("F1-score (%s): %.3f", rank_used, f1_score)
+          }
 
           n_true <- length(true_levels)
           n_pred <- length(pred_levels)
@@ -139,7 +237,7 @@ viz_annotation <- function(
               axis.text.y = element_text(size = 7)
             ) +
             coord_equal() +
-            xlab("True taxID") + ylab("Predicted taxID") +
+            xlab(taxid_xlab) + ylab(taxid_ylab) +
             labs(caption = caption_text) +
             ggtitle(tmp_name)
 
@@ -242,7 +340,7 @@ viz_annotation <- function(
               theme_minimal() +
               theme(panel.grid.minor = element_blank()) +
               coord_equal() +
-              xlab("True taxID") + ylab("Predicted taxID") +
+              xlab(taxid_xlab) + ylab(taxid_ylab) +
               labs(caption = caption_text) +
               ggtitle(tmp_name)
 
@@ -340,7 +438,11 @@ viz_annotation <- function(
             ) +
             coord_equal() +
             xlab(tmp_name2) + ylab(tmp_name1) +
-            ggtitle(paste(tmp_name1, "vs", tmp_name2))
+            ggtitle(if (is.null(rank_used)) {
+              paste(tmp_name1, "vs", tmp_name2)
+            } else {
+              paste0(tmp_name1, " vs ", tmp_name2, " (", rank_used, ")")
+            })
 
           gglist[[paste(tmp_name1, "vs", tmp_name2)]] <- gg
         }

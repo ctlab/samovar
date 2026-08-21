@@ -16,6 +16,7 @@ show_top <- 0
 output_dir <- NULL
 types <- c("f1", "R2", "cv")
 split <- F
+rank <- "genus"
 # Parse arguments
 i <- 1
 csv_file <- NULL
@@ -31,6 +32,9 @@ while (i <= length(args)) {
     i <- i + 2
   } else if (args[i] == "--csv") {
     csv_file <- args[i + 1]
+    i <- i + 2
+  } else if (args[i] == "--rank") {
+    rank <- args[i + 1]
     i <- i + 2
   } else if (args[i] == "--split") {
     split <- T
@@ -50,31 +54,36 @@ if (!is.null(output_dir)) {
   dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 }
 
-# Installed samovaR may concatenate every CSV in the directory, including a
-# previously written combined_annotation_table.csv. Hide those files so they
-# cannot be mixed back into the plot (that is how true taxID 0 reappeared).
+# Restore leftovers from a previous interrupted viz, then hide combined
+# tables so they are not mixed into the plot.
+combined_hidden <- character()
+restore_combined_plotbak <- function() {
+  leftovers <- list.files(
+    annotation_dir,
+    pattern = "^combined_annotation_table.*\\.csv\\.plotbak$",
+    full.names = TRUE
+  )
+  for (hidden in unique(c(combined_hidden, leftovers))) {
+    orig <- sub("\\.plotbak$", "", hidden)
+    if (file.exists(hidden) && !file.exists(orig)) {
+      file.rename(hidden, orig)
+    }
+  }
+}
+restore_combined_plotbak()
+
 combined_files <- list.files(
   annotation_dir,
   pattern = "^combined_annotation_table.*\\.csv$",
   full.names = TRUE
 )
-combined_hidden <- character()
 for (f in combined_files) {
   hidden <- paste0(f, ".plotbak")
   if (file.rename(f, hidden)) {
     combined_hidden <- c(combined_hidden, hidden)
   }
 }
-on.exit({
-  for (hidden in combined_hidden) {
-    orig <- sub("\\.plotbak$", "", hidden)
-    if (file.exists(hidden) && !file.exists(orig)) {
-      file.rename(hidden, orig)
-    } else if (file.exists(hidden)) {
-      unlink(hidden)
-    }
-  }
-}, add = TRUE)
+on.exit(restore_combined_plotbak(), add = TRUE)
 
 # Read and process data
 data <- read_annotation_dir(annotation_dir)
@@ -96,7 +105,8 @@ results <- tryCatch({
     show_top = show_top,
     output_dir = output_dir,
     plot = FALSE,
-    split = split
+    split = split,
+    rank = rank
   )
 }, error = function(e) {
   warning(sprintf("Skipping visualization due to error: %s", conditionMessage(e)))

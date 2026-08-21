@@ -1,15 +1,18 @@
 """Combine annotator *.out files into per-sample CSVs.
 
 The join is a C++ external sort-merge (bin/samovar_combine_annotations) so
-Kraken k-mer columns are never loaded. Species-rank remapping is a streaming
-pass over the resulting CSV (unique taxIDs only go through taxonomy lookup).
+Kraken k-mer columns are never loaded.
+
+TaxIDs are kept at the annotators' original resolution. Collapsing to genus
+(or another rank) happens only at visualization time via a cached
+``taxid|genera_taxid`` translation table — rewriting this table would break
+genome fetch (NCBI assemblies are strain/species IDs, not genus IDs).
 """
 
 import argparse
 import sys
-from pathlib import Path
 
-from samovar.combine_tables import apply_species_level_csv, combine_with_cpp
+from samovar.combine_tables import combine_with_cpp
 
 
 def main(argv=None) -> int:
@@ -34,18 +37,24 @@ def main(argv=None) -> int:
         help="External-sort run size (rows) for the C++ combiner.",
     )
     parser.add_argument(
+        "--rank",
+        type=str,
+        default=None,
+        help="Ignored. Rank collapse is applied only during visualization.",
+    )
+    parser.add_argument(
+        "--skip-rank",
+        action="store_true",
+        help="No-op (tables are never rank-collapsed after merge).",
+    )
+    parser.add_argument(
         "--skip-species",
         action="store_true",
-        help="Do not remap taxIDs to species after the merge.",
+        help="Deprecated no-op; species/genus remapping is not applied to combined tables.",
     )
     args = parser.parse_args(argv)
 
     combine_with_cpp(args.input_dir, args.output_dir, args.split_sample_name, args.chunk_rows)
-
-    if not args.skip_species:
-        for csv_path in sorted(Path(args.output_dir).glob("*.annotation.csv")):
-            apply_species_level_csv(str(csv_path), level="species")
-            print(f"Species-mapped {csv_path.name}")
     return 0
 
 

@@ -17,6 +17,11 @@ from samovar.parse_annotators import (
     extract_true_taxid,
     _discover_nodes_path,
     resolve_metaphlan_db_file,
+    remap_taxid_dataframe,
+    canonical_taxid,
+    ensure_taxid_rank_map,
+    read_taxid_rank_table,
+    rank_map_column,
 )
 
 
@@ -180,10 +185,47 @@ def test_correct_level(test_data_dir):
     
     # Check that taxIDs were corrected to genus level
     # Note: These assertions may need to be adjusted based on actual NCBI taxonomy data
-    assert ann.DataFrame['taxID_kraken1_0'].iloc[0] != '9606'  # Should be changed to genus level
-    assert ann.DataFrame['taxID_kraken1_0'].iloc[1] != '511145'  # Should be changed to genus level
+    assert str(ann.DataFrame['taxID_kraken1_0'].iloc[0]) == '9605'
+    assert str(ann.DataFrame['taxID_kraken1_0'].iloc[1]) == '561'
     assert ann.DataFrame['taxID_kraken1_0'].iloc[2] == '0'  # Unclassified should remain 0
     assert ann.DataFrame['taxID_kraken1_0'].iloc[3] == '1234567890'  # Invalid taxID should remain unchanged
+
+
+def test_remap_taxid_dataframe_genus_collapses_strain_and_true(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    df = pd.DataFrame({
+        "taxID_kaiju": ["511145", "562", "0"],
+        "taxid_kraken2": [511145, 561, 0],
+        "true": ["511145", "511145", "9606"],
+        "taxID_kaiju_confidence": [0.9, 0.8, 0.1],
+    })
+    cache = tmp_path / "taxid_genera_map.tsv"
+    out = remap_taxid_dataframe(df, rank="genus", cache_path=str(cache))
+    assert str(canonical_taxid(out.loc[0, "taxID_kaiju"])) == "561"
+    assert str(canonical_taxid(out.loc[1, "taxID_kaiju"])) == "561"
+    assert str(canonical_taxid(out.loc[1, "taxid_kraken2"])) == "561"
+    assert str(canonical_taxid(out.loc[0, "true"])) == "561"
+    assert str(canonical_taxid(out.loc[2, "true"])) == "9605"
+    assert str(canonical_taxid(out.loc[2, "taxID_kaiju"])) == "0"
+    assert out.loc[0, "taxID_kaiju_confidence"] == 0.9
+    assert str(canonical_taxid(df.loc[0, "taxID_kaiju"])) == "511145"
+    text = cache.read_text()
+    assert text.splitlines()[0] == "taxid|genera_taxid"
+    assert "511145|561" in text
+    table = read_taxid_rank_table(cache)
+    assert table["511145"] == "561"
+    exact = remap_taxid_dataframe(df, rank="none")
+    assert str(canonical_taxid(exact.loc[0, "taxID_kaiju"])) == "511145"
+
+
+def test_ensure_taxid_rank_map_reuses_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    cache = tmp_path / "map.tsv"
+    cache.write_text("taxid|genera_taxid\n999999|42\n")
+    mapping = ensure_taxid_rank_map(["999999"], rank="genus", cache_path=str(cache))
+    assert mapping["999999"] == "42"
+    assert rank_map_column("genus") == "genera_taxid"
+    assert rank_map_column("species") == "species_taxid"
 
 
 def test_rank_annotation_class():

@@ -59,7 +59,8 @@ if not os.path.exists(args.validation_file):
     raise FileNotFoundError(f"Validation file not found: {args.validation_file}")
 
 validation_df = pd.read_csv(args.validation_file)
-validation_df.drop("seq", axis=1, inplace=True)
+if "seq" in validation_df.columns:
+    validation_df.drop("seq", axis=1, inplace=True)
 
 # Drop rows with NaN in true column
 initial_rows = len(validation_df)

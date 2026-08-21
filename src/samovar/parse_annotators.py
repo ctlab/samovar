@@ -73,12 +73,230 @@ def extract_true_taxid(seq_id: str, pattern: Optional[str] = None) -> str:
 ncbi = None
 _taxonomy_parent_rank = None
 
+# Metrics and plots default to genus: annotators often return strain/species/genus
+# taxIDs that only agree after collapsing to a shared rank via NCBI lineage.
+DEFAULT_TAX_RANK = "genus"
+
+_RANK_ALIASES = {
+    "sp": "species",
+    "species": "species",
+    "g": "genus",
+    "genus": "genus",
+    "genera": "genus",
+    "fam": "family",
+    "family": "family",
+    "order": "order",
+    "class": "class",
+    "phylum": "phylum",
+    "kingdom": "kingdom",
+    "superkingdom": "superkingdom",
+}
+
 # Minimal built-in fallback for common test taxids if no taxonomy DB is available.
 _FALLBACK_LINEAGE = {
     9606: {"species": 9606, "genus": 9605},
+    9605: {"genus": 9605},
     511145: {"species": 562, "genus": 561},
     562: {"species": 562, "genus": 561},
+    561: {"genus": 561},
+    4932: {"species": 4932, "genus": 4930},
+    4930: {"genus": 4930},
 }
+
+
+def normalize_tax_rank(rank: Optional[str]) -> Optional[str]:
+    """Map CLI/user rank names to NCBI rank strings. None means keep exact taxIDs."""
+    if rank is None:
+        return None
+    key = str(rank).strip().lower()
+    if key in {"", "none", "exact", "taxid", "raw", "false", "off"}:
+        return None
+    return _RANK_ALIASES.get(key, key)
+
+
+def canonical_taxid(value) -> str:
+    """Normalize a table cell to a taxID string (unclassified -> 0)."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "0"
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none", "na", "<na>"}:
+        return "0"
+    if text.endswith(".0") and text[:-2].lstrip("-").isdigit():
+        text = text[:-2]
+    match = re.search(r"(\d+)", text)
+    return match.group(1) if match else text
+
+
+def taxid_value_columns(columns) -> List[str]:
+    """Annotator taxID columns plus ``true``; skip confidence fields."""
+    out = []
+    for col in columns:
+        name = str(col).lower()
+        if "confidence" in name:
+            continue
+        if name == "true" or name.startswith("taxid"):
+            out.append(col)
+    return out
+
+
+def build_taxid_rank_map(taxids, rank: str) -> Dict[str, str]:
+    """Map unique taxID strings to the ancestor (or self) at ``rank``."""
+    rank_name = normalize_tax_rank(rank)
+    mapping: Dict[str, str] = {}
+    if rank_name is None:
+        for taxid in taxids:
+            key = canonical_taxid(taxid)
+            mapping[str(taxid)] = key
+            mapping[key] = key
+        return mapping
+    for taxid in taxids:
+        raw = str(taxid) if taxid is not None else "0"
+        key = canonical_taxid(taxid)
+        if key == "0":
+            mapping[raw] = "0"
+            mapping[key] = "0"
+            continue
+        ranked = _resolve_taxid_by_rank(key, rank_name)
+        mapping[raw] = ranked if ranked is not None else key
+        mapping[key] = mapping[raw]
+    return mapping
+
+
+def rank_map_column(rank: str) -> str:
+    """Column name for a rank translation table (genus -> ``genera_taxid``)."""
+    resolved = normalize_tax_rank(rank) or str(rank).strip().lower() or "genus"
+    if resolved == "genus":
+        return "genera_taxid"
+    return f"{resolved}_taxid"
+
+
+def default_rank_map_path(rank: str) -> Path:
+    return _cache_dir() / f"taxid_{rank_map_column(rank)}.tsv"
+
+
+def read_taxid_rank_table(path) -> Dict[str, str]:
+    """Load a ``taxid|{rank}_taxid`` translation table (pipe, tab, or csv)."""
+    table = Path(path)
+    if not table.exists():
+        return {}
+    mapping: Dict[str, str] = {}
+    with table.open(encoding="utf-8") as handle:
+        for i, line in enumerate(handle):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "|" in line:
+                parts = [p.strip() for p in line.split("|")]
+            elif "\t" in line:
+                parts = [p.strip() for p in line.split("\t")]
+            else:
+                parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                continue
+            if i == 0 and parts[0].lower() in {"taxid", "tax_id"}:
+                continue
+            src = canonical_taxid(parts[0])
+            dst = canonical_taxid(parts[1])
+            mapping[src] = dst
+            mapping[str(parts[0]).strip()] = dst
+    return mapping
+
+
+def write_taxid_rank_table(path, mapping: Dict[str, str], rank: str) -> None:
+    """Write ``taxid|{rank}_taxid`` (pipe-separated) for reuse across viz runs."""
+    table = Path(path)
+    table.parent.mkdir(parents=True, exist_ok=True)
+    col = rank_map_column(rank)
+    rows: Dict[str, str] = {}
+    for key, value in mapping.items():
+        src = canonical_taxid(key)
+        if src == "0":
+            continue
+        rows[src] = canonical_taxid(value)
+    tmp = table.with_suffix(table.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        handle.write(f"taxid|{col}\n")
+        for src in sorted(rows, key=lambda x: (len(x), x)):
+            handle.write(f"{src}|{rows[src]}\n")
+    tmp.replace(table)
+
+
+def ensure_taxid_rank_map(taxids, rank: str, cache_path=None) -> Dict[str, str]:
+    """Resolve missing taxIDs to ``rank`` and persist a translation table."""
+    rank_name = normalize_tax_rank(rank) or rank
+    paths = []
+    if cache_path:
+        paths.append(Path(cache_path))
+    try:
+        global_path = default_rank_map_path(rank_name)
+        if not cache_path or Path(cache_path).resolve() != global_path.resolve():
+            paths.append(global_path)
+    except Exception:
+        pass
+
+    mapping: Dict[str, str] = {}
+    for path in paths:
+        mapping.update(read_taxid_rank_table(path))
+
+    added = False
+    for taxid in taxids:
+        key = canonical_taxid(taxid)
+        raw = str(taxid) if taxid is not None else "0"
+        if key == "0":
+            mapping[key] = "0"
+            mapping[raw] = "0"
+            continue
+        if key in mapping:
+            mapping[raw] = mapping[key]
+            continue
+        ranked = _resolve_taxid_by_rank(key, rank_name)
+        mapping[key] = ranked if ranked is not None else key
+        mapping[raw] = mapping[key]
+        added = True
+
+    requested = {canonical_taxid(t) for t in taxids}
+    local_path = Path(cache_path).resolve() if cache_path else None
+    for path in paths:
+        if local_path and path.resolve() == local_path:
+            subset = {
+                key: value
+                for key, value in mapping.items()
+                if canonical_taxid(key) in requested
+            }
+            write_taxid_rank_table(path, subset, rank_name)
+        elif added or not path.exists():
+            write_taxid_rank_table(path, mapping, rank_name)
+    return mapping
+
+
+def remap_taxid_dataframe(
+    df: pd.DataFrame,
+    rank: str = DEFAULT_TAX_RANK,
+    cache_path: Optional[str] = None,
+) -> pd.DataFrame:
+    """Rewrite taxID columns in a *copy* using a cached taxid→rank table.
+
+    Annotation CSVs on disk are left unchanged. ``cache_path`` is a
+    ``taxid|genera_taxid`` (or other rank) table written during visualization.
+    """
+    rank_name = normalize_tax_rank(rank)
+    out = df.copy()
+    if rank_name is None:
+        return out
+    cols = taxid_value_columns(out.columns)
+    if not cols:
+        return out
+    unique = set()
+    for col in cols:
+        unique.update(out[col].dropna().unique())
+    mapping = ensure_taxid_rank_map(unique, rank_name, cache_path)
+    for col in cols:
+        out[col] = out[col].map(
+            lambda v, m=mapping: m.get(str(v), m.get(canonical_taxid(v), canonical_taxid(v)))
+            if pd.notna(v)
+            else v
+        )
+    return out
 
 
 def _get_ncbi() -> "NCBITaxa":
@@ -182,6 +400,8 @@ def _get_taxid_by_rank_from_nodes(taxid: int, rank_name: str) -> Optional[str]:
 
 def _resolve_taxid_by_rank(taxid: str, rank_name: str) -> Optional[str]:
     """Resolve target rank with fast and robust fallback strategy."""
+    rank_name = normalize_tax_rank(rank_name) or rank_name
+    taxid = canonical_taxid(taxid)
     if taxid == "0":
         return "0"
 
@@ -496,7 +716,7 @@ class Annotation:
         """
         self.true_annotation = [change_dict.get(TA) if TA in change_dict else "" for TA in self.true_annotation]
 
-    def rank_annotation(self, rank: str = "species") -> 'RankAnnotation':
+    def rank_annotation(self, rank: str = DEFAULT_TAX_RANK) -> 'RankAnnotation':
         """Get annotations at specified taxonomic rank.
         
         Args:
@@ -509,7 +729,7 @@ class Annotation:
         rank_dict = dict(zip(self.rank_list, rank_list))
         return RankAnnotation(rank).make(self.full(), rank_dict)
 
-    def expand_annotation(self, rank: List[str] = ["species"]) -> 'ExpandAnnotation':
+    def expand_annotation(self, rank: List[str] = None) -> 'ExpandAnnotation':
         """Expand annotations to multiple taxonomic ranks.
         
         Args:
@@ -518,12 +738,14 @@ class Annotation:
         Returns:
             ExpandAnnotation object with annotations at multiple ranks
         """
+        if rank is None:
+            rank = [DEFAULT_TAX_RANK]
         full_rank_annotation = ExpandAnnotation()
         for i in rank:
             full_rank_annotation.add(self.rank_annotation(i))
         return full_rank_annotation
 
-    def correct_annotations(self, rank: str = "species") -> pd.DataFrame:
+    def correct_annotations(self, rank: str = DEFAULT_TAX_RANK) -> pd.DataFrame:
         """Get correct annotations at specified rank.
         
         Args:
@@ -540,38 +762,25 @@ class Annotation:
         tmp["true"] = self.true_annotation
         return tmp
 
-    def correct_level(self, level: str = "sp") -> None:
+    def correct_level(self, level: str = DEFAULT_TAX_RANK) -> None:
         """Correct annotations to specified taxonomic level.
         
         Args:
-            level: Taxonomic level to correct to (e.g. 'sp' for species, 'genus', etc.)
+            level: Taxonomic level to correct to (default genus). Use
+                ``none``/``exact`` to skip remapping.
             
         This method:
-        1. Gets unique taxIDs from the DataFrame
-        2. Maps them to the specified taxonomic level
+        1. Gets unique taxIDs from the DataFrame (and ``true`` / true_annotation)
+        2. Maps them to the specified taxonomic level via ete3 NCBITaxa
         3. Replaces original taxIDs with their corrected versions
         """
-        # Get all unique taxIDs from taxID columns
-        taxid_cols = [col for col in self.DataFrame.columns if col.startswith('taxID')]
-        unique_taxids = set()
-        for col in taxid_cols:
-            unique_taxids.update(self.DataFrame[col].dropna().unique())
-        
-        # Create mapping dictionary for taxIDs
-        taxid_map = {}
-        for taxid in unique_taxids:
-            if taxid == "0" or pd.isna(taxid):
-                taxid_map[taxid] = taxid
-                continue
-            try:
-                ranked = _resolve_taxid_by_rank(taxid, level)
-                taxid_map[taxid] = ranked if ranked is not None else taxid
-            except Exception:
-                taxid_map[taxid] = taxid
-        
-        # Replace taxIDs in all taxID columns
-        for col in taxid_cols:
-            self.DataFrame[col] = self.DataFrame[col].map(taxid_map)
+        self.DataFrame = remap_taxid_dataframe(self.DataFrame, rank=level)
+        if self.true_annotation:
+            mapping = build_taxid_rank_map(self.true_annotation, level)
+            self.true_annotation = [
+                mapping.get(str(ta), canonical_taxid(ta)) for ta in self.true_annotation
+            ]
+            self.true_annotation_list = self.list2set(self.true_annotation)
 
     def tr(self) -> pd.DataFrame:
         """Get DataFrame with only taxID columns."""
