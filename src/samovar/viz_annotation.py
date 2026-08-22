@@ -607,6 +607,7 @@ def viz_annotation(
 
     if "true" in work.columns and types & {"scores", "score", "purity"}:
         from samovar.scores import (
+            OPAL_DISPLAY,
             majority_vote,
             purity_by_taxon,
             save_scores_altair,
@@ -626,6 +627,18 @@ def viz_annotation(
                 title=f"Annotation quality{caption_rank}",
             )
             save_scores_altair(scores_table, out_dir / "scores.html")
+            save_scores_barplot(
+                scores_table,
+                out_dir / "opal_scores.png",
+                title=f"OPAL-style profile metrics{caption_rank}",
+                display=OPAL_DISPLAY,
+                ymax=2.0,
+            )
+            save_scores_altair(
+                scores_table,
+                out_dir / "opal_scores.html",
+                display=OPAL_DISPLAY,
+            )
             taxon_frames = []
             tools = tool_annotators(annotators)
             for name in scores_table["annotator"].astype(str):
@@ -644,6 +657,22 @@ def viz_annotation(
                 pd.concat(taxon_frames, ignore_index=True).to_csv(
                     out_dir / "purity_by_taxon.csv", index=False
                 )
+            try:
+                from samovar.opal import maybe_run_opal
+
+                plot_names = [
+                    n for n in scores_table["annotator"].astype(str) if n in work.columns
+                ]
+                maybe_run_opal(
+                    work,
+                    plot_names,
+                    out_dir,
+                    rank=rank_used or "genus",
+                )
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning("OPAL step skipped: %s", exc)
 
     if "true" in work.columns and types & {"f1"}:
         from samovar.scores import format_f1_caption, standard_classification_metrics
@@ -663,6 +692,9 @@ def viz_annotation(
             true_levels_last = true_levels
             f1 = _f1_from_counts(counts)
             std = standard_classification_metrics(true, pred)
+            from samovar.opal import confusion_rates
+
+            std.update(confusion_rates(true, pred))
             caption = format_f1_caption(f1, std, rank_used)
             matrix = _trim_matrix(_pivot_matrix(counts, "true", "pred", true_levels, pred_levels))
             gglist[name] = {"f1": f1, "metrics": std, "matrix": matrix}

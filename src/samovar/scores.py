@@ -37,6 +37,23 @@ SCORE_COLUMNS = (
     "r2",
     "accuracy_purity",
     "f1_purity",
+    "tpr",
+    "tnr",
+    "fpr",
+    "fnr",
+    "tn_pct",
+    "fn_pct",
+    "fp_pct",
+    "tp_pct",
+    "opal_tp",
+    "opal_fp",
+    "opal_fn",
+    "completeness",
+    "opal_purity",
+    "opal_f1",
+    "jaccard",
+    "l1_norm",
+    "bray_curtis",
 )
 
 
@@ -262,6 +279,9 @@ def annotation_scores(true: Iterable, pred: Iterable) -> Dict[str, float]:
         "r2": _r2_abundance(true_s, pred_s),
     }
     stats.update(standard_classification_metrics(true_s, pred_s))
+    from samovar.opal import opal_style_metrics
+
+    stats.update(opal_style_metrics(true_s, pred_s))
     return stats
 
 
@@ -304,6 +324,9 @@ def score_annotators(
         stats["f1"] = _f1_accuracy(true, collapsed)
         stats["r2"] = _r2_abundance(true, collapsed)
         stats.update(standard_classification_metrics(true, collapsed))
+        from samovar.opal import opal_style_metrics
+
+        stats.update(opal_style_metrics(true, collapsed))
         rows.append({"annotator": name, **stats})
 
     for name in names:
@@ -318,6 +341,9 @@ def score_annotators(
     table = pd.DataFrame(rows)
     if table.empty:
         return pd.DataFrame(columns=list(SCORE_COLUMNS))
+    for col in SCORE_COLUMNS:
+        if col not in table.columns:
+            table[col] = np.nan
     table = table[list(SCORE_COLUMNS)]
     ordered = order_annotators(list(table["annotator"]))
     table["annotator"] = pd.Categorical(table["annotator"], categories=ordered, ordered=True)
@@ -331,8 +357,19 @@ SCORE_DISPLAY = {
     "f1_macro": "F1-macro",
     "f1": "F1 (current)",
     "r2": "R² (current)",
+    "tnr": "TN rate",
+    "fnr": "FN rate",
     "accuracy_purity": "Accuracy purity",
     "f1_purity": "F1 purity",
+}
+
+OPAL_DISPLAY = {
+    "completeness": "Completeness",
+    "opal_purity": "Purity (OPAL)",
+    "opal_f1": "F1 (OPAL)",
+    "jaccard": "Jaccard",
+    "l1_norm": "L1 norm",
+    "bray_curtis": "Bray–Curtis",
 }
 
 BAR_COLORS = {
@@ -342,24 +379,39 @@ BAR_COLORS = {
     "f1_macro": "#1F78B4",
     "f1": "#7570B3",
     "r2": "#E7298A",
+    "tnr": "#80B1D3",
+    "fnr": "#FB8072",
     "accuracy_purity": "#1B9E77",
     "f1_purity": "#D95F02",
+    "completeness": "#8DD3C7",
+    "opal_purity": "#BEBADA",
+    "opal_f1": "#FDB462",
+    "jaccard": "#B3DE69",
+    "l1_norm": "#FCCDE5",
+    "bray_curtis": "#D9D9D9",
 }
 
 
-def scores_long(table: pd.DataFrame) -> pd.DataFrame:
-    metrics = [c for c in SCORE_DISPLAY if c in table.columns]
+def scores_long(table: pd.DataFrame, display: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+    labels = display or SCORE_DISPLAY
+    metrics = [c for c in labels if c in table.columns]
     long = table.melt(
         id_vars=["annotator"],
         value_vars=metrics,
         var_name="metric",
         value_name="score",
     )
-    long["label"] = long["metric"].map(SCORE_DISPLAY)
+    long["label"] = long["metric"].map(labels)
     return long
 
 
-def save_scores_barplot(table: pd.DataFrame, path, title: Optional[str] = None) -> None:
+def save_scores_barplot(
+    table: pd.DataFrame,
+    path,
+    title: Optional[str] = None,
+    display: Optional[Dict[str, str]] = None,
+    ymax: Optional[float] = None,
+) -> None:
     """Grouped barplot of quality metrics per annotator (PNG)."""
     from pathlib import Path
 
@@ -375,8 +427,11 @@ def save_scores_barplot(table: pd.DataFrame, path, title: Optional[str] = None) 
     if table is None or table.empty:
         return
 
+    labels = display or SCORE_DISPLAY
     cns = _setup_cns()
-    metrics = [m for m in SCORE_DISPLAY if m in table.columns]
+    metrics = [m for m in labels if m in table.columns]
+    if not metrics:
+        return
     annotators = [str(a) for a in table["annotator"].tolist()]
     n_ann = len(annotators)
     n_met = len(metrics)
@@ -397,7 +452,7 @@ def save_scores_barplot(table: pd.DataFrame, path, title: Optional[str] = None) 
             x + offset,
             vals,
             width,
-            label=SCORE_DISPLAY[metric],
+            label=labels[metric],
             color=BAR_COLORS.get(metric, "0.5"),
             edgecolor="white",
             linewidth=0.4,
@@ -409,9 +464,10 @@ def save_scores_barplot(table: pd.DataFrame, path, title: Optional[str] = None) 
     ax.set_xlabel("Annotator")
     ax.set_title(title or "Annotation quality")
     finite = pd.to_numeric(table[metrics].stack(), errors="coerce")
-    ymax = float(np.nanmax(finite.to_numpy())) if len(finite) else 1.0
-    ymin = float(np.nanmin(finite.to_numpy())) if len(finite) else 0.0
-    ax.set_ylim(min(0.0, ymin) - 0.05, max(1.0, ymax) + 0.08)
+    data_max = float(np.nanmax(finite.to_numpy())) if len(finite) else 1.0
+    data_min = float(np.nanmin(finite.to_numpy())) if len(finite) else 0.0
+    top = ymax if ymax is not None else max(1.0, data_max)
+    ax.set_ylim(min(0.0, data_min) - 0.05, top + 0.08)
     ax.axhline(0, color="0.6", linewidth=0.6)
     ax.legend(frameon=False, ncol=min(n_met, 4), loc="upper center", bbox_to_anchor=(0.5, -0.28))
     ax.set_axisbelow(True)
@@ -433,12 +489,18 @@ def format_f1_caption(f1: float, std: Dict[str, float], rank: Optional[str] = No
     """Two-line caption for F1 heatmaps: current formula + standard metrics."""
     tag = f" ({rank})" if rank else ""
     acc = std.get("accuracy", f1)
+    tnr = std.get("tnr")
+    fnr = std.get("fnr")
+    rates = ""
+    if tnr is not None and fnr is not None:
+        rates = f"   TN rate = {float(tnr):.3f}   FN rate = {float(fnr):.3f}"
     return (
         f"F1 (current){tag} = 2PR/(P+R) = {f1:.3f}   |   P = R = TP/N = accuracy = {acc:.3f}\n"
         f"P-macro = {std.get('precision_macro', float('nan')):.3f}   "
         f"R-macro = {std.get('recall_macro', float('nan')):.3f}   "
         f"F1-macro = {std.get('f1_macro', float('nan')):.3f}   "
         f"F1-weighted = {std.get('f1_weighted', float('nan')):.3f}"
+        f"{rates}"
     )
 
 
@@ -451,7 +513,7 @@ def format_r2_caption(r2: float, rank: Optional[str] = None) -> str:
     )
 
 
-def save_scores_altair(table: pd.DataFrame, path) -> None:
+def save_scores_altair(table: pd.DataFrame, path, display: Optional[Dict[str, str]] = None) -> None:
     from pathlib import Path
 
     path = Path(path)
@@ -461,7 +523,7 @@ def save_scores_altair(table: pd.DataFrame, path) -> None:
         import altair as alt
     except ImportError:
         return
-    long = scores_long(table)
+    long = scores_long(table, display=display)
     chart = (
         alt.Chart(long)
         .mark_bar()

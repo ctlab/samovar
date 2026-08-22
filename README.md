@@ -79,6 +79,7 @@ It will prompt for an NCBI Entrez email (genome downloads). In CI the default is
 - Dev / CI: `SAMOVAR_INSTALL_DEV=1 ./install.sh`
 - Air-gapped: `SAMOVAR_OFFLINE=1 SAMOVAR_WHEELHOUSE=/path/to/wheels ./install.sh`
 - Optional R package: `./install.sh R-package` (installs `samovaR` from GitHub branch [`r-package`](https://github.com/ctlab/samovar/tree/r-package) if it is not already present; warns with the installed version if it is)
+- Optional [CAMI OPAL](https://github.com/CAMI-challenge/OPAL): `./install.sh OPAL` (or `SAMOVAR_INSTALL_OPAL=1 ./install.sh`). Pipeline plots always include OPAL-style metrics; `opal.py` adds the CAMI HTML report when present. Disable a run with `SAMOVAR_OPAL=0`.
 
 Annotators such as `kraken2` and `kaiju` may be given as names on `$PATH` (no full path required):
 

@@ -135,6 +135,9 @@ def test_viz_annotation_writes_scores_barplot(tmp_path):
     assert "f1_purity" in csv.columns
     assert "accuracy" in csv.columns
     assert "f1_macro" in csv.columns
+    assert "tnr" in csv.columns
+    assert "completeness" in csv.columns
+    assert (out / "opal_scores.png").is_file()
     assert "f1" in csv.columns
     assert "r2" in csv.columns
     assert "SAMOVAR" in set(csv["annotator"].astype(str))

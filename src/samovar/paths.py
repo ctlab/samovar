@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.9"
+PACKAGE_VERSION = "0.10.10"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -27,6 +27,8 @@ KNOWN_TOOLS = (
     "metaphlan4",
     "centrifuge",
     "iss",
+    "opal.py",
+    "opal",
     "R",
     "Rscript",
     "snakemake",

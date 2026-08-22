@@ -5,11 +5,13 @@
 # Usage:
 #   ./install.sh                 Python pipeline only
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
+#   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
 #
 # Environment:
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
 #   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
+#   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
@@ -127,9 +129,64 @@ PY
     return 0
 }
 
+install_opal() {
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Skipping OPAL install in offline mode."
+        return 1
+    fi
+    echo "Installing optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL) ..."
+    if ! "$PYTHON_PATH" -m pip install "cami-opal" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
+        echo "Warning: pip install cami-opal failed. Profiling HTML from OPAL will be skipped."
+        echo "Install later with: ./install.sh OPAL"
+        return 1
+    fi
+    hash -r 2>/dev/null || true
+    local opal_bin=""
+    opal_bin="$(command -v opal.py 2>/dev/null || true)"
+    if [ -z "$opal_bin" ] && [ -x "$PY_BIN/opal.py" ]; then
+        opal_bin="$PY_BIN/opal.py"
+    fi
+    if [ -z "$opal_bin" ]; then
+        opal_bin="$(command -v opal 2>/dev/null || true)"
+    fi
+    if [ -z "$opal_bin" ]; then
+        echo "Warning: cami-opal installed but opal.py is not on PATH."
+        return 1
+    fi
+    echo "OPAL: $opal_bin"
+    export SAMOVAR_OPAL_BIN="$opal_bin"
+    "$PYTHON_PATH" - <<'PY'
+import os, shutil
+from pathlib import Path
+try:
+    from samovar.paths import load_config, write_config
+except ImportError:
+    print("Warning: samovar is not importable yet; re-run ./install.sh to record opal_path")
+    raise SystemExit(0)
+cfg = load_config()
+cfg["opal_path"] = os.environ.get("SAMOVAR_OPAL_BIN") or shutil.which("opal.py") or ""
+write_config(cfg)
+print("Updated config opal_path:", cfg.get("opal_path"))
+PY
+    return 0
+}
+
 if [ "${1:-}" = "R-package" ] || [ "${1:-}" = "r-package" ]; then
     echo "R-package mode (Python tree is unchanged)."
     install_samovar_r_package
+    exit $?
+fi
+
+if [ "${1:-}" = "OPAL" ] || [ "${1:-}" = "opal" ]; then
+    echo "OPAL mode (optional CAMI profiler assessment)."
+    PIP_OPTS=()
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        PIP_OPTS+=(--offline --no-build-isolation)
+        if [ -n "${SAMOVAR_WHEELHOUSE:-}" ]; then
+            PIP_OPTS+=(--no-index --find-links "$SAMOVAR_WHEELHOUSE")
+        fi
+    fi
+    install_opal
     exit $?
 fi
 
@@ -239,6 +296,12 @@ else
     echo "Skipping R package (not required). Use ./install.sh R-package to install samovaR from GitHub branch r-package."
 fi
 
+if [ "${SAMOVAR_INSTALL_OPAL:-0}" != "0" ]; then
+    install_opal || echo "Warning: optional OPAL install did not complete."
+else
+    echo "Skipping OPAL (not required). Use ./install.sh OPAL to install CAMI OPAL (cami-opal)."
+fi
+
 # Write ~/.config/samovar/config.json (and build/config.json copy)
 export USER_CFG_DIR
 export SAMOVAR_ROOT="$ROOT"
@@ -270,6 +333,7 @@ payload = {
     "r_path": shutil.which("R") or "",
     "r_lib_path": existing.get("r_lib_path", ""),
     "iss_path": shutil.which("iss") or tools.get("iss", ""),
+    "opal_path": existing.get("opal_path") or shutil.which("opal.py") or shutil.which("opal") or "",
     "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
     "test_genomes": os.path.join(root, "data", "test_genomes"),
     "tools": tools,
