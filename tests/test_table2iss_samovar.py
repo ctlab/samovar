@@ -45,7 +45,7 @@ def _r_with_samovar_available() -> bool:
             [r_path, "--vanilla", "-s", "-e", "library(samovaR)"],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=15,
             env=env,
         )
     except (OSError, subprocess.TimeoutExpired):

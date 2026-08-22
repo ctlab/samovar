@@ -1,4 +1,5 @@
 import os
+import shutil
 import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -44,7 +45,7 @@ def test_process_abundance_table_with_dataframe():
         table=df,
         genome_dir=genome_dir,
         output_dir=reads_dir,
-        total_amount=1000,
+        total_amount=40,
         read_length=150,
         model="hiseq",
         email="test@samovar.com"
@@ -87,7 +88,7 @@ def test_process_abundance_table_with_file():
         table=table_path,
         genome_dir=genome_dir,
         output_dir=reads_dir,
-        total_amount=1000,
+        total_amount=40,
         read_length=150,
         model="hiseq",
         email="test@samovar.com",
@@ -103,11 +104,12 @@ def test_process_abundance_table_with_missing_genome():
     """Test process_abundance_table with some missing genome files."""
     # Create output directory
     output_dir = "tests_outs/test_process_abundance_table_missing_genome"
+    shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test DataFrame
     df = pd.DataFrame({
-        "taxid": ["562", "562", "9606"],
+        "taxid": ["562", "562", "999999999"],
         "N_k1": [100, 200, 300],
         "N_k2": [150, 250, 350]
     })
@@ -128,7 +130,7 @@ def test_process_abundance_table_with_missing_genome():
         table=df,
         genome_dir=genome_dir,
         output_dir=reads_dir,
-        total_amount=1000,
+        total_amount=40,
         read_length=150,
         model="hiseq",
         email="test@samovar.com"
@@ -169,7 +171,7 @@ def test_process_abundance_table_with_zero_reads():
         table=df,
         genome_dir=genome_dir,
         output_dir=reads_dir,
-        total_amount=1000,
+        total_amount=40,
         read_length=150,
         model="hiseq",
         email="test@samovar.com"

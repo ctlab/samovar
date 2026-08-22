@@ -4,6 +4,8 @@ Genome fetching and taxonomy parsing functionality
 
 import os
 import logging
+import shutil
+import socket
 from typing import Optional
 import urllib.request
 from Bio import Entrez
@@ -31,7 +33,7 @@ def default_entrez_email() -> str:
 
     return ncbi_email()
 
-def _entrez_retry(func, max_retries=8, initial_delay=2):
+def _entrez_retry(func, max_retries=3, initial_delay=1):
     """
     Retry an Entrez function with exponential backoff.
     
@@ -61,11 +63,62 @@ def _entrez_retry(func, max_retries=8, initial_delay=2):
             if rate_limited and attempt < max_retries - 1:
                 logger.warning(f"Rate limited / transient NCBI error, retrying in {delay} seconds...")
                 time.sleep(delay)
-                delay = min(delay * 2, 60)
+                delay = min(delay * 2, 8)
                 continue
             raise
     
     raise last_exception
+
+def bundled_test_genome(taxid: str | int) -> Optional[Path]:
+    """Return a genome shipped under ``data/test_genomes`` for this taxid, if any.
+
+    Used before NCBI so ISS / tests / air-gapped installs do not download
+    reference assemblies (especially taxid 9606).
+    """
+    from samovar.paths import test_genomes_dir
+
+    taxid = _normalize_taxid(taxid)
+    root = test_genomes_dir()
+    if not root.is_dir():
+        return None
+    names = [
+        f"{taxid}{ext}"
+        for ext in (".fna", ".fa", ".fasta", ".fna.gz", ".fa.gz", ".fasta.gz")
+    ]
+    search_roots = [root, root / "meta", root / "host"]
+    for base in search_roots:
+        if not base.is_dir():
+            continue
+        for name in names:
+            candidate = base / name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _copy_bundled_genome(taxid: str | int, output_folder: str) -> Optional[str]:
+    bundled = bundled_test_genome(taxid)
+    if bundled is None:
+        return None
+    dest_dir = Path(output_folder)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{_normalize_taxid(taxid)}{''.join(bundled.suffixes)}"
+    if not dest.exists():
+        shutil.copy2(bundled, dest)
+    return str(dest)
+
+
+def _download_url(url: str, dest: Path, timeout: int = 45) -> None:
+    """Fetch ``url`` to ``dest`` with a socket timeout (urlretrieve has none)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+
 
 def _normalize_taxid(taxid: str | int) -> str:
     taxid = str(taxid)
@@ -128,7 +181,7 @@ def _download_assembly_file(
         url = f"{ftp_path}/{asm_name}{suffix}".replace("ftp://", "https://")
         if not silent:
             logger.info(f"Downloading {url}")
-        urllib.request.urlretrieve(url, dest_gz)
+        _download_url(url, dest_gz)
         return str(dest_gz)
     except Exception as e:
         if not silent:
@@ -194,7 +247,15 @@ def fetch_genome_raw(
                 logger.info(f"Genome for taxid {taxid} already exists at {candidate}")
             return str(candidate)
 
+    bundled = _copy_bundled_genome(taxid, output_folder)
+    if bundled is not None:
+        if not silent:
+            logger.info(f"Using bundled test genome for taxid {taxid}: {bundled}")
+        return bundled
+
     genome_path = output_path / f"{taxid}.fna.gz"
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(45)
     try:
         ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
         if not ftp_path:
@@ -203,12 +264,14 @@ def fetch_genome_raw(
         http_url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
         if not silent:
             logger.info(f"Downloading genome from {http_url}")
-        urllib.request.urlretrieve(http_url, genome_path)
+        _download_url(http_url, genome_path)
         return str(genome_path)
     except Exception as e:
         if not silent:
             logger.error(f"Error fetching genome for taxid {taxid}: {str(e)}")
         return None
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 def fetch_genome(
     taxid: str|int,
@@ -276,6 +339,8 @@ def generate_random_taxids(
     if not hasattr(Entrez, 'email'):
         raise ValueError("Entrez.email must be set before calling this function")
     
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(45)
     try:
         # Search for organisms with complete genomes
         search_term = f'"{group}"[Organism] AND "latest refseq"[filter] AND "complete genome"[filter]'
@@ -366,6 +431,9 @@ def generate_random_taxids(
         if not silent:
             logger.error(f"Error generating random taxids: {str(e)}")
         return []
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+
 
 def main():
     """Main function to process genomes from random taxids."""

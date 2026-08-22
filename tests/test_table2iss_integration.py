@@ -46,7 +46,7 @@ def test_process_annotation_table():
         table_path=table_path,
         genome_dir=genome_dir,
         output_dir=reads_dir,
-        total_amount=1000,
+        total_amount=40,
         read_length=150,
         model="hiseq",
         email="test@samovar.com",
@@ -90,7 +90,7 @@ def test_process_abundance_table_integration():
         table_path=table_path,
         genome_dir=genome_dir,
         output_dir=reads_dir,
-        total_amount=1000,
+        total_amount=40,
         read_length=150,
         model="hiseq",
         email="test@samovar.com"

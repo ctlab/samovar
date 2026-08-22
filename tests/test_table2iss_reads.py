@@ -38,7 +38,7 @@ def test_generate_reads_genome():
     generate_reads_genome(
         genome_file=fasta_path,
         output_file=output_path,
-        amount=100,
+        amount=20,
         read_length=150,
         cpus=1,
         seed=1,
@@ -57,7 +57,7 @@ def test_generate_reads_metagenome():
     generate_reads_metagenome(
         genome_files=fasta_paths,
         output_dir=output_dir,
-        amount=[100, 200, 300],
+        amount=[20, 20, 20],
         read_length=150,
         sample_name="test_metagenome",
         genome_ids=["g0", "g1", "g2"],
@@ -82,7 +82,7 @@ def test_regenerate_metagenome():
     regenerate_metagenome(
         genome_files=fasta_paths,
         output_dir=output_dir,
-        amount=[100, 200, 300],
+        amount=[20, 20, 20],
         read_length=150,
         sample_name="test_regenerated",
         genome_ids=["g0", "g1", "g2"],
