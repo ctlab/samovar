@@ -3,6 +3,7 @@
 \docType{class}
 \name{samovar_run}
 \alias{samovar_run}
+\alias{samovar_run-class}
 \title{Samovar run data class}
 \description{
 Samovar run data class
@@ -14,13 +15,10 @@ Samovar run data class
 
 \item{\code{data}}{data}
 
-\item{\code{run}}{character, samle IDs}
-}}
+\item{\code{run}}{character, sample IDs}
 
-\section{Methods}{
+\item{\code{cluster}}{character}
 
-\describe{
-\item{\code{export(Class)}}{Returns the result of coercing the object to
-Class.  No effect on the object itself.}
+\item{\code{species}}{character}
 }}
 

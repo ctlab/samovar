@@ -279,13 +279,7 @@ confusion_heatmap <- function(plot_df, x_col, y_col, x_levels, y_levels,
 #'   ``fpc`` (default) uses the first principal component of the count matrix;
 #'   ``0`` and ``other`` are excluded from that sort and appended last.
 #' @return list of ggplot objects
-#' @importFrom tibble tibble
-#' @importFrom dplyr mutate_all mutate summarise group_by %>% sym
-#' @importFrom dplyr summarise left_join pull arrange across
-#' @importFrom tidyr pivot_longer
-#' @importFrom stringr str_detect str_remove
 #' @import ggplot2
-#' @import ggnewscale
 #'
 #' @example R/examples/check_samovar.R
 #' @export

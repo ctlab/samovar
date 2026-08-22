@@ -1,6 +1,5 @@
 #' Progress bar
-#'
-#' @import progress
+#' @noRd
 
 progress_function <- function (iters) {
   if (length(iters) != 1) iters = length(iters)

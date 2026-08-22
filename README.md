@@ -15,17 +15,18 @@ This branch is the independent **R generator of abundance tables**. The Python e
 
 ## Installation
 
-### Quick Installation
+Needs **R ≥ 3.5**. The package name is `samovaR` (capital R).
 
-Use installation script from the source of this package:
+### From GitHub
 
 ```r
-devtools::install_github("https://github.com/ctlab/samovar/", ref = "r-package")
+install.packages("remotes")   # once, if remotes is not installed
+remotes::install_github("ctlab/samovar", ref = "r-package")
 ```
 
-***Attention:*** *check that samovar can be loaded with* ```Rscript -e 'library(samovaR)'```, *especially in case of several R versions installed*
+`devtools::install_github()` works the same way. Always pass `ref = "r-package"` — the default branch is the Python tool, not this generator.
 
-### Manual Installation
+### From a local clone
 
 ```bash
 git clone https://github.com/ctlab/samovar
@@ -34,12 +35,27 @@ git checkout r-package
 R CMD INSTALL .
 ```
 
-***Attention**: the installer automatically detects custom R library paths from `.Renviron` (R_LIBS) or `.Rprofile` (libPaths())*
+Or in R, from the clone: `remotes::install_local(".")`.
+
+R installs into the first library in `.libPaths()`. If you keep a custom library, set `R_LIBS` in `~/.Renviron` (or `libPaths()` in `~/.Rprofile`) **before** installing.
+
+### Check that it loaded
+
+```r
+library(samovaR)
+packageVersion("samovaR")   # expect 1.0.0
+```
+
+If several R versions are installed, run the same check with that version’s `Rscript`:
+
+```bash
+Rscript -e 'library(samovaR); packageVersion("samovaR")'
+```
 
 ## Components
 
 - **R** package `samovaR` for the artificial abundance table generation
-- Optional **Shiny** app for interactive generation
+- Optional **Shiny** app for interactive generation (`shiny/demo.R`, or the [web app](https://dsmutin.shinyapps.io/samovaR/))
 
 ## Project Structure
 
@@ -59,46 +75,46 @@ graph LR
 
 ## Usage
 
-### Artificial metagenome generation
-Basic usage described in <a href="./vignettes">**vignettes**</a> and <a href="https://github.com/ctlab/samovar/wiki">**wiki**</a>
+Full walkthrough: [vignette](vignettes/samovar-basic.Rmd), [PDF overview](samovaR.pdf), [function reference](samovaR_man.pdf), [wiki](https://github.com/ctlab/samovar/wiki). Interactive: [shiny app](https://dsmutin.shinyapps.io/samovaR/).
 
-You can also try the generator with <a href="https://dsmutin.shinyapps.io/samovaR/">**web** shiny app</a>
-
-
-#### R generation
-
-<a href="https://github.com/ctlab/samovar/blob/main/samovaR.pdf">See description</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
-
-``` r
+```r
 library(samovaR)
 
-# download data
-teatree <- GMrepo_type2data(number_to_process = 2000)
+# 1. Load an abundance table (species × samples).
+#    GMrepo first; if the API is down, packaged example data is used.
+teatree <- GMrepo_type2data_or_example(number_to_process = 1500)
 
-# filter
+#    Or skip GMrepo and use your own matrix / CSV:
+# teatree <- table2samovar(my_matrix)
+# teatree <- read_samovar("abundances.csv")
+
+viz_composition(teatree, type = "tile", interactive = FALSE, top = 10)
+
+# 2. Drop rare species/samples and near-zero noise
 tealeaves <- teatree %>%
-  teatree_trim(treshhold_species = 3, treshhold_samples = 3, treshhold_amount = 10^(-3))
+  teatree_trim(treshhold_species = 3, treshhold_samples = 3, treshhold_amount = 1e-3)
 
-# normalizing
+# 3. Transform abundances (default log10(x + 1)) so GLM later is stable
 teabag <- tealeaves %>%
   tealeaves_pack()
 
-# clustering
+# 4. Cluster species that co-vary (min/max cluster size)
 concotion <- teabag %>%
   teabag_brew(min_cluster_size = 4, max_cluster_size = 6)
 
-# building samovar
+# 5. Fit within- and between-cluster models
 samovar <- concotion %>%
-  concotion_pour()
+  concotion_pour(probability_calculation = "simple")
 
-# generating new data
+# 6. Draw N new samples. Result is a samovar_run; abundances in $data
 new_data <- samovar %>%
-  samovar_boil(N = 100)
+  samovar_boil(N = 100, avoid_zero_generations = TRUE)
+
+viz_composition(new_data, type = "tile", interactive = FALSE, top = 10)
+head(new_data$data)
 ```
 
-<a src="https://github.com/ctlab/samovar/blob/main/samovaR_man.pdf">Documentation</a> for the **R package**
-
-#### Pipeline
+One-call equivalent of steps 2–5: `samovar_preprocess(teatree)`.
 
 <img src="data/img/additional/algo.png" width = 50%>
 
@@ -114,7 +130,8 @@ graph LR
     subgraph "R Package Dependencies"
         subgraph "Main"
             direction LR
-            tidyverse
+            magrittr
+            dplyr
             scclust
             Matrix
             methods

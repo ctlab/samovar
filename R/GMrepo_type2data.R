@@ -8,7 +8,6 @@
 #' @param at_level "species" by default. level to obtain classification from GMrepo
 # @param keep_metadata To be implemented. Keep metadata from query
 #' @param QC_filter QCStatus by default. Perform auto QC filtering based on metadata column, or False for no checking.
-#' @import tidyverse
 #' @example R/examples/GMrepo.R
 #' @export
 

@@ -1,5 +1,4 @@
 library(samovaR)
-library(tidyverse)
 
 # download and prepare data
 samovar_raw <- GMrepo_type2data(number_to_process = 2000)

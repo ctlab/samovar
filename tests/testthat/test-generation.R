@@ -1,5 +1,3 @@
-library(tidyverse)
-
 test_that("Samova.R: build", {
   expect_no_error({
     concotion %>%

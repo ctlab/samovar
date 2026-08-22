@@ -1,10 +1,9 @@
-library(samovar)
-library(yaml)
+library(samovaR)
 
 # Example config
 tf <- tempfile()
 
-write_yaml(
+yaml::write_yaml(
   list(
     treshhold_amount = 10^(-5),
     plot_log = F,

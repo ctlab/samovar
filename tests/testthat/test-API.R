@@ -1,5 +1,3 @@
-library(tidyverse)
-
 test_that("Samova.R: GMrepo API", {
   skip_on_cran()
   skip_if_offline()

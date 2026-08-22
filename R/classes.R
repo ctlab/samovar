@@ -23,64 +23,100 @@
 
 # Generics ----
 
+#' S4 generics for samovaR objects
+#'
+#' @param object A samovaR S4 object
+#' @param bind_with Object to bind to \code{object}
+#' @param field Metadata column name
+#' @param value Filter value
+#' @param cluster_sp Cluster label for new species
+#' @param sp Species names
+#' @param abundance Numeric abundances
+#' @param to_run Generated-sample column index
+#' @param cl Cluster identifier
+#' @param scale_function Column rescaling function
+#' @param normalization_function Abundance transform
+#' @param x Matrix or data frame to reverse-normalize
+#' @param min_sp Minimum species per sample
+#' @param min_samp Minimum samples per species
+#' @param predicted Indices already generated
+#' @param type Graph type, usually \code{"prob"}
+#' @name bind_samovar
+#' @rdname samovar-s4
 #' @export
 setGeneric("bind_samovar", function(object, bind_with) standardGeneric("bind_samovar"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("filter_samovar", function(object, field, value) standardGeneric("filter_samovar"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("add_species", function(object, cluster_sp, sp, abundance, to_run = 1) {
   standardGeneric("add_species")
 })
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("export_data", function(object) standardGeneric("export_data"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("get_cluster_data", function(object, cl) standardGeneric("get_cluster_data"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("rescale_samovar", function(object, scale_function = function(x) x / sum(x)) {
   standardGeneric("rescale_samovar")
 })
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("normalize_samovar", function(object, normalization_function = object@normalization_function) {
   standardGeneric("normalize_samovar")
 })
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("reverse_normalize_samovar", function(object) standardGeneric("reverse_normalize_samovar"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("reverse_normalize_df_samovar", function(object, x) standardGeneric("reverse_normalize_df_samovar"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("rebuild_samovar", function(object, min_sp = 1, min_samp = 1) {
   standardGeneric("rebuild_samovar")
 })
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("get_clean_samovar", function(object, cl) standardGeneric("get_clean_samovar"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("get_data_samovar", function(object, cl) standardGeneric("get_data_samovar"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("cluster_count", function(object) standardGeneric("cluster_count"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("get_cluster_info", function(object, sp) standardGeneric("get_cluster_info"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("get_cluster_length", function(object, cl) standardGeneric("get_cluster_length"))
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("get_max_inter_cluster", function(object, predicted, type = "prob") {
   standardGeneric("get_max_inter_cluster")
 })
 
+#' @rdname samovar-s4
 #' @export
 setGeneric("get_max_inner_cluster", function(object, cl, predicted, type = "prob") {
   standardGeneric("get_max_inner_cluster")
@@ -94,6 +130,7 @@ setGeneric("get_max_inner_cluster", function(object, cl, predicted, type = "prob
 #' @slot run character
 #' @slot data data.frame
 #' @name GMrepo_run
+#' @aliases GMrepo_run-class
 #' @rdname GMrepo_run
 #' @docType class
 #' @export
@@ -148,6 +185,7 @@ setMethod("filter_samovar", "GMrepo_run", function(object, field, value) {
 #' @slot cluster character
 #' @slot species character
 #' @name samovar_run
+#' @aliases samovar_run-class
 #' @rdname samovar_run
 #' @docType class
 #' @export
@@ -268,6 +306,7 @@ setMethod("export_data", "samovar_run", function(object) {
 #' @slot cluster_size named numeric, cluster sizes per cluster
 #' @docType class
 #' @name samovar_data
+#' @aliases samovar_data-class
 #' @rdname samovar_data
 #' @export
 setClass(
@@ -465,6 +504,7 @@ setMethod("cluster_count", "samovar_data", function(object) {
 #' @slot preferences concotion_pour() properties
 #' @docType class
 #' @name samovar_base
+#' @aliases samovar_base-class
 #' @rdname samovar_base
 #' @export
 setClass(

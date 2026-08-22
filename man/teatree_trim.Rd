@@ -35,7 +35,6 @@ Filter species and samples from samovar_data object
 }
 \examples{
 library(samovaR)
-library(tidyverse)
 
 # download data
 teatree <- GMrepo_type2data(number_to_process = 2000)

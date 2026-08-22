@@ -1,5 +1,3 @@
-library(tidyverse)
-
 test_that("Samova.R: installation", {
   expect_no_error(library(samovaR))
 })

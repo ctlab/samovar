@@ -10,7 +10,10 @@ viz_annotation(
   show_top = 10,
   output_dir = NULL,
   plot = T,
-  split = T
+  split = T,
+  rank = "genus",
+  use_names = TRUE,
+  reord = "fpc"
 )
 }
 \arguments{
@@ -43,6 +46,17 @@ Column names:
 \item{plot}{logical. If TRUE, plots are printed.}
 
 \item{split}{logical. If TRUE, plots are split into separate files.}
+
+\item{rank}{NCBI rank used to regroup taxIDs before F1 / R2 / CV (default genus).
+Use \code{none} to compare exact taxIDs. Lookup uses ete3 via Python and is
+cached as \code{taxid|genera_taxid} next to the plots; source tables are unchanged.}
+
+\item{use_names}{logical. If TRUE (default), axis labels are scientific names.
+Genus and species names are drawn in italic; \code{0} and \code{other} are not.}
+
+\item{reord}{character. Shared row/column order for F1 and CV heatmaps.
+\code{fpc} (default) uses the first principal component of the count matrix;
+\code{0} and \code{other} are excluded from that sort and appended last.}
 }
 \value{
 list of ggplot objects

@@ -1,5 +1,4 @@
 library(samovaR)
-library(tidyverse)
 
 # get data from GMrepo
 data_GMrepo <- GMrepo_type2data(mesh_ids = "D006262", number_to_process = 1000)

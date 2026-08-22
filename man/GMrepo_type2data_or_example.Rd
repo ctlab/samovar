@@ -4,14 +4,17 @@
 \alias{GMrepo_type2data_or_example}
 \title{Download GMrepo data with an offline fallback}
 \usage{
-GMrepo_type2data_or_example(...)
+GMrepo_type2data_or_example(..., fallback = "teatree_abundance.rds")
 }
 \arguments{
 \item{...}{Arguments passed to \code{\link{GMrepo_type2data}}.}
+
+\item{fallback}{Packaged RDS name in \code{inst/testdata} used when GMrepo fails.}
 }
 \value{
 A \code{samovar_data} object.
 }
 \description{
-Download GMrepo data with an offline fallback
+Tries the GMrepo API, then packaged example abundance tables, then a
+synthetic matrix from \code{\link{example_samovar_data}}.
 }

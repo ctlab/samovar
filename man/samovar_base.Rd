@@ -3,6 +3,7 @@
 \docType{class}
 \name{samovar_base}
 \alias{samovar_base}
+\alias{samovar_base-class}
 \title{samovar base class}
 \description{
 samovar base class
@@ -10,9 +11,7 @@ samovar base class
 \section{Slots}{
 
 \describe{
-\item{\code{samovar_base}}{samovar_data object}
-
-\item{\code{method}}{method to obtain samovar_base}
+\item{\code{samovar_data}}{samovar_data object}
 
 \item{\code{inner_cluster_graph_method}}{list of graphs in matrix form of inner cluster connections}
 
@@ -22,7 +21,6 @@ samovar base class
 
 \item{\code{inter_cluster_graph_prob}}{list of co-occurrence probabilities in matrix form between clusters}
 
-\item{\code{properties}}{concotion_pour() properties}
+\item{\code{preferences}}{concotion_pour() properties}
 }}
-
 

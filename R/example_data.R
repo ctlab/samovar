@@ -43,7 +43,7 @@ example_samovar_data <- function(n_species = 50, n_samples = 20, seed = 1) {
 #'
 #' @param filename File name in \code{inst/testdata}.
 #' @return A \code{samovar_data} object, or NULL if the file is missing.
-#' @keywords internal
+#' @noRd
 abundance_rds_to_samovar <- function(filename) {
   path <- .packaged_abundance_path(filename)
   if (is.na(path)) {

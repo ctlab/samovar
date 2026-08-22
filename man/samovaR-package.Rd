@@ -16,11 +16,12 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Smutin Daniil \email{dvsmutin@gmail.com} (\href{https://orcid.org/0009-0009-1460-4108}{ORCID})
+\strong{Maintainer}: Daniil Smutin \email{dvsmutin@gmail.com} (\href{https://orcid.org/0009-0009-1460-4108}{ORCID})
 
 Authors:
 \itemize{
-  \item Ivanov Artem
+  \item Konstantin Yamshikov
+  \item Artem Ivanov
 }
 
 Other contributors:

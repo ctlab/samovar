@@ -1,5 +1,3 @@
-library(tidyverse)
-
 # load phyloseq
 library(phyloseq)
 data(GlobalPatterns)

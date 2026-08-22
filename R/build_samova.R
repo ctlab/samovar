@@ -145,7 +145,7 @@ build_samovar <- function(
     as.dendrogram() %>%
     plotly::plot_dendro() %>%
     plotly::layout(split = ~sc_df$new_sc) %>%
-    hide_legend()
+    plotly::hide_legend()
   }
 
   samovar_data$cluster <- sc_df$new_sc %>% as.character()

@@ -3,6 +3,7 @@
 \docType{class}
 \name{GMrepo_run}
 \alias{GMrepo_run}
+\alias{GMrepo_run-class}
 \title{GMrepo run data class}
 \description{
 GMrepo run data class
@@ -13,6 +14,7 @@ GMrepo run data class
 \item{\code{metadata}}{metadata DataFrame}
 
 \item{\code{run}}{character}
-}}
 
+\item{\code{data}}{data.frame}
+}}
 

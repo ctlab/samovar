@@ -2,9 +2,6 @@
 #'
 #' @param mesh_ids Character. All types of meshID to use. List of relations between meshID and phenotype could be obtained using `GMrepo_meshID()`
 #' @param number_to_process False by default, or maximum number of runs per meshID
-#' @importFrom xml2 xml_text
-#' @importFrom jsonlite fromJSON
-#' @import httr
 #' @example R/examples/GMrepo.R
 #' @export
 

@@ -1,6 +1,5 @@
 #' Print a log plot
-#'
-#' @importFrom htmlwidgets saveWidget
+#' @noRd
 
 log_plot <- function(plot_log, postfix, gg, mode = "ggplot", write = F) {
   if(!write) {
@@ -9,7 +8,7 @@ log_plot <- function(plot_log, postfix, gg, mode = "ggplot", write = F) {
         if (mode == "ggplot") {
           ggsave(paste0(plot_log, postfix, ".png"), gg)
         } else if (mode == "plotly") {
-          htmlwidgets::saveWidget(as_widget(gg), paste0(plot_log, postfix, ".html"))
+          htmlwidgets::saveWidget(gg, paste0(plot_log, postfix, ".html"))
         }
       } else {
         print(gg)

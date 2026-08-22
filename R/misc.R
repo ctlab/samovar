@@ -1,6 +1,6 @@
-#' Misc functions
-#'
-#' @import tidyverse
+#' Misc internal helpers
+#' @noRd
+NULL
 
 gmrepo_post <- function(path, body, timeout = 30) {
   bases <- c("https://gmrepo.humangut.info", "http://gmrepo.humangut.info")

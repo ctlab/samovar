@@ -49,7 +49,6 @@ For better understanding of building database and using it in generation, visit 
 }
 \examples{
 library(samovaR)
-library(tidyverse)
 
 # download data
 teatree <- GMrepo_type2data(number_to_process = 2000)

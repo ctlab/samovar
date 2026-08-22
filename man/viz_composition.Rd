@@ -37,7 +37,6 @@ Visualize composition
 }
 \examples{
 library(samovaR)
-library(tidyverse)
 
 # Download data
 teatree <- GMrepo_type2data(number_to_process = 1000)

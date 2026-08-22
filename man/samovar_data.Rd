@@ -3,6 +3,7 @@
 \docType{class}
 \name{samovar_data}
 \alias{samovar_data}
+\alias{samovar_data-class}
 \title{samovar data class}
 \description{
 samovar data class
@@ -30,5 +31,4 @@ samovar data class
 
 \item{\code{cluster_size}}{named numeric, cluster sizes per cluster}
 }}
-
 

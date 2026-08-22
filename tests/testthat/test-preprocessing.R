@@ -1,6 +1,3 @@
-library(tidyverse)
-
-
 test_that("Samova.R: preprocessing", {
   expect_no_error({
     tealeaves_test <- teatree %>%

@@ -16,13 +16,12 @@ arguments for samovar_preprocess and samovar_boil
 Unpack SAMOVAR config to a list of parameters
 }
 \examples{
-library(samovar)
-library(yaml)
+library(samovaR)
 
 # Example config
 tf <- tempfile()
 
-write_yaml(
+yaml::write_yaml(
   list(
     treshhold_amount = 10^(-5),
     plot_log = F,

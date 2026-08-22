@@ -2,7 +2,7 @@
 title: "Basic samovar usage"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{samovar-basic}
+  %\VignetteIndexEntry{Basic samovar usage}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -15,7 +15,6 @@ knitr::opts_chunk$set(
 )
 
 library(samovaR)
-library(tidyverse)
 ```
 
 # Download data

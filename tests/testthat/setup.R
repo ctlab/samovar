@@ -1,4 +1,3 @@
-library(tidyverse)
 library(samovaR)
 
 make_test_samovar_fixtures <- function() {
