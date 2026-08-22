@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -160,13 +160,14 @@ def regenerate_bootstrap(
         if mat.shape[1] == 0:
             continue
         n_src = mat.shape[1]
+        names = synthetic_sample_names(list(mat.columns), n_samples)
         synth = {}
-        for i in range(int(n_samples)):
+        for name in names:
             picks = rng.integers(0, n_src, size=n_src)
             combined = pd.Series(0.0, index=mat.index)
             for idx in picks:
                 combined = combined.add(mat.iloc[:, int(idx)], fill_value=0)
-            synth[f"synth_{i + 1}"] = combined
+            synth[name] = combined
         synth_mat = pd.DataFrame(synth)
         synth_mat = _filter_taxa(synth_mat, threshold_amount, n_reads)
         synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
@@ -195,9 +196,17 @@ def regenerate_vae(
     for col in _taxid_columns(work):
         mat = _count_matrix(work, col, sample_col)
         mat = _filter_taxa(mat, threshold_amount, n_reads)
+        names = synthetic_sample_names(list(mat.columns), n_samples)
         if mat.shape[0] < 2 or mat.shape[1] < 2:
+            synth = {}
+            cols = list(mat.columns) or ["1"]
+            for i, name in enumerate(names):
+                src = cols[i % len(cols)]
+                synth[name] = mat[src] if src in mat.columns else mat.iloc[:, 0]
+            synth_mat = pd.DataFrame(synth, index=mat.index)
+            synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
             name = _annotator_name(col)
-            result[name] = _abundance_table_from_matrix(mat.round(), name)
+            result[name] = _abundance_table_from_matrix(synth_mat, name)
             continue
         log_mat = np.log1p(mat.to_numpy(dtype=float))
         X = log_mat.T  # sklearn: samples x features (taxa)
@@ -209,11 +218,11 @@ def regenerate_vae(
         latent_std = np.std(latent, axis=0)
         latent_std[latent_std == 0] = 1.0
         synth_cols = {}
-        for i in range(int(n_samples)):
+        for name in names:
             z = rng.normal(0, 1, size=n_comp) * latent_std
             decoded = fa.mean_ + np.dot(z.reshape(1, -1), fa.components_).flatten()
             decoded = np.expm1(np.maximum(decoded, 0))
-            synth_cols[f"synth_{i + 1}"] = decoded
+            synth_cols[name] = decoded
         synth_mat = pd.DataFrame(synth_cols, index=mat.index)
         synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
         name = _annotator_name(col)
@@ -241,19 +250,24 @@ def regenerate_glm_python(
         mat = _filter_taxa(mat, threshold_amount, n_reads)
         if mat.empty:
             continue
+        names = synthetic_sample_names(list(mat.columns), n_samples)
         log_mat = np.log1p(mat.to_numpy(dtype=float))
-        corr = np.corrcoef(log_mat)
-        np.fill_diagonal(corr, 1.0)
+        corr = _correlation_matrix(log_mat)
         synth = {}
         src_cols = list(range(mat.shape[1]))
-        for i in range(int(n_samples)):
+        if not src_cols:
+            continue
+        n_taxa = int(log_mat.shape[0])
+        for name in names:
             base_idx = int(rng.choice(src_cols))
             profile = log_mat[:, base_idx].copy()
-            for j in range(profile.shape[0]):
-                partners = corr[j] * rng.normal(0, noise_scale, size=profile.shape[0])
-                profile[j] += float(np.sum(partners)) / max(profile.shape[0], 1)
+            if n_taxa >= 1 and corr.shape[0] == n_taxa:
+                noise = rng.normal(0, noise_scale, size=n_taxa)
+                for j in range(n_taxa):
+                    partners = corr[j] * noise
+                    profile[j] += float(np.sum(partners)) / max(n_taxa, 1)
             decoded = np.expm1(np.maximum(profile, 0))
-            synth[f"synth_{i + 1}"] = decoded
+            synth[name] = decoded
         synth_mat = pd.DataFrame(synth, index=mat.index)
         synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
         name = _annotator_name(col)
@@ -270,7 +284,6 @@ def regenerate_annotation_tables(
     """Regenerate per-annotator abundance CSVs from an annotation directory."""
     cfg = dict(config or {})
     mode = normalize_regeneration_mode(cfg.get("regeneration_mode", "preserve"))
-    n_samples = int(cfg.get("N", 10))
     n_reads = cfg.get("N_reads")
     if n_reads is not None:
         n_reads = int(n_reads)
@@ -281,6 +294,7 @@ def regenerate_annotation_tables(
 
     if data is None:
         data = read_annotation_dir(annotation_dir)
+    n_samples = _n_samples_or_observed(data, cfg.get("N"))
 
     if mode == "preserve":
         tables = regenerate_preserve(
@@ -331,7 +345,6 @@ def write_samovar_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         "plot_log": False,
         "min_cluster_size": 2,
         "max_cluster_size": 100,
-        "N": 10,
         "N_reads": 1000,
         "regeneration_mode": "preserve",
         "seed": 42,
@@ -360,3 +373,66 @@ def sample_names_from_abundance_columns(
         else:
             names.append(col_s)
     return names
+
+
+def synthetic_sample_names(
+    original: Sequence[str],
+    n_samples: Optional[int] = None,
+) -> List[str]:
+    """Stable sample names for generative regeneration.
+
+    Names are derived from the observed samples. ``N`` only changes how many
+    profiles are emitted (truncate, or extra rounds as ``{name}_r2``), never
+    switches the scheme to ``synth_1..N``.
+    """
+    orig: List[str] = []
+    seen = set()
+    for name in original:
+        text = str(name).strip()
+        if not text or text in seen:
+            continue
+        orig.append(text)
+        seen.add(text)
+    if not orig:
+        orig = ["1"]
+    if n_samples is None or int(n_samples) <= 0:
+        n = len(orig)
+    else:
+        n = int(n_samples)
+    if n <= len(orig):
+        return orig[:n]
+    names = list(orig)
+    round_idx = 2
+    i = 0
+    while len(names) < n:
+        names.append(f"{orig[i % len(orig)]}_r{round_idx}")
+        i += 1
+        if i % len(orig) == 0:
+            round_idx += 1
+    return names
+
+
+def _n_samples_or_observed(data: pd.DataFrame, n_samples: Optional[int]) -> int:
+    observed = 1
+    if "sample" in data.columns and len(data.index):
+        observed = max(int(pd.Series(data["sample"].astype(str)).nunique()), 1)
+    if n_samples is None or int(n_samples) <= 0:
+        return observed
+    return int(n_samples)
+
+
+def _correlation_matrix(log_mat: np.ndarray) -> np.ndarray:
+    """Row-wise correlation; always finite with 1s on the diagonal."""
+    n_taxa = int(log_mat.shape[0]) if log_mat.ndim == 2 else 0
+    if n_taxa <= 0:
+        return np.zeros((0, 0), dtype=float)
+    if n_taxa == 1 or log_mat.shape[1] < 2:
+        return np.ones((n_taxa, n_taxa), dtype=float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        corr = np.corrcoef(log_mat)
+    corr = np.atleast_2d(np.asarray(corr, dtype=float))
+    if corr.shape != (n_taxa, n_taxa):
+        return np.eye(n_taxa, dtype=float)
+    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(corr, 1.0)
+    return corr

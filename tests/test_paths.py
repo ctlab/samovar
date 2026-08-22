@@ -12,7 +12,7 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.1"
+    assert PACKAGE_VERSION == "0.10.2"
 
 
 def test_repo_root_contains_workflow():

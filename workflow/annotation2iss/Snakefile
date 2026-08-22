@@ -2,7 +2,7 @@ import os
 import glob
 import logging
 
-from samovar.regenerate import normalize_regeneration_mode
+from samovar.regenerate import normalize_regeneration_mode, synthetic_sample_names
 from samovar.table2iss import process_annotation_tables
 
 # Set up logging
@@ -25,13 +25,14 @@ CORES = int(config.get("cores", 2))
 REGENERATION_MODE = normalize_regeneration_mode(config.get("regeneration_mode", "preserve"))
 REGENERATION_CONFIG = {
     "regeneration_mode": REGENERATION_MODE,
-    "N": int(config.get("N", 10)),
     "N_reads": int(config.get("N_reads", 1000)),
     "seed": config.get("seed", 42),
     "threshold_amount": config.get("threshold_amount", config.get("treshhold_amount", 1e-5)),
     "vae_latent_dim": config.get("vae_latent_dim", 4),
     "rescale_abundance": config.get("rescale_abundance", False),
 }
+if config.get("N") not in (None, "", 0):
+    REGENERATION_CONFIG["N"] = int(config["N"])
 
 # Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -72,12 +73,11 @@ def get_sample_names():
     for file in annotation_files:
         sample_name = os.path.basename(file).split(".")[0]
         original.append(sample_name)
-    if REGENERATION_MODE != "preserve":
-        n = REGENERATION_CONFIG["N"]
-        if len(original) == n:
-            return original
-        return [f"synth_{i}" for i in range(1, n + 1)]
-    return original
+    if REGENERATION_MODE == "preserve":
+        return original
+    n_cfg = REGENERATION_CONFIG.get("N")
+    n = int(n_cfg) if n_cfg not in (None, "", 0) else 0
+    return synthetic_sample_names(original, n or None)
 
 SAMPLES = get_sample_names()
 logger.info(f"Using samples: {SAMPLES}")

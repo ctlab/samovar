@@ -34,7 +34,7 @@ class PipelineConfig:
     cores: int = 1
     max_genomes: int = 50
     regeneration_mode: str = "preserve"
-    regeneration_n: int = 10
+    regeneration_n: Optional[int] = None
     regeneration_n_reads: int = 1000
     regeneration_seed: int = 42
 
@@ -195,10 +195,11 @@ class PipelineConfig:
             'max_genomes': getattr(self, 'max_genomes', 50),
             'cores': self.cores,
             'regeneration_mode': self.regeneration_mode,
-            'N': self.regeneration_n,
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
         }
+        if self.regeneration_n:
+            annotation2iss_config['N'] = self.regeneration_n
         annotation2iss_path = configs_dir / 'config_annotation2iss.yaml'
         with open(annotation2iss_path, 'w') as f:
             yaml.dump(annotation2iss_config, f)

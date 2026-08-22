@@ -1058,23 +1058,20 @@ def samovar_annotation_regenerate(
     """
     from samovar.regenerate import normalize_regeneration_mode
 
+    tmp_config_path = None
     if config_samovar is None:
-        tmp_file = tempfile.mktemp()
-        with open(tmp_file, 'w') as f:
-            yaml.dump({
-                'threshold_amount': 1e-5,
-                'plot_log': False,
-                'N': 10,
-                'N_reads': 1000,
-                'regeneration_mode': 'preserve',
-            }, f)
-        config_samovar = tmp_file
-
-    with open(config_samovar, 'r') as f:
-        config_samovar_dict = yaml.safe_load(f) or {}
+        config_samovar_dict = {
+            "threshold_amount": 1e-5,
+            "plot_log": False,
+            "N_reads": 1000,
+            "regeneration_mode": "preserve",
+        }
+    else:
+        with open(config_samovar, "r") as f:
+            config_samovar_dict = yaml.safe_load(f) or {}
 
     if output_dir is None:
-        output_dir = config_samovar_dict.get('output_dir')
+        output_dir = config_samovar_dict.get("output_dir")
         if not output_dir:
             raise ValueError("output_dir is required")
 
@@ -1099,6 +1096,16 @@ def samovar_annotation_regenerate(
         env["R_LIBS"] = r_lib_path
         env["R_LIBS_USER"] = r_lib_path
 
+    config_path = config_samovar
+    if config_path is None:
+        handle = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        )
+        yaml.dump(config_samovar_dict, handle)
+        handle.close()
+        tmp_config_path = handle.name
+        config_path = tmp_config_path
+
     cmd = [
         r_path,
         "--vanilla",
@@ -1107,7 +1114,7 @@ def samovar_annotation_regenerate(
         annotation_regenerate,
         "--args",
         "--config",
-        str(config_samovar),
+        str(config_path),
         "--annotation_dir",
         str(annotation_dir),
         "--output_dir",
@@ -1120,3 +1127,9 @@ def samovar_annotation_regenerate(
             "samovar_annotation_regenerate failed while running R "
             f"(exit {exc.returncode}). Command: {' '.join(cmd)}"
         ) from exc
+    finally:
+        if tmp_config_path:
+            try:
+                os.unlink(tmp_config_path)
+            except OSError:
+                pass

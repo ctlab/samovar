@@ -16,6 +16,7 @@ from samovar.parse_annotators import (
     parse_metaphlan_db,
     extract_true_taxid,
     _discover_nodes_path,
+    _load_nodes_cache,
     resolve_metaphlan_db_file,
     remap_taxid_dataframe,
     canonical_taxid,
@@ -341,3 +342,20 @@ def test_discover_nodes_path_from_env(tmp_path, monkeypatch):
     monkeypatch.delenv("SAMOVAR_NODES_DMP")
     monkeypatch.setenv("SAMOVAR_NODES_SEARCH", str(tmp_path))
     assert _discover_nodes_path() == str(nodes)
+
+
+def test_load_nodes_cache_atomic_reload(tmp_path, monkeypatch):
+    nodes = tmp_path / "nodes.dmp"
+    nodes.write_text("1\t|\t1\t|\tno rank\t|\n2\t|\t1\t|\tspecies\t|\n")
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(cache))
+    tree1 = _load_nodes_cache(str(nodes))
+    tree2 = _load_nodes_cache(str(nodes))
+    assert tree1 == tree2
+    assert 2 in tree1
+    pickles = list(cache.glob("nodes_*.pkl"))
+    assert len(pickles) == 1
+    # Truncated pickle is discarded and rebuilt.
+    pickles[0].write_bytes(b"not a pickle")
+    tree3 = _load_nodes_cache(str(nodes))
+    assert tree3 == tree1

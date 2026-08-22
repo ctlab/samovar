@@ -9,6 +9,8 @@ import pandas as pd
 import os
 import re
 import sys
+import hashlib
+import tempfile
 from typing import Dict, List, Optional
 import sqlite3
 import pickle
@@ -435,23 +437,61 @@ def _cache_dir() -> Path:
 
 
 def _load_nodes_cache(nodes_path: str) -> Dict[int, tuple]:
-    """Load parent/rank map from nodes.dmp with filesystem cache."""
+    """Load parent/rank map from nodes.dmp with an atomic filesystem cache.
+
+    Concurrent job-array writers reload after parsing and replace the pickle
+    via a temp file so a partial write cannot be observed.
+    """
     cache_dir = _cache_dir()
     stat = os.stat(nodes_path)
-    cache_key = f"{nodes_path}:{int(stat.st_mtime)}:{stat.st_size}"
-    cache_name = f"nodes_{abs(hash(cache_key))}.pkl"
-    cache_file = cache_dir / cache_name
+    digest = hashlib.sha256(
+        f"{os.path.abspath(nodes_path)}:{int(stat.st_mtime)}:{stat.st_size}".encode()
+    ).hexdigest()[:16]
+    cache_file = cache_dir / f"nodes_{digest}.pkl"
 
-    if cache_file.exists():
-        with open(cache_file, "rb") as fh:
-            return pickle.load(fh)
+    def _try_load():
+        try:
+            with open(cache_file, "rb") as fh:
+                return pickle.load(fh)
+        except FileNotFoundError:
+            return None
+        except (OSError, pickle.UnpicklingError, EOFError, AttributeError):
+            try:
+                cache_file.unlink()
+            except OSError:
+                pass
+            return None
+
+    loaded = _try_load()
+    if loaded is not None:
+        return loaded
 
     parser = NCBITaxonomyParser(nodes_path)
     tree = parser.tree
 
-    with open(cache_file, "wb") as fh:
-        pickle.dump(tree, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    loaded = _try_load()
+    if loaded is not None:
+        return loaded
 
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=cache_file.name + ".", suffix=".tmp", dir=str(cache_dir)
+    )
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            pickle.dump(tree, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, cache_file)
+    except OSError:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        loaded = _try_load()
+        if loaded is not None:
+            return loaded
+        return tree
     return tree
 
 

@@ -17,7 +17,9 @@ from samovar.regenerate import (
     regenerate_preserve,
     regenerate_vae,
     sample_names_from_abundance_columns,
+    synthetic_sample_names,
     write_samovar_config_defaults,
+    _correlation_matrix,
 )
 from samovar.table2iss import (
     _sample_tables_from_abundance_dir,
@@ -104,8 +106,8 @@ def test_glm_python_changes_profile_vs_preserve(toy_annotation_dir):
     preserve = regenerate_preserve(data, rescale=False)["kaiju"]
     glm = regenerate_glm_python(data, n_samples=2, n_reads=100, seed=3)["kaiju"]
     assert glm.shape[1] == 3
-    glm_col = "N_synth_1" if "N_synth_1" in glm.columns else "N_1"
-    assert glm_col in glm.columns
+    assert "N_1" in glm.columns
+    assert "N_2" in glm.columns
 
 
 def test_regenerate_annotation_tables_writes_csvs(toy_annotation_dir, tmp_path):
@@ -185,6 +187,40 @@ def test_sample_names_from_abundance_columns():
     assert sample_names_from_abundance_columns(cols, ["a", "b"]) == ["a", "b"]
 
 
+def test_synthetic_sample_names_stable_with_n():
+    assert synthetic_sample_names(["1", "2"], None) == ["1", "2"]
+    assert synthetic_sample_names(["1", "2"], 2) == ["1", "2"]
+    assert synthetic_sample_names(["1", "2"], 1) == ["1"]
+    assert synthetic_sample_names(["1", "2"], 5) == ["1", "2", "1_r2", "2_r2", "1_r3"]
+
+
+def test_glm_corrcoef_single_taxon_is_finite():
+    data = pd.DataFrame(
+        {
+            "sample": ["a", "a", "b"],
+            "taxID_kaiju_0": [562, 562, 562],
+        }
+    )
+    tables = regenerate_glm_python(data, n_samples=3, n_reads=20, seed=0)
+    kaiju = tables["kaiju"]
+    n_cols = [c for c in kaiju.columns if c.startswith("N_")]
+    assert n_cols == ["N_a", "N_b", "N_a_r2"]
+    assert not kaiju[n_cols].isna().any().any()
+
+
+def test_correlation_matrix_guards_nan():
+    import numpy as np
+
+    constant = np.ones((2, 3))
+    corr = _correlation_matrix(np.log1p(constant))
+    assert corr.shape == (2, 2)
+    assert np.isfinite(corr).all()
+    assert corr[0, 0] == 1.0
+    single = _correlation_matrix(np.log1p(np.array([[1.0, 2.0, 3.0]])))
+    assert single.shape == (1, 1)
+    assert single[0, 0] == 1.0
+
+
 def test_process_annotation_tables_with_bootstrap_regeneration(toy_annotation_dir, tmp_path):
     from unittest.mock import patch
 
@@ -222,8 +258,9 @@ def test_process_annotation_tables_with_bootstrap_regeneration(toy_annotation_di
             },
         )
 
-    assert (reads / "synth_1_kaiju_R1.fastq").exists()
-    assert (reads / "synth_3_kaiju_R1.fastq").exists()
+    assert (reads / "1_kaiju_R1.fastq").exists()
+    assert (reads / "2_kaiju_R1.fastq").exists()
+    assert (reads / "1_r2_kaiju_R1.fastq").exists()
     sample_tables = _sample_tables_from_abundance_dir(
         reads / ".regenerated_abundance", None
     )

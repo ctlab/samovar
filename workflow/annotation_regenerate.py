@@ -23,7 +23,12 @@ def main() -> None:
         default="preserve",
         choices=["preserve", "glm", "bootstrap", "vae"],
     )
-    parser.add_argument("--N", type=int, default=10)
+    parser.add_argument(
+        "--N",
+        type=int,
+        default=None,
+        help="Synthetic sample count (default: same as input samples)",
+    )
     parser.add_argument("--N_reads", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -37,7 +42,8 @@ def main() -> None:
     cfg["regeneration_mode"] = normalize_regeneration_mode(
         args.regeneration_mode or cfg.get("regeneration_mode", "preserve")
     )
-    cfg["N"] = args.N
+    if args.N is not None:
+        cfg["N"] = args.N
     cfg["N_reads"] = args.N_reads
     cfg["seed"] = args.seed
     cfg["output_dir"] = args.output_dir
