@@ -14,7 +14,7 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.8"
+    assert PACKAGE_VERSION == "0.10.9"
 
 
 def test_portable_annotator_cmd_warns_when_missing(capsys, monkeypatch):

@@ -68,7 +68,7 @@ def test_viz_annotation_writes_png(tmp_path):
     out = tmp_path / "plots"
     results = viz_annotation(
         df,
-        type=("f1", "R2", "cv"),
+        type=("f1", "R2", "cv", "scores"),
         show_top=0,
         output_dir=str(out),
         plot=False,
@@ -78,11 +78,14 @@ def test_viz_annotation_writes_png(tmp_path):
     assert "F1" in results
     assert "R2" in results
     assert "CV" in results
+    assert "scores" in results
     pngs = list(out.glob("*.png"))
     assert pngs, "expected publication PNGs from cnsplots/matplotlib"
     assert any(p.name.startswith("F1_") for p in pngs)
     assert any(p.name.startswith("R2_") for p in pngs)
     assert any(p.name.startswith("CV_") for p in pngs)
+    assert (out / "scores.png").is_file()
+    assert (out / "quality_scores.csv").is_file()
 
     import matplotlib.image as mpimg
 
@@ -165,7 +168,7 @@ def test_compare_annotations_cli_integrity(tmp_path):
         output_dir=str(out),
         csv_file=str(csv),
         show_top=0,
-        types=("f1", "R2", "cv"),
+        types=("f1", "R2", "cv", "scores"),
         rank="none",
     )
     assert not data.empty

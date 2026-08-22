@@ -131,8 +131,8 @@ def _strip_annotator_prefixes(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     rename = {}
     for col in out.columns:
-        name = re.sub(r"^taxID_", "", str(col))
-        name = re.sub(r"^N_", "", name)
+        name = re.sub(r"^taxid_", "", str(col), flags=re.I)
+        name = re.sub(r"^N_", "", name, flags=re.I)
         rename[col] = name
     out = out.rename(columns=rename)
     if "length" not in out.columns:
@@ -384,12 +384,12 @@ def _save_heatmap_png(
         lowest = min(b.y0 for b in boxes)
         _, y_fig = fig.transFigure.inverted().transform((0, lowest))
         fig.text(
-            0.12,
-            y_fig - 0.055,
+            0.08,
+            y_fig - 0.08,
             caption,
             ha="left",
             va="top",
-            fontsize=9,
+            fontsize=8,
             color="black",
             transform=fig.transFigure,
         )
@@ -398,7 +398,7 @@ def _save_heatmap_png(
         path,
         dpi=150,
         bbox_inches="tight",
-        pad_inches=0.35,
+        pad_inches=0.5,
         facecolor="white",
         transparent=False,
         edgecolor="none",
@@ -438,11 +438,11 @@ def _save_scatter_png(table: pd.DataFrame, path: Path, title: str, caption: str)
             caption,
             xy=(0.0, 0.0),
             xycoords="axes fraction",
-            xytext=(0, -36),
+            xytext=(0, -56),
             textcoords="offset points",
             ha="left",
             va="top",
-            fontsize=9,
+            fontsize=8,
             annotation_clip=False,
         )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -547,7 +547,7 @@ def _pivot_matrix(counts: pd.DataFrame, x_col: str, y_col: str, x_levels: List[s
 
 def viz_annotation(
     data: pd.DataFrame,
-    type: Sequence[str] = ("f1", "R2", "cv", "conf"),
+    type: Sequence[str] = ("f1", "R2", "cv", "conf", "scores"),
     show_top: int = 10,
     output_dir: Optional[str] = None,
     plot: bool = False,
@@ -556,7 +556,7 @@ def viz_annotation(
     use_names: bool = True,
     reord: str = "fpc",
 ) -> dict:
-    """Mirror ``viz_annotation()`` in R: F1 / R2 / CV / confidence plots."""
+    """Mirror ``viz_annotation()`` in R: F1 / R2 / CV / confidence / scores plots."""
     results: dict = {}
     if data is None or data.empty:
         return results
@@ -605,7 +605,49 @@ def viz_annotation(
 
     types = {str(t).lower() for t in type}
 
+    if "true" in work.columns and types & {"scores", "score", "purity"}:
+        from samovar.scores import (
+            majority_vote,
+            purity_by_taxon,
+            save_scores_altair,
+            save_scores_barplot,
+            score_annotators,
+            tool_annotators,
+        )
+
+        scores_table = score_annotators(work, annotators)
+        results["scores"] = scores_table
+        if out_dir and not scores_table.empty:
+            scores_table.to_csv(out_dir / "quality_scores.csv", index=False)
+            caption_rank = f" ({rank_used})" if rank_used else ""
+            save_scores_barplot(
+                scores_table,
+                out_dir / "scores.png",
+                title=f"Annotation quality{caption_rank}",
+            )
+            save_scores_altair(scores_table, out_dir / "scores.html")
+            taxon_frames = []
+            tools = tool_annotators(annotators)
+            for name in scores_table["annotator"].astype(str):
+                if name == "consensus":
+                    pred = majority_vote(work, tools)
+                elif name not in work.columns:
+                    continue
+                else:
+                    pred = work[name]
+                per = purity_by_taxon(work["true"], pred)
+                if per.empty:
+                    continue
+                per.insert(0, "annotator", name)
+                taxon_frames.append(per)
+            if taxon_frames:
+                pd.concat(taxon_frames, ignore_index=True).to_csv(
+                    out_dir / "purity_by_taxon.csv", index=False
+                )
+
     if "true" in work.columns and types & {"f1"}:
+        from samovar.scores import format_f1_caption, standard_classification_metrics
+
         gglist = {}
         true_levels_last: List[str] = []
         for name in annotators:
@@ -620,9 +662,10 @@ def viz_annotation(
             pred_levels = axis_levels_from_fpc(pred, fpc_core)
             true_levels_last = true_levels
             f1 = _f1_from_counts(counts)
-            caption = f"F1-score: {f1:.3f}" if rank_used is None else f"F1-score ({rank_used}): {f1:.3f}"
+            std = standard_classification_metrics(true, pred)
+            caption = format_f1_caption(f1, std, rank_used)
             matrix = _trim_matrix(_pivot_matrix(counts, "true", "pred", true_levels, pred_levels))
-            gglist[name] = {"f1": f1, "matrix": matrix}
+            gglist[name] = {"f1": f1, "metrics": std, "matrix": matrix}
             if out_dir:
                 png = out_dir / f"F1_{name}.png"
                 _save_heatmap_png(matrix, png, name, taxid_xlab, taxid_ylab, caption, name_map, italic)
@@ -634,6 +677,8 @@ def viz_annotation(
         results["F1"] = gglist
 
     if "true" in work.columns and types & {"r2"}:
+        from samovar.scores import format_r2_caption
+
         gglist = {}
         for name in annotators:
             pred = _collapse_other(work[name], work["true"])
@@ -643,7 +688,7 @@ def viz_annotation(
                 continue
             gglist[name] = {"r2": r2, "table": table}
             if out_dir:
-                _save_scatter_png(table, out_dir / f"R2_{name}.png", name, f"R²-score: {r2:.3f}")
+                _save_scatter_png(table, out_dir / f"R2_{name}.png", name, format_r2_caption(r2, rank_used))
                 _save_altair(_altair_scatter(table, name), out_dir / f"R2_{name}.html")
         results["R2"] = gglist
 
@@ -727,7 +772,7 @@ def compare_annotations(
     output_dir: Optional[str] = None,
     csv_file: Optional[str] = None,
     show_top: int = 0,
-    types: Sequence[str] = ("f1", "R2", "cv"),
+    types: Sequence[str] = ("f1", "R2", "cv", "scores"),
     rank: str = "genus",
     split: bool = False,
 ) -> pd.DataFrame:

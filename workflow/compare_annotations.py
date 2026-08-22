@@ -27,7 +27,7 @@ def main(argv=None) -> int:
         output_dir=args.output_dir,
         csv_file=args.csv_file,
         show_top=args.show_top,
-        types=("f1", "R2", "cv"),
+        types=("f1", "R2", "cv", "scores"),
         rank=args.rank,
         split=args.split,
     )
