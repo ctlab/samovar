@@ -313,7 +313,7 @@ viz_annotation <- function(
     "#006837",
     "#004529"
   )
-  palette_taxids <- colorRampPalette(c("lightgreen","#E6E487","pink","lightblue","purple"))
+  palette_taxids <- grDevices::colorRampPalette(c("lightgreen","#E6E487","pink","lightblue","purple"))
 
   labels_10 <- function(x) {
     ifelse(x == 0, "0",
@@ -483,7 +483,7 @@ viz_annotation <- function(
             )
           }
           # Also try a stacked overview; ignore failures
-          if (require(ggpubr, quietly = TRUE) && !split) {
+          if (requireNamespace("ggpubr", quietly = TRUE) && !split) {
             tryCatch({
               stacked <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
               results[["F1"]] <- stacked
@@ -541,7 +541,7 @@ viz_annotation <- function(
 
             if(is.na(r2_score)) r2_score <- 0
 
-            caption_text <- sprintf("R²-score: %.3f", r2_score)
+            caption_text <- sprintf("R\u00b2-score: %.3f", r2_score)
 
             # Visualize
             gg <- R2_table %>%
@@ -571,7 +571,7 @@ viz_annotation <- function(
           }
         }
 
-        if(require(ggpubr,quietly = T) & !split) {
+        if (requireNamespace("ggpubr", quietly = TRUE) && !split) {
           results[["R2"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
           if(plot) {
             print(results[["R2"]])
@@ -674,7 +674,7 @@ viz_annotation <- function(
           limitsize = FALSE
         )
       }
-      if (require(ggpubr, quietly = TRUE) && !split) {
+      if (requireNamespace("ggpubr", quietly = TRUE) && !split) {
         tryCatch({
           stacked <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
           results[["CV"]] <- stacked
@@ -718,7 +718,7 @@ viz_annotation <- function(
         tmp_top <- tmp %>%
           count(y) %>%
           arrange(n) %>%
-          head(show_top)
+          utils::head(show_top)
 
         tmp <- tmp %>%
           subset(y %in% tmp_top$y)
@@ -752,7 +752,7 @@ viz_annotation <- function(
         gglist2[[paste(tmp_name, "confidence", "true")]] <- gg2
       }
     }
-    if(require(ggpubr,quietly = T) & !split) {
+    if (requireNamespace("ggpubr", quietly = TRUE) && !split) {
       results[["confidence"]] <- ggpubr::ggarrange(plotlist = gglist, ncol = 1)
       if("true" %in% colnames(data)) {
         results[["confidence_true"]] <- ggpubr::ggarrange(plotlist = gglist2, ncol = 1)

@@ -236,16 +236,6 @@ which.max.coord <- function(df, predicted) {
   which(df == max(df), arr.ind=T)[1,] %>% as.numeric()
 }
 
-## Get reverse function ----
-rf <- function(x) {
-  if(is.na(x)) return (0)
-  if(x < 0) return (0)
-  if(x > 1) return (1)
-
-  x = x * (pn$max_data - pn$min_data) +  pn$min_data
-  x = pn$reverse_function(x)
-  return(x)
-}
 
 
 ## Get new value ----

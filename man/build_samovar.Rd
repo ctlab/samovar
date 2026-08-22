@@ -10,21 +10,24 @@ build_samovar(
   network = F,
   k_means = F,
   min_cluster_size = F,
+  max_cluster_size = 100,
   plot_log = T
 )
 }
 \arguments{
 \item{samovar_data}{samovar data after preprocessing stages}
 
+\item{dist_function}{function used for measuring distances between species based on samples}
+
 \item{network}{FALSE or graph that can be used for generation. To be implemented}
 
+\item{k_means}{FALSE or number of k-means using for split. recommended for lazy-bootstrap}
+
+\item{min_cluster_size}{FALSE or minimum number of species per cluster}
+
+\item{max_cluster_size}{Maximum number of species per cluster}
+
 \item{plot_log}{Logical or path for log plots output}
-
-\item{distance_function}{function used for measuring distances between species based on samples}
-
-\item{min_min_cluster_size}{FALSE or minimum number of species per cluster}
-
-\item{max_min_cluster_size}{FALSE or minimum number of species per cluster}
 }
 \description{
 Samovar network is a 2D-oriented graph with metadata and abundances of species per sample. Oriented graph could be used for network prediction, or for better generation some network could be used as initial (to be implemented)

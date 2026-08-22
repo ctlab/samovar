@@ -4,12 +4,11 @@
 #' Samovar network is a 2D-oriented graph with metadata and abundances of species per sample. Oriented graph could be used for network prediction, or for better generation some network could be used as initial (to be implemented)
 #' For better understanding of building database and using it in generation, visit github source
 #' @param samovar_data samovar data after preprocessing stages
-#' @param network FALSE or graph that can be used for generation. To be implemented
 #' @param inner_method Character, glm, other to be implemented (bootstrap, bsPCA)
 #' @param inter_method Character, glm, other to be implemented (bootstrap, bsPCA)
 #' @param inner_model Character, model processed by glm(). For glm mode only. quasipoisson by default
 #' @param inter_model Character, model processed by glm(). For glm mode only. quasipoisson by default
-#' @param cooccurrence Character, co-occurrence calculation.
+#' @param probability_calculation Character, co-occurrence calculation.
 #' <br>
 #' <br>If "simple", calculated as:
 #' <br>P(A|B) = sum(A&B)/sum(A|B).

@@ -4,7 +4,26 @@
 \name{samovar_base}
 \alias{samovar_base}
 \alias{samovar_base-class}
+\alias{$,samovar_base-method}
+\alias{$<-,samovar_base-method}
+\alias{show,samovar_base-method}
 \title{samovar base class}
+\usage{
+\S4method{$}{samovar_base}(x, name)
+
+\S4method{$}{samovar_base}(x, name) <- value
+
+\S4method{show}{samovar_base}(object)
+}
+\arguments{
+\item{x}{A \code{samovar_base} object}
+
+\item{name}{Slot name}
+
+\item{value}{Replacement value}
+
+\item{object}{A \code{samovar_base} object}
+}
 \description{
 samovar base class
 }

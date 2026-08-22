@@ -129,6 +129,10 @@ setGeneric("get_max_inner_cluster", function(object, cl, predicted, type = "prob
 #' @slot metadata metadata DataFrame
 #' @slot run character
 #' @slot data data.frame
+#' @param x A \code{GMrepo_run} object
+#' @param name Slot name
+#' @param value Replacement value
+#' @param object A \code{GMrepo_run} object
 #' @name GMrepo_run
 #' @aliases GMrepo_run-class
 #' @rdname GMrepo_run
@@ -148,18 +152,22 @@ setClass(
   )
 )
 
+#' @rdname GMrepo_run
 #' @export
 setMethod("$", "GMrepo_run", function(x, name) .slot_get(x, name))
 
+#' @rdname GMrepo_run
 #' @export
 setMethod("$<-", "GMrepo_run", function(x, name, value) .slot_set(x, name, value))
 
+#' @rdname GMrepo_run
 #' @export
 setMethod("show", "GMrepo_run", function(object) {
   cat("GMrepo run object:")
   cat(object@run, sep = "\n")
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("bind_samovar", "GMrepo_run", function(object, bind_with) {
   object@metadata <- rbind(object@metadata, bind_with@metadata)
@@ -167,6 +175,7 @@ setMethod("bind_samovar", "GMrepo_run", function(object, bind_with) {
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("filter_samovar", "GMrepo_run", function(object, field, value) {
   tmp <- which(object@metadata[, field] == value)
@@ -184,6 +193,10 @@ setMethod("filter_samovar", "GMrepo_run", function(object, field, value) {
 #' @slot run character, sample IDs
 #' @slot cluster character
 #' @slot species character
+#' @param x A \code{samovar_run} object
+#' @param name Slot name
+#' @param value Replacement value
+#' @param object A \code{samovar_run} object
 #' @name samovar_run
 #' @aliases samovar_run-class
 #' @rdname samovar_run
@@ -207,18 +220,22 @@ setClass(
   )
 )
 
+#' @rdname samovar_run
 #' @export
 setMethod("$", "samovar_run", function(x, name) .slot_get(x, name))
 
+#' @rdname samovar_run
 #' @export
 setMethod("$<-", "samovar_run", function(x, name, value) .slot_set(x, name, value))
 
+#' @rdname samovar_run
 #' @export
 setMethod("show", "samovar_run", function(object) {
   cat("Samovar run object, data:\n")
   print(object@data %>% rownames_to_column("sp") %>% as_tibble)
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("bind_samovar", "samovar_run", function(object, bind_with) {
   object@metadata <- rbind(object@metadata, bind_with@metadata)
@@ -233,6 +250,7 @@ setMethod("bind_samovar", "samovar_run", function(object, bind_with) {
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("add_species", "samovar_run", function(object, cluster_sp, sp, abundance, to_run = 1) {
   sp <- as.character(sp)
@@ -271,6 +289,7 @@ setMethod("add_species", "samovar_run", function(object, cluster_sp, sp, abundan
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("filter_samovar", "samovar_run", function(object, field, value) {
   tmp <- which(object@metadata[, field] == value)
@@ -280,11 +299,13 @@ setMethod("filter_samovar", "samovar_run", function(object, field, value) {
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("get_cluster_data", "samovar_run", function(object, cl) {
   object@data[object@cluster == cl, , drop = FALSE]
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("export_data", "samovar_run", function(object) {
   object@data
@@ -294,7 +315,7 @@ setMethod("export_data", "samovar_run", function(object) {
 
 #' samovar data class
 #'
-#' @slot description metadata DataFrame
+#' @slot metadata metadata DataFrame
 #' @slot data DataFrame with species abundances. No NA pass
 #' @slot run character, runs
 #' @slot species character, runs
@@ -304,6 +325,10 @@ setMethod("export_data", "samovar_run", function(object) {
 #' @slot max_value maximal value after scaling
 #' @slot cluster character vector, enumerated clusters for each species
 #' @slot cluster_size named numeric, cluster sizes per cluster
+#' @param x A \code{samovar_data} object
+#' @param name Slot name
+#' @param value Replacement value
+#' @param object A \code{samovar_data} object
 #' @docType class
 #' @name samovar_data
 #' @aliases samovar_data-class
@@ -337,12 +362,15 @@ setClass(
   )
 )
 
+#' @rdname samovar_data
 #' @export
 setMethod("$", "samovar_data", function(x, name) .slot_get(x, name))
 
+#' @rdname samovar_data
 #' @export
 setMethod("$<-", "samovar_data", function(x, name, value) .slot_set(x, name, value))
 
+#' @rdname samovar_data
 #' @export
 setMethod("show", "samovar_data", function(object) {
   cat("samovar_data object:\n")
@@ -351,6 +379,7 @@ setMethod("show", "samovar_data", function(object) {
   print(tibble(object@data))
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("bind_samovar", "samovar_data", function(object, bind_with) {
   if (is(bind_with, "GMrepo_run")) {
@@ -371,6 +400,7 @@ setMethod("bind_samovar", "samovar_data", function(object, bind_with) {
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("filter_samovar", "samovar_data", function(object, field, value) {
   tmp <- which(object@metadata[, field] %in% value)
@@ -386,6 +416,7 @@ setMethod("filter_samovar", "samovar_data", function(object, field, value) {
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("rescale_samovar", "samovar_data", function(object, scale_function = function(x) {
   x / sum(x)
@@ -397,6 +428,7 @@ setMethod("rescale_samovar", "samovar_data", function(object, scale_function = f
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("normalize_samovar", "samovar_data", function(object, normalization_function = object@normalization_function) {
   object@data <- apply(object@data, 2, normalization_function) %>% as.data.frame()
@@ -424,12 +456,14 @@ setMethod("normalize_samovar", "samovar_data", function(object, normalization_fu
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("reverse_normalize_samovar", "samovar_data", function(object) {
   object@data <- apply(object@data, 2, object@reverse_normalization_function)
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("reverse_normalize_df_samovar", "samovar_data", function(object, x) {
   if (!is.null(object@reverse_normalization_function)) {
@@ -453,6 +487,7 @@ setMethod("reverse_normalize_df_samovar", "samovar_data", function(object, x) {
   x
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("rebuild_samovar", "samovar_data", function(object, min_sp = 1, min_samp = 1) {
   cat("Initial:", nrow(object@data), "x", ncol(object@data), "\n")
@@ -475,6 +510,7 @@ setMethod("rebuild_samovar", "samovar_data", function(object, min_sp = 1, min_sa
   object
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("get_clean_samovar", "samovar_data", function(object, cl) {
   df <- object@data[object@cluster == cl, , drop = FALSE]
@@ -482,11 +518,13 @@ setMethod("get_clean_samovar", "samovar_data", function(object, cl) {
   df
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("get_data_samovar", "samovar_data", function(object, cl) {
   object@data[object@cluster == cl, , drop = FALSE]
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("cluster_count", "samovar_data", function(object) {
   length(unique(object@cluster))
@@ -502,6 +540,10 @@ setMethod("cluster_count", "samovar_data", function(object) {
 #' @slot inner_cluster_graph_prob list of co-occurrence probabilities in matrix form of inner cluster members
 #' @slot inter_cluster_graph_prob list of co-occurrence probabilities in matrix form between clusters
 #' @slot preferences concotion_pour() properties
+#' @param x A \code{samovar_base} object
+#' @param name Slot name
+#' @param value Replacement value
+#' @param object A \code{samovar_base} object
 #' @docType class
 #' @name samovar_base
 #' @aliases samovar_base-class
@@ -527,12 +569,15 @@ setClass(
   )
 )
 
+#' @rdname samovar_base
 #' @export
 setMethod("$", "samovar_base", function(x, name) .slot_get(x, name))
 
+#' @rdname samovar_base
 #' @export
 setMethod("$<-", "samovar_base", function(x, name, value) .slot_set(x, name, value))
 
+#' @rdname samovar_base
 #' @export
 setMethod("show", "samovar_base", function(object) {
   cat("Prepared samovar:")
@@ -541,16 +586,19 @@ setMethod("show", "samovar_base", function(object) {
   print(as.data.frame(object@preferences) %>% t)
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("get_cluster_info", "samovar_base", function(object, sp) {
   as.numeric(object@samovar_data@cluster[object@samovar_data@species == sp])
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("get_cluster_length", "samovar_base", function(object, cl) {
   object@samovar_data@cluster_size[cl]
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("get_max_inter_cluster", "samovar_base", function(object, predicted, type = "prob") {
   if (type != "prob") {
@@ -561,6 +609,7 @@ setMethod("get_max_inter_cluster", "samovar_base", function(object, predicted, t
   which.max.coord(df, predicted)
 })
 
+#' @rdname samovar-s4
 #' @export
 setMethod("get_max_inner_cluster", "samovar_base", function(object, cl, predicted, type = "prob") {
   if (type != "prob") {

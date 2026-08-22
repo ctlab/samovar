@@ -3,12 +3,11 @@
 #' @description
 #' Samovar network is a 2D-oriented graph with metadata and abundances of species per sample. Oriented graph could be used for network prediction, or for better generation some network could be used as initial (to be implemented)
 #' For better understanding of building database and using it in generation, visit github source
-#' @param data samovar data after preprocessing stages
+#' @param samovar_data samovar data after preprocessing stages
+#' @param dist_function function used for measuring distances between species based on samples
 #' @param network FALSE or graph that can be used for generation. To be implemented
-#' @param distance_function function used for measuring distances between species based on samples
-# @param k_means FALSE or number of k-means using for split. recommended for lazy-bootstrap
 #' @param min_cluster_size FALSE or minimum number of species per cluster
-#' @param max_cluster_size FALSE or minimum number of species per cluster
+#' @param max_cluster_size FALSE or maximum number of species per cluster
 #' @param plot_log Logical or path for log plots output
 #' @param ... Additional arguments, passed
 #' @importFrom distances distances
@@ -31,7 +30,7 @@ teabag_brew <- function(
   #make minimal sizes clusters
   sc <- data$data %>%
     distances::distances() %>%
-    sc_clustering(x, size_constraint = min_cluster_size) %>%
+    sc_clustering(size_constraint = min_cluster_size) %>%
     as.numeric()
 
   # re-calculate maximum sizes clusters

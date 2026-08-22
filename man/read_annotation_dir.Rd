@@ -22,7 +22,7 @@ Read annotations produced with samovar pipeline from the directory
 \examples{
 library(samovaR)
 
-data <- read_annotation_dir("data/test_annotations/")
+data <- read_annotation_dir(system.file("extdata", "test_annotations", package = "samovaR"))
 gglist <- viz_annotation(data)
 
 samovar_list <- annotation2samovar(data)

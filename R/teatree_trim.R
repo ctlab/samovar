@@ -5,6 +5,7 @@
 #' @param treshhold_amount Minimum value to conclude as not the noise.
 #' @param treshhold_samples Minimum number of representing samples to keep species.
 #' @param treshhold_species Minimum number of representing species to keep samples.
+#' @param drop_species Species names to drop, or FALSE
 #' @param drop_unclassified Drop unknown and unclassified ranks. True by default
 #' @param ... Additional arguments, passed
 #' @example R/examples/preprocessing.R

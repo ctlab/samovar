@@ -12,13 +12,13 @@ GMrepo_run2data(
 )
 }
 \arguments{
+\item{run}{GMrepo_run object got by GMrepo_type2run or created by user with \code{new('GMrepo_run', metadata = data.frame(), run = run_list)}}
+
 \item{number_to_out}{False by default, maximum number of obtained data}
 
 \item{at_level}{"species" by default. level to obtain classification from GMrepo}
 
 \item{QC_filter}{QCStatus by default. Perform auto QC filtering based on metadata column, or False for no checking.}
-
-\item{runs}{GMrepo_run object got by GMrepo_type2run or created by user with \code{new('GMrepo_run', metadata = data.frame(), run = run_list)}}
 }
 \description{
 Get data from GMrepo_run object

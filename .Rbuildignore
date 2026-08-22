@@ -20,3 +20,6 @@ samovaR.Rproj
 ^vignettes/samovar-ML\.Rmd$
 ^samovaR\.pdf$
 ^samovaR_man\.pdf$
+^samovaR\.Rcheck$
+^samovaR_.*\.tar\.gz$
+^data/

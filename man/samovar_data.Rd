@@ -4,14 +4,33 @@
 \name{samovar_data}
 \alias{samovar_data}
 \alias{samovar_data-class}
+\alias{$,samovar_data-method}
+\alias{$<-,samovar_data-method}
+\alias{show,samovar_data-method}
 \title{samovar data class}
+\usage{
+\S4method{$}{samovar_data}(x, name)
+
+\S4method{$}{samovar_data}(x, name) <- value
+
+\S4method{show}{samovar_data}(object)
+}
+\arguments{
+\item{x}{A \code{samovar_data} object}
+
+\item{name}{Slot name}
+
+\item{value}{Replacement value}
+
+\item{object}{A \code{samovar_data} object}
+}
 \description{
 samovar data class
 }
 \section{Slots}{
 
 \describe{
-\item{\code{description}}{metadata DataFrame}
+\item{\code{metadata}}{metadata DataFrame}
 
 \item{\code{data}}{DataFrame with species abundances. No NA pass}
 

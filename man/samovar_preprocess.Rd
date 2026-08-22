@@ -38,17 +38,21 @@ samovar_preprocess(
 
 \item{treshhold_species}{Minimum number of representing species to keep samples.}
 
+\item{drop_species}{Species names to drop, or FALSE}
+
 \item{drop_unclassified}{Drop unknown and unclassified ranks. True by default}
 
 \item{normalization_function}{Function using for rescaling}
 
 \item{plot_log}{Logical or path for log plots output}
 
+\item{dist_function}{function used for measuring distances between species based on samples}
+
 \item{network}{FALSE or graph that can be used for generation. To be implemented}
 
 \item{min_cluster_size}{FALSE or minimum number of species per cluster}
 
-\item{max_cluster_size}{FALSE or minimum number of species per cluster}
+\item{max_cluster_size}{FALSE or maximum number of species per cluster}
 
 \item{inner_method}{Character, glm, other to be implemented (bootstrap, bsPCA)}
 
@@ -57,6 +61,17 @@ samovar_preprocess(
 \item{inner_model}{Character, model processed by glm(). For glm mode only. quasipoisson by default}
 
 \item{inter_model}{Character, model processed by glm(). For glm mode only. quasipoisson by default}
+
+\item{probability_calculation}{Character, co-occurrence calculation.
+\if{html}{\out{<br>}}
+\if{html}{\out{<br>}}If "simple", calculated as:
+\if{html}{\out{<br>}}P(A|B) = sum(A&B)/sum(A|B).
+\if{html}{\out{<br>}}
+\if{html}{\out{<br>}}If "oriented", calculated as
+\if{html}{\out{<br>}}P(A|B) = P(A&B|B)
+\if{html}{\out{<br>}}
+\if{html}{\out{<br>}}If "compositional", calculated as
+\if{html}{\out{<br>}}P(A|B) = P(A&B|B), and than sampled one of represented conditions of occurence}
 
 \item{cluster_connection}{Character (mean, median), or function. The way of cluster connection. If function, way of summarize all samples of species cluster}
 

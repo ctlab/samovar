@@ -18,6 +18,27 @@
 \alias{get_cluster_length}
 \alias{get_max_inter_cluster}
 \alias{get_max_inner_cluster}
+\alias{bind_samovar,GMrepo_run-method}
+\alias{filter_samovar,GMrepo_run-method}
+\alias{bind_samovar,samovar_run-method}
+\alias{add_species,samovar_run-method}
+\alias{filter_samovar,samovar_run-method}
+\alias{get_cluster_data,samovar_run-method}
+\alias{export_data,samovar_run-method}
+\alias{bind_samovar,samovar_data-method}
+\alias{filter_samovar,samovar_data-method}
+\alias{rescale_samovar,samovar_data-method}
+\alias{normalize_samovar,samovar_data-method}
+\alias{reverse_normalize_samovar,samovar_data-method}
+\alias{reverse_normalize_df_samovar,samovar_data-method}
+\alias{rebuild_samovar,samovar_data-method}
+\alias{get_clean_samovar,samovar_data-method}
+\alias{get_data_samovar,samovar_data-method}
+\alias{cluster_count,samovar_data-method}
+\alias{get_cluster_info,samovar_base-method}
+\alias{get_cluster_length,samovar_base-method}
+\alias{get_max_inter_cluster,samovar_base-method}
+\alias{get_max_inner_cluster,samovar_base-method}
 \title{S4 generics for samovaR objects}
 \usage{
 bind_samovar(object, bind_with)
@@ -56,6 +77,56 @@ get_cluster_length(object, cl)
 get_max_inter_cluster(object, predicted, type = "prob")
 
 get_max_inner_cluster(object, cl, predicted, type = "prob")
+
+\S4method{bind_samovar}{GMrepo_run}(object, bind_with)
+
+\S4method{filter_samovar}{GMrepo_run}(object, field, value)
+
+\S4method{bind_samovar}{samovar_run}(object, bind_with)
+
+\S4method{add_species}{samovar_run}(object, cluster_sp, sp, abundance, to_run = 1)
+
+\S4method{filter_samovar}{samovar_run}(object, field, value)
+
+\S4method{get_cluster_data}{samovar_run}(object, cl)
+
+\S4method{export_data}{samovar_run}(object)
+
+\S4method{bind_samovar}{samovar_data}(object, bind_with)
+
+\S4method{filter_samovar}{samovar_data}(object, field, value)
+
+\S4method{rescale_samovar}{samovar_data}(
+  object,
+  scale_function = function(x) {
+     x/sum(x)
+ }
+)
+
+\S4method{normalize_samovar}{samovar_data}(
+  object,
+  normalization_function = object@normalization_function
+)
+
+\S4method{reverse_normalize_samovar}{samovar_data}(object)
+
+\S4method{reverse_normalize_df_samovar}{samovar_data}(object, x)
+
+\S4method{rebuild_samovar}{samovar_data}(object, min_sp = 1, min_samp = 1)
+
+\S4method{get_clean_samovar}{samovar_data}(object, cl)
+
+\S4method{get_data_samovar}{samovar_data}(object, cl)
+
+\S4method{cluster_count}{samovar_data}(object)
+
+\S4method{get_cluster_info}{samovar_base}(object, sp)
+
+\S4method{get_cluster_length}{samovar_base}(object, cl)
+
+\S4method{get_max_inter_cluster}{samovar_base}(object, predicted, type = "prob")
+
+\S4method{get_max_inner_cluster}{samovar_base}(object, cl, predicted, type = "prob")
 }
 \arguments{
 \item{object}{A samovaR S4 object}

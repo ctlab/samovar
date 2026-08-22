@@ -4,11 +4,11 @@
 #' Samovar network is a 2D-oriented graph with metadata and abundances of species per sample. Oriented graph could be used for network prediction, or for better generation some network could be used as initial (to be implemented)
 #' For better understanding of building database and using it in generation, visit github source
 #' @param samovar_data samovar data after preprocessing stages
+#' @param dist_function function used for measuring distances between species based on samples
 #' @param network FALSE or graph that can be used for generation. To be implemented
-#' @param distance_function function used for measuring distances between species based on samples
-# @param k_means FALSE or number of k-means using for split. recommended for lazy-bootstrap
-#' @param min_min_cluster_size FALSE or minimum number of species per cluster
-#' @param max_min_cluster_size FALSE or minimum number of species per cluster
+#' @param k_means FALSE or number of k-means using for split. recommended for lazy-bootstrap
+#' @param min_cluster_size FALSE or minimum number of species per cluster
+#' @param max_cluster_size Maximum number of species per cluster
 #' @param plot_log Logical or path for log plots output
 #' @importFrom plotly ggplotly
 #' @export
@@ -19,6 +19,7 @@ build_samovar <- function(
     network = F,
     k_means = F,
     min_cluster_size = F,
+    max_cluster_size = 100,
     plot_log = T) {
 
   if (isFALSE(k_means)) {
@@ -58,8 +59,8 @@ build_samovar <- function(
       dist_function()
 
     cluster <- distance %>%
-      clust_function() %>%
-      stats::cutree(k_means)
+      hclust() %>%
+      stats::cutree(k = k_means)
 
     ## recalculate clusters
     # NOT STABLE!!! NOT RECOMMENDED!!!

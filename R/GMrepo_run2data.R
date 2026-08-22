@@ -1,6 +1,6 @@
 #' Get data from GMrepo_run object
 #'
-#' @param runs GMrepo_run object got by GMrepo_type2run or created by user with `new('GMrepo_run', metadata = data.frame(), run = run_list)`
+#' @param run GMrepo_run object got by GMrepo_type2run or created by user with `new('GMrepo_run', metadata = data.frame(), run = run_list)`
 #' @param number_to_out False by default, maximum number of obtained data
 #' @param at_level "species" by default. level to obtain classification from GMrepo
 # @param keep_metadata To be implemented. Keep metadata from query

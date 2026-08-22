@@ -24,7 +24,16 @@
 #' @importFrom methods is new setClass setGeneric setMethod show slot slotNames
 #' @importFrom stats as.dendrogram dist glm hclust lm na.omit prcomp predict
 #' @importFrom stats runif uniroot
-#' @importFrom utils read.csv write.csv
+#' @importFrom utils read.csv write.csv head
+#' @importFrom grDevices colorRampPalette
 #' @import scclust
 ## usethis namespace: end
 NULL
+
+# dplyr / ggplot2 NSE symbols used in package code
+utils::globalVariables(c(
+  ".", "Freq", "N", "PC1", "PC2", "label_color", "n_bin", "name",
+  "predicted taxID", "raw_value", "rect", "relative_abundance",
+  "samples", "scientific_name", "sp", "true", "true taxID", "value",
+  "x", "y"
+))

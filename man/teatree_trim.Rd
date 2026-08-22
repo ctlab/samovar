@@ -26,6 +26,8 @@ teatree_trim(
 
 \item{treshhold_species}{Minimum number of representing species to keep samples.}
 
+\item{drop_species}{Species names to drop, or FALSE}
+
 \item{drop_unclassified}{Drop unknown and unclassified ranks. True by default}
 
 \item{...}{Additional arguments, passed}

@@ -4,7 +4,26 @@
 \name{samovar_run}
 \alias{samovar_run}
 \alias{samovar_run-class}
+\alias{$,samovar_run-method}
+\alias{$<-,samovar_run-method}
+\alias{show,samovar_run-method}
 \title{Samovar run data class}
+\usage{
+\S4method{$}{samovar_run}(x, name)
+
+\S4method{$}{samovar_run}(x, name) <- value
+
+\S4method{show}{samovar_run}(object)
+}
+\arguments{
+\item{x}{A \code{samovar_run} object}
+
+\item{name}{Slot name}
+
+\item{value}{Replacement value}
+
+\item{object}{A \code{samovar_run} object}
+}
 \description{
 Samovar run data class
 }

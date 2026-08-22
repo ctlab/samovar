@@ -4,7 +4,26 @@
 \name{GMrepo_run}
 \alias{GMrepo_run}
 \alias{GMrepo_run-class}
+\alias{$,GMrepo_run-method}
+\alias{$<-,GMrepo_run-method}
+\alias{show,GMrepo_run-method}
 \title{GMrepo run data class}
+\usage{
+\S4method{$}{GMrepo_run}(x, name)
+
+\S4method{$}{GMrepo_run}(x, name) <- value
+
+\S4method{show}{GMrepo_run}(object)
+}
+\arguments{
+\item{x}{A \code{GMrepo_run} object}
+
+\item{name}{Slot name}
+
+\item{value}{Replacement value}
+
+\item{object}{A \code{GMrepo_run} object}
+}
 \description{
 GMrepo run data class
 }
