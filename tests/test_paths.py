@@ -2,6 +2,7 @@ from pathlib import Path
 
 from samovar.paths import (
     PACKAGE_VERSION,
+    iss_executable,
     ncbi_email,
     repo_root,
     resolve_executable,
@@ -60,3 +61,14 @@ def test_cli_help_from_other_directory(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert "prepare" in proc.stdout.lower() or "Usage:" in proc.stdout
+
+
+def test_iss_executable_uses_config(tmp_path, monkeypatch):
+    exe = tmp_path / "iss"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {"iss_path": str(exe)},
+    )
+    assert iss_executable() == str(exe.resolve())

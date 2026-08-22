@@ -74,7 +74,8 @@ python3 -m pip install -e .
 
 It will prompt for an NCBI Entrez email (genome downloads). In CI the default is `test@samovar.com`. Override with `NCBI_EMAIL=you@institution.edu`.
 
-- Production install: `./install.sh` (no pytest extras)
+- Production install: `./install.sh` (no pytest extras). Adds `bin/` to this session's `PATH` and to `~/.bashrc` unless another `samovar` is already on `PATH`.
+- Shared / HPC (no PATH or bashrc edits): `SAMOVAR_UPDATE_SHELL=0 ./install.sh` then `source ~/.config/samovar/env`
 - Dev / CI: `SAMOVAR_INSTALL_DEV=1 ./install.sh`
 - Air-gapped: `SAMOVAR_OFFLINE=1 SAMOVAR_WHEELHOUSE=/path/to/wheels ./install.sh`
 - Optional R package: `SAMOVAR_INSTALL_R=1 ./install.sh` (see branch `r-package`)

@@ -58,7 +58,9 @@ fi
 
 ROOT="${SAMOVAR_ROOT:-}"
 if [ -z "$ROOT" ] && command -v python3 >/dev/null 2>&1; then
-    ROOT="$(python3 -c "import json; print(json.load(open(r'''$CFG''')).get('root','') or '')" 2>/dev/null || true)"
+    ROOT="$(
+        SAMOVAR_CFG="$CFG" python3 -c 'import json,os; print(json.load(open(os.environ["SAMOVAR_CFG"])).get("root","") or "")' 2>/dev/null || true
+    )"
 fi
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
     ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -72,14 +74,25 @@ if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
     . "$XDG_CONFIG_HOME/samovar/env"
 fi
 
+PYTHON="${PYTHON_PATH:-}"
+if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+    PYTHON="$(
+        SAMOVAR_CFG="$CFG" python3 -c 'import json,os; print(json.load(open(os.environ["SAMOVAR_CFG"])).get("python_path","") or "")' 2>/dev/null || true
+    )"
+fi
+if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+    PYTHON="$(command -v python3 || command -v python || true)"
+fi
+PYTHON="${PYTHON:-python3}"
+
 case "${1:-}" in
     "generate")
         shift
-        "$SCRIPT_DIR/samovar_generate" "$@"
+        "$PYTHON" "$SCRIPT_DIR/samovar_generate" "$@"
         ;;
     "prepare"|"preprocess")
         shift
-        "$SCRIPT_DIR/samovar_preprocess" "$@"
+        "$PYTHON" "$SCRIPT_DIR/samovar_preprocess" "$@"
         ;;
     "exec")
         shift
@@ -93,7 +106,7 @@ case "${1:-}" in
         case "${1:-}" in
             "--sort")
                 shift
-                "$SCRIPT_DIR/samovar_sort_reads" "$@"
+                "$PYTHON" "$SCRIPT_DIR/samovar_sort_reads" "$@"
                 ;;
             *)
                 echo "Error: Unknown tool '${1:-}'"

@@ -200,7 +200,7 @@ def test_process_annotation_tables_with_bootstrap_regeneration(toy_annotation_di
         class Result:
             returncode = 0
 
-        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "iss":
+        if isinstance(cmd, (list, tuple)) and cmd and Path(str(cmd[0])).name == "iss":
             output = cmd[cmd.index("--output") + 1]
             os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
             with open(f"{output}_R1.fastq", "w") as r1, open(f"{output}_R2.fastq", "w") as r2:

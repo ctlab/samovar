@@ -107,6 +107,18 @@ def python_path() -> str:
     return found or sys.executable
 
 
+def iss_executable() -> str:
+    """ISS CLI: config ``iss_path``, then PATH."""
+    cfg = load_config()
+    configured = (cfg.get("iss_path") or "").strip() or "iss"
+    resolved = resolve_executable(configured, tool_key="iss")
+    token = (resolved or "iss").split()[0]
+    if token and Path(token).is_file() and os.access(token, os.X_OK):
+        return str(Path(token).resolve())
+    found = shutil.which(token) or shutil.which("iss")
+    return found or token or "iss"
+
+
 def ncbi_email() -> str:
     for key in ("NCBI_EMAIL", "ENTREZ_EMAIL", "SAMOVAR_EMAIL"):
         value = os.environ.get(key, "").strip()
@@ -158,9 +170,15 @@ def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
     dest = user_config_dir() / "config.json"
     dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     if also_repo_build:
-        build = repo_root() / "build"
-        build.mkdir(parents=True, exist_ok=True)
-        (build / "config.json").write_text(dest.read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            build = repo_root() / "build"
+            build.mkdir(parents=True, exist_ok=True)
+            (build / "config.json").write_text(
+                dest.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        except OSError:
+            # Read-only shared checkout: user config is enough.
+            pass
     return dest
 
 
@@ -199,7 +217,8 @@ def smoke_test() -> List[str]:
         import samovar  # noqa: F401
     except Exception as exc:  # pragma: no cover
         problems.append(f"import samovar failed: {exc}")
-    if not shutil.which("iss") and not resolve_executable("iss"):
+    iss = iss_executable()
+    if not (iss and (Path(iss).is_file() or shutil.which(iss) or shutil.which("iss"))):
         problems.append("iss CLI not on PATH (install InSilicoSeq / insilicoseq)")
     if not shutil.which("snakemake"):
         problems.append("snakemake not on PATH")

@@ -7,6 +7,9 @@ from pathlib import Path
 
 from samovar.paths import ncbi_email, python_path, repo_root, resolve_executable, test_genomes_dir
 
+DEFAULT_OUTPUT_DIR = "samovar_out"
+
+
 def _default_email() -> str:
     return ncbi_email()
 
@@ -23,7 +26,7 @@ class AnnotatorConfig:
 class PipelineConfig:
     input_config: Optional[str] = None
     input_dir: Optional[str] = None
-    output_dir: str = "tests_outs"
+    output_dir: str = DEFAULT_OUTPUT_DIR
     annotators: List[AnnotatorConfig] = None
     read_length: int = 150
     coverage: int = 30
@@ -54,11 +57,8 @@ class PipelineConfig:
             with open(args.input_config, 'r') as f:
                 input_config = yaml.safe_load(f)
                 config.input_dir = input_config.get('input_dir')
-                # Only use config file output_dir if not specified in args
-                if not args.output_dir:
-                    config.output_dir = input_config.get('output_dir', config.output_dir)
-                else:
-                    config.output_dir = args.output_dir
+                cli_out = getattr(args, "output_dir", None)
+                config.output_dir = cli_out or input_config.get("output_dir") or DEFAULT_OUTPUT_DIR
                 config.read_length = input_config.get('read_length', config.read_length)
                 config.coverage = input_config.get('coverage', config.coverage)
                 config.email = input_config.get('email', config.email)
@@ -77,6 +77,8 @@ class PipelineConfig:
                         config.annotators.append(AnnotatorConfig(**ann))
         elif args.input_dir:
             config.input_dir = args.input_dir
+            config.output_dir = getattr(args, "output_dir", None) or DEFAULT_OUTPUT_DIR
+        elif getattr(args, "output_dir", None):
             config.output_dir = args.output_dir
 
         # Handle command line annotators
@@ -375,7 +377,7 @@ def parse_args() -> argparse.Namespace:
     input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
     
     # Output
-    parser.add_argument('--output_dir', default='tests_outs', help='Output directory', required=True)
+    parser.add_argument('--output_dir', default=None, help='Output directory (default: samovar_out, or from --input_config)')
     
     # Add a dynamic command argument group
     cmd_group = parser.add_argument_group('Command Arguments')

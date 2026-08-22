@@ -3,7 +3,7 @@
 import sys
 import argparse
 from pathlib import Path
-from samovar.config import setup_pipeline, parse_args
+from samovar.config import DEFAULT_OUTPUT_DIR, setup_pipeline, parse_args
 
 def main():
     # Get the base parser
@@ -15,7 +15,7 @@ def main():
     input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
     
     # Output
-    parser.add_argument('--output_dir', default='tests_outs', help='Output directory', required=True)
+    parser.add_argument('--output_dir', default=None, help='Output directory (default: samovar_out, or from --input_config)')
     parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
     parser.add_argument('--max_genomes', type=int, default=50,
                         help='Max taxids to fetch for annotation2iss (top by abundance)')
@@ -24,11 +24,12 @@ def main():
     args, remaining = parser.parse_known_args()
     
     # Check if .generate exists in output_dir
-    generate_dir = Path(args.output_dir) / ".generate"
+    out_dir = args.output_dir or DEFAULT_OUTPUT_DIR
+    generate_dir = Path(out_dir) / ".generate"
     if generate_dir.exists():
         # Add input-dir argument if not already present
         if not args.input_dir:
-            args.input_dir = str(Path(args.output_dir) / "initial")
+            args.input_dir = str(Path(out_dir) / "initial")
     
     # Process remaining arguments to handle dynamic command arguments
     cmd_args = {}

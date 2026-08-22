@@ -32,6 +32,7 @@ jobs:
         CI: "true"
         NCBI_EMAIL: test@samovar.com
         SAMOVAR_INSTALL_DEV: "1"
+        SAMOVAR_UPDATE_SHELL: "0"
       run: |
         chmod +x install.sh
         ./install.sh

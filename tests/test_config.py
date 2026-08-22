@@ -58,6 +58,40 @@ def test_pipeline_config_from_args_file():
     assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
 
+def test_pipeline_config_uses_yaml_output_dir_when_cli_unset():
+    test_output_dir = "tests_outs/test_pipeline_config_yaml_output_dir"
+    clean_dir(test_output_dir)
+    os.makedirs(test_output_dir, exist_ok=True)
+    config_path = Path(test_output_dir) / "test_config.yaml"
+    config_path.write_text(
+        """
+input_dir: /path/to/input
+output_dir: /from/yaml/out
+annotators: []
+"""
+    )
+    args = argparse.Namespace(
+        input_config=str(config_path),
+        input_dir=None,
+        output_dir=None,
+        kraken2=None,
+        kaiju=None,
+    )
+    config = PipelineConfig.from_args(args)
+    assert config.output_dir == "/from/yaml/out"
+
+
+def test_pipeline_config_default_output_dir():
+    args = argparse.Namespace(
+        input_config=None,
+        input_dir="/path/to/input",
+        output_dir=None,
+        kraken2=None,
+        kaiju=None,
+    )
+    config = PipelineConfig.from_args(args)
+    assert config.output_dir == "samovar_out"
+
 def test_pipeline_config_from_args_cli():
     test_output_dir = 'tests_outs/test_pipeline_config_from_args_cli'
     clean_dir(test_output_dir)

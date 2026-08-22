@@ -6,15 +6,21 @@
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
 #   SAMOVAR_INSTALL_R=1        optional R package
+#   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
+#   SAMOVAR_UPDATE_SHELL=0     shared/read-only: skip PATH and ~/.bashrc edits
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
 #   CI=true                    non-interactive; NCBI_EMAIL defaults to test@samovar.com
+#                              and shell/PATH edits are skipped
 set -euo pipefail
 
 echo "Installing SamovaR (Python pipeline)..."
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
-mkdir -p build bin
+mkdir -p bin
+if ! mkdir -p build 2>/dev/null; then
+    echo "Warning: cannot write $ROOT/build (read-only checkout); config will live under XDG only"
+fi
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 USER_CFG_DIR="${XDG_CONFIG_HOME}/samovar"
 mkdir -p "$USER_CFG_DIR"
@@ -62,9 +68,11 @@ echo "NCBI email: $NCBI_EMAIL"
 PIP_OPTS=()
 if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
     echo "Offline mode (SAMOVAR_OFFLINE=1): skipping pip upgrade / PyPI"
-    PIP_OPTS+=(--offline)
+    PIP_OPTS+=(--offline --no-build-isolation)
     if [ -n "${SAMOVAR_WHEELHOUSE:-}" ]; then
         PIP_OPTS+=(--no-index --find-links "$SAMOVAR_WHEELHOUSE")
+    else
+        echo "Warning: SAMOVAR_WHEELHOUSE is unset; offline pip needs local wheels."
     fi
 else
     echo "Installing Python package (editable)..."
@@ -73,12 +81,10 @@ fi
 
 if [ "${SAMOVAR_INSTALL_DEV:-0}" != "0" ] || [ -n "${CI:-}" ]; then
     echo "Installing package + dev extras..."
-    "$PYTHON_PATH" -m pip install -e ".[dev]" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}" \
-        || "$PYTHON_PATH" -m pip install -e ".[dev]"
+    "$PYTHON_PATH" -m pip install -e ".[dev]" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"
 else
     echo "Installing package (no dev extras; set SAMOVAR_INSTALL_DEV=1 for pytest/flake8)..."
-    "$PYTHON_PATH" -m pip install -e . "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}" \
-        || "$PYTHON_PATH" -m pip install -e .
+    "$PYTHON_PATH" -m pip install -e . "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"
 fi
 
 # ISS CLI (InSilicoSeq)
@@ -153,12 +159,45 @@ PY
 
 echo "export NCBI_EMAIL=\"$NCBI_EMAIL\"" > "$USER_CFG_DIR/env"
 echo "export SAMOVAR_ROOT=\"$ROOT\"" >> "$USER_CFG_DIR/env"
+echo "export PYTHON_PATH=\"$PYTHON_PATH\"" >> "$USER_CFG_DIR/env"
+echo "export PATH=\"$ROOT/bin:\$PATH\"" >> "$USER_CFG_DIR/env"
 
-if [ -z "${CI:-}" ] && [ -f "${HOME}/.bashrc" ]; then
-    if ! grep -q "export PATH=\$PATH:${ROOT}/bin" "${HOME}/.bashrc"; then
-        echo "export PATH=\$PATH:${ROOT}/bin" >> "${HOME}/.bashrc"
-        echo "Added ${ROOT}/bin to PATH in ~/.bashrc"
+BIN_DIR="$ROOT/bin"
+UPDATE_SHELL="${SAMOVAR_UPDATE_SHELL:-1}"
+if [ -n "${CI:-}" ] || [ "${SAMOVAR_UPDATE_SHELL:-}" = "0" ]; then
+    UPDATE_SHELL=0
+fi
+
+EXISTING_SAMOVAR="$(command -v samovar 2>/dev/null || true)"
+if [ -n "$EXISTING_SAMOVAR" ]; then
+    EXISTING_DIR="$(cd "$(dirname "$EXISTING_SAMOVAR")" && pwd)"
+    if [ "$EXISTING_DIR" != "$BIN_DIR" ]; then
+        echo "Warning: another samovar is already on PATH: $EXISTING_SAMOVAR"
+        echo "This install is $BIN_DIR/samovar."
+        if [ "$UPDATE_SHELL" != "0" ]; then
+            echo "Switching to SAMOVAR_UPDATE_SHELL=0 (no ~/.bashrc or PATH edits)."
+            UPDATE_SHELL=0
+        fi
     fi
+fi
+
+if [ "$UPDATE_SHELL" != "0" ]; then
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ;;
+        *)
+            export PATH="$BIN_DIR:$PATH"
+            echo "Added $BIN_DIR to PATH for this session"
+            ;;
+    esac
+    if [ -f "${HOME}/.bashrc" ]; then
+        if ! grep -Fq "$BIN_DIR" "${HOME}/.bashrc"; then
+            echo "export PATH=\$PATH:${BIN_DIR}" >> "${HOME}/.bashrc"
+            echo "Added ${BIN_DIR} to PATH in ~/.bashrc"
+        fi
+    fi
+else
+    echo "Shell/PATH edits skipped (SAMOVAR_UPDATE_SHELL=0 or another samovar on PATH)."
+    echo "Load this install with: source $USER_CFG_DIR/env"
 fi
 
 echo "Running install smoke test..."
@@ -188,5 +227,8 @@ fi
 
 echo "Installation completed successfully!"
 echo "Config: $USER_CFG_DIR/config.json"
-echo "Also:   $ROOT/build/config.json"
+if [ -f "$ROOT/build/config.json" ]; then
+    echo "Also:   $ROOT/build/config.json"
+fi
 echo "Use NCBI_EMAIL=$NCBI_EMAIL (export it in new shells, or: source $USER_CFG_DIR/env)"
+echo "Shared/HPC install without PATH edits: SAMOVAR_UPDATE_SHELL=0 ./install.sh"
