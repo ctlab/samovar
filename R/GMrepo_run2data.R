@@ -24,7 +24,7 @@ GMrepo_run2data <- function(run,
 
   # initialize
   if (!isFALSE(QC_filter)) {
-    run$filter(QC_filter, 1) # get only runs with annotated data
+    run <- filter_samovar(run, QC_filter, 1) # get only runs with annotated data
   }
   pb <- progress_function(length(run$run))
 
@@ -35,12 +35,11 @@ GMrepo_run2data <- function(run,
     pb$tick()
 
     # get run info from GMrepo
-    query <- httr::POST("https://gmrepo.humangut.info/api/getFullTaxonomicProfileByRunID",
-      body = list("run_id" = RUN), encode = "json"
+    query <- gmrepo_post(
+      "/api/getFullTaxonomicProfileByRunID",
+      body = list("run_id" = RUN)
     ) %>%
-      httr::content() %>%
-      xml2::xml_text() %>%
-      jsonlite::fromJSON()
+      gmrepo_parse()
 
     if (!is.null(query[[at_level]])) {
       df_sp <- query[[at_level]][, -2] %>%
@@ -59,7 +58,7 @@ GMrepo_run2data <- function(run,
     species = rownames(res_sp)
   )
 
-  GMrepo$rescale()
+  GMrepo <- rescale_samovar(GMrepo)
   GMrepo$data <- GMrepo$data %>% apply(2, as.numeric) %>% as.data.frame
 
   return(GMrepo)

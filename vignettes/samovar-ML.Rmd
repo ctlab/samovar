@@ -20,11 +20,15 @@ library(umap)
 
 # Get data
 ```{r}
-data1 <- GMrepo_type2data(mesh_ids = "D006262", number_to_process = 1500) %>% 
-    teatree_trim(treshhold_amount = 0.0001, 
+data1 <- GMrepo_type2data_or_example(
+    mesh_ids = "D006262", number_to_process = 1500,
+    fallback = "data1_abundance.rds") %>%
+    teatree_trim(treshhold_amount = 0.0001,
                  treshhold_samples = 5, treshhold_species = 5)
-data2 <- GMrepo_type2data(mesh_ids = "D003967", number_to_process = 1500) %>% 
-        teatree_trim(treshhold_amount = 0.0001, 
+data2 <- GMrepo_type2data_or_example(
+    mesh_ids = "D003967", number_to_process = 1500,
+    fallback = "data2_abundance.rds") %>%
+        teatree_trim(treshhold_amount = 0.0001,
                  treshhold_samples = 5, treshhold_species = 5)
 
 print(data1)

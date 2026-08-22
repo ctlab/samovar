@@ -26,7 +26,7 @@ teabag_brew <- function(
     ...
 ) {
 
-  data <- samovar_data$copy()
+  data <- samovar_data
 
   #make minimal sizes clusters
   sc <- data$data %>%

@@ -9,7 +9,7 @@ run_GMrepo <- GMrepo_type2run(mesh_ids = "D006262", number_to_process = 1000)
 data_GMrepo <- GMrepo_run2data(run_GMrepo)
 
 # filter runs before obtaining data (OOP updating data!)
-run_GMrepo$filter("checking", 1)
+run_GMrepo <- filter_samovar(run_GMrepo, "checking", 1)
 
 # view
 data_GMrepo

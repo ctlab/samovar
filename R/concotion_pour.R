@@ -53,7 +53,7 @@ concotion_pour <- function(
     cl_len <- NULL
     suppressWarnings(
       try({
-        df_cluster <- samovar_data$get_clean(clust)
+        df_cluster <- get_clean_samovar(samovar_data, clust)
         cl_len <- nrow(df_cluster)
       })
     )
@@ -77,7 +77,7 @@ concotion_pour <- function(
     for (cl in clust_list) {
       pb$tick()
       # prepare data
-      df_cluster <- samovar_data$get_clean(cl)
+      df_cluster <- get_clean_samovar(samovar_data, cl)
       cl_len <- nrow(df_cluster)
 
       df_r2 <- prep_matrix(cl_len)
@@ -107,16 +107,16 @@ concotion_pour <- function(
   #progress bar for connection between clusters calculation
   pb <- progress_function(length(clust_list)-1)
 
-  if(samovar_data$cluster_n() > 1) {
+  if(cluster_count(samovar_data) > 1) {
     if(inter_method == "glm") {
       cl_len <- length(clust_list)
       Rs_il <- prep_matrix(cl_len)
       Pr_il <- prep_matrix(cl_len)
 
       for (i in 1:(cl_len-1)) {
-        X <- samovar_data$get(clust_list[i])
+        X <- get_data_samovar(samovar_data, clust_list[i])
         for (j in (i+1):cl_len) {
-          Y <- samovar_data$get(clust_list[j])
+          Y <- get_data_samovar(samovar_data, clust_list[j])
           Pr_il[j,i] <- prob_calc(X, Y, min_value)
           Rs_il[j,i] <- rsq_calc(X, Y, inter_model)
         }

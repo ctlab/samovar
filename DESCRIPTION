@@ -35,6 +35,7 @@ Imports:
     stringr,
     tibble,
     tidyr,
+    forcats,
     ggnewscale,
     yaml
 Suggests: 

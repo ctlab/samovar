@@ -42,7 +42,7 @@ samovar_preprocess <- function(
     ...
 ) {
   data <- teatree_trim(
-    samovar_data$copy(),
+    samovar_data,
     metadata_filter,
     treshhold_amount,
     treshhold_samples,
@@ -53,14 +53,14 @@ samovar_preprocess <- function(
   )
 
   data <- tealeaves_pack(
-    data$copy(),
+    data,
     normalization_function,
     plot_log,
     ...
     )
 
   data <- teabag_brew(
-    data$copy(),
+    data,
     dist_function,
     network,
     min_cluster_size,
@@ -69,7 +69,7 @@ samovar_preprocess <- function(
     )
 
   data <- concotion_pour(
-    data$copy(),
+    data,
     inner_method,
     inter_method,
     inner_model,

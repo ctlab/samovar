@@ -77,9 +77,9 @@ samovar_boil <- function(samovar_base, N = 1,
       init_level <- init_ab[iter]
 
       ## Initializing iter ----
-      cluster <- samovar_base$get_cluster(init)
-      cluster_len <- samovar_base$get_cluster_len(cluster)
-      cluster_todo <- rep(0, samovar_base$samovar_data$cluster_n())
+      cluster <- get_cluster_info(samovar_base, init)
+      cluster_len <- get_cluster_length(samovar_base, cluster)
+      cluster_todo <- rep(0, cluster_count(samovar_base$samovar_data))
       cluster_todo[cluster] <- 1
 
       ## Calculate cluster representation ----
@@ -99,7 +99,7 @@ samovar_boil <- function(samovar_base, N = 1,
       cl_done <- cl0
 
       ## Generation loop ----
-      while(length(cl_done) < samovar_base$samovar_data$cluster_n()) {
+      while(length(cl_done) < cluster_count(samovar_base$samovar_data)) {
 
         ### Re-initializing cluster ----
         # for any cluster except of the first initial
@@ -110,7 +110,7 @@ samovar_boil <- function(samovar_base, N = 1,
             !(cl_done %in% cl0) #!!!!!
           ]) #samovar_base$get_max_inter(cl_done)
           cluster <- from_to[2]
-          cluster_len <- samovar_base$get_cluster_len(cluster)
+          cluster_len <- get_cluster_length(samovar_base, cluster)
 
           if ((from_to[1] == from_to[2])|(is.na(cluster))) {
             warning(paste0("Exit: possible incomplete generation on cluster: ",
@@ -119,15 +119,15 @@ samovar_boil <- function(samovar_base, N = 1,
           }
 
           # predict new value of the cluster
-          Y <- samovar_base$samovar_data$get(from_to[2])
-          X <- samovar_base$samovar_data$get(from_to[1])
-          xval <- suppressWarnings(results$get_cluster(from_to[1]) %>% mean(na.rm = T))
+          Y <- get_data_samovar(samovar_base$samovar_data, from_to[2])
+          X <- get_data_samovar(samovar_base$samovar_data, from_to[1])
+          xval <- suppressWarnings(get_cluster_data(results, from_to[1]) %>% mean(na.rm = T))
 
           cluster_init_level <- get_newval(X = X, Y = Y, xval = xval,
                                            model = samovar_base$preferences$inter_model)
           #!!!
-          tmp1 <- samovar_base$samovar_data$get_clean(from_to[1]) %>% colnames
-          tmp <- samovar_base$samovar_data$get(from_to[2])
+          tmp1 <- get_clean_samovar(samovar_base$samovar_data, from_to[1]) %>% colnames
+          tmp <- get_data_samovar(samovar_base$samovar_data, from_to[2])
 
           tmp2 <- tmp[,tmp1]
           tmp2 <- tmp2[,apply(tmp2, 2, function(x) sum(x) > 0)]
@@ -140,14 +140,14 @@ samovar_boil <- function(samovar_base, N = 1,
             init_level <- means[init] / mean(means) * cluster_init_level
           } else {
             init <- NA
-            results$new_sp(cluster, sp_cl, 0, iter)
+            results <- add_species(results, cluster, sp_cl, 0, iter)
           }
         }
 
         ### Generating cluster ----
         #### Parse data ----
         if(!is.na(init)) {
-          df_cl <- samovar_base$samovar_data$get(cluster)
+          df_cl <- get_data_samovar(samovar_base$samovar_data, cluster)
           xRs_cl <- samovar_base$inner_cluster_graph_method[[as.character(cluster)]]
           xPr_cl <- samovar_base$inner_cluster_graph_prob[[as.character(cluster)]]
 
@@ -197,7 +197,7 @@ samovar_boil <- function(samovar_base, N = 1,
               }
           }
           #### Combine data ----
-          results$new_sp(as.character(cluster), species, species_abundance, to_run = iter)
+          results <- add_species(results, as.character(cluster), species, species_abundance, to_run = iter)
         }
 
         cl_done <- c(cl_done, cluster)
@@ -207,7 +207,7 @@ samovar_boil <- function(samovar_base, N = 1,
     if(is.character(iter_error)) {
       warning(iter_error)
       warning(paste("Possible incompete generation on iter", iter))
-      results$new_sp("error", "error", samovar_base$samovar_data$max_value, to_run = iter)
+      results <- add_species(results, "error", "error", samovar_base$samovar_data$max_value, to_run = iter)
     }
 
     pb$tick()
@@ -233,5 +233,5 @@ samovar_boil <- function(samovar_base, N = 1,
   ###
   cat("---  Generation done  ---\n\n")
   #results$data <- results$data %>%  samovar$samovar_data$reverse_normalize_df
-  return(results$copy())
+  return(results)
 }

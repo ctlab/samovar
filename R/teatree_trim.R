@@ -22,7 +22,7 @@ teatree_trim <- function(
 ) {
 
   # init
-  data <- samovar_data$copy()
+  data <- samovar_data
 
   # unclassified filtering
   if (drop_unclassified) {
@@ -38,17 +38,17 @@ teatree_trim <- function(
   # metadata filtering
   if (!isFALSE(metadata_filter)) {
     if (is.character(metadata_filter)) {
-      data$filter(metadata_filter[1], metadata_filter[2])
+      data <- filter_samovar(data, metadata_filter[1], metadata_filter[2])
     } else {
       for (i in 1:nrow(metadata_filter)) {
-        data$filter(metadata_filter[i,1], metadata_filter[i,2])
+        data <- filter_samovar(data, metadata_filter[i,1], metadata_filter[i,2])
       }
     }
   }
 
   # treshhold filtering
   data$data[data$data <= treshhold_amount] <- 0
-  data$rebuild(min_samp = treshhold_samples, min_sp = treshhold_species)
+  data <- rebuild_samovar(data, min_samp = treshhold_samples, min_sp = treshhold_species)
 
   return(data)
 }

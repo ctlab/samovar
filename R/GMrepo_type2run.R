@@ -31,17 +31,15 @@ GMrepo_type2run <- function(mesh_ids = c("D006262"),
     }
 
     # get runIDs metadata table
-    GMrepo_run_data <- httr::POST("https://gmrepo.humangut.info/api/getAssociatedRunsByPhenotypeMeshIDLimit",
-      body = list("mesh_id" = mesh_id, "skip" = 0, "limit" = N),
-      encode = "json"
+    GMrepo_run_data <- gmrepo_post(
+      "/api/getAssociatedRunsByPhenotypeMeshIDLimit",
+      body = list("mesh_id" = mesh_id, "skip" = 0, "limit" = N)
     ) %>%
-      httr::content() %>%
-      xml2::xml_text() %>%
-      jsonlite::fromJSON() %>%
+      gmrepo_parse() %>%
       column_to_rownames("run_id") %>%
       new("GMrepo_run", metadata = ., run = rownames(.))
 
-    run$bind(GMrepo_run_data)
+    run <- bind_samovar(run, GMrepo_run_data)
   }
 
   return(run)

@@ -40,7 +40,7 @@ tealeaves <- teatree %>%
 
 ## Normalizing
 
-If you build teatree by your own, do rescaling stage when building via `teatree$rescale()` or assigning `teatree$min_value` and `teatree$max_value` is required
+If you build teatree by your own, do rescaling stage when building via `rescale_samovar(teatree)` or assigning `teatree$min_value` and `teatree$max_value` is required
 
 Good approximation to normal distribution is required for `glm` generating methods
 

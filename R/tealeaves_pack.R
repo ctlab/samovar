@@ -15,8 +15,8 @@ tealeaves_pack = function(
     ...
 ) {
 
-  data = samovar_data$copy()
-  data$normalize(normalization_function)
+  data <- samovar_data
+  data <- normalize_samovar(data, normalization_function)
   data$data[is.na(data$data)] <- 0
   data$data[data$data == -Inf] <- 0
 

@@ -2,6 +2,45 @@
 #'
 #' @import tidyverse
 
+gmrepo_post <- function(path, body, timeout = 30) {
+  bases <- c("https://gmrepo.humangut.info", "http://gmrepo.humangut.info")
+  last_error <- NULL
+  for (base in bases) {
+    url <- paste0(base, path)
+    resp <- tryCatch(
+      httr::POST(url, body = body, encode = "json", httr::timeout(timeout)),
+      error = function(e) e
+    )
+    if (inherits(resp, "error")) {
+      last_error <- resp
+      next
+    }
+    if (!httr::http_error(resp)) {
+      return(resp)
+    }
+    last_error <- simpleError(paste0("GMrepo API error: HTTP ", httr::status_code(resp), " from ", url))
+  }
+  stop(last_error)
+}
+
+gmrepo_parse <- function(resp) {
+  txt <- httr::content(resp, as = "text", encoding = "UTF-8")
+  txt <- trimws(txt)
+  if (!nzchar(txt)) {
+    stop("GMrepo API returned an empty response")
+  }
+  if (startsWith(txt, "<")) {
+    txt <- xml2::xml_text(xml2::read_xml(txt))
+  }
+  parsed <- jsonlite::fromJSON(txt)
+  if (is.list(parsed) && !is.data.frame(parsed) && !is.null(parsed$msg)) {
+    stop("GMrepo API error: ", parsed$msg,
+         if (!is.null(parsed$code)) paste0(" (code ", parsed$code, ")"),
+         call. = FALSE)
+  }
+  parsed
+}
+
 ## Min-max scaling ----
 minmaxscale <- function(x) {
   x <- (x - min(x))
