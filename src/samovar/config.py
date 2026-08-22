@@ -1,4 +1,6 @@
 import os
+import shutil
+import sys
 import yaml
 import argparse
 from typing import Dict, List, Optional, Union
@@ -46,8 +48,37 @@ def _portable_annotator_cmd(cmd: str) -> str:
     """Keep PATH names in YAML; exec resolves via PATH / install config.
 
     Absolute binaries the user passed explicitly are stored as-is.
+    Warns (does not fail) if the token is not on PATH and not in config.
     """
-    return (cmd or "").strip()
+    from samovar.paths import resolve_executable
+
+    text = (cmd or "").strip()
+    if not text:
+        return text
+    token = text.split()[0]
+    path = Path(token).expanduser()
+    if path.is_file():
+        return text
+    resolved = (resolve_executable(token) or "").split()[0]
+    if resolved and Path(resolved).expanduser().is_file():
+        return text
+    if shutil.which(token):
+        return text
+    if path.is_absolute():
+        print(
+            f"Warning: annotator binary {token!r} was not found. "
+            "Fix the path, or use the command name and set tools / tool_envs "
+            "in ~/.config/samovar/config.json so exec can find it.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Warning: annotator {token!r} is not on PATH. "
+            "Install it, or add its environment in ~/.config/samovar/config.json "
+            f"(path, tools.{token}, or tool_envs.{token}) before exec.",
+            file=sys.stderr,
+        )
+    return text
 
 
 def _absolute_db_path(db_path: str) -> str:

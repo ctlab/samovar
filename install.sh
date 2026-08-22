@@ -46,6 +46,11 @@ if ! command -v "$PYTHON_PATH" >/dev/null 2>&1; then
 fi
 PYTHON_PATH="$(command -v "$PYTHON_PATH" || true)"
 PYTHON_PATH="${PYTHON_PATH:-python3}"
+PY_BIN="$(cd "$(dirname "$PYTHON_PATH")" && pwd)"
+case ":$PATH:" in
+    *":$PY_BIN:"*) ;;
+    *) export PATH="$PY_BIN:$PATH" ;;
+esac
 
 install_samovar_r_package() {
     local repo="${SAMOVAR_R_REPO:-ctlab/samovar}"
@@ -174,18 +179,39 @@ else
     "$PYTHON_PATH" -m pip install -e . "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"
 fi
 
-# ISS CLI (InSilicoSeq)
-if ! command -v iss >/dev/null 2>&1; then
-    echo "iss not on PATH; installing insilicoseq..."
-    if [ "${SAMOVAR_OFFLINE:-0}" = "0" ]; then
-        "$PYTHON_PATH" -m pip install "insilicoseq>2.0.0" || true
+# ISS / snakemake: try pip, then hard-exit if still missing
+ensure_cli() {
+    local name="$1"
+    local pip_spec="$2"
+    local hint="$3"
+    if command -v "$name" >/dev/null 2>&1; then
+        echo "$name: $(command -v "$name")"
+        return 0
     fi
-fi
-if command -v iss >/dev/null 2>&1; then
-    echo "iss: $(command -v iss)"
-else
-    echo "Warning: iss CLI still not found. Install insilicoseq or add it to PATH."
-fi
+    if [ -x "$PY_BIN/$name" ]; then
+        echo "$name: $PY_BIN/$name"
+        return 0
+    fi
+    echo "$name not on PATH; installing ${pip_spec}..."
+    "$PYTHON_PATH" -m pip install "$pip_spec" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}" || true
+    hash -r 2>/dev/null || true
+    if command -v "$name" >/dev/null 2>&1; then
+        echo "$name: $(command -v "$name")"
+        return 0
+    fi
+    if [ -x "$PY_BIN/$name" ]; then
+        echo "$name: $PY_BIN/$name"
+        return 0
+    fi
+    echo "ERROR: $name is required but was not found after install attempt."
+    echo "$hint"
+    return 1
+}
+
+ensure_cli iss "insilicoseq>2.0.0" \
+    "Install with: $PYTHON_PATH -m pip install 'insilicoseq>2.0.0' (conda: insilicoseq)" || exit 1
+ensure_cli snakemake "snakemake>=7.0" \
+    "Install with: $PYTHON_PATH -m pip install 'snakemake>=7.0' or conda install -c bioconda snakemake-minimal" || exit 1
 
 chmod +x bin/* workflow/database_prep/samovar_build_database.sh workflow/database_prep/samovar_build_database.py workflow/compare_annotations.py workflow/annotation_regenerate.py workflow/combine_annotation_tables.py workflow/remap_taxids.py workflow/ML.py 2>/dev/null || true
 
@@ -321,15 +347,18 @@ raise SystemExit(1 if p else 0)" || SMOKE_FAIL=1
     echo "Re-run ./install.sh or: $PYTHON_PATH -m pip install 'cnsplots>=0.6.0' altair"
     exit 1
 }
-if command -v iss >/dev/null 2>&1; then
-    echo "  iss: $(command -v iss)"
+if command -v iss >/dev/null 2>&1 || [ -x "$PY_BIN/iss" ]; then
+    echo "  iss: $(command -v iss 2>/dev/null || echo "$PY_BIN/iss")"
 else
-    echo "  iss: MISSING"; SMOKE_FAIL=1
+    echo "ERROR: iss CLI is required (tried pip install insilicoseq)."
+    exit 1
 fi
-if command -v snakemake >/dev/null 2>&1; then
-    echo "  snakemake: $(snakemake --version 2>/dev/null | head -1)"
+if command -v snakemake >/dev/null 2>&1 || [ -x "$PY_BIN/snakemake" ]; then
+    echo "  snakemake: $(snakemake --version 2>/dev/null | head -1 || echo found)"
 else
-    echo "  snakemake: MISSING (install via conda environment.yml)"; SMOKE_FAIL=1
+    echo "ERROR: snakemake is required (tried pip install snakemake)."
+    echo "Or: conda install -c bioconda snakemake-minimal"
+    exit 1
 fi
 if [ ! -f "$ROOT/workflow/annotators/Snakefile" ]; then
     echo "  workflow: MISSING"; SMOKE_FAIL=1

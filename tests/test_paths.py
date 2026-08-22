@@ -14,7 +14,32 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.7"
+    assert PACKAGE_VERSION == "0.10.8"
+
+
+def test_portable_annotator_cmd_warns_when_missing(capsys, monkeypatch):
+    from samovar.config import _portable_annotator_cmd
+
+    monkeypatch.setattr("samovar.paths.load_config", lambda: {})
+    monkeypatch.setattr("samovar.config.shutil.which", lambda name: None)
+    monkeypatch.setattr("samovar.paths.shutil.which", lambda name: None)
+    out = _portable_annotator_cmd("definitely_not_a_real_annotator_xyz /db")
+    assert out == "definitely_not_a_real_annotator_xyz /db"
+    err = capsys.readouterr().err
+    assert "Warning:" in err
+    assert "definitely_not_a_real_annotator_xyz" in err
+    assert "not on PATH" in err
+
+
+def test_portable_annotator_cmd_silent_when_absolute_exists(tmp_path, capsys):
+    from samovar.config import _portable_annotator_cmd
+
+    exe = tmp_path / "kaiju"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    out = _portable_annotator_cmd(f"{exe} /db")
+    assert str(exe) in out
+    assert "Warning:" not in capsys.readouterr().err
 
 
 def test_absolute_path_resolves_relative(tmp_path, monkeypatch):

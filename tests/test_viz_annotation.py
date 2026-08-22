@@ -118,24 +118,42 @@ def test_compare_annotations_cli_fails_on_missing_dir(tmp_path):
     assert proc.returncode != 0
 
 
-def test_require_viz_backend():
-    from samovar.viz_annotation import require_viz_backend
+def test_compare_annotations_fails_on_empty_dir(tmp_path):
+    import pytest
 
-    backend = require_viz_backend()
-    assert backend in {"cnsplots", "altair"}
+    with pytest.raises(FileNotFoundError, match="per-sample"):
+        compare_annotations(annotation_dir=str(tmp_path))
 
 
-def test_compare_annotations_cli_fails_on_missing_dir(tmp_path):
+def test_compare_annotations_fails_on_combined_only(tmp_path):
+    import pytest
+
+    pd.DataFrame({"seq": ["r1"]}).to_csv(
+        tmp_path / "combined_annotation_table.csv", index=False
+    )
+    with pytest.raises(FileNotFoundError, match="per-sample"):
+        compare_annotations(annotation_dir=str(tmp_path))
+
+
+def test_compare_annotations_cli_fails_on_empty_dir(tmp_path):
+    import os
     import subprocess
+    import sys
+
     from samovar.paths import repo_root
 
     script = repo_root() / "workflow" / "compare_annotations.py"
+    env = os.environ.copy()
+    src = str(repo_root() / "src")
+    env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     proc = subprocess.run(
-        ["python3", str(script), "--annotation_dir", str(tmp_path / "missing")],
+        [sys.executable, str(script), "--annotation_dir", str(tmp_path)],
         capture_output=True,
         text=True,
+        env=env,
     )
     assert proc.returncode != 0
+    assert "per-sample" in (proc.stderr + proc.stdout)
 
 
 def test_compare_annotations_cli_integrity(tmp_path):

@@ -737,6 +737,11 @@ def compare_annotations(
     if not annotation_path.is_dir():
         raise FileNotFoundError(f"annotation_dir not found: {annotation_path}")
     data = read_annotation_dir(annotation_dir)
+    if data.empty:
+        raise FileNotFoundError(
+            f"no per-sample annotation tables in {annotation_path} "
+            "(expected *.csv other than combined_annotation_table*)"
+        )
     tax_cols = [c for c in data.columns if str(c).startswith("taxID_")]
     annotators = []
     for col in tax_cols:
