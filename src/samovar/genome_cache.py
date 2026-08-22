@@ -161,6 +161,20 @@ def place_genome(
         return target
 
 
+def _path_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def _path_is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def _iter_taxid_files(directory: Path, taxid: str) -> List[Path]:
     hits: List[Path] = []
     seen = set()
@@ -170,7 +184,7 @@ def _iter_taxid_files(directory: Path, taxid: str) -> List[Path]:
             key = str(path.resolve())
         except OSError:
             key = str(path)
-        if key in seen or not path.is_file():
+        if key in seen or not _path_is_file(path):
             return
         seen.add(key)
         hits.append(path)
@@ -179,7 +193,11 @@ def _iter_taxid_files(directory: Path, taxid: str) -> List[Path]:
         add(directory / f"{taxid}{ext}")
     # Prefixed copies (e.g. Bacteria_562-processed.fasta from the realistic pipeline).
     for ext in genome_lookup_extensions():
-        for path in directory.glob(f"*_{taxid}{ext}"):
+        try:
+            found = list(directory.glob(f"*_{taxid}{ext}"))
+        except OSError:
+            found = []
+        for path in found:
             add(path)
     return hits
 
@@ -200,7 +218,11 @@ def genome_library_dirs(
         if not str(path).strip():
             return
         try:
-            key = str(path.resolve()) if path.exists() else str(path)
+            exists = path.exists()
+        except OSError:
+            exists = False
+        try:
+            key = str(path.resolve()) if exists else str(path)
         except OSError:
             key = str(path)
         if key in seen:
@@ -235,7 +257,7 @@ def find_library_genome(
     for directory in genome_library_dirs(
         extra, include_test_genomes=include_test_genomes
     ):
-        if not directory.is_dir():
+        if not _path_is_dir(directory):
             continue
         for candidate in _iter_taxid_files(directory, taxid):
             if processed_only and "-processed." not in candidate.name.lower():
@@ -258,7 +280,7 @@ def register_genome_dir(path: PathLike, *, force: bool = False) -> Optional[Path
             directory,
         )
         return None
-    if not directory.is_dir():
+    if not _path_is_dir(directory):
         logger.warning("Not registering missing genome directory: %s", directory)
         return None
     cfg = load_config()
@@ -305,7 +327,7 @@ def generate_source_genome_dirs(output_dir: PathLike) -> List[Path]:
     test genomes; they are not registered as an NCBI library.
     """
     yaml_path = _as_path(output_dir) / ".generate" / "configs" / "iss_config.yaml"
-    if not yaml_path.is_file():
+    if not _path_is_file(yaml_path):
         return []
     try:
         import yaml
@@ -322,9 +344,9 @@ def generate_source_genome_dirs(output_dir: PathLike) -> List[Path]:
         if not raw:
             return
         path = _as_path(raw)
-        if path.is_file():
+        if _path_is_file(path):
             path = path.parent
-        if not path.is_dir():
+        if not _path_is_dir(path):
             return
         try:
             key = str(path.resolve())
@@ -365,7 +387,7 @@ def seed_run_genomes(
         )
         tg = test_genomes_dir()
         for sub in (tg, tg / "meta", tg / "host"):
-            if sub.is_dir():
+            if _path_is_dir(sub):
                 sources.append(sub)
     if do_reuse:
         # Explicit extra dirs (prepare --genome-dirs / check --src) are bulk-linked.
@@ -373,12 +395,14 @@ def seed_run_genomes(
         # by taxid so a toy run does not inherit every cached assembly.
         for raw in extra_dirs or []:
             path = _as_path(raw)
-            if path.is_dir() and (include_test_genomes or not is_bundled_test_genomes_path(path)):
+            if _path_is_dir(path) and (
+                include_test_genomes or not is_bundled_test_genomes_path(path)
+            ):
                 sources.append(path)
 
     seen_taxids = set()
     for src_dir in sources:
-        if not src_dir.is_dir():
+        if not _path_is_dir(src_dir):
             continue
         try:
             if src_dir.resolve() == dest.resolve():
@@ -386,8 +410,16 @@ def seed_run_genomes(
         except OSError:
             pass
         stats["sources"].append(str(src_dir))
-        for path in sorted(src_dir.iterdir()):
-            if not path.is_file():
+        try:
+            children = sorted(src_dir.iterdir())
+        except OSError:
+            continue
+        for path in children:
+            try:
+                is_file = path.is_file()
+            except OSError:
+                is_file = False
+            if not is_file:
                 continue
             if not is_fasta_name(path.name, protein=False, nucleotide=True):
                 continue

@@ -404,6 +404,39 @@ for name, path in (existing.get("tools") or {}).items():
         tools[name] = path
 path_extra = existing.get("path") or existing.get("extra_path") or []
 tool_envs = existing.get("tool_envs") or {}
+default_genomes = str(
+    Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"
+)
+
+def _usable_dir(raw):
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return ""
+    return str(path)
+
+genomes = _usable_dir(existing.get("genomes")) or default_genomes
+processed = (
+    _usable_dir(existing.get("processed_genomes"))
+    or _usable_dir(existing.get("genomes"))
+    or genomes
+)
+kept_libs = []
+for item in existing.get("genome_dirs") or []:
+    text = str(item or "").strip()
+    if not text:
+        continue
+    path = Path(text).expanduser()
+    try:
+        ok = path.is_dir()
+    except OSError:
+        ok = False
+    if ok:
+        kept_libs.append(str(path))
 payload = {
     "version": PACKAGE_VERSION,
     "root": root,
@@ -415,11 +448,9 @@ payload = {
     "multiqc_path": existing.get("multiqc_path") or discover_multiqc() or shutil.which("multiqc") or "",
     "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
     "test_genomes": os.path.join(root, "data", "test_genomes"),
-    "genomes": existing.get("genomes") or str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"),
-    "processed_genomes": existing.get("processed_genomes")
-        or existing.get("genomes")
-        or str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"),
-    "genome_dirs": existing.get("genome_dirs") or [],
+    "genomes": genomes,
+    "processed_genomes": processed,
+    "genome_dirs": kept_libs,
     "tools": tools,
 }
 if path_extra:

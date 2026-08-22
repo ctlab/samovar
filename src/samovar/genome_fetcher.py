@@ -283,7 +283,16 @@ def fetch_genome_raw(
             return bundled
 
     cache = genome_download_dir()
-    cache.mkdir(parents=True, exist_ok=True)
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        from samovar.paths import user_cache_dir
+
+        cache = user_cache_dir() / "genomes"
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            cache = output_path
     genome_path = cache / f"{taxid}.fna.gz"
     for ext in possible_exts:
         existing_cache = cache / f"{taxid}{ext}"
@@ -360,7 +369,16 @@ def fetch_genome(
         return None
 
     processed_dir = cache_processed_dir()
-    processed_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        processed_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        from samovar.paths import user_cache_dir
+
+        processed_dir = user_cache_dir() / "genomes"
+        try:
+            processed_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            processed_dir = Path(output_folder)
     cache_processed = processed_genome_path(processed_dir, taxid, gzip_genomes=gzip_genomes)
     run_processed = processed_genome_path(output_folder, taxid, gzip_genomes=gzip_genomes)
 

@@ -1,10 +1,12 @@
 """Install-layout helpers: repo root, XDG config, and executable lookup.
 
-Config is read from (first hit wins):
+Config is read from:
 
-1. ``$SAMOVAR_CONFIG``
-2. ``$XDG_CONFIG_HOME/samovar/config.json`` (default ``~/.config/samovar/config.json``)
-3. ``<repo>/build/config.json``
+1. ``$SAMOVAR_CONFIG`` — exclusive override (even an empty ``{}``). Used by
+   tests and custom installs so HPC ``~/.config`` / ``build/config.json``
+   paths are not inherited.
+2. Otherwise merge ``$XDG_CONFIG_HOME/samovar/config.json`` (default
+   ``~/.config/samovar/config.json``) over ``<repo>/build/config.json``.
 """
 
 from __future__ import annotations
@@ -58,8 +60,17 @@ def repo_root() -> Path:
         return Path(env).resolve()
     cfg = _read_json(user_config_path())
     root = (cfg or {}).get("root")
-    if root and Path(root).is_dir():
-        return Path(root).resolve()
+    if root:
+        root_path = Path(root)
+        try:
+            usable = root_path.is_dir()
+        except OSError:
+            usable = False
+        if usable:
+            try:
+                return root_path.resolve()
+            except OSError:
+                return root_path
     # src/samovar/paths.py → repo
     return Path(__file__).resolve().parent.parent.parent
 
@@ -150,17 +161,22 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def load_config() -> Dict[str, Any]:
-    candidates = []
     override = os.environ.get("SAMOVAR_CONFIG", "").strip()
     if override:
-        candidates.append(Path(override))
-    candidates.append(user_config_dir() / "config.json")
-    candidates.append(repo_root() / "build" / "config.json")
+        # Exclusive: tests and custom installs must not inherit ~/.config or
+        # build/config.json (those can point at unreadable HPC paths).
+        data = _read_json(Path(override).expanduser())
+        return dict(data) if isinstance(data, dict) else {}
+
+    candidates = [
+        user_config_dir() / "config.json",
+        repo_root() / "build" / "config.json",
+    ]
     merged: Dict[str, Any] = {}
     # Later files overlay earlier so repo build/ can fill gaps, user config wins.
     for path in reversed(list(dict.fromkeys(candidates))):
         data = _read_json(path)
-        if data:
+        if data is not None:
             merged.update(data)
     return merged
 
@@ -168,8 +184,13 @@ def load_config() -> Dict[str, Any]:
 def python_path() -> str:
     cfg = load_config()
     configured = (cfg.get("python_path") or "").strip()
-    if configured and Path(configured).is_file():
-        return configured
+    if configured:
+        try:
+            present = Path(configured).is_file()
+        except OSError:
+            present = False
+        if present:
+            return configured
     found = shutil.which(configured or "python3") or shutil.which("python")
     return found or sys.executable
 
@@ -201,13 +222,21 @@ def _dir_for_path_entry(raw: str, *, env_prefix: bool = False) -> Optional[str]:
     # Bare command names live on PATH; they are not directories to prepend.
     if not path.is_absolute() and len(path.parts) == 1:
         return None
-    if path.is_file():
+    try:
+        is_file = path.is_file()
+        is_dir = path.is_dir()
+        bindir_ok = (path / "bin").is_dir()
+    except OSError:
+        is_file = False
+        is_dir = False
+        bindir_ok = False
+    if is_file:
         return str(path.resolve().parent)
     bindir = path / "bin"
-    if path.is_dir():
+    if is_dir:
         if path.name == "bin":
             return str(path.resolve())
-        if bindir.is_dir():
+        if bindir_ok:
             return str(bindir.resolve())
         return str(path.resolve())
     # Not on disk yet (other HPC / module not loaded). Keep .../bin as-is;

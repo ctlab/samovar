@@ -170,6 +170,12 @@ def main():
         "--clusters", type=int, default=5, help="Number of KMeans clusters"
     )
     parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=50000,
+        help="Number of reads to process in RAM at once",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
