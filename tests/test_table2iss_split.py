@@ -27,11 +27,15 @@ def _count_fastq_records(path):
         return sum(1 for line in handle if line.startswith("@"))
 
 
+def _is_iss_cmd(cmd):
+    return isinstance(cmd, (list, tuple)) and cmd and Path(str(cmd[0])).name == "iss"
+
+
 def _fake_iss_run(cmd, **kwargs):
     class Result:
         returncode = 0
 
-    if not isinstance(cmd, (list, tuple)) or not cmd or cmd[0] != "iss":
+    if not _is_iss_cmd(cmd):
         return Result()
 
     output = cmd[cmd.index("--output") + 1]
@@ -80,7 +84,7 @@ def test_generate_reads_metagenome_single_iss_call(tmp_path):
             genome_ids=["562", "9606"],
         )
 
-    iss_calls = [c for c in calls if isinstance(c, (list, tuple)) and c and c[0] == "iss"]
+    iss_calls = [c for c in calls if _is_iss_cmd(c)]
     assert len(iss_calls) == 1
     assert "--readcount_file" in iss_calls[0]
     assert iss_calls[0].count("--genomes") == 1
@@ -126,7 +130,7 @@ def test_process_annotation_tables_generates_once_then_splits(tmp_path):
             output_dir=str(reads),
         )
 
-    iss_calls = [c for c in calls if isinstance(c, (list, tuple)) and c and c[0] == "iss"]
+    iss_calls = [c for c in calls if _is_iss_cmd(c)]
     # One full-metagenome ISS call per annotator, not per sample/genome.
     assert len(iss_calls) == 2
     for annotator in ("k1", "k2"):
@@ -170,7 +174,7 @@ def test_generate_iss_test_samples_two_iss_calls(tmp_path):
             cpus=1,
         )
 
-    iss_calls = [c for c in calls if isinstance(c, (list, tuple)) and c and c[0] == "iss"]
+    iss_calls = [c for c in calls if _is_iss_cmd(c)]
     assert len(iss_calls) == 2  # host pool + one metagenome pool
     assert len(outputs) == 6
     for sample in ("1", "2", "3"):
@@ -180,3 +184,24 @@ def test_generate_iss_test_samples_two_iss_calls(tmp_path):
         assert r2.exists()
         assert _count_fastq_records(r1) == _count_fastq_records(r2)
     assert not (out / ".iss_full").exists()
+
+
+def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
+    genomes = [_write_fasta(tmp_path / "genomes" / "562.fa", "orig562")]
+
+    def fail(cmd, **kwargs):
+        class Result:
+            returncode = 1
+
+        return Result()
+
+    with patch("samovar.table2iss.subprocess.run", side_effect=fail):
+        with pytest.raises(RuntimeError, match="ISS command failed"):
+            generate_reads_metagenome(
+                genome_files=genomes,
+                output_dir=str(tmp_path / "reads"),
+                amount=[10],
+                sample_name="merged",
+                annotator_name="k1",
+                genome_ids=["562"],
+            )

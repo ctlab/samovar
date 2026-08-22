@@ -16,11 +16,23 @@ import json
 import tempfile
 import warnings
 import shutil
-from samovar.paths import annotation_regenerate_r, load_config, resolve_executable
+from samovar.paths import annotation_regenerate_r, iss_executable, load_config, resolve_executable
 
 
 SKIP_TAXIDS = {"0", "nan", "None", ""}
 CONTIG_SPACER = "N" * 500
+
+
+def _iss_cmd(*args: str) -> List[str]:
+    return [iss_executable(), *args]
+
+
+def _run_iss(cmd: Sequence[str]) -> None:
+    result = subprocess.run(list(cmd), check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ISS command failed (exit {result.returncode}): {' '.join(cmd)}"
+        )
 
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
@@ -391,17 +403,17 @@ def generate_reads_genome(
     
     if genome_file is not None and os.path.exists(genome_file):
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        cmd = [
-            "iss", "generate",
+        cmd = _iss_cmd(
+            "generate",
             "--genomes", genome_file,
             "--model", model,
             "--output", output_file,
             "--n_reads", str(int(amount)),
             "--cpus", str(cpus),
-        ]
+        )
         if seed is not None:
             cmd.extend(["--seed", str(seed)])
-        subprocess.run(cmd, check=False)
+        _run_iss(cmd)
         _cleanup_iss_tmp(output_file)
 
 
@@ -464,28 +476,23 @@ def generate_reads_metagenome(
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
         return output_file_R1, output_file_R2
 
-    cmd = [
-        "iss", "generate",
+    cmd = _iss_cmd(
+        "generate",
         "--genomes", combined_fasta,
         "--readcount_file", readcount_path,
         "--model", model,
         "--output", output_prefix,
         "--cpus", str(cpus),
-    ]
+    )
     if seed is not None:
         cmd.extend(["--seed", str(seed)])
-    result = subprocess.run(cmd, check=False)
-    if result.returncode != 0:
-        warnings.warn(
-            f"ISS generate exited with {result.returncode} for {output_prefix}"
-        )
+    _run_iss(cmd)
     _cleanup_iss_tmp(output_prefix)
 
     if not os.path.exists(output_file_R1) or not os.path.exists(output_file_R2):
-        warnings.warn(
-            f"ISS did not produce reads for {output_prefix}; emitting empty FASTQ files"
+        raise RuntimeError(
+            f"ISS did not produce reads for {output_prefix}"
         )
-        _write_empty_fastq_pair(output_file_R1, output_file_R2)
 
     return output_file_R1, output_file_R2
 
