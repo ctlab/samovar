@@ -2,12 +2,14 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 import yaml
 
+from samovar.paths import annotation_regenerate_r
 from samovar.table2iss import (
     _resolve_r_executable,
     process_abundance_table,
@@ -15,8 +17,21 @@ from samovar.table2iss import (
 )
 
 
+def _r_script_from_branch() -> Optional[Path]:
+    from samovar.table2iss import R_REGENERATE_DRIVER
+
+    found = annotation_regenerate_r()
+    if found is not None and Path(found).is_file():
+        return Path(found)
+    dest = Path(tempfile.gettempdir()) / "samovar_annotation_regenerate.R"
+    dest.write_text(R_REGENERATE_DRIVER)
+    return dest
+
+
 def _r_with_samovar_available() -> bool:
-    """True when R can load the samovaR package (real integration path)."""
+    """True when R can load samovaR and the regenerator script is locatable."""
+    if _r_script_from_branch() is None:
+        return False
     try:
         r_path, r_lib_path = _resolve_r_executable()
     except FileNotFoundError:
@@ -42,6 +57,15 @@ requires_r_samovar = pytest.mark.skipif(
     not _r_with_samovar_available(),
     reason="R with samovaR package is required for this integration test",
 )
+
+
+@pytest.fixture
+def r_regenerator_script(monkeypatch):
+    script = _r_script_from_branch()
+    if script is None:
+        pytest.skip("annotation_regenerate.R not available from config or origin/r-package")
+    monkeypatch.setattr("samovar.table2iss.annotation_regenerate_r", lambda: script)
+    return script
 
 
 @pytest.fixture
@@ -193,7 +217,10 @@ def test_glm_does_not_invoke_r(tmp_path, mock_config):
 
 
 def test_samovar_mode_requires_r_script(tmp_path, mock_config, monkeypatch):
-    monkeypatch.setattr("samovar.table2iss.annotation_regenerate_r", lambda: None)
+    monkeypatch.setattr(
+        "samovar.table2iss.annotation_regenerate_r",
+        lambda: tmp_path / "missing_annotation_regenerate.R",
+    )
     annotation_dir = tmp_path / "ann"
     annotation_dir.mkdir()
     output_dir = tmp_path / "out"
@@ -241,7 +268,9 @@ def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config
 
 
 @requires_r_samovar
-def test_samovar_annotation_regenerate_basic(test_data_dir, test_output_dir, mock_config):
+def test_samovar_annotation_regenerate_basic(
+    test_data_dir, test_output_dir, mock_config, r_regenerator_script
+):
     """Integration: real R + samovaR regeneration produces abundance CSVs."""
     assert test_data_dir.exists(), f"Missing fixture annotations at {test_data_dir}"
     config_path = _write_config({**mock_config, "regeneration_mode": "samovar"})
@@ -272,7 +301,9 @@ def test_samovar_annotation_regenerate_basic(test_data_dir, test_output_dir, moc
 
 
 @requires_r_samovar
-def test_samovar_annotation_regenerate_integration(test_data_dir, test_output_dir, mock_config):
+def test_samovar_annotation_regenerate_integration(
+    test_data_dir, test_output_dir, mock_config, r_regenerator_script
+):
     """Integration: regenerated tables feed process_abundance_table."""
     config_path = _write_config({**mock_config, "regeneration_mode": "samovar"})
 

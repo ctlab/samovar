@@ -221,7 +221,7 @@ Per annotator:
 Regenerate after a run with the same workflow script the pipeline uses:
 
 ```bash
-Rscript workflow/compare_annotations.R \
+python workflow/compare_annotations.py \
   --annotation_dir samovar_realistic/reprofiled_annotations \
   --output_dir samovar_realistic/reprofiled_annotations_plots \
   --show_top 0

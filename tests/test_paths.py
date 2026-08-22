@@ -13,13 +13,17 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.3"
+    assert PACKAGE_VERSION == "0.10.4"
 
 
 def test_repo_root_contains_workflow():
     root = repo_root()
     assert (root / "workflow" / "annotators" / "Snakefile").is_file()
     assert workflow_dir() == root / "workflow"
+    assert not (root / "DESCRIPTION").exists()
+    assert not (root / "R").exists()
+    assert not (root / "man").exists()
+    assert not (root / "workflow" / "annotation_regenerate.R").exists()
 
 
 def test_user_config_dir_respects_xdg(monkeypatch, tmp_path):
@@ -87,5 +91,5 @@ def test_annotation_regenerate_r_missing_when_unbundled(monkeypatch, tmp_path):
     monkeypatch.delenv("SAMOVAR_R_REGENERATE", raising=False)
     monkeypatch.delenv("SAMOVAR_ANNOTATION_REGENERATE_R", raising=False)
     monkeypatch.setattr("samovar.paths.load_config", lambda: {})
-    monkeypatch.setattr("samovar.paths.workflow_dir", lambda: tmp_path / "empty_workflow")
+    monkeypatch.setattr("samovar.paths.user_config_dir", lambda: tmp_path / "empty_xdg")
     assert annotation_regenerate_r() is None

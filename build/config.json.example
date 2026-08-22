@@ -1,5 +1,5 @@
 {
-    "version": "0.10.3",
+    "version": "0.10.4",
     "root": "/path/to/samovar",
     "python_path": "/usr/bin/python3",
     "r_path": "/usr/bin/R",

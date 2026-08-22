@@ -1,4 +1,4 @@
-# SamovaR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a>
+# SAMOVAR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a>
 ### Ensemble taxonomic annotation, cross-validation, and ML re-profiling of metagenomes
 
 [![ITMO](https://raw.githubusercontent.com/aimclub/open-source-ops/43bb283758b43d75ec1df0a6bb4ae3eb20066323/badges/ITMO_badge.svg)](https://itmo.ru/)
@@ -78,7 +78,7 @@ It will prompt for an NCBI Entrez email (genome downloads). In CI the default is
 - Shared / HPC (no PATH or bashrc edits): `SAMOVAR_UPDATE_SHELL=0 ./install.sh` then `source ~/.config/samovar/env`
 - Dev / CI: `SAMOVAR_INSTALL_DEV=1 ./install.sh`
 - Air-gapped: `SAMOVAR_OFFLINE=1 SAMOVAR_WHEELHOUSE=/path/to/wheels ./install.sh`
-- Optional R package: `SAMOVAR_INSTALL_R=1 ./install.sh` (see branch `r-package`)
+- Optional R package: `./install.sh R-package` (installs `samovaR` from GitHub branch [`r-package`](https://github.com/ctlab/samovar/tree/r-package) if it is not already present; warns with the installed version if it is)
 
 Annotators such as `kraken2` and `kaiju` may be given as names on `$PATH` (no full path required):
 
@@ -108,8 +108,12 @@ samovar exec --output_dir samovar_out
 
 ## R package
 
-Generative abundance models (`samovar_boil`, GMrepo helpers, Shiny) are **not** part of the Python install. Use `regeneration_mode: samovar` after installing that optional R component (anywhere) and pointing `SAMOVAR_R_REGENERATE` (or config `annotation_regenerate_r`) at `annotation_regenerate.R`. The Python modes are `direct` (default; same samples), `bootstrap`, `vae`, and `glm`. Rescaling column totals to `N_reads` is opt-in via `rescale_abundance: true`.
+The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://github.com/ctlab/samovar/tree/r-package)** branch and is **not** part of this tree. Install it with `./install.sh R-package` (requires R + remotes). That writes a small R driver into `~/.config/samovar/` that only calls exported `samovaR` functions. Then set `regeneration_mode: samovar`.
+
+Python modes (no R): `direct` (default; same samples), `bootstrap` (noisy copies of real samples), `vae`, `glm` (cluster + Gaussian GLM walk, same logic as the R package). Rescaling column totals to `N_reads` is opt-in via `rescale_abundance: true`.
 
 ## References
 
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
+
+- Do not forget to cite all annotators used for the ensemble

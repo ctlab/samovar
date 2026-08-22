@@ -31,6 +31,11 @@ def main() -> None:
     )
     parser.add_argument("--N_reads", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--rescale_abundance",
+        action="store_true",
+        help="Force synthetic column totals to N_reads (off by default).",
+    )
     args = parser.parse_args()
 
     cfg_path = args.config
@@ -46,6 +51,7 @@ def main() -> None:
         cfg["N"] = args.N
     cfg["N_reads"] = args.N_reads
     cfg["seed"] = args.seed
+    cfg["rescale_abundance"] = bool(args.rescale_abundance)
     cfg["output_dir"] = args.output_dir
 
     tmp = Path(args.output_dir) / ".regeneration_config.yaml"

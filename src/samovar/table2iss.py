@@ -17,7 +17,66 @@ import tempfile
 import warnings
 import shutil
 from pathlib import Path
-from samovar.paths import annotation_regenerate_r, iss_executable, load_config, resolve_executable
+from samovar.paths import annotation_regenerate_r, iss_executable, load_config, resolve_executable, user_config_dir
+
+
+# Thin R CLI used with the optional samovaR package (GitHub branch r-package).
+# Not an R package source; it only calls exported samovaR functions.
+R_REGENERATE_DRIVER = r'''library(tidyverse)
+library(samovaR)
+
+args <- commandArgs(trailingOnly = TRUE)
+annotation_dir <- NULL
+output_dir <- NULL
+config_samovar <- NULL
+i <- 1
+while (i <= length(args)) {
+  if (args[i] == "--annotation_dir") {
+    annotation_dir <- args[i + 1]; i <- i + 2
+  } else if (args[i] == "--output_dir") {
+    output_dir <- args[i + 1]; i <- i + 2
+  } else if (args[i] == "--config") {
+    config_samovar <- args[i + 1]; i <- i + 2
+  } else {
+    i <- i + 1
+  }
+}
+if (is.null(config_samovar)) {
+  config <- list()
+} else {
+  config <- unpack_config(config_samovar)
+}
+if (!("N" %in% names(config))) config$N <- 1
+if (!("N_reads" %in% names(config))) config$N_reads <- 100
+if ("output_dir" %in% names(config)) output_dir <- config$output_dir
+if (is.null(annotation_dir)) stop("--annotation_dir is required")
+if (!is.null(output_dir)) {
+  dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+} else {
+  output_dir <- "."
+}
+
+samovar_data_long <- read_annotation_dir(annotation_dir)
+samovar_data_list <- annotation2samovar(samovar_data_long)
+for (i in seq_along(samovar_data_list)) {
+  annotator <- names(samovar_data_list)[i]
+  tryCatch({
+    config$samovar_data <- samovar_data_list[[i]]$copy()
+    samovar <- do.call(samovar_preprocess, config)
+    new_data <- samovar_boil(samovar, N = config$N)
+    result_df <- as.data.frame(round(new_data$data * config$N_reads))
+    result_df <- tibble::rownames_to_column(result_df, "taxid")
+    colnames(result_df)[-1] <- paste0("N_", colnames(result_df)[-1])
+    write.csv(
+      result_df,
+      paste0(output_dir, "/", annotator, ".csv"),
+      row.names = FALSE
+    )
+  }, error = function(e) {
+    warning(paste0("samovaR generation failed for ", annotator, ": ", conditionMessage(e)))
+  })
+}
+'''
 
 
 SKIP_TAXIDS = {"0", "nan", "None", ""}
@@ -1050,17 +1109,22 @@ def _samovar_annotation_regenerate_python(
 
 def _optional_r_regenerator_script() -> Path:
     script = annotation_regenerate_r()
-    if script is None or not Path(script).is_file():
-        looked = str(script) if script is not None else (
-            "SAMOVAR_R_REGENERATE or config annotation_regenerate_r"
-        )
+    if script is not None:
+        path = Path(script)
+        if path.is_file():
+            return path
         raise FileNotFoundError(
             "regeneration_mode='samovar' requires the optional R regenerator. "
-            "Install samovaR separately and set SAMOVAR_R_REGENERATE "
-            "(or annotation_regenerate_r in config) to annotation_regenerate.R. "
-            f"Looked up: {looked}"
+            "Install samovaR from https://github.com/ctlab/samovar/tree/r-package "
+            "(./install.sh R-package) and set SAMOVAR_R_REGENERATE or "
+            "annotation_regenerate_r. "
+            f"Looked up: {path}"
         )
-    return Path(script)
+    dest = user_config_dir() / "annotation_regenerate.R"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.is_file():
+        dest.write_text(R_REGENERATE_DRIVER, encoding="utf-8")
+    return dest
 
 
 def samovar_annotation_regenerate(

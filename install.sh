@@ -1,11 +1,17 @@
 #!/bin/bash
 # Conda-friendly installer for the Python SamovaR pipeline.
-# R / samovaR is optional (generative abundance models on the r-package branch).
+# Optional R package lives on the GitHub ``r-package`` branch (not in this tree).
+#
+# Usage:
+#   ./install.sh                 Python pipeline only
+#   ./install.sh R-package       install samovaR from GitHub branch r-package
 #
 # Environment:
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
-#   SAMOVAR_INSTALL_R=1        optional R package
+#   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
+#   SAMOVAR_R_REPO             default ctlab/samovar
+#   SAMOVAR_R_BRANCH           default r-package
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
 #   SAMOVAR_UPDATE_SHELL=0     shared/read-only: skip PATH and ~/.bashrc edits
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
@@ -40,6 +46,87 @@ if ! command -v "$PYTHON_PATH" >/dev/null 2>&1; then
 fi
 PYTHON_PATH="$(command -v "$PYTHON_PATH" || true)"
 PYTHON_PATH="${PYTHON_PATH:-python3}"
+
+install_samovar_r_package() {
+    local repo="${SAMOVAR_R_REPO:-ctlab/samovar}"
+    local branch="${SAMOVAR_R_BRANCH:-r-package}"
+    local script_dest="$USER_CFG_DIR/annotation_regenerate.R"
+
+    if ! command -v R >/dev/null 2>&1; then
+        echo "R is not on PATH; cannot install the optional samovaR package."
+        return 1
+    fi
+
+    local info
+    info="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("samovaR")), find.package("samovaR")) } else cat("MISSING")' 2>/dev/null || true)"
+    if echo "$info" | grep -q '^INSTALLED'; then
+        local ver lib
+        ver="$(echo "$info" | awk '{print $2}')"
+        lib="$(echo "$info" | awk '{print $3}')"
+        echo "Warning: samovaR is already installed (version ${ver:-unknown}${lib:+ at $lib})."
+        echo "Skipping GitHub install. Uninstall the package (not its dependencies) to reinstall from $repo@$branch."
+    else
+        if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+            echo "Skipping samovaR install in offline mode."
+            return 1
+        fi
+        echo "Installing samovaR from https://github.com/${repo}/tree/${branch} ..."
+        R --vanilla -s -e "if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', repos='https://cloud.r-project.org')"
+        if ! R --vanilla -s -e "library(remotes); remotes::install_github('${repo}', ref='${branch}', upgrade='never', dependencies=NA)"; then
+            echo "GitHub install failed; trying a local checkout of origin/${branch}..."
+            local tmp
+            tmp="$(mktemp -d)"
+            if git -C "$ROOT" fetch origin "$branch" 2>/dev/null; then
+                git -C "$ROOT" archive --format=tar "origin/${branch}" | tar -x -C "$tmp"
+                R --vanilla -s -e "library(remotes); remotes::install_local('${tmp}', upgrade='never', dependencies=NA)"
+            else
+                echo "Could not install samovaR from ${repo}@${branch}"
+                rm -rf "$tmp"
+                return 1
+            fi
+            rm -rf "$tmp"
+        fi
+        info="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("samovaR"))) } else cat("MISSING")' 2>/dev/null || true)"
+        echo "samovaR: $info"
+    fi
+
+    mkdir -p "$USER_CFG_DIR"
+    export SAMOVAR_R_SCRIPT="$script_dest"
+    "$PYTHON_PATH" - <<'PY'
+import os, shutil, sys
+from pathlib import Path
+
+dest = Path(os.environ["SAMOVAR_R_SCRIPT"])
+try:
+    from samovar.table2iss import R_REGENERATE_DRIVER
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(R_REGENERATE_DRIVER, encoding="utf-8")
+    print("R regenerator script:", dest)
+except Exception as exc:
+    print("Warning: could not write R driver:", exc)
+    sys.exit(0)
+try:
+    from samovar.paths import load_config, write_config
+except ImportError:
+    print(
+        "Warning: samovar Python package not importable; set SAMOVAR_R_REGENERATE="
+        + str(dest)
+    )
+    sys.exit(0)
+cfg = load_config()
+cfg["annotation_regenerate_r"] = str(dest)
+cfg["r_path"] = shutil.which("R") or cfg.get("r_path") or ""
+write_config(cfg)
+print("Updated config annotation_regenerate_r")
+PY
+    return 0
+}
+
+if [ "${1:-}" = "R-package" ] || [ "${1:-}" = "r-package" ]; then
+    echo "R-package mode (Python tree is unchanged)."
+    install_samovar_r_package
+    exit $?
+fi
 
 PYTHON_VERSION=$("$PYTHON_PATH" --version)
 echo "Using $PYTHON_VERSION ($PYTHON_PATH)"
@@ -100,7 +187,7 @@ else
     echo "Warning: iss CLI still not found. Install insilicoseq or add it to PATH."
 fi
 
-chmod +x bin/* workflow/database_prep/samovar_build_database.sh workflow/database_prep/samovar_build_database.py workflow/compare_annotations.py 2>/dev/null || true
+chmod +x bin/* workflow/database_prep/samovar_build_database.sh workflow/database_prep/samovar_build_database.py workflow/compare_annotations.py workflow/annotation_regenerate.py workflow/combine_annotation_tables.py workflow/remap_taxids.py workflow/ML.py 2>/dev/null || true
 
 echo "Building C++ annotation combiner..."
 CXX_BIN="${CXX:-}"
@@ -120,16 +207,10 @@ else
     echo "Warning: no C++ compiler (g++/c++/clang++); annotation merge will try to compile on first use."
 fi
 
-if [ "${SAMOVAR_INSTALL_R:-0}" != "0" ] && command -v R >/dev/null 2>&1; then
-    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
-        echo "Skipping R package install in offline mode."
-    else
-        echo "SAMOVAR_INSTALL_R=1: installing optional R package..."
-        R --quiet -e "if (!require('remotes')) install.packages('remotes', repos='https://cloud.r-project.org/')"
-        R --quiet -e "library(remotes); remotes::install_local('.', upgrade='never')"
-    fi
+if [ "${SAMOVAR_INSTALL_R:-0}" != "0" ]; then
+    install_samovar_r_package || echo "Warning: optional R package install did not complete."
 else
-    echo "Skipping R package (not required for samovar prepare/exec). Set SAMOVAR_INSTALL_R=1 to install it."
+    echo "Skipping R package (not required). Use ./install.sh R-package to install samovaR from GitHub branch r-package."
 fi
 
 # Write ~/.config/samovar/config.json (and build/config.json copy)

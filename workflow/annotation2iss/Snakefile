@@ -30,6 +30,9 @@ REGENERATION_CONFIG = {
     "threshold_amount": config.get("threshold_amount", config.get("treshhold_amount", 1e-5)),
     "vae_latent_dim": config.get("vae_latent_dim", 4),
     "rescale_abundance": config.get("rescale_abundance", False),
+    "bootstrap_error_scale": config.get("bootstrap_error_scale", 0.15),
+    "min_cluster_size": config.get("min_cluster_size", 2),
+    "max_cluster_size": config.get("max_cluster_size", 100),
 }
 if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])

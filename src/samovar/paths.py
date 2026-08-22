@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.3"
+PACKAGE_VERSION = "0.10.4"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -198,9 +198,9 @@ def annotation_regenerate_r() -> Optional[Path]:
 
     1. ``$SAMOVAR_R_REGENERATE`` / ``$SAMOVAR_ANNOTATION_REGENERATE_R``
     2. config key ``annotation_regenerate_r``
-    3. bundled ``workflow/annotation_regenerate.R`` if that file exists
+    3. ``~/.config/samovar/annotation_regenerate.R`` written by ``./install.sh R-package``
 
-    Returns ``None`` when the optional R component is not installed.
+    There is no R driver under ``workflow/`` on the Python tree.
     """
     for key in ("SAMOVAR_R_REGENERATE", "SAMOVAR_ANNOTATION_REGENERATE_R"):
         env = os.environ.get(key, "").strip()
@@ -210,9 +210,9 @@ def annotation_regenerate_r() -> Optional[Path]:
     override = str(cfg.get("annotation_regenerate_r") or "").strip()
     if override:
         return Path(override)
-    bundled = workflow_dir() / "annotation_regenerate.R"
-    if bundled.is_file():
-        return bundled
+    xdg = user_config_dir() / "annotation_regenerate.R"
+    if xdg.is_file():
+        return xdg
     return None
 
 

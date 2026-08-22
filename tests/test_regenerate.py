@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -131,6 +132,44 @@ def test_bootstrap_does_not_rescale_by_default(toy_annotation_dir):
         assert int(kaiju[col].sum()) != 200
 
 
+def _cosine(a, b) -> float:
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def test_bootstrap_mimics_real_samples_with_error(test_data_dir):
+    if not test_data_dir.exists():
+        pytest.skip("data/test_annotations missing")
+    data = read_annotation_dir(test_data_dir)
+    n_obs = max(int(data["sample"].nunique()) if "sample" in data.columns else 1, 1)
+    direct = regenerate_preserve(data, rescale=False)
+    boot = regenerate_bootstrap(
+        data, n_samples=n_obs, seed=3, rescale=False, error_scale=0.08
+    )
+    differed = False
+    similar = False
+    for name in direct:
+        d = _n_matrix(direct[name])
+        b = _n_matrix(boot[name])
+        shared = [c for c in d.columns if c in b.columns]
+        assert shared
+        if not d[shared].equals(b[shared]):
+            differed = True
+        for col in shared:
+            idx = d.index.union(b.index)
+            u = d[col].reindex(idx).fillna(0)
+            v = b[col].reindex(idx).fillna(0)
+            if _cosine(u, v) >= 0.75:
+                similar = True
+    assert differed
+    assert similar
+
+
 def test_vae_produces_n_synthetic_columns(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     tables = regenerate_vae(data, n_samples=3, n_reads=150, seed=2, latent_dim=2)
@@ -148,6 +187,17 @@ def test_glm_python_changes_profile_vs_direct(toy_annotation_dir):
     assert "N_1" in glm.columns
     assert "N_2" in glm.columns
     assert not _n_matrix(direct).equals(_n_matrix(glm))
+
+
+def test_glm_uses_cluster_walk_not_copy(toy_annotation_dir):
+    data = read_annotation_dir(toy_annotation_dir)
+    glm = regenerate_glm_python(
+        data, n_samples=2, seed=11, min_cluster_size=1, rescale=False
+    )["kaiju"]
+    n_cols = [c for c in glm.columns if str(c).startswith("N_")]
+    assert n_cols
+    assert (glm[n_cols].fillna(0) >= 0).all().all()
+    assert glm["taxid"].nunique() >= 1
 
 
 def test_generative_modes_do_not_force_n_reads(toy_annotation_dir, tmp_path):
@@ -181,7 +231,22 @@ def test_regenerate_annotation_tables_writes_csvs(toy_annotation_dir, tmp_path):
     assert "kaiju" in tables
 
 
-def test_regenerate_annotation_tables_samovar_is_not_python(toy_annotation_dir, tmp_path):
+def test_python_modes_are_self_contained(toy_annotation_dir, tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_R_REGENERATE", raising=False)
+    monkeypatch.delenv("SAMOVAR_ANNOTATION_REGENERATE_R", raising=False)
+    monkeypatch.setattr("samovar.table2iss.annotation_regenerate_r", lambda: None)
+    for mode in ("direct", "bootstrap", "vae", "glm"):
+        out = tmp_path / mode
+        tables = regenerate_annotation_tables(
+            toy_annotation_dir,
+            out,
+            {"regeneration_mode": mode, "N": 2, "seed": 1},
+        )
+        assert tables
+        for table in tables.values():
+            assert "taxid" in table.columns
+            n_cols = [c for c in table.columns if str(c).startswith("N_")]
+            assert n_cols
     with pytest.raises(ValueError, match="optional R regenerator"):
         regenerate_annotation_tables(
             toy_annotation_dir,
