@@ -47,11 +47,48 @@ def test_fetch_genome_reuses_gzipped_processed(tmp_path):
     assert result == str(dest)
 
 
-def test_fetch_genome_uses_bundled_test_data(tmp_path):
-    result = fetch_genome("562", str(tmp_path), "test@example.com")
+def test_fetch_genome_reuses_library_not_bundled(tmp_path, monkeypatch):
+    """Truncated test_genomes must not satisfy fetch_genome for a missing taxid."""
+    from unittest.mock import patch
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}\n")
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("SAMOVAR_REUSE_GENOMES", "1")
+    monkeypatch.delenv("SAMOVAR_ALLOW_TEST_GENOMES", raising=False)
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    processed = lib / "562-processed.fasta.gz"
+    with gzip.open(processed, "wt") as handle:
+        handle.write(">x\nACGT\n")
+    monkeypatch.setenv("SAMOVAR_GENOME_DIRS", str(lib))
+
+    result = fetch_genome("562", str(tmp_path / "run"), "test@example.com")
     assert result is not None
     assert Path(result).is_file()
     assert "562" in Path(result).name
+
+    empty = tmp_path / "empty_run"
+    empty.mkdir()
+    with patch("samovar.genome_fetcher._assembly_ftp_path", return_value=None):
+        missing = fetch_genome("999999001", str(empty), "test@example.com")
+    assert missing is None
+
+
+def test_fetch_genome_does_not_use_bundled_test_data(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}\n")
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("SAMOVAR_ALLOW_TEST_GENOMES", raising=False)
+    monkeypatch.setenv("SAMOVAR_REUSE_GENOMES", "0")
+    with patch("samovar.genome_fetcher._assembly_ftp_path", return_value=None):
+        result = fetch_genome("562", str(tmp_path / "run"), "test@example.com")
+    assert result is None
 
 
 def test_fetch_genome_invalid_taxid(test_output_dir):
@@ -64,18 +101,15 @@ def test_fetch_genome_invalid_taxid(test_output_dir):
     assert result is None
 
 
-def test_fetch_genome_already_exists(test_output_dir):
-    """Test that existing genome is not re-downloaded"""
-    email = "test@example.com"
-    result1 = fetch_genome("562", test_output_dir, email, reference_only=False)
-
-    if result1 is None:
-        pytest.skip("Could not obtain genome 562 from bundled test data or NCBI")
-
+def test_fetch_genome_already_exists(tmp_path):
+    """Test that existing processed genome is not re-downloaded"""
+    dest = tmp_path / "562-processed.fasta.gz"
+    with gzip.open(dest, "wt") as handle:
+        handle.write(">x\nACGT\n")
+    result1 = fetch_genome("562", str(tmp_path), "test@example.com")
     mtime1 = os.path.getmtime(result1)
-    result2 = fetch_genome("562", test_output_dir, email, reference_only=False)
+    result2 = fetch_genome("562", str(tmp_path), "test@example.com")
     mtime2 = os.path.getmtime(result2)
-
     assert result1 == result2
     assert mtime1 == mtime2
 

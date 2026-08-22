@@ -226,6 +226,7 @@ def test_generate_pipeline():
         assert "samovar.seqio" in pipeline_content
         assert "link_or_copy_reads" in pipeline_content
         assert "cp data/test_genomes" not in pipeline_content
+        assert "samovar.genome_cache seed" in pipeline_content
         assert "export PYTHONPATH=" in pipeline_content
         assert "export SAMOVAR_ROOT=" in pipeline_content
         assert "samovar.exec_control" in pipeline_content

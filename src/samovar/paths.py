@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.10"
+PACKAGE_VERSION = "0.10.11"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -73,6 +73,50 @@ def test_genomes_dir() -> Path:
     if override:
         return Path(override)
     return repo_root() / "data" / "test_genomes"
+
+
+def user_cache_dir() -> Path:
+    xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+    if xdg:
+        return Path(xdg) / "samovar"
+    return Path.home() / ".cache" / "samovar"
+
+
+def genome_download_dir() -> Path:
+    """Directory where SamovaR stores NCBI-downloaded (full) assemblies."""
+    env = os.environ.get("SAMOVAR_GENOMES", "").strip()
+    if env:
+        return Path(env).expanduser()
+    cfg = load_config()
+    val = str(cfg.get("genomes") or "").strip()
+    if val:
+        return Path(val).expanduser()
+    return user_cache_dir() / "genomes"
+
+
+def processed_genomes_dir() -> Path:
+    """Directory for ``{taxid}-processed.fasta.gz`` files (defaults to genomes cache)."""
+    env = os.environ.get("SAMOVAR_PROCESSED_GENOMES", "").strip()
+    if env:
+        return Path(env).expanduser()
+    cfg = load_config()
+    val = str(cfg.get("processed_genomes") or "").strip()
+    if val:
+        return Path(val).expanduser()
+    return genome_download_dir()
+
+
+def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict[str, Any]:
+    """Merge ``updates`` into the install config and write it back."""
+    cfg = load_config()
+    changed = False
+    for key, value in updates.items():
+        if cfg.get(key) != value:
+            cfg[key] = value
+            changed = True
+    if changed or not user_config_path().is_file():
+        write_config(cfg, also_repo_build=also_repo_build)
+    return cfg
 
 
 def absolute_path(path: Optional[str]) -> str:
@@ -293,9 +337,8 @@ def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
     payload = dict(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
-    user_dir = user_config_dir()
-    user_dir.mkdir(parents=True, exist_ok=True)
-    dest = user_config_dir() / "config.json"
+    dest = user_config_path()
+    dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     if also_repo_build:
         try:

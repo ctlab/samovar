@@ -14,7 +14,6 @@ from samovar.paths import (
     python_path,
     repo_root,
     runtime_path_prefix,
-    test_genomes_dir,
 )
 from samovar.regenerate import normalize_regeneration_mode
 
@@ -113,10 +112,15 @@ class PipelineConfig:
     rescale_abundance: bool = False
     gzip_genomes: bool = True
     gzip_reads: bool = False
+    reuse_genomes: bool = True
+    use_test_genomes: bool = False
+    genome_dirs: Optional[List[str]] = None
 
     def __post_init__(self):
         if self.annotators is None:
             self.annotators = []
+        if self.genome_dirs is None:
+            self.genome_dirs = []
         if not self.email:
             self.email = _default_email()
 
@@ -248,6 +252,20 @@ class PipelineConfig:
             config.gzip_genomes = bool(args.gzip_genomes)
         if getattr(args, "gzip_reads", None) is not None:
             config.gzip_reads = bool(args.gzip_reads)
+        if getattr(args, "reuse_genomes", None) is not None:
+            config.reuse_genomes = bool(args.reuse_genomes)
+        if getattr(args, "use_test_genomes", False):
+            config.use_test_genomes = True
+        extra_dirs = getattr(args, "genome_dirs", None)
+        if extra_dirs:
+            if isinstance(extra_dirs, str):
+                config.genome_dirs = [
+                    piece.strip()
+                    for piece in extra_dirs.replace(";", ":").split(":")
+                    if piece.strip()
+                ]
+            else:
+                config.genome_dirs = [str(p) for p in extra_dirs if str(p).strip()]
 
         return config
 
@@ -345,10 +363,12 @@ class PipelineConfig:
         py = python_path()
         wf = root / "workflow"
         src = root / "src"
-        genomes = test_genomes_dir()
         email = self.email or ncbi_email()
         step_names = " ".join(CHECKPOINT_STEPS)
         tool_path = runtime_path_prefix()
+        extra_genome_dirs = ":".join(self.genome_dirs or [])
+        reuse_flag = "1" if self.reuse_genomes else "0"
+        test_flag = "1" if self.use_test_genomes else "0"
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
@@ -397,6 +417,12 @@ cleanup_tmp_if_requested() {{
 
 mkdir -p "$out_dir"
 mkdir -p "$out_dir/initial" "$out_dir/initial_reports" "$out_dir/regenerated" "$out_dir/regenerated_reports"
+# NCBI genome cache reuse (truncated data/test_genomes is not a library).
+export SAMOVAR_REUSE_GENOMES="${{SAMOVAR_REUSE_GENOMES:-{reuse_flag}}}"
+export SAMOVAR_ALLOW_TEST_GENOMES="${{SAMOVAR_ALLOW_TEST_GENOMES:-{test_flag}}}"
+export SAMOVAR_GENOME_DIRS="${{SAMOVAR_GENOME_DIRS:+$SAMOVAR_GENOME_DIRS:}}{extra_genome_dirs}"
+export SAMOVAR_RUN_DIR="$out_dir"
+export SAMOVAR_RUN_GENOMES="$out_dir/genomes"
 """
 
         setup_reads = _checkpoint_block(
@@ -436,16 +462,12 @@ fi""",
 
         seed_genomes = _checkpoint_block(
             "seed_genomes",
-            f"""# Seed toy genomes only when the destination is empty and bundled test genomes exist.
+            """# Reuse NCBI/user genome libraries (never the truncated data/test_genomes
+# stubs, unless this run's ISS generate.yaml pointed at them or
+# SAMOVAR_ALLOW_TEST_GENOMES / --test-genomes is set).
 mkdir -p "$out_dir/genomes"
-if ! ls "$out_dir/genomes/"* >/dev/null 2>&1; then
-    if [ -d "{genomes}/meta" ]; then
-        cp "{genomes}/meta/"* "$out_dir/genomes/" 2>/dev/null || true
-    fi
-    if [ -d "{genomes}/host" ]; then
-        cp "{genomes}/host/"* "$out_dir/genomes/" 2>/dev/null || true
-    fi
-fi""",
+"$PYTHON_PATH" -m samovar.genome_cache seed --dest "$out_dir/genomes" --generate-dir "$out_dir" --genome-dirs "$SAMOVAR_GENOME_DIRS"
+""",
         )
 
         regenerate_reads = _checkpoint_block(
@@ -596,6 +618,12 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         args = parse_args()
     
     config = PipelineConfig.from_args(args)
+    try:
+        from samovar.genome_cache import remember_prepare_genome_paths
+
+        remember_prepare_genome_paths(extra_dirs=config.genome_dirs)
+    except OSError as exc:
+        print(f"Warning: could not update genome cache config: {exc}", file=sys.stderr)
     configs = config.generate_configs(config.output_dir)
     pipeline_path = config.generate_pipeline(config.output_dir)
     

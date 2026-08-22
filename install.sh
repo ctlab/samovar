@@ -336,6 +336,11 @@ payload = {
     "opal_path": existing.get("opal_path") or shutil.which("opal.py") or shutil.which("opal") or "",
     "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
     "test_genomes": os.path.join(root, "data", "test_genomes"),
+    "genomes": existing.get("genomes") or str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"),
+    "processed_genomes": existing.get("processed_genomes")
+        or existing.get("genomes")
+        or str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"),
+    "genome_dirs": existing.get("genome_dirs") or [],
     "tools": tools,
 }
 if path_extra:
@@ -360,6 +365,23 @@ env_path.write_text(
 )
 print("Wrote user + repo config")
 print(f"Wrote {env_path} PATH with {len(dirs)} tool bin dir(s)")
+genomes = payload.get("genomes") or ""
+processed = payload.get("processed_genomes") or genomes
+lib_dirs = payload.get("genome_dirs") or []
+print("")
+print("Genome cache (NCBI / user assemblies, reused by `samovar prepare`):")
+print(f"  Downloaded genomes:  {genomes}")
+print(f"  Processed genomes:   {processed}")
+print(f"  Extra libraries:     {', '.join(lib_dirs) if lib_dirs else '(none yet; add dirs to genome_dirs in config.json)'}")
+print("")
+print("IMPORTANT: data/test_genomes contains TRUNCATED assemblies for ISS and CI only.")
+print("They are never used as NCBI substitutes. Real metagenomes reuse only genomes")
+print("previously downloaded by SamovaR or listed in genome_dirs.")
+print("  samovar prepare --reuse-genomes      # default: symlink from cache if found")
+print("  samovar prepare --no-reuse-genomes   # download into the genomes cache")
+print("  samovar prepare --genome-dirs DIR[:DIR]")
+print("  samovar prepare --test-genomes       # allow truncated stubs (ISS/CI only)")
+print("Prefer symlinks into $out_dir/genomes; copy with a warning if linking fails.")
 PY
 
 BIN_DIR="$ROOT/bin"

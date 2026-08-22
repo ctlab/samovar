@@ -17,9 +17,10 @@ def main():
     # Output
     parser.add_argument('--output_dir', default=None, help='Output directory (default: samovar_out, or from --input_config)')
     parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
-    parser.add_argument('--max_genomes', type=int, default=50,
-                        help='Max taxids to fetch for annotation2iss (top by abundance)')
-    parser.set_defaults(gzip_genomes=None, gzip_reads=None)
+    parser.add_argument(
+        '--max_genomes', type=int, default=50,
+        help='Max taxids to fetch for annotation2iss (top by abundance)')
+    parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
     gzip_group = parser.add_mutually_exclusive_group()
     gzip_group.add_argument(
         '--gzip-genomes',
@@ -50,7 +51,34 @@ def main():
         const=False,
         help='Leave simulated FASTQ uncompressed (default)',
     )
-    
+    reuse_group = parser.add_mutually_exclusive_group()
+    reuse_group.add_argument(
+        '--reuse-genomes',
+        dest='reuse_genomes',
+        action='store_const',
+        const=True,
+        help='Reuse NCBI/user genomes from config genome_dirs / genomes cache (default)',
+    )
+    reuse_group.add_argument(
+        '--no-reuse-genomes',
+        dest='reuse_genomes',
+        action='store_const',
+        const=False,
+        help='Do not reuse library genomes; download into the genomes cache',
+    )
+    parser.add_argument(
+        '--genome-dirs',
+        dest='genome_dirs',
+        default=None,
+        help='Colon-separated extra directories of previously downloaded NCBI genomes',
+    )
+    parser.add_argument(
+        '--test-genomes',
+        dest='use_test_genomes',
+        action='store_true',
+        help='Allow truncated bundled data/test_genomes (ISS/CI only; never for real metagenomes)',
+    )
+
     # Parse known args first to get output_dir
     args, remaining = parser.parse_known_args()
     

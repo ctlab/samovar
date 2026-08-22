@@ -14,6 +14,16 @@ import random
 from tqdm import tqdm
 import time
 from samovar.fasta_processor import preprocess_fasta
+from samovar.genome_cache import (
+    allow_test_genomes,
+    find_library_genome,
+    genome_download_dir,
+    place_genome,
+    processed_genomes_dir as cache_processed_dir,
+    register_genome_dir,
+    reuse_enabled,
+    ensure_genome_config,
+)
 from samovar.seqio import (
     find_existing_processed_genome,
     gunzip_file,
@@ -72,8 +82,8 @@ def _entrez_retry(func, max_retries=3, initial_delay=1):
 def bundled_test_genome(taxid: str | int) -> Optional[Path]:
     """Return a genome shipped under ``data/test_genomes`` for this taxid, if any.
 
-    Used before NCBI so ISS / tests / air-gapped installs do not download
-    reference assemblies (especially taxid 9606).
+    These files are truncated ISS/CI stubs. ``fetch_genome`` does not use them
+    unless ``--test-genomes`` / ``SAMOVAR_ALLOW_TEST_GENOMES=1`` is set.
     """
     from samovar.paths import test_genomes_dir
 
@@ -228,10 +238,14 @@ def fetch_genome_raw(
     output_folder: str,
     email: str,
     reference_only: bool = True,
-    silent: bool = False
+    silent: bool = False,
+    reuse: Optional[bool] = None,
     ) -> Optional[str]:
-    """
-    Fetch genome from NCBI for a given taxid.
+    """Fetch a genome for ``taxid``: run dir, NCBI library cache, then NCBI.
+
+    Bundled ``data/test_genomes`` stubs are not used unless explicitly allowed.
+    New downloads go to the install ``genomes`` cache and are linked into
+    ``output_folder``.
     """
     taxid = _normalize_taxid(taxid)
     Entrez.email = email
@@ -247,31 +261,58 @@ def fetch_genome_raw(
                 logger.info(f"Genome for taxid {taxid} already exists at {candidate}")
             return str(candidate)
 
-    bundled = _copy_bundled_genome(taxid, output_folder)
-    if bundled is not None:
-        if not silent:
-            logger.info(f"Using bundled test genome for taxid {taxid}: {bundled}")
-        return bundled
+    do_reuse = reuse_enabled(reuse)
+    if do_reuse:
+        library = find_library_genome(taxid, extra=[output_path], include_test_genomes=False)
+        if library is not None:
+            placed = place_genome(library, output_path, taxid)
+            if not silent:
+                logger.info(f"Reusing library genome for taxid {taxid}: {placed}")
+            return str(placed)
 
-    genome_path = output_path / f"{taxid}.fna.gz"
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(45)
-    try:
-        ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
-        if not ftp_path:
+    if allow_test_genomes():
+        bundled = _copy_bundled_genome(taxid, output_folder)
+        if bundled is not None:
+            if not silent:
+                logger.warning(
+                    "Using truncated bundled test genome for taxid %s: %s "
+                    "(SAMOVAR_ALLOW_TEST_GENOMES / --test-genomes)",
+                    taxid,
+                    bundled,
+                )
+            return bundled
+
+    cache = genome_download_dir()
+    cache.mkdir(parents=True, exist_ok=True)
+    genome_path = cache / f"{taxid}.fna.gz"
+    for ext in possible_exts:
+        existing_cache = cache / f"{taxid}{ext}"
+        if existing_cache.exists():
+            genome_path = existing_cache
+            break
+    else:
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(45)
+        try:
+            ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
+            if not ftp_path:
+                return None
+            asm_name = os.path.basename(ftp_path)
+            http_url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
+            if not silent:
+                logger.info(f"Downloading genome from {http_url}")
+            _download_url(http_url, genome_path)
+        except Exception as e:
+            if not silent:
+                logger.error(f"Error fetching genome for taxid {taxid}: {str(e)}")
             return None
-        asm_name = os.path.basename(ftp_path)
-        http_url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
-        if not silent:
-            logger.info(f"Downloading genome from {http_url}")
-        _download_url(http_url, genome_path)
-        return str(genome_path)
-    except Exception as e:
-        if not silent:
-            logger.error(f"Error fetching genome for taxid {taxid}: {str(e)}")
-        return None
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+        finally:
+            socket.setdefaulttimeout(old_timeout)
+
+    ensure_genome_config()
+    register_genome_dir(cache)
+    placed = place_genome(genome_path, output_path, taxid)
+    return str(placed)
 
 def fetch_genome(
     taxid: str|int,
@@ -280,6 +321,7 @@ def fetch_genome(
     reference_only: bool = True,
     silent: bool = False,
     gzip_genomes: bool = True,
+    reuse: Optional[bool] = None,
     ) -> Optional[str]:
     
     if isinstance(taxid, str):
@@ -295,21 +337,47 @@ def fetch_genome(
             logger.info(f"Processed genome for taxid {taxid} already exists at {existing}")
         return str(existing)
 
-    output_path = processed_genome_path(output_folder, taxid, gzip_genomes=gzip_genomes)
+    do_reuse = reuse_enabled(reuse)
+    if do_reuse:
+        library = find_library_genome(
+            taxid, extra=[output_folder], include_test_genomes=False, processed_only=True
+        )
+        if library is not None:
+            placed = place_genome(library, output_folder, taxid)
+            if gzip_genomes and not is_gzip_path(placed):
+                placed = Path(gzip_file(placed))
+            elif not gzip_genomes and is_gzip_path(placed):
+                placed = Path(gunzip_file(placed, remove_source=False))
+                placed = place_genome(placed, output_folder, taxid)
+            if not silent:
+                logger.info(f"Reusing processed library genome for taxid {taxid}: {placed}")
+            return str(placed)
 
-    genome_path = fetch_genome_raw(taxid, output_folder, email, reference_only, silent)
+    genome_path = fetch_genome_raw(
+        taxid, output_folder, email, reference_only, silent, reuse=reuse
+    )
     if genome_path is None:
         return None
+
+    processed_dir = cache_processed_dir()
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    cache_processed = processed_genome_path(processed_dir, taxid, gzip_genomes=gzip_genomes)
+    run_processed = processed_genome_path(output_folder, taxid, gzip_genomes=gzip_genomes)
 
     try:
         preprocess_fasta(
             input_file=genome_path,
-            output_file=str(output_path),
+            output_file=str(cache_processed),
             mutation_rate=0.0,
             include_percent=100.0,
         )
+        ensure_genome_config()
+        register_genome_dir(processed_dir)
+        if Path(cache_processed).resolve() != Path(run_processed).resolve():
+            place_genome(cache_processed, output_folder, taxid)
         logger.info(f"Successfully processed genome for taxid {taxid}")
-        return str(output_path)
+        found = find_existing_processed_genome(output_folder, taxid)
+        return str(found or cache_processed)
     except Exception as e:
         logger.error(f"Failed to process genome for taxid {taxid}: {str(e)}")
         return None

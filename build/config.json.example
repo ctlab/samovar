@@ -1,5 +1,5 @@
 {
-    "version": "0.10.10",
+    "version": "0.10.11",
     "root": "/path/to/samovar",
     "python_path": "/usr/bin/python3",
     "r_path": "/usr/bin/R",
@@ -8,6 +8,12 @@
     "opal_path": "/usr/bin/opal.py",
     "ncbi_email": "test@samovar.com",
     "test_genomes": "/path/to/samovar/data/test_genomes",
+    "_comment_test_genomes": "Truncated ISS/CI stubs only. Never used as NCBI substitutes.",
+    "genomes": "/home/user/.cache/samovar/genomes",
+    "processed_genomes": "/home/user/.cache/samovar/genomes",
+    "genome_dirs": [
+        "/path/to/previously/downloaded/ncbi_genomes"
+    ],
     "_comment_path": "Extra bin dirs or conda prefixes prepended so bash .log/samovar.sh finds tools without module load / conda activate",
     "path": [
         "/opt/other-env/bin"
