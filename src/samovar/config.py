@@ -11,6 +11,7 @@ from samovar.paths import (
     ncbi_email,
     python_path,
     repo_root,
+    runtime_path_prefix,
     test_genomes_dir,
 )
 from samovar.regenerate import normalize_regeneration_mode
@@ -316,6 +317,7 @@ class PipelineConfig:
         genomes = test_genomes_dir()
         email = self.email or ncbi_email()
         step_names = " ".join(CHECKPOINT_STEPS)
+        tool_path = runtime_path_prefix()
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
@@ -324,7 +326,15 @@ class PipelineConfig:
 set -e
 export SAMOVAR_ROOT="{root}"
 export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"
-export PATH="{root}/bin:$PATH"
+# Prefer the current install env (other-HPC reinstall) when present.
+XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
+if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
+  # shellcheck disable=SC1090
+  . "$XDG_CONFIG_HOME/samovar/env"
+fi
+# Baked tool bins from config.json: path[], tools.*, tool_envs.*, python/iss.
+# Override further with SAMOVAR_PATH=dir1:dir2 (prepended).
+export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
 export PYTHONPATH="{src}${{PYTHONPATH:+:$PYTHONPATH}}"
 # Honor env PYTHON_PATH (install.sh writes it); fall back to the prepare-time interpreter.
 PYTHON_PATH="${{PYTHON_PATH:-{py}}}"

@@ -201,13 +201,18 @@ def test_generate_pipeline():
         assert "PYTHON_PATH=" in pipeline_content
         assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/compare_annotations.R" not in pipeline_content
-        assert "R_PATH=" not in pipeline_content
+        assert "export R_PATH=" not in pipeline_content
+        assert "R_PATH=" not in pipeline_content.replace("SAMOVAR_PATH", "")
         
         # Check config file paths
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert 'PYTHON_PATH="${PYTHON_PATH:-' in pipeline_content
         assert '[ -f "$CKPT/$1.done" ]' in pipeline_content
         assert "visualization failed; continuing" not in pipeline_content
+        assert "XDG_CONFIG_HOME" in pipeline_content
+        assert "samovar/env" in pipeline_content
+        assert "SAMOVAR_PATH" in pipeline_content
+        assert "tool_envs" in pipeline_content or "Baked tool bins" in pipeline_content
         
         # Check snakemake commands
         assert "snakemake -s " in pipeline_content

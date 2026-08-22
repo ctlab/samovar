@@ -127,6 +127,89 @@ def python_path() -> str:
     return found or sys.executable
 
 
+def _split_path_value(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items: List[str] = []
+        for part in value:
+            items.extend(_split_path_value(part))
+        return items
+    text = str(value).strip()
+    if not text or text.startswith("_"):
+        return []
+    return [
+        piece.strip()
+        for piece in text.replace(";", ":").split(":")
+        if piece.strip() and piece.strip() not in {"$PATH", "${PATH}"}
+    ]
+
+
+def _dir_for_path_entry(raw: str, *, env_prefix: bool = False) -> Optional[str]:
+    """Directory to prepend to PATH for an executable or a conda/module prefix."""
+    text = str(raw).strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if path.is_file():
+        return str(path.resolve().parent)
+    if path.is_dir():
+        bindir = path / "bin"
+        if env_prefix or (path.name != "bin" and bindir.is_dir()):
+            return str((bindir if bindir.is_dir() else path).resolve())
+        return str(path.resolve())
+    if env_prefix:
+        return str(path / "bin")
+    if path.name in KNOWN_TOOLS or path.suffix:
+        return str(path.parent)
+    return str(path)
+
+
+def collect_runtime_path_dirs(cfg: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Bin directories from config so bare ``bash .log/samovar.sh`` finds tools.
+
+    Sources, in order:
+
+    * repo ``bin/``
+    * ``python_path`` / ``iss_path`` / ``r_path`` parent dirs
+    * ``path`` / ``extra_path`` (string or list) — extra env ``bin/`` dirs
+    * parent dirs of ``tools.*`` executables
+    * ``tool_envs.<name>`` conda/module prefixes (``<prefix>/bin``)
+    """
+    cfg = dict(cfg or load_config())
+    ordered: List[str] = []
+    seen = set()
+
+    def add(raw: Optional[str], env_prefix: bool = False) -> None:
+        if not raw:
+            return
+        directory = _dir_for_path_entry(str(raw), env_prefix=env_prefix)
+        if not directory or directory in seen:
+            return
+        seen.add(directory)
+        ordered.append(directory)
+
+    add(str(repo_root() / "bin"))
+    add(cfg.get("python_path"))
+    add(cfg.get("iss_path"))
+    add(cfg.get("r_path"))
+    for extra in _split_path_value(cfg.get("path") or cfg.get("extra_path")):
+        add(extra, env_prefix=True)
+    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+    for value in tools.values():
+        add(str(value) if value is not None else "")
+    envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
+    for key, value in envs.items():
+        if str(key).startswith("_"):
+            continue
+        add(str(value) if value is not None else "", env_prefix=True)
+    return ordered
+
+
+def runtime_path_prefix(cfg: Optional[Dict[str, Any]] = None) -> str:
+    return ":".join(collect_runtime_path_dirs(cfg))
+
+
 def iss_executable() -> str:
     """ISS CLI: config ``iss_path``, then PATH."""
     cfg = load_config()
@@ -165,8 +248,15 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
     key = tool_key or Path(token).name
     mapped = str(tools.get(key) or tools.get(Path(token).stem) or "").strip()
+    envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
+    env_root = str(envs.get(key) or envs.get(Path(token).stem) or "").strip()
+    env_candidates: List[str] = []
+    if env_root:
+        root = Path(env_root).expanduser()
+        env_candidates.append(str(root / "bin" / Path(token).name))
+        env_candidates.append(str(root / Path(token).name))
 
-    candidates = [token, mapped]
+    candidates = [mapped, *env_candidates, token]
     for cand in candidates:
         if not cand:
             continue

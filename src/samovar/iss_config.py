@@ -63,7 +63,7 @@ class ISSTestConfig:
 
     def generate_pipeline(self, base_dir: str) -> str:
         """Generate the ISS test pipeline script and return its path"""
-        from samovar.paths import absolute_path, python_path, repo_root
+        from samovar.paths import absolute_path, python_path, repo_root, runtime_path_prefix
 
         base_dir = absolute_path(base_dir)
         base_path = Path(base_dir)
@@ -78,11 +78,17 @@ class ISSTestConfig:
         # Generate pipeline script
         root = repo_root()
         py = python_path()
+        tool_path = runtime_path_prefix()
         snakefile = root / "workflow" / "iss_test" / "Snakefile"
         pipeline_content = f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
-export PATH="{root}/bin:$PATH"
+XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
+if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
+  # shellcheck disable=SC1090
+  . "$XDG_CONFIG_HOME/samovar/env"
+fi
+export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
 export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
 PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
 if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
@@ -91,7 +97,7 @@ fi
 PYTHON_PATH="${{PYTHON_PATH:-python3}}"
 
 out_dir="{base_dir}"
-mkdir -p $out_dir
+mkdir -p "$out_dir"
 
 # Generate reads with InSilicoSeq
 snakemake -s {snakefile} \\

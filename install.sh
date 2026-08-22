@@ -214,35 +214,63 @@ else
 fi
 
 # Write ~/.config/samovar/config.json (and build/config.json copy)
+export USER_CFG_DIR
 export SAMOVAR_ROOT="$ROOT"
 export PYTHON_PATH
 "$PYTHON_PATH" - <<'PY'
 import os, shutil
-from samovar.paths import discover_tools, write_config, PACKAGE_VERSION
+from pathlib import Path
+from samovar.paths import (
+    PACKAGE_VERSION,
+    collect_runtime_path_dirs,
+    discover_tools,
+    load_config,
+    write_config,
+)
 
 root = os.environ["SAMOVAR_ROOT"]
 python_path = os.environ["PYTHON_PATH"]
-tools = discover_tools()
-iss = shutil.which("iss") or tools.get("iss", "")
-write_config({
+existing = load_config()
+tools = dict(discover_tools())
+for name, path in (existing.get("tools") or {}).items():
+    if str(path or "").strip():
+        tools[name] = path
+path_extra = existing.get("path") or existing.get("extra_path") or []
+tool_envs = existing.get("tool_envs") or {}
+payload = {
     "version": PACKAGE_VERSION,
     "root": root,
     "python_path": python_path,
     "r_path": shutil.which("R") or "",
-    "r_lib_path": "",
-    "iss_path": iss,
+    "r_lib_path": existing.get("r_lib_path", ""),
+    "iss_path": shutil.which("iss") or tools.get("iss", ""),
     "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
     "test_genomes": os.path.join(root, "data", "test_genomes"),
     "tools": tools,
-})
+}
+if path_extra:
+    payload["path"] = path_extra
+if tool_envs:
+    payload["tool_envs"] = tool_envs
+if existing.get("annotation_regenerate_r"):
+    payload["annotation_regenerate_r"] = existing["annotation_regenerate_r"]
+write_config(payload)
+user_cfg = Path(os.environ["USER_CFG_DIR"])
+user_cfg.mkdir(parents=True, exist_ok=True)
+email = os.environ.get("NCBI_EMAIL", "")
+dirs = collect_runtime_path_dirs()
+path_export = ":".join(dirs + ["$PATH"])
+env_path = user_cfg / "env"
+env_path.write_text(
+    f'export NCBI_EMAIL="{email}"\n'
+    f'export SAMOVAR_ROOT="{root}"\n'
+    f'export PYTHON_PATH="{python_path}"\n'
+    f'export PATH="{path_export}"\n',
+    encoding="utf-8",
+)
 print("Wrote user + repo config")
+print(f"Wrote {env_path} PATH with {len(dirs)} tool bin dir(s)")
 PY
-
-echo "export NCBI_EMAIL=\"$NCBI_EMAIL\"" > "$USER_CFG_DIR/env"
-echo "export SAMOVAR_ROOT=\"$ROOT\"" >> "$USER_CFG_DIR/env"
-echo "export PYTHON_PATH=\"$PYTHON_PATH\"" >> "$USER_CFG_DIR/env"
-PY_BIN_DIR="$(dirname "$PYTHON_PATH")"
-echo "export PATH=\"$ROOT/bin:${PY_BIN_DIR}:\$PATH\"" >> "$USER_CFG_DIR/env"
 
 BIN_DIR="$ROOT/bin"
 UPDATE_SHELL="${SAMOVAR_UPDATE_SHELL:-1}"

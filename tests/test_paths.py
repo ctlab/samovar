@@ -52,14 +52,47 @@ def test_resolve_executable_absolute(tmp_path):
     assert resolve_executable(str(exe), tool_key="kraken2") == str(exe.resolve())
 
 
-def test_resolve_executable_from_path(tmp_path, monkeypatch):
-    exe = tmp_path / "kaiju"
+def test_collect_runtime_path_dirs_tools_path_and_envs(tmp_path):
+    from samovar.paths import collect_runtime_path_dirs
+
+    py = tmp_path / "conda" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("#!/bin/sh\n")
+    py.chmod(0o755)
+    kaiju_env = tmp_path / "kaiju_env"
+    kaiju_bin = kaiju_env / "bin"
+    kaiju_bin.mkdir(parents=True)
+    kaiju = kaiju_bin / "kaiju"
+    kaiju.write_text("#!/bin/sh\n")
+    kaiju.chmod(0o755)
+    extra_env = tmp_path / "other_env"
+    (extra_env / "bin").mkdir(parents=True)
+    k2_prefix = tmp_path / "kraken2_env"
+    dirs = collect_runtime_path_dirs(
+        {
+            "python_path": str(py),
+            "path": [str(extra_env)],
+            "tools": {"kaiju": str(kaiju)},
+            "tool_envs": {"kraken2": str(k2_prefix)},
+        }
+    )
+    assert str(py.parent) in dirs
+    assert str(kaiju_bin) in dirs
+    assert str(extra_env / "bin") in dirs
+    assert str(k2_prefix / "bin") in dirs
+
+
+def test_resolve_executable_uses_tool_envs(tmp_path, monkeypatch):
+    env = tmp_path / "kaiju_env"
+    (env / "bin").mkdir(parents=True)
+    exe = env / "bin" / "kaiju"
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tmp_path))
-    resolved = resolve_executable("kaiju --verbose", tool_key="kaiju")
-    assert resolved.startswith(str(exe.resolve()))
-    assert resolved.endswith("--verbose")
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {"tool_envs": {"kaiju": str(env)}},
+    )
+    assert resolve_executable("kaiju", tool_key="kaiju") == str(exe.resolve())
 
 
 def test_cli_help_from_other_directory(tmp_path):

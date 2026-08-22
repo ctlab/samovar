@@ -21,7 +21,8 @@ def test_generated_exec_pipeline_is_python_only(tmp_path):
     script = Path(result["pipeline"]).read_text()
     assert "compare_annotations.py" in script
     assert "compare_annotations.R" not in script
-    assert "R_PATH" not in script
+    assert "export R_PATH=" not in script
+    assert "R_PATH=" not in script.replace("SAMOVAR_PATH", "")
     assert "workflow/ML.py" in script
     assert "snakemake -s " in script
     assert "workflow/annotators/Snakefile" in script

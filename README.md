@@ -109,6 +109,20 @@ samovar exec --output_dir samovar_out
 # samovar exec --output_dir samovar_out --cleanup-tmp
 ```
 
+Annotators in **another conda env or module** go in `~/.config/samovar/config.json` (copied to `build/config.json` on install):
+
+```json
+{
+  "path": ["/opt/other-env/bin"],
+  "tools": { "kaiju": "/opt/conda/envs/kaiju/bin/kaiju" },
+  "tool_envs": { "kaiju": "/opt/conda/envs/kaiju" }
+}
+```
+
+`path` and `tool_envs.<name>/bin` plus parent dirs of `tools.*` are prepended in generated `.log/samovar.sh`, so `bash .log/samovar.sh` finds them without `module load`. Extra dirs at runtime: `SAMOVAR_PATH=/more/bin`. 
+
+
+**Important**: if you want to re-use SAMOVAR, it is needed to re-run samovar generate, preprocess & exec stages after the installation, not to reuse pre-existing ones because they have hard-coded information about the environment paths. Also, re-run these stages after editing config. `./install.sh` keeps existing `path` / `tools` / `tool_envs`.
 
 ## R package
 
