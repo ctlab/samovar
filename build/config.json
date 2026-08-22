@@ -3,6 +3,6 @@
   "r_path": "/nfs/home/dsmutin/local/bin/R",
   "r_lib_path": "",
   "annotation_regenerate_r": "/nfs/home/dsmutin/.config/samovar/annotation_regenerate.R",
-  "version": "0.10.4",
+    "version": "0.10.6",
   "root": "/mnt/tank/scratch/dsmutin/tools/my/samovar/samovar"
 }

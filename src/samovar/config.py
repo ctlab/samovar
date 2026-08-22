@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
 
+from samovar.exec_control import CHECKPOINT_STEPS
 from samovar.paths import ncbi_email, python_path, repo_root, resolve_executable, test_genomes_dir
 from samovar.regenerate import normalize_regeneration_mode
 
@@ -13,6 +14,25 @@ DEFAULT_OUTPUT_DIR = "samovar_out"
 
 def _default_email() -> str:
     return ncbi_email()
+
+
+def _indent_bash(text: str, spaces: int = 2) -> str:
+    pad = " " * spaces
+    lines = text.strip("\n").split("\n")
+    return "\n".join(pad + line if line.strip() else line for line in lines)
+
+
+def _checkpoint_block(name: str, body: str) -> str:
+    """Wrap a bash snippet so it is skipped when the named checkpoint exists."""
+    return (
+        f"if ckpt_skip {name}; then\n"
+        f"  echo \"[checkpoint] skip {name}\"\n"
+        f"else\n"
+        f"  echo \"[checkpoint] run {name}\"\n"
+        f"{_indent_bash(body, 2)}\n"
+        f"  ckpt_finish {name}\n"
+        f"fi\n"
+    )
 
 @dataclass
 class AnnotatorConfig:
@@ -265,9 +285,12 @@ class PipelineConfig:
         src = root / "src"
         genomes = test_genomes_dir()
         email = self.email or ncbi_email()
+        step_names = " ".join(CHECKPOINT_STEPS)
         
-        # Generate pipeline script (absolute paths so exec works from any cwd)
-        pipeline_content = f"""# Setup
+        # Generate pipeline script (absolute paths so exec works from any cwd).
+        # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
+        # skipped on the next exec unless SAMOVAR_REDO=1 / --redo.
+        header = f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
 export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"
@@ -277,10 +300,33 @@ PYTHON_PATH="{py}"
 PYTHON_PATH=${{PYTHON_PATH:-python3}}
 
 out_dir="{base_dir}"
+CKPT="$out_dir/.log/checkpoints"
+mkdir -p "$CKPT"
+# Checkpoint names: {step_names}
+
+ckpt_skip() {{
+  "$PYTHON_PATH" -m samovar.exec_control skip "$out_dir" "$1"
+}}
+
+ckpt_finish() {{
+  "$PYTHON_PATH" -m samovar.exec_control mark "$out_dir" "$1"
+  echo "[checkpoint] done $1"
+}}
+
+cleanup_tmp_if_requested() {{
+  if [ "${{SAMOVAR_CLEANUP_TMP:-0}}" != "0" ]; then
+    echo "[cleanup] removing temporary directories under $out_dir"
+    "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true
+  fi
+}}
+
 mkdir -p $out_dir
 mkdir -p $out_dir/initial $out_dir/initial_reports $out_dir/regenerated $out_dir/regenerated_reports
+"""
 
-# Link/copy source reads into output initial/ when input_dir is provided
+        setup_reads = _checkpoint_block(
+            "setup_reads",
+            f"""# Link/copy source reads into output initial/ when input_dir is provided
 # and is not already the destination (generate→preprocess sets input_dir=initial).
 if [ -n "{self.input_dir}" ] && [ -d "{self.input_dir}" ]; then
     src_dir=$(readlink -f "{self.input_dir}")
@@ -288,25 +334,34 @@ if [ -n "{self.input_dir}" ] && [ -d "{self.input_dir}" ]; then
     if [ "$src_dir" != "$dst_dir" ]; then
         $PYTHON_PATH -c "from samovar.seqio import link_or_copy_reads; link_or_copy_reads('$src_dir', '$dst_dir')"
     fi
-fi
+fi""",
+        )
 
-# Run annotators on initial reads
-snakemake -s {wf / 'annotators' / 'Snakefile'} \\
+        annotate_initial = _checkpoint_block(
+            "annotate_initial",
+            f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['init_annotator']} \\
-    --cores {self.cores}
+    --cores {self.cores}""",
+        )
 
-# Combine annotation tables
-$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
+        combine_initial = _checkpoint_block(
+            "combine_initial",
+            f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -i $out_dir/initial_reports \\
-    -o $out_dir/initial_annotations
+    -o $out_dir/initial_annotations""",
+        )
 
-# Visualize annotations (Python: altair + cnsplots; never abort the pipeline)
-$PYTHON_PATH {wf / 'compare_annotations.py'} \\
+        viz_initial = _checkpoint_block(
+            "viz_initial",
+            f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
     --annotation_dir $out_dir/initial_annotations \\
     --output_dir $out_dir/initial_annotations_plots \\
-    --show_top 0 || echo "Warning: initial visualization failed; continuing"
+    --show_top 0 || echo "Warning: initial visualization failed; continuing\"""",
+        )
 
-# Seed toy genomes only when the destination is empty and bundled test genomes exist.
+        seed_genomes = _checkpoint_block(
+            "seed_genomes",
+            f"""# Seed toy genomes only when the destination is empty and bundled test genomes exist.
 mkdir -p $out_dir/genomes
 if ! ls $out_dir/genomes/* >/dev/null 2>&1; then
     if [ -d "{genomes}/meta" ]; then
@@ -315,14 +370,15 @@ if ! ls $out_dir/genomes/* >/dev/null 2>&1; then
     if [ -d "{genomes}/host" ]; then
         cp "{genomes}/host/"* $out_dir/genomes/ 2>/dev/null || true
     fi
-fi
+fi""",
+        )
 
-# Translate annotation table to new reads set
-snakemake -s {wf / 'annotation2iss' / 'Snakefile'} \\
+        regenerate_reads = _checkpoint_block(
+            "regenerate_reads",
+            f"""snakemake -s {wf / 'annotation2iss' / 'Snakefile'} \\
     --configfile {configs['annotation2iss']} \\
     --cores {self.cores}
 
-# Clean up
 {{
     find $out_dir/regenerated -type f -empty -delete || true
     rm -f $out_dir/regenerated/*processed* || true
@@ -330,36 +386,48 @@ snakemake -s {wf / 'annotation2iss' / 'Snakefile'} \\
     rm -f $out_dir/regenerated/*iss.tmp* || true
 }} || {{
     echo "Warning: Some cleanup operations failed"
-}}
+}}""",
+        )
 
-if ! $PYTHON_PATH -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads('$out_dir/regenerated') else 1)"; then
+        early_exit = """if ! $PYTHON_PATH -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads('$out_dir/regenerated') else 1)"; then
     echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
+    cleanup_tmp_if_requested
     exit 0
 fi
+"""
 
-# Sort paired-end reads to ensure matching order
-{root / 'bin' / 'samovar'} tools --sort --output_dir $out_dir
+        sort_reads = _checkpoint_block(
+            "sort_reads",
+            f"""{root / 'bin' / 'samovar'} tools --sort --output_dir $out_dir""",
+        )
 
-# Run annotators on new reads set
-snakemake -s {wf / 'annotators' / 'Snakefile'} \\
+        annotate_regenerated = _checkpoint_block(
+            "annotate_regenerated",
+            f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['reannotate']} \\
-    --cores {self.cores}
+    --cores {self.cores}""",
+        )
 
-# Combine annotation tables
-$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
+        combine_regenerated = _checkpoint_block(
+            "combine_regenerated",
+            f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -i $out_dir/regenerated_reports \\
     -o $out_dir/regenerated_annotations \\
-    -s 2
+    -s 2""",
+        )
 
-# Visualize & combine results
-$PYTHON_PATH {wf / 'compare_annotations.py'} \\
+        viz_regenerated = _checkpoint_block(
+            "viz_regenerated",
+            f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
     --annotation_dir $out_dir/regenerated_annotations \\
     --output_dir $out_dir/regenerated_annotations_plots \\
     --csv $out_dir/regenerated_annotations/combined_annotation_table.csv \\
-    --show_top 0 || echo "Warning: regenerated visualization failed; continuing"
+    --show_top 0 || echo "Warning: regenerated visualization failed; continuing\"""",
+        )
 
-# Train and test ML
-if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
+        reprofile = _checkpoint_block(
+            "reprofile",
+            f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
     $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial', '$out_dir/combined_temporary_R1.fastq')"
     $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} $out_dir/combined_temporary_R1.fastq -o $out_dir/features.tsv --chunk_size 50000
@@ -372,15 +440,40 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --reprofiling_dir $out_dir/initial_annotations \\
     --validation_file $out_dir/regenerated_annotations/combined_annotation_table.csv \\
     --output_dir $out_dir/reprofiled_annotations \\
-    $FEATURE_ARG
+    $FEATURE_ARG""",
+        )
 
-# Check reprofiled results
-$PYTHON_PATH {wf / 'compare_annotations.py'} \\
+        viz_reprofiled = _checkpoint_block(
+            "viz_reprofiled",
+            f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
     --annotation_dir $out_dir/reprofiled_annotations \\
     --output_dir $out_dir/reprofiled_annotations_plots \\
     --csv $out_dir/reprofiled_annotations/combined_annotation_table.csv \\
-    --show_top 0 || echo "Warning: reprofiled visualization failed; continuing"
+    --show_top 0 || echo "Warning: reprofiled visualization failed; continuing\"""",
+        )
+
+        footer = """cleanup_tmp_if_requested
 """
+
+        pipeline_content = "\n".join(
+            [
+                header,
+                setup_reads,
+                annotate_initial,
+                combine_initial,
+                viz_initial,
+                seed_genomes,
+                regenerate_reads,
+                early_exit,
+                sort_reads,
+                annotate_regenerated,
+                combine_regenerated,
+                viz_regenerated,
+                reprofile,
+                viz_reprofiled,
+                footer,
+            ]
+        )
 
         with open(pipeline_path, 'w') as f:
             f.write(pipeline_content)

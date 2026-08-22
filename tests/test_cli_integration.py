@@ -42,6 +42,8 @@ def test_cli_help_lists_prepare_build_exec():
     assert "prepare" in out
     assert "build" in out
     assert "exec" in out
+    assert "--redo" in out
+    assert "--cleanup-tmp" in out
 
 
 def test_prepare_writes_pipeline_and_configs(tmp_path):

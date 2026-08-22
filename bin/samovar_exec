@@ -4,19 +4,61 @@ set -e
 
 # Parse arguments
 OUTPUT_DIR="."
+export SAMOVAR_REDO="${SAMOVAR_REDO:-0}"
+export SAMOVAR_CLEANUP_TMP="${SAMOVAR_CLEANUP_TMP:-0}"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --output_dir)
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        --redo)
+            export SAMOVAR_REDO=1
+            shift
+            ;;
+        --cleanup-tmp)
+            export SAMOVAR_CLEANUP_TMP=1
+            shift
+            ;;
+        --no-cleanup-tmp)
+            export SAMOVAR_CLEANUP_TMP=0
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp]"
+            echo ""
+            echo "  --redo          Ignore completed checkpoints and rerun every exec step"
+            echo "  --cleanup-tmp   After a successful run, remove .tmp / ISS scratch dirs"
+            echo "  --no-cleanup-tmp  Keep temporary directories (default)"
+            exit 0
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: samovar_exec --output_dir /path/to/output"
+            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp]"
             exit 1
             ;;
     esac
 done
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${SAMOVAR_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PYTHON="${PYTHON_PATH:-python3}"
+
+_cleanup_tmp_if_requested() {
+    if [ "${SAMOVAR_CLEANUP_TMP:-0}" = "0" ]; then
+        return 0
+    fi
+    echo "Cleaning temporary directories under $OUTPUT_DIR..."
+    PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON" -m samovar.exec_control cleanup "$OUTPUT_DIR" || true
+}
+
+if [ "${SAMOVAR_REDO:-0}" != "0" ]; then
+    echo "Clearing pipeline checkpoints (--redo)"
+    PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON" -m samovar.exec_control clear "$OUTPUT_DIR" || \
+        rm -f "$OUTPUT_DIR/.log/checkpoints/"*.done 2>/dev/null || true
+fi
 
 # Check for .generate directory and run its pipeline if it exists
 if [ -d "$OUTPUT_DIR/.generate" ] && [ -f "$OUTPUT_DIR/.generate/generate.sh" ]; then
@@ -30,4 +72,6 @@ if [ -d "$OUTPUT_DIR/.log" ] && [ -f "$OUTPUT_DIR/.log/samovar.sh" ]; then
     bash "$OUTPUT_DIR/.log/samovar.sh"
 fi
 
-echo "Pipeline execution completed." 
+_cleanup_tmp_if_requested
+
+echo "Pipeline execution completed."

@@ -220,6 +220,25 @@ def test_generate_pipeline():
         assert "cp data/test_genomes" not in pipeline_content
         assert "export PYTHONPATH=" in pipeline_content
         assert "export SAMOVAR_ROOT=" in pipeline_content
+        assert "samovar.exec_control" in pipeline_content
+        assert "ckpt_skip" in pipeline_content
+        assert "ckpt_finish" in pipeline_content
+        for step in (
+            "setup_reads",
+            "annotate_initial",
+            "combine_initial",
+            "viz_initial",
+            "seed_genomes",
+            "regenerate_reads",
+            "sort_reads",
+            "annotate_regenerated",
+            "combine_regenerated",
+            "viz_regenerated",
+            "reprofile",
+            "viz_reprofiled",
+        ):
+            assert f"ckpt_skip {step}" in pipeline_content
+            assert f"ckpt_finish {step}" in pipeline_content
 
 def test_setup_pipeline():
     test_output_dir = 'tests_outs/test_setup_pipeline'

@@ -28,7 +28,7 @@ show_usage() {
     echo "Commands:"
     echo "  prepare     Generate main pipeline configuration (alias: preprocess)"
     echo "  build       Build Kaiju or Kraken2 database from config (alias: build_database)"
-    echo "  exec        Execute the pipeline(s)"
+    echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "  generate    Generate ISS test configuration and pipeline"
     echo "  tools       Various utility tools"
     echo "  help        Show this help message"
@@ -38,6 +38,8 @@ show_usage() {
     echo "  samovar prepare --input_dir [...] --output_dir [...]"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...]"
     echo "  samovar exec --output_dir [...]"
+    echo "  samovar exec --output_dir [...] --redo"
+    echo "  samovar exec --output_dir [...] --cleanup-tmp"
     echo "  samovar tools --sort --output_dir [...]"
 }
 

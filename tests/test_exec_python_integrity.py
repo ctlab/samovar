@@ -25,6 +25,9 @@ def test_generated_exec_pipeline_is_python_only(tmp_path):
     assert "workflow/ML.py" in script
     assert "snakemake -s " in script
     assert "workflow/annotators/Snakefile" in script
+    assert "samovar.exec_control" in script
+    for step in ("setup_reads", "regenerate_reads", "reprofile"):
+        assert f"ckpt_skip {step}" in script
 
 
 def test_workflow_scripts_are_python_or_cpp():

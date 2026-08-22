@@ -103,8 +103,10 @@ samovar prepare \
     --kraken2-test "kraken2 $DB_KRAKEN2" \
     --kaiju-test "kaiju $DB_KAIJU"
 
-# Do SAMOVARing
+# Do SAMOVARing (resumes from `.log/checkpoints`; `--redo` reruns every step)
 samovar exec --output_dir samovar_out
+# Optional: drop `.tmp` / ISS scratch after a successful run
+# samovar exec --output_dir samovar_out --cleanup-tmp
 ```
 
 
