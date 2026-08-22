@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -48,6 +49,44 @@ def normalize_regeneration_mode(mode: Optional[str]) -> str:
 
 def is_direct_mode(mode: Optional[str]) -> bool:
     return normalize_regeneration_mode(mode) == "direct"
+
+
+def coerce_seed(seed: Any, default: int = 42) -> int:
+    """Stable non-negative seed for numpy / sklearn / ISS."""
+    if seed is None or seed is False:
+        return int(default)
+    try:
+        return int(seed)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def rng_for(seed: Any, *parts: Any) -> np.random.Generator:
+    """Independent reproducible stream per (seed, annotator, sample, ...)."""
+    ints = [coerce_seed(seed)]
+    for part in parts:
+        if isinstance(part, (int, np.integer)):
+            ints.append(int(part) & 0xFFFFFFFF)
+        else:
+            ints.append(zlib.crc32(str(part).encode("utf-8")) & 0xFFFFFFFF)
+    return np.random.default_rng(np.random.SeedSequence(ints))
+
+
+def _noisy_copy_column(
+    counts: np.ndarray,
+    rng: np.random.Generator,
+    error_scale: float = 0.15,
+) -> np.ndarray:
+    """Dirichlet-multinomial resample of one abundance column (not a clone)."""
+    counts = np.maximum(np.asarray(counts, dtype=float), 0.0)
+    total = int(round(float(counts.sum())))
+    if total <= 0:
+        return np.zeros_like(counts, dtype=float)
+    concentration = max(1.0, 1.0 / max(float(error_scale), 1e-6))
+    alpha = counts * (concentration / float(total)) + 0.05
+    p = rng.dirichlet(alpha)
+    p = p / p.sum()
+    return rng.multinomial(total, p).astype(float)
 
 
 def _taxid_columns(df: pd.DataFrame) -> List[str]:
@@ -182,9 +221,10 @@ def regenerate_bootstrap(
 
     Each synthetic column is a resample of a real sample with sampling error,
     not a mixture of all columns. Named samples prefer the matching source.
+    A fixed seed is reproducible but does not clone every column: each sample
+    name gets its own RNG stream.
     """
-    rng = np.random.default_rng(seed)
-    concentration = max(1.0, 1.0 / max(float(error_scale), 1e-6))
+    seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
     sample_col = "sample" if "sample" in data.columns else "sample"
     work = data.copy()
@@ -200,21 +240,18 @@ def regenerate_bootstrap(
         names = synthetic_sample_names(src_names, n_samples)
         values = mat.to_numpy(dtype=float)
         synth = {}
+        annotator = _annotator_name(col)
+        pick_rng = rng_for(seed, annotator, "source-pick")
         for name in names:
+            rng = rng_for(seed, annotator, name)
             if name in src_index:
                 src = src_index[name]
             else:
-                src = int(rng.integers(0, n_src))
-            counts = np.maximum(values[:, src], 0.0)
-            total = int(round(float(counts.sum())))
-            if total <= 0:
-                synth[name] = pd.Series(np.zeros(mat.shape[0]), index=mat.index)
-                continue
-            alpha = counts * (concentration / float(total)) + 0.05
-            p = rng.dirichlet(alpha)
-            p = p / p.sum()
-            drawn = rng.multinomial(total, p)
-            synth[name] = pd.Series(drawn.astype(float), index=mat.index)
+                src = int(pick_rng.integers(0, n_src))
+            synth[name] = pd.Series(
+                _noisy_copy_column(values[:, src], rng, error_scale=error_scale),
+                index=mat.index,
+            )
         synth_mat = pd.DataFrame(synth)
         synth_mat = _filter_taxa(synth_mat, threshold_amount, n_reads, rescale=rescale)
         synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
@@ -235,7 +272,7 @@ def regenerate_vae(
     """Sample synthetic profiles with a latent linear generative model (FA)."""
     from sklearn.decomposition import FactorAnalysis
 
-    rng = np.random.default_rng(seed)
+    seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
     sample_col = "sample" if "sample" in data.columns else "sample"
     work = data.copy()
@@ -245,36 +282,40 @@ def regenerate_vae(
         mat = _count_matrix(work, col, sample_col)
         mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
         names = synthetic_sample_names(list(mat.columns), n_samples)
+        annotator = _annotator_name(col)
         if mat.shape[0] < 2 or mat.shape[1] < 2:
             synth = {}
             cols = list(mat.columns) or ["1"]
             for i, name in enumerate(names):
                 src = cols[i % len(cols)]
-                synth[name] = mat[src] if src in mat.columns else mat.iloc[:, 0]
+                src_vec = mat[src] if src in mat.columns else mat.iloc[:, 0]
+                synth[name] = _noisy_copy_column(
+                    src_vec.to_numpy(dtype=float),
+                    rng_for(seed, annotator, name),
+                )
             synth_mat = pd.DataFrame(synth, index=mat.index)
             synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
-            name = _annotator_name(col)
-            result[name] = _abundance_table_from_matrix(synth_mat, name)
+            result[annotator] = _abundance_table_from_matrix(synth_mat, annotator)
             continue
         log_mat = np.log1p(mat.to_numpy(dtype=float))
         X = log_mat.T  # sklearn: samples x features (taxa)
         n_comp = min(int(latent_dim), X.shape[0] - 1, X.shape[1] - 1)
         n_comp = max(1, n_comp)
-        fa = FactorAnalysis(n_components=n_comp, random_state=int(seed or 0))
+        fa = FactorAnalysis(n_components=n_comp, random_state=seed)
         fa.fit(X)
         latent = fa.transform(X)
         latent_std = np.std(latent, axis=0)
         latent_std[latent_std == 0] = 1.0
         synth_cols = {}
         for name in names:
+            rng = rng_for(seed, annotator, name)
             z = rng.normal(0, 1, size=n_comp) * latent_std
             decoded = fa.mean_ + np.dot(z.reshape(1, -1), fa.components_).flatten()
             decoded = np.expm1(np.maximum(decoded, 0))
             synth_cols[name] = decoded
         synth_mat = pd.DataFrame(synth_cols, index=mat.index)
         synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
-        name = _annotator_name(col)
-        result[name] = _abundance_table_from_matrix(synth_mat, name)
+        result[annotator] = _abundance_table_from_matrix(synth_mat, annotator)
     return result
 
 
@@ -295,7 +336,7 @@ def regenerate_glm_python(
     (oriented co-occurrence, Rsq edge weights), then each synthetic community
     is generated by walking that graph from a random init taxon.
     """
-    rng = np.random.default_rng(seed)
+    seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
     sample_col = "sample" if "sample" in data.columns else "sample"
     work = data.copy()
@@ -309,10 +350,11 @@ def regenerate_glm_python(
         names = synthetic_sample_names(list(mat.columns), n_samples)
         values = np.maximum(mat.to_numpy(dtype=float), 0.0)
         synth_cols = {}
+        annotator = _annotator_name(col)
         for name in names:
             profile = _glm_boil_one(
                 values,
-                rng,
+                rng_for(seed, annotator, name),
                 min_cluster_size=min_cluster_size,
                 max_cluster_size=max_cluster_size,
                 noise_scale=noise_scale,
@@ -320,8 +362,7 @@ def regenerate_glm_python(
             synth_cols[name] = profile
         synth_mat = pd.DataFrame(synth_cols, index=mat.index)
         synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
-        name = _annotator_name(col)
-        result[name] = _abundance_table_from_matrix(synth_mat, name)
+        result[annotator] = _abundance_table_from_matrix(synth_mat, annotator)
     return result
 
 
@@ -338,7 +379,7 @@ def regenerate_annotation_tables(
     if n_reads is not None:
         n_reads = int(n_reads)
     threshold = float(cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5)))
-    seed = cfg.get("seed", 42)
+    seed = coerce_seed(cfg.get("seed", 42))
     rescale = bool(cfg.get("rescale_abundance", False))
     latent_dim = int(cfg.get("vae_latent_dim", 4))
     min_cluster_size = int(cfg.get("min_cluster_size", 2))

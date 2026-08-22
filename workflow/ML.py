@@ -62,6 +62,8 @@ parser.add_argument("--classify-unclassified", action="store_true",
                     help="If set, will attempt to classify sequences that have all taxid fields = 0")
 parser.add_argument("--features", "-f", type=str, required=False,
                     help="TSV/CSV of per-read features from src/annotators/fastq_annotator.py")
+parser.add_argument("--seed", type=int, default=42,
+                    help="Random seed for train/test split and classifiers")
 args = parser.parse_args()
 
 # Create output directory if it doesn't exist
@@ -99,7 +101,9 @@ if len(validation_df) == 0:
     raise SystemExit(0)
 
 try:
-    best_model, models, metrics, feature_cols = train_models(validation_df)
+    best_model, models, metrics, feature_cols = train_models(
+        validation_df, random_state=int(args.seed)
+    )
 except ValueError as exc:
     print(f"Skipping ML reprofiling: {exc}")
     raise SystemExit(0)

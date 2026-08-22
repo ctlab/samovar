@@ -403,14 +403,23 @@ def test_process_annotation_tables_modes_compatible_with_iss(
             assert n_cols
         assert differed, f"{mode} tables should differ from direct"
 
-    with patch("samovar.table2iss.subprocess.run", side_effect=_fake_iss):
+    with patch("samovar.table2iss.subprocess.run", side_effect=_fake_iss) as mocked:
         process_annotation_tables(
             table_paths=[str(p) for p in ann_files],
             genome_dir=str(genome_dir),
             output_dir=str(reads),
             annotation_dir=str(toy_annotation_dir),
             regeneration_config=regen_cfg,
+            seed=regen_cfg["seed"],
         )
+    iss_cmds = [
+        list(c.args[0])
+        for c in mocked.call_args_list
+        if c.args and isinstance(c.args[0], (list, tuple)) and c.args[0] and Path(str(c.args[0][0])).name == "iss"
+    ]
+    assert iss_cmds
+    for cmd in iss_cmds:
+        assert "--seed" in cmd
 
     for sample in expected_samples:
         for annotator in ("kaiju", "kraken2"):
@@ -418,7 +427,12 @@ def test_process_annotation_tables_modes_compatible_with_iss(
             assert (reads / f"{sample}_{annotator}_R2.fastq").exists()
 
     if mode == "direct":
-        assert not (reads / ".regenerated_abundance").exists()
+        sample_tables = _sample_tables_from_abundance_dir(
+            reads / ".regenerated_abundance", None
+        )
+        assert sorted(sample_tables) == sorted(expected_samples)
+        direct_from_disk = pd.read_csv(reads / ".regenerated_abundance" / "kaiju.csv")
+        assert _n_matrix(direct_tables["kaiju"]).equals(_n_matrix(direct_from_disk))
     else:
         sample_tables = _sample_tables_from_abundance_dir(
             reads / ".regenerated_abundance", None
@@ -484,3 +498,80 @@ def test_process_annotation_tables_samovar_mode_feeds_iss(
         {"regeneration_mode": "direct"},
     )["kaiju"]
     assert not _n_matrix(direct).equals(_n_matrix(kaiju))
+
+
+def test_bootstrap_seed_reproducible_but_not_constant():
+    rng = np.random.default_rng(0)
+    taxa = [562, 9606, 28901, 1423]
+    rows = []
+    for sample in ("1", "2", "3"):
+        for _ in range(40):
+            rows.append(
+                {
+                    "seq": f"{sample}_{len(rows)}",
+                    "sample": sample,
+                    "taxID_kaiju_0": int(rng.choice(taxa, p=[0.5, 0.3, 0.15, 0.05])),
+                }
+            )
+    data = pd.DataFrame(rows)
+    a = regenerate_bootstrap(data, n_samples=4, seed=11, rescale=False, error_scale=0.2)
+    b = regenerate_bootstrap(data, n_samples=4, seed=11, rescale=False, error_scale=0.2)
+    c = regenerate_bootstrap(data, n_samples=4, seed=99, rescale=False, error_scale=0.2)
+    ma, mb, mc = _n_matrix(a["kaiju"]), _n_matrix(b["kaiju"]), _n_matrix(c["kaiju"])
+    assert ma.equals(mb)
+    assert not ma.equals(mc)
+    profiles = {tuple(ma[col].tolist()) for col in ma.columns}
+    assert len(profiles) > 1
+
+
+def test_generative_modes_differ_from_each_other_and_direct(toy_annotation_dir):
+    data = read_annotation_dir(toy_annotation_dir)
+    tables = {
+        "direct": regenerate_preserve(data, rescale=False)["kaiju"],
+        "bootstrap": regenerate_bootstrap(data, n_samples=3, seed=5, rescale=False)["kaiju"],
+        "vae": regenerate_vae(data, n_samples=3, seed=5, rescale=False)["kaiju"],
+        "glm": regenerate_glm_python(data, n_samples=3, seed=5, rescale=False)["kaiju"],
+    }
+    matrices = {k: _n_matrix(v) for k, v in tables.items()}
+    keys = list(matrices)
+    for i, a in enumerate(keys):
+        for b in keys[i + 1 :]:
+            assert not matrices[a].equals(matrices[b]), f"{a} == {b}"
+
+
+def test_iss_readcounts_match_regenerated_glm_tables(
+    toy_annotation_dir, tmp_path
+):
+    from unittest.mock import patch
+
+    genome_dir = tmp_path / "genomes"
+    genome_dir.mkdir()
+    for taxid in ("562", "9606"):
+        (genome_dir / f"{taxid}.fa").write_text(f">{taxid}\nATCGATCG\n")
+    reads = tmp_path / "reads"
+    captured = {}
+
+    def fake(cmd, **kwargs):
+        if isinstance(cmd, (list, tuple)) and "--readcount_file" in cmd:
+            path = Path(cmd[cmd.index("--readcount_file") + 1])
+            captured[cmd[cmd.index("--output") + 1]] = path.read_text()
+        return _fake_iss(cmd, **kwargs)
+
+    regen_cfg = {"regeneration_mode": "glm", "N": 2, "seed": 8, "rescale_abundance": False}
+    with patch("samovar.table2iss.subprocess.run", side_effect=fake):
+        process_annotation_tables(
+            table_paths=[str(p) for p in sorted(toy_annotation_dir.glob("*.annotation.csv"))],
+            genome_dir=str(genome_dir),
+            output_dir=str(reads),
+            annotation_dir=str(toy_annotation_dir),
+            regeneration_config=regen_cfg,
+            seed=8,
+        )
+    glm = pd.read_csv(reads / ".regenerated_abundance" / "kaiju.csv")
+    n_cols = [c for c in glm.columns if str(c).startswith("N_")]
+    expected_total = int(glm[n_cols].sum().sum())
+    kaiju_key = next(k for k in captured if "kaiju" in k)
+    iss_total = sum(int(line.split()[-1]) for line in captured[kaiju_key].splitlines() if line.strip())
+    assert iss_total == expected_total
+    assert expected_total > 0
+

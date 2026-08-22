@@ -862,13 +862,14 @@ def process_annotation_tables(
             ``N``, ``N_reads``, ``seed``, etc.).
     """
     from samovar.regenerate import (
-        is_direct_mode,
-        normalize_regeneration_mode,
+        coerce_seed,
         write_samovar_config_defaults,
     )
 
     regen_cfg = write_samovar_config_defaults(dict(regeneration_config or {}))
-    mode = normalize_regeneration_mode(regen_cfg.get("regeneration_mode"))
+    if seed is None:
+        seed = regen_cfg.get("seed")
+    seed = coerce_seed(seed)
 
     table_paths = list(table_paths)
     email = email or default_entrez_email()
@@ -880,12 +881,19 @@ def process_annotation_tables(
             for name, path in zip(sample_names, table_paths)
         ]
 
+    if not annotation_dir and table_paths:
+        parent = os.path.dirname(os.path.abspath(table_paths[0]))
+        if all(os.path.dirname(os.path.abspath(p)) == parent for p in table_paths) and any(
+            os.path.basename(p).endswith(".annotation.csv") for p in table_paths
+        ):
+            annotation_dir = parent
+
     sample_tables: Dict[str, pd.DataFrame] = {}
-    if not is_direct_mode(mode) and annotation_dir:
+    if annotation_dir:
         regen_dir = os.path.join(output_dir, ".regenerated_abundance")
         cfg_out = dict(regen_cfg)
         cfg_out["output_dir"] = regen_dir
-        cfg_out["regeneration_mode"] = mode
+        cfg_out["seed"] = seed
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
             yaml.dump(cfg_out, tmp)
             tmp_config = tmp.name
@@ -982,7 +990,7 @@ def process_annotation_tables(
             model=model,
             genome_ids=genome_ids,
             cpus=cpus,
-            seed=seed,
+            seed=seed + annotators.index(annotator_name),
         )
         split_metagenome_to_samples(
             r1_full,
@@ -1011,7 +1019,10 @@ def generate_iss_test_samples(
     """
     Generate one host pool and one metagenome pool, then split them into samples.
     """
+    from samovar.regenerate import coerce_seed
+
     os.makedirs(output_dir, exist_ok=True)
+    seed = coerce_seed(seed)
     rng = random.Random(seed)
     samples = [str(i) for i in range(1, int(n_samples) + 1)]
 

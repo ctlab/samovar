@@ -118,6 +118,7 @@ rule process_annotations:
         cpus = CORES,
         annotation_dir = ANNOTATION_DIR,
         regeneration_config = REGENERATION_CONFIG,
+        seed = REGENERATION_CONFIG.get("seed", 42),
     run:
         try:
             process_annotation_tables(
@@ -130,6 +131,7 @@ rule process_annotations:
                 read_length=params.read_length,
                 max_genomes=params.max_genomes,
                 cpus=params.cpus,
+                seed=params.seed,
                 annotation_dir=params.annotation_dir,
                 regeneration_config=params.regeneration_config,
                 gzip_genomes=GZIP_GENOMES,

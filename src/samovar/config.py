@@ -537,7 +537,7 @@ fi
             f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
     $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial', '$out_dir/combined_temporary_R1.fastq')"
-    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} "$out_dir/combined_temporary_R1.fastq" -o "$out_dir/features.tsv" --chunk_size 50000
+    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} "$out_dir/combined_temporary_R1.fastq" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}
     rm -f "$out_dir/combined_temporary_R1.fastq"
     FEATURE_ARG="--features $out_dir/features.tsv"
 else
@@ -547,6 +547,7 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --reprofiling_dir "$out_dir/initial_annotations" \\
     --validation_file "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
     --output_dir "$out_dir/reprofiled_annotations" \\
+    --seed {self.regeneration_seed} \\
     $FEATURE_ARG""",
         )
 

@@ -223,6 +223,7 @@ def test_generate_pipeline():
         assert "workflow/combine_annotation_tables.py" in pipeline_content
         assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/ML.py" in pipeline_content
+        assert "--seed 42" in pipeline_content
         assert "samovar.seqio" in pipeline_content
         assert "link_or_copy_reads" in pipeline_content
         assert "cp data/test_genomes" not in pipeline_content

@@ -133,7 +133,7 @@ def _fit_or_partial(ipca, mbk, k_mat, n_pca, args):
         ipca = IncrementalPCA(n_components=n_pca)
         mbk = MiniBatchKMeans(
             n_clusters=n_clusters,
-            random_state=42,
+            random_state=getattr(args, "seed", 42),
             batch_size=min(args.chunk_size, max(n_samples, 1)),
             n_init="auto",
         )
@@ -170,10 +170,10 @@ def main():
         "--clusters", type=int, default=5, help="Number of KMeans clusters"
     )
     parser.add_argument(
-        "--chunk_size",
+        "--seed",
         type=int,
-        default=50000,
-        help="Number of reads to process in RAM at once",
+        default=42,
+        help="Random seed for MiniBatchKMeans / IncrementalPCA",
     )
     args = parser.parse_args()
 
