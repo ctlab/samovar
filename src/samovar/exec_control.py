@@ -11,6 +11,7 @@ import argparse
 import os
 import shutil
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
@@ -62,7 +63,21 @@ def mark_done(output_dir: PathLike, name: str) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     marker = dest / f"{name}.done"
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    marker.write_text(stamp + "\n", encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{name}.done.", suffix=".tmp", dir=str(dest)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(stamp + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, marker)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return marker
 
 
@@ -92,18 +107,11 @@ def listed_done(output_dir: PathLike) -> List[str]:
 
 
 def _is_tmp_dir(path: Path) -> bool:
-    name = path.name
-    if name in TMP_DIR_NAMES:
-        return True
-    if name.startswith("tmp_"):
-        return True
-    if name.endswith(".tmp"):
-        return True
-    return False
+    return path.name in TMP_DIR_NAMES
 
 
 def _is_tmp_file(name: str) -> bool:
-    return "iss.tmp" in name or name.endswith(".tmp")
+    return "iss.tmp" in name
 
 
 def cleanup_tmp(output_dir: PathLike) -> List[str]:

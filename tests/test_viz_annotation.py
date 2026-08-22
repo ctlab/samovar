@@ -91,6 +91,53 @@ def test_viz_annotation_writes_png(tmp_path):
     assert img.shape[0] > 50 and img.shape[1] > 50
 
 
+def test_require_viz_backend():
+    from samovar.viz_annotation import require_viz_backend
+
+    backend = require_viz_backend()
+    assert backend in {"cnsplots", "altair"}
+
+
+def test_compare_annotations_cli_fails_on_missing_dir(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    from samovar.paths import repo_root
+
+    script = repo_root() / "workflow" / "compare_annotations.py"
+    env = os.environ.copy()
+    src = str(repo_root() / "src")
+    env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    proc = subprocess.run(
+        [sys.executable, str(script), "--annotation_dir", str(tmp_path / "missing")],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode != 0
+
+
+def test_require_viz_backend():
+    from samovar.viz_annotation import require_viz_backend
+
+    backend = require_viz_backend()
+    assert backend in {"cnsplots", "altair"}
+
+
+def test_compare_annotations_cli_fails_on_missing_dir(tmp_path):
+    import subprocess
+    from samovar.paths import repo_root
+
+    script = repo_root() / "workflow" / "compare_annotations.py"
+    proc = subprocess.run(
+        ["python3", str(script), "--annotation_dir", str(tmp_path / "missing")],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+
+
 def test_compare_annotations_cli_integrity(tmp_path):
     src = Path("data/test_annotations")
     out = tmp_path / "plots"

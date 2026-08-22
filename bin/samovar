@@ -86,6 +86,7 @@ if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
     PYTHON="$(command -v python3 || command -v python || true)"
 fi
 PYTHON="${PYTHON:-python3}"
+export PYTHON_PATH="$PYTHON"
 
 case "${1:-}" in
     "generate")

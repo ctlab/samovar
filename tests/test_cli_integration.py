@@ -71,6 +71,12 @@ def test_prepare_writes_pipeline_and_configs(tmp_path):
     init_cfg = yaml.safe_load(Path(result["configs"]["init_annotator"]).read_text())
     types = {run["type"] for run in init_cfg["run_config"]}
     assert types == {"kraken2", "kaiju"}
+    cmds = {run["type"]: run["cmd"] for run in init_cfg["run_config"]}
+    assert cmds["kraken2"] == "kraken2"
+    assert cmds["kaiju"] == "kaiju"
+    for run in init_cfg["run_config"]:
+        assert Path(run["db_path"]).is_absolute()
+    assert Path(init_cfg["r1_dir"]).is_absolute()
 
 
 def test_build_from_config_invokes_kaiju_indexers(tmp_path):

@@ -241,7 +241,8 @@ PY
 echo "export NCBI_EMAIL=\"$NCBI_EMAIL\"" > "$USER_CFG_DIR/env"
 echo "export SAMOVAR_ROOT=\"$ROOT\"" >> "$USER_CFG_DIR/env"
 echo "export PYTHON_PATH=\"$PYTHON_PATH\"" >> "$USER_CFG_DIR/env"
-echo "export PATH=\"$ROOT/bin:\$PATH\"" >> "$USER_CFG_DIR/env"
+PY_BIN_DIR="$(dirname "$PYTHON_PATH")"
+echo "export PATH=\"$ROOT/bin:${PY_BIN_DIR}:\$PATH\"" >> "$USER_CFG_DIR/env"
 
 BIN_DIR="$ROOT/bin"
 UPDATE_SHELL="${SAMOVAR_UPDATE_SHELL:-1}"
@@ -287,6 +288,11 @@ SMOKE_FAIL=0
 print('\\n'.join('  WARN: '+x for x in p) or '  samovar.paths.smoke_test: ok');
 raise SystemExit(1 if p else 0)" || SMOKE_FAIL=1
 "$PYTHON_PATH" -c "import samovar; print('  import samovar: ok')" || SMOKE_FAIL=1
+"$PYTHON_PATH" -c "from samovar.viz_annotation import require_viz_backend; print('  viz backend:', require_viz_backend())" || {
+    echo "ERROR: cnsplots (preferred) or altair is required for pipeline plots."
+    echo "Re-run ./install.sh or: $PYTHON_PATH -m pip install 'cnsplots>=0.6.0' altair"
+    exit 1
+}
 if command -v iss >/dev/null 2>&1; then
     echo "  iss: $(command -v iss)"
 else

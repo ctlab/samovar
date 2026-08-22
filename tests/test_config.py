@@ -42,8 +42,8 @@ def test_pipeline_config_from_args_file():
         kaiju=None
     )
     config = PipelineConfig.from_args(args)
-    assert config.input_dir == "/path/to/input"
-    assert config.output_dir == test_output_dir
+    assert config.input_dir == str(Path("/path/to/input").resolve())
+    assert config.output_dir == str(Path(test_output_dir).resolve())
     assert config.read_length == 100
     assert config.coverage == 20
     assert config.email == "test@example.com"
@@ -78,7 +78,7 @@ annotators: []
         kaiju=None,
     )
     config = PipelineConfig.from_args(args)
-    assert config.output_dir == "/from/yaml/out"
+    assert config.output_dir == str(Path("/from/yaml/out").resolve())
 
 
 def test_pipeline_config_default_output_dir():
@@ -90,7 +90,7 @@ def test_pipeline_config_default_output_dir():
         kaiju=None,
     )
     config = PipelineConfig.from_args(args)
-    assert config.output_dir == "samovar_out"
+    assert config.output_dir == str((Path.cwd() / "samovar_out").resolve())
 
 def test_pipeline_config_from_args_cli():
     test_output_dir = 'tests_outs/test_pipeline_config_from_args_cli'
@@ -104,8 +104,8 @@ def test_pipeline_config_from_args_cli():
         kaiju=[["/path/to/kaiju /path/to/kaiju"]]
     )
     config = PipelineConfig.from_args(args)
-    assert config.input_dir == "/path/to/input"
-    assert config.output_dir == test_output_dir
+    assert config.input_dir == str(Path("/path/to/input").resolve())
+    assert config.output_dir == str(Path(test_output_dir).resolve())
     assert len(config.annotators) == 2
     k2 = next(a for a in config.annotators if a.type == "kraken2")
     assert k2.run_name == "kraken2"
@@ -150,9 +150,9 @@ def test_generate_configs():
     assert os.path.exists(configs['reannotate'])
     with open(configs['init_annotator'], 'r') as f:
         init_config = yaml.safe_load(f)
-        assert init_config['r1_dir'] == str(Path(test_output_dir) / 'initial')
-        assert init_config['r2_dir'] == str(Path(test_output_dir) / 'initial')
-        assert init_config['output_dir'] == str(Path(test_output_dir) / 'initial_reports')
+        assert init_config['r1_dir'] == str((Path(test_output_dir) / 'initial').resolve())
+        assert init_config['r2_dir'] == str((Path(test_output_dir) / 'initial').resolve())
+        assert init_config['output_dir'] == str((Path(test_output_dir) / 'initial_reports').resolve())
         assert len(init_config['run_config']) == 2
         k2_config = next(c for c in init_config['run_config'] if c['type'] == 'kraken2')
         assert k2_config['cmd'] == "/path/to/kraken2"
@@ -204,7 +204,10 @@ def test_generate_pipeline():
         assert "R_PATH=" not in pipeline_content
         
         # Check config file paths
-        assert f"out_dir=\"{test_output_dir}\"" in pipeline_content
+        assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
+        assert 'PYTHON_PATH="${PYTHON_PATH:-' in pipeline_content
+        assert '[ -f "$CKPT/$1.done" ]' in pipeline_content
+        assert "visualization failed; continuing" not in pipeline_content
         
         # Check snakemake commands
         assert "snakemake -s " in pipeline_content
@@ -270,4 +273,4 @@ def test_setup_pipeline():
     # Verify pipeline content
     with open(pipeline_path, 'r') as f:
         pipeline_content = f.read()
-        assert f"out_dir=\"{test_output_dir}\"" in pipeline_content 
+        assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content 

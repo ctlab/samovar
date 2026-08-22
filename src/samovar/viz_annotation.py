@@ -41,6 +41,30 @@ def _use_agg_backend() -> None:
     matplotlib.use("Agg")
 
 
+def require_viz_backend() -> str:
+    """Return ``cnsplots`` (preferred) or ``altair``.
+
+    Pipeline plots need at least one of these. ``./install.sh`` installs both
+    via pyproject; a compute node without either must fail rather than skip.
+    """
+    try:
+        import cnsplots  # noqa: F401
+
+        return "cnsplots"
+    except ImportError:
+        pass
+    try:
+        import altair  # noqa: F401
+
+        return "altair"
+    except ImportError:
+        pass
+    raise RuntimeError(
+        "Visualization requires cnsplots (preferred) or altair. "
+        "Reinstall with ./install.sh or: pip install 'cnsplots>=0.6.0' altair"
+    )
+
+
 def _setup_cns():
     _use_agg_backend()
     try:
@@ -708,6 +732,10 @@ def compare_annotations(
     split: bool = False,
 ) -> pd.DataFrame:
     """CLI analog of ``workflow/compare_annotations.R``."""
+    require_viz_backend()
+    annotation_path = Path(annotation_dir)
+    if not annotation_path.is_dir():
+        raise FileNotFoundError(f"annotation_dir not found: {annotation_path}")
     data = read_annotation_dir(annotation_dir)
     tax_cols = [c for c in data.columns if str(c).startswith("taxID_")]
     annotators = []

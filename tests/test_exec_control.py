@@ -67,10 +67,18 @@ def test_cleanup_tmp_removes_scratch_keeps_log(tmp_path):
     assert (tmp_path / ".log" / "checkpoints" / "setup_reads.done").is_file()
     assert (tmp_path / ".generate" / "generate.sh").is_file()
     assert (tmp_path / "reprofiled_annotations" / "keep.csv").is_file()
+    assert (tmp_path / "initial_reports" / "tmp_sample.out").is_dir()
     assert not (tmp_path / ".tmp").exists()
     assert not (tmp_path / ".iss_full").exists()
     assert not leftover.exists()
     assert any(".tmp" in path for path in removed)
+
+
+def test_mark_done_is_atomic(tmp_path):
+    marker = mark_done(tmp_path, "setup_reads")
+    assert marker.is_file()
+    leftovers = list((tmp_path / ".log" / "checkpoints").glob(".setup_reads.done.*"))
+    assert leftovers == []
 
 
 def test_exec_redo_clears_checkpoints(tmp_path):

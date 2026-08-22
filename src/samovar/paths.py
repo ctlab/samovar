@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.6"
+PACKAGE_VERSION = "0.10.7"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -71,6 +71,26 @@ def test_genomes_dir() -> Path:
     if override:
         return Path(override)
     return repo_root() / "data" / "test_genomes"
+
+
+def absolute_path(path: Optional[str]) -> str:
+    """Resolve ``path`` against the current working directory.
+
+    Used at ``samovar prepare`` so generated YAML/scripts do not depend on cwd
+    at ``samovar exec`` (e.g. Slurm ``cd $OUT``).
+    """
+    if path is None:
+        return ""
+    raw = str(path).strip()
+    if not raw:
+        return raw
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    try:
+        return str(candidate.resolve())
+    except OSError:
+        return str(candidate.absolute())
 
 
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -244,4 +264,10 @@ def smoke_test() -> List[str]:
         problems.append(f"workflow Snakefiles missing under {root}")
     if cxx_compiler() is None:
         problems.append("no C++ compiler (g++/c++/clang++) for annotation combiner")
+    try:
+        from samovar.viz_annotation import require_viz_backend
+
+        require_viz_backend()
+    except Exception as exc:
+        problems.append(str(exc))
     return problems

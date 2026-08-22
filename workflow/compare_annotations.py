@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 from samovar.viz_annotation import compare_annotations
@@ -23,19 +22,15 @@ def main(argv=None) -> int:
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    try:
-        compare_annotations(
-            annotation_dir=args.annotation_dir,
-            output_dir=args.output_dir,
-            csv_file=args.csv_file,
-            show_top=args.show_top,
-            types=("f1", "R2", "cv"),
-            rank=args.rank,
-            split=args.split,
-        )
-    except Exception as exc:
-        print(f"Skipping visualization due to error: {exc}", file=sys.stderr)
-        return 0
+    compare_annotations(
+        annotation_dir=args.annotation_dir,
+        output_dir=args.output_dir,
+        csv_file=args.csv_file,
+        show_top=args.show_top,
+        types=("f1", "R2", "cv"),
+        rank=args.rank,
+        split=args.split,
+    )
     return 0
 
 

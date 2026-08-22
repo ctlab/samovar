@@ -13,7 +13,16 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.6"
+    assert PACKAGE_VERSION == "0.10.7"
+
+
+def test_absolute_path_resolves_relative(tmp_path, monkeypatch):
+    from samovar.paths import absolute_path
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "reads").mkdir()
+    assert absolute_path("reads") == str((tmp_path / "reads").resolve())
+    assert absolute_path("/already/abs") == str(Path("/already/abs").resolve())
 
 
 def test_repo_root_contains_workflow():

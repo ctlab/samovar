@@ -27,9 +27,9 @@ def test_iss_config_from_args():
     )
     
     config = ISSTestConfig.from_args(args)
-    assert config.genome_dir == "/path/to/genomes"
-    assert config.output_dir == test_output_dir
-    assert config.host_genome == "/path/to/host.fna"
+    assert config.genome_dir == str(Path("/path/to/genomes").resolve())
+    assert config.output_dir == str(Path(test_output_dir).resolve())
+    assert config.host_genome == str(Path("/path/to/host.fna").resolve())
     assert config.n_samples == 5
     assert config.total_reads == 1000
     assert config.host_fraction == "0.1"
@@ -53,9 +53,9 @@ def test_iss_config_defaults():
     )
     
     config = ISSTestConfig.from_args(args)
-    assert config.genome_dir == "/path/to/genomes"
-    assert config.output_dir == test_output_dir
-    assert config.host_genome == "/path/to/host.fna"
+    assert config.genome_dir == str(Path("/path/to/genomes").resolve())
+    assert config.output_dir == str(Path(test_output_dir).resolve())
+    assert config.host_genome == str(Path("/path/to/host.fna").resolve())
     assert config.n_samples == 10  # default
     assert config.total_reads == 2000  # default
     assert config.host_fraction == "RANDOM"  # default
@@ -84,7 +84,7 @@ def test_generate_config():
     with open(config_path, 'r') as f:
         config_content = yaml.safe_load(f)
         assert config_content['genome_dir'] == "/path/to/genomes"
-        assert config_content['output_dir'] == str(Path(test_output_dir) / 'initial')
+        assert config_content['output_dir'] == str((Path(test_output_dir) / 'initial').resolve())
         assert config_content['host_genome'] == "/path/to/host.fna"
         assert config_content['n_samples'] == 5
         assert config_content['total_reads'] == 1000
@@ -111,7 +111,7 @@ def test_generate_pipeline():
         pipeline_content = f.read()
         assert "set -e" in pipeline_content
         assert "PYTHON_PATH=" in pipeline_content
-        assert f"out_dir=\"{test_output_dir}\"" in pipeline_content
+        assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "snakemake -s " in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
 
@@ -145,7 +145,7 @@ def test_setup_iss_test():
     with open(config_path, 'r') as f:
         config_content = yaml.safe_load(f)
         assert config_content['genome_dir'] == "/path/to/genomes"
-        assert config_content['output_dir'] == str(Path(test_output_dir) / 'initial')
+        assert config_content['output_dir'] == str((Path(test_output_dir) / 'initial').resolve())
         assert config_content['host_genome'] == "/path/to/host.fna"
         assert config_content['n_samples'] == 5
         assert config_content['total_reads'] == 1000
@@ -158,6 +158,6 @@ def test_setup_iss_test():
         pipeline_content = f.read()
         assert "set -e" in pipeline_content
         assert "PYTHON_PATH=" in pipeline_content
-        assert f"out_dir=\"{test_output_dir}\"" in pipeline_content
+        assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "snakemake -s " in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content 

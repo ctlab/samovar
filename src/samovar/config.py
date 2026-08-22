@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from samovar.exec_control import CHECKPOINT_STEPS
-from samovar.paths import ncbi_email, python_path, repo_root, resolve_executable, test_genomes_dir
+from samovar.paths import (
+    absolute_path,
+    ncbi_email,
+    python_path,
+    repo_root,
+    test_genomes_dir,
+)
 from samovar.regenerate import normalize_regeneration_mode
 
 DEFAULT_OUTPUT_DIR = "samovar_out"
@@ -33,6 +39,20 @@ def _checkpoint_block(name: str, body: str) -> str:
         f"  ckpt_finish {name}\n"
         f"fi\n"
     )
+
+
+def _portable_annotator_cmd(cmd: str) -> str:
+    """Keep PATH names in YAML; exec resolves via PATH / install config.
+
+    Absolute binaries the user passed explicitly are stored as-is.
+    """
+    return (cmd or "").strip()
+
+
+def _absolute_db_path(db_path: str) -> str:
+    if not db_path or db_path == ".":
+        return db_path or "."
+    return absolute_path(db_path)
 
 @dataclass
 class AnnotatorConfig:
@@ -105,12 +125,21 @@ class PipelineConfig:
                 # Handle annotators from config
                 if 'annotators' in input_config:
                     for ann in input_config['annotators']:
-                        config.annotators.append(AnnotatorConfig(**ann))
+                        payload = dict(ann)
+                        if payload.get("cmd"):
+                            payload["cmd"] = _portable_annotator_cmd(payload["cmd"])
+                        if "db_path" in payload:
+                            payload["db_path"] = _absolute_db_path(str(payload["db_path"]))
+                        config.annotators.append(AnnotatorConfig(**payload))
         elif args.input_dir:
             config.input_dir = args.input_dir
             config.output_dir = getattr(args, "output_dir", None) or DEFAULT_OUTPUT_DIR
         elif getattr(args, "output_dir", None):
             config.output_dir = args.output_dir
+
+        if config.input_dir:
+            config.input_dir = absolute_path(config.input_dir)
+        config.output_dir = absolute_path(config.output_dir or DEFAULT_OUTPUT_DIR)
 
         # Handle command line annotators
         # Get all attributes that start with 'cmd_'
@@ -147,8 +176,8 @@ class PipelineConfig:
                     config.annotators.append(AnnotatorConfig(
                         run_name=run_name,
                         type=type_name,
-                        cmd=resolve_executable(cmd, tool_key=type_name),
-                        db_path=db_path,
+                        cmd=_portable_annotator_cmd(cmd),
+                        db_path=_absolute_db_path(db_path),
                         extra=extra
                     ))
 
@@ -178,8 +207,8 @@ class PipelineConfig:
                     config.annotators.append(AnnotatorConfig(
                         run_name=type_name if attr != "dummy" else "dummy",
                         type=type_name,
-                        cmd=resolve_executable(cmd, tool_key=type_name),
-                        db_path=db_path,
+                        cmd=_portable_annotator_cmd(cmd),
+                        db_path=_absolute_db_path(db_path),
                         extra=extra
                     ))
 
@@ -192,7 +221,7 @@ class PipelineConfig:
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
         """Generate all necessary config files and return their paths"""
-        base_path = Path(base_dir)
+        base_path = Path(absolute_path(base_dir))
         configs_dir = base_path / '.log' / 'configs'
         configs_dir.mkdir(parents=True, exist_ok=True)
         configs = {}
@@ -271,6 +300,7 @@ class PipelineConfig:
 
     def generate_pipeline(self, base_dir: str) -> str:
         """Generate the pipeline script and return its path"""
+        base_dir = absolute_path(base_dir)
         base_path = Path(base_dir)
         log_dir = base_path / '.log'
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -296,8 +326,12 @@ export SAMOVAR_ROOT="{root}"
 export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"
 export PATH="{root}/bin:$PATH"
 export PYTHONPATH="{src}${{PYTHONPATH:+:$PYTHONPATH}}"
-PYTHON_PATH="{py}"
-PYTHON_PATH=${{PYTHON_PATH:-python3}}
+# Honor env PYTHON_PATH (install.sh writes it); fall back to the prepare-time interpreter.
+PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
+if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
+  PYTHON_PATH="$(command -v python3 || command -v python || true)"
+fi
+PYTHON_PATH="${{PYTHON_PATH:-python3}}"
 
 out_dir="{base_dir}"
 CKPT="$out_dir/.log/checkpoints"
@@ -305,7 +339,7 @@ mkdir -p "$CKPT"
 # Checkpoint names: {step_names}
 
 ckpt_skip() {{
-  "$PYTHON_PATH" -m samovar.exec_control skip "$out_dir" "$1"
+  [ "${{SAMOVAR_REDO:-0}}" = "0" ] && [ -f "$CKPT/$1.done" ]
 }}
 
 ckpt_finish() {{
@@ -320,17 +354,17 @@ cleanup_tmp_if_requested() {{
   fi
 }}
 
-mkdir -p $out_dir
-mkdir -p $out_dir/initial $out_dir/initial_reports $out_dir/regenerated $out_dir/regenerated_reports
+mkdir -p "$out_dir"
+mkdir -p "$out_dir/initial" "$out_dir/initial_reports" "$out_dir/regenerated" "$out_dir/regenerated_reports"
 """
 
         setup_reads = _checkpoint_block(
             "setup_reads",
             f"""# Link/copy source reads into output initial/ when input_dir is provided
 # and is not already the destination (generate→preprocess sets input_dir=initial).
-if [ -n "{self.input_dir}" ] && [ -d "{self.input_dir}" ]; then
-    src_dir=$(readlink -f "{self.input_dir}")
-    dst_dir=$(readlink -f "$out_dir/initial")
+if [ -n "{self.input_dir or ''}" ] && [ -d "{self.input_dir or ''}" ]; then
+    src_dir=$(readlink -f "{self.input_dir or ''}" || realpath "{self.input_dir or ''}")
+    dst_dir=$(readlink -f "$out_dir/initial" || realpath "$out_dir/initial")
     if [ "$src_dir" != "$dst_dir" ]; then
         $PYTHON_PATH -c "from samovar.seqio import link_or_copy_reads; link_or_copy_reads('$src_dir', '$dst_dir')"
     fi
@@ -347,28 +381,28 @@ fi""",
         combine_initial = _checkpoint_block(
             "combine_initial",
             f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
-    -i $out_dir/initial_reports \\
-    -o $out_dir/initial_annotations""",
+    -i "$out_dir/initial_reports" \\
+    -o "$out_dir/initial_annotations\"""",
         )
 
         viz_initial = _checkpoint_block(
             "viz_initial",
             f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
-    --annotation_dir $out_dir/initial_annotations \\
-    --output_dir $out_dir/initial_annotations_plots \\
-    --show_top 0 || echo "Warning: initial visualization failed; continuing\"""",
+    --annotation_dir "$out_dir/initial_annotations" \\
+    --output_dir "$out_dir/initial_annotations_plots" \\
+    --show_top 0""",
         )
 
         seed_genomes = _checkpoint_block(
             "seed_genomes",
             f"""# Seed toy genomes only when the destination is empty and bundled test genomes exist.
-mkdir -p $out_dir/genomes
-if ! ls $out_dir/genomes/* >/dev/null 2>&1; then
+mkdir -p "$out_dir/genomes"
+if ! ls "$out_dir/genomes/"* >/dev/null 2>&1; then
     if [ -d "{genomes}/meta" ]; then
-        cp "{genomes}/meta/"* $out_dir/genomes/ 2>/dev/null || true
+        cp "{genomes}/meta/"* "$out_dir/genomes/" 2>/dev/null || true
     fi
     if [ -d "{genomes}/host" ]; then
-        cp "{genomes}/host/"* $out_dir/genomes/ 2>/dev/null || true
+        cp "{genomes}/host/"* "$out_dir/genomes/" 2>/dev/null || true
     fi
 fi""",
         )
@@ -380,10 +414,10 @@ fi""",
     --cores {self.cores}
 
 {{
-    find $out_dir/regenerated -type f -empty -delete || true
-    rm -f $out_dir/regenerated/*processed* || true
-    rm -f $out_dir/regenerated/*_abundance* || true
-    rm -f $out_dir/regenerated/*iss.tmp* || true
+    find "$out_dir/regenerated" -type f -empty -delete || true
+    rm -f "$out_dir/regenerated/"*processed* || true
+    rm -f "$out_dir/regenerated/"*_abundance* || true
+    rm -f "$out_dir/regenerated/"*iss.tmp* || true
 }} || {{
     echo "Warning: Some cleanup operations failed"
 }}""",
@@ -398,7 +432,7 @@ fi
 
         sort_reads = _checkpoint_block(
             "sort_reads",
-            f"""{root / 'bin' / 'samovar'} tools --sort --output_dir $out_dir""",
+            f"""{root / 'bin' / 'samovar'} tools --sort --output_dir "$out_dir\"""",
         )
 
         annotate_regenerated = _checkpoint_block(
@@ -411,18 +445,18 @@ fi
         combine_regenerated = _checkpoint_block(
             "combine_regenerated",
             f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
-    -i $out_dir/regenerated_reports \\
-    -o $out_dir/regenerated_annotations \\
+    -i "$out_dir/regenerated_reports" \\
+    -o "$out_dir/regenerated_annotations" \\
     -s 2""",
         )
 
         viz_regenerated = _checkpoint_block(
             "viz_regenerated",
             f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
-    --annotation_dir $out_dir/regenerated_annotations \\
-    --output_dir $out_dir/regenerated_annotations_plots \\
-    --csv $out_dir/regenerated_annotations/combined_annotation_table.csv \\
-    --show_top 0 || echo "Warning: regenerated visualization failed; continuing\"""",
+    --annotation_dir "$out_dir/regenerated_annotations" \\
+    --output_dir "$out_dir/regenerated_annotations_plots" \\
+    --csv "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
+    --show_top 0""",
         )
 
         reprofile = _checkpoint_block(
@@ -430,26 +464,26 @@ fi
             f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
     $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial', '$out_dir/combined_temporary_R1.fastq')"
-    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} $out_dir/combined_temporary_R1.fastq -o $out_dir/features.tsv --chunk_size 50000
-    rm -f $out_dir/combined_temporary_R1.fastq
+    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} "$out_dir/combined_temporary_R1.fastq" -o "$out_dir/features.tsv" --chunk_size 50000
+    rm -f "$out_dir/combined_temporary_R1.fastq"
     FEATURE_ARG="--features $out_dir/features.tsv"
 else
     FEATURE_ARG=""
 fi
 $PYTHON_PATH {wf / 'ML.py'} \\
-    --reprofiling_dir $out_dir/initial_annotations \\
-    --validation_file $out_dir/regenerated_annotations/combined_annotation_table.csv \\
-    --output_dir $out_dir/reprofiled_annotations \\
+    --reprofiling_dir "$out_dir/initial_annotations" \\
+    --validation_file "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
+    --output_dir "$out_dir/reprofiled_annotations" \\
     $FEATURE_ARG""",
         )
 
         viz_reprofiled = _checkpoint_block(
             "viz_reprofiled",
             f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
-    --annotation_dir $out_dir/reprofiled_annotations \\
-    --output_dir $out_dir/reprofiled_annotations_plots \\
-    --csv $out_dir/reprofiled_annotations/combined_annotation_table.csv \\
-    --show_top 0 || echo "Warning: reprofiled visualization failed; continuing\"""",
+    --annotation_dir "$out_dir/reprofiled_annotations" \\
+    --output_dir "$out_dir/reprofiled_annotations_plots" \\
+    --csv "$out_dir/reprofiled_annotations/combined_annotation_table.csv" \\
+    --show_top 0""",
         )
 
         footer = """cleanup_tmp_if_requested

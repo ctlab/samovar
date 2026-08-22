@@ -19,10 +19,12 @@ class ISSTestConfig:
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'ISSTestConfig':
+        from samovar.paths import absolute_path
+
         return cls(
-            genome_dir=args.genome_dir,
-            output_dir=args.output_dir,
-            host_genome=args.host_genome,
+            genome_dir=absolute_path(args.genome_dir),
+            output_dir=absolute_path(args.output_dir),
+            host_genome=absolute_path(args.host_genome),
             n_samples=args.n_samples if args.n_samples is not None else 10,
             total_reads=args.total_reads if args.total_reads is not None else 2000,
             host_fraction=args.host_fraction if args.host_fraction is not None else "RANDOM",
@@ -33,7 +35,9 @@ class ISSTestConfig:
 
     def generate_config(self, base_dir: str) -> str:
         """Generate ISS test config file and return its path"""
-        base_path = Path(base_dir)
+        from samovar.paths import absolute_path
+
+        base_path = Path(absolute_path(base_dir))
         configs_dir = base_path / '.generate' / 'configs'
         configs_dir.mkdir(parents=True, exist_ok=True)
         
@@ -59,6 +63,9 @@ class ISSTestConfig:
 
     def generate_pipeline(self, base_dir: str) -> str:
         """Generate the ISS test pipeline script and return its path"""
+        from samovar.paths import absolute_path, python_path, repo_root
+
+        base_dir = absolute_path(base_dir)
         base_path = Path(base_dir)
         generate_dir = base_path / '.generate'
         generate_dir.mkdir(parents=True, exist_ok=True)
@@ -69,8 +76,6 @@ class ISSTestConfig:
         config_path = self.generate_config(base_dir)
         
         # Generate pipeline script
-        from samovar.paths import python_path, repo_root
-
         root = repo_root()
         py = python_path()
         snakefile = root / "workflow" / "iss_test" / "Snakefile"
@@ -79,7 +84,11 @@ set -e
 export SAMOVAR_ROOT="{root}"
 export PATH="{root}/bin:$PATH"
 export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
-PYTHON_PATH="{py}"
+PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
+if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
+  PYTHON_PATH="$(command -v python3 || command -v python || true)"
+fi
+PYTHON_PATH="${{PYTHON_PATH:-python3}}"
 
 out_dir="{base_dir}"
 mkdir -p $out_dir
