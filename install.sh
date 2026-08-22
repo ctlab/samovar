@@ -6,12 +6,14 @@
 #   ./install.sh                 Python pipeline only
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
+#   ./install.sh MultiQC         optional MultiQC reports (https://seqera.io/multiqc/)
 #
 # Environment:
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
 #   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
 #   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
+#   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
@@ -182,6 +184,50 @@ print("Updated config opal_path:", cfg.get("opal_path"))
 PY
 }
 
+install_multiqc() {
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Skipping MultiQC install in offline mode."
+        return 1
+    fi
+    echo "Installing optional MultiQC (https://seqera.io/multiqc/) ..."
+    if ! "$PYTHON_PATH" -m pip install "multiqc>=1.21" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
+        echo "Warning: pip install multiqc failed. HTML reports from MultiQC will be skipped."
+        echo "Install later with: ./install.sh MultiQC"
+        return 1
+    fi
+    hash -r 2>/dev/null || true
+    export PY_BIN
+    "$PYTHON_PATH" - <<'PY'
+import os, shutil, sys
+from pathlib import Path
+
+try:
+    from samovar.paths import discover_multiqc, load_config, write_config
+except ImportError:
+    print("Warning: samovar is not importable yet; re-run ./install.sh to record multiqc_path")
+    raise SystemExit(0)
+
+found = discover_multiqc() or shutil.which("multiqc")
+py_bin = Path(os.environ.get("PY_BIN") or Path(sys.executable).parent)
+for extra in (py_bin / "multiqc", Path.home() / ".local" / "bin" / "multiqc"):
+    if extra.is_file() and (not found):
+        found = str(extra.resolve())
+        break
+if not found:
+    print("Warning: multiqc installed but the CLI was not found on PATH.")
+    print("Add it with: multiqc_path in ~/.config/samovar/config.json")
+    raise SystemExit(1)
+cfg = load_config()
+cfg["multiqc_path"] = str(found)
+tools = dict(cfg.get("tools") or {})
+tools["multiqc"] = str(found)
+cfg["tools"] = tools
+write_config(cfg)
+print("MultiQC:", found)
+print("Updated config multiqc_path:", cfg.get("multiqc_path"))
+PY
+}
+
 if [ "${1:-}" = "R-package" ] || [ "${1:-}" = "r-package" ]; then
     echo "R-package mode (Python tree is unchanged)."
     install_samovar_r_package
@@ -198,6 +244,19 @@ if [ "${1:-}" = "OPAL" ] || [ "${1:-}" = "opal" ]; then
         fi
     fi
     install_opal
+    exit $?
+fi
+
+if [ "${1:-}" = "MultiQC" ] || [ "${1:-}" = "multiqc" ]; then
+    echo "MultiQC mode (optional HTML report; native plot picker + --export)."
+    PIP_OPTS=()
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        PIP_OPTS+=(--offline --no-build-isolation)
+        if [ -n "${SAMOVAR_WHEELHOUSE:-}" ]; then
+            PIP_OPTS+=(--no-index --find-links "$SAMOVAR_WHEELHOUSE")
+        fi
+    fi
+    install_multiqc
     exit $?
 fi
 
@@ -313,6 +372,12 @@ else
     echo "Skipping OPAL (not required). Use ./install.sh OPAL to install CAMI OPAL (cami-opal)."
 fi
 
+if [ "${SAMOVAR_INSTALL_MULTIQC:-0}" != "0" ]; then
+    install_multiqc || echo "Warning: optional MultiQC install did not complete."
+else
+    echo "Skipping MultiQC (not required). Use ./install.sh MultiQC to install MultiQC."
+fi
+
 # Write ~/.config/samovar/config.json (and build/config.json copy)
 export USER_CFG_DIR
 export SAMOVAR_ROOT="$ROOT"
@@ -323,6 +388,7 @@ from pathlib import Path
 from samovar.paths import (
     PACKAGE_VERSION,
     collect_runtime_path_dirs,
+    discover_multiqc,
     discover_opal,
     discover_tools,
     load_config,
@@ -346,6 +412,7 @@ payload = {
     "r_lib_path": existing.get("r_lib_path", ""),
     "iss_path": shutil.which("iss") or tools.get("iss", ""),
     "opal_path": existing.get("opal_path") or discover_opal() or shutil.which("opal.py") or shutil.which("opal") or "",
+    "multiqc_path": existing.get("multiqc_path") or discover_multiqc() or shutil.which("multiqc") or "",
     "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
     "test_genomes": os.path.join(root, "data", "test_genomes"),
     "genomes": existing.get("genomes") or str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"),
@@ -363,6 +430,9 @@ if existing.get("annotation_regenerate_r"):
     payload["annotation_regenerate_r"] = existing["annotation_regenerate_r"]
 if payload.get("opal_path"):
     tools.setdefault("opal.py", payload["opal_path"])
+    payload["tools"] = tools
+if payload.get("multiqc_path"):
+    tools.setdefault("multiqc", payload["multiqc_path"])
     payload["tools"] = tools
 write_config(payload)
 user_cfg = Path(os.environ["USER_CFG_DIR"])
@@ -406,6 +476,10 @@ if payload.get("opal_path"):
     print(f"OPAL (cami-opal): {payload['opal_path']}")
 else:
     print("OPAL: not found. ./install.sh OPAL to install CAMI OPAL and record opal_path.")
+if payload.get("multiqc_path"):
+    print(f"MultiQC: {payload['multiqc_path']}")
+else:
+    print("MultiQC: not found. ./install.sh MultiQC to install MultiQC and record multiqc_path.")
 PY
 
 BIN_DIR="$ROOT/bin"
@@ -478,6 +552,7 @@ if [ ! -f "$ROOT/workflow/annotators/Snakefile" ]; then
     echo "  workflow: MISSING"; SMOKE_FAIL=1
 fi
 "$PYTHON_PATH" -c "from samovar.opal import opal_executable; p=opal_executable(); print('  opal.py:', p or 'not found (optional; ./install.sh OPAL)')" || true
+"$PYTHON_PATH" -c "from samovar.paths import discover_multiqc; p=discover_multiqc(); print('  multiqc:', p or 'not found (optional; ./install.sh MultiQC)')" || true
 if [ "$SMOKE_FAIL" != "0" ]; then
     echo "Smoke test reported missing pieces (see above). Core Python package may still work."
 else

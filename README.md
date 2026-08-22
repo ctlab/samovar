@@ -80,6 +80,7 @@ It will prompt for an NCBI Entrez email (genome downloads). In CI the default is
 - Air-gapped: `SAMOVAR_OFFLINE=1 SAMOVAR_WHEELHOUSE=/path/to/wheels ./install.sh`
 - Optional R package: `./install.sh R-package` (installs `samovaR` from GitHub branch [`r-package`](https://github.com/ctlab/samovar/tree/r-package) if it is not already present; warns with the installed version if it is)
 - Optional [CAMI OPAL](https://github.com/CAMI-challenge/OPAL): `./install.sh OPAL` (or `SAMOVAR_INSTALL_OPAL=1 ./install.sh`). Pipeline plots always include OPAL-style metrics; `opal.py` adds the CAMI HTML report when present. Disable a run with `SAMOVAR_OPAL=0`.
+- Optional [MultiQC](https://seqera.io/multiqc/): `./install.sh MultiQC` (or `SAMOVAR_INSTALL_MULTIQC=1 ./install.sh`). `samovar prepare` turns the end-of-run report **on by default when MultiQC is installed** (`--multiqc` / `--no-multiqc`). Native heatmaps/scatters/bars use MultiQC's plot picker and `--export`; Altair HTML is included as extra interactive views. Disable a run with `SAMOVAR_MULTIQC=0`.
 
 Annotators such as `kraken2` and `kaiju` may be given as names on `$PATH` (no full path required):
 
@@ -108,11 +109,16 @@ samovar prepare \
 samovar exec --output_dir samovar_out
 # Optional: drop `.tmp` / ISS scratch after a successful run
 # samovar exec --output_dir samovar_out --cleanup-tmp
-# Interactive MultiQC report (Altair + cnsplots + OPAL, plus stage JSON like fastp)
-# samovar multiqc --output_dir samovar_out
+# MultiQC (optional, like OPAL): default on at prepare-time if MultiQC is installed.
+# samovar prepare --output_dir samovar_out --no-multiqc
+# samovar multiqc --output_dir samovar_out -- --export --interactive
 ```
 
-Each exec step writes `.log/multiqc/<stage>.samovar.json` (FastQC/fastp-style summaries). `samovar multiqc` restages those files plus **Altair** HTML (F1, R², CV, scores) as stock MultiQC `*_mqc.html` under `multiqc_samovar/` and writes `multiqc/multiqc_report.html`.
+Each exec step writes `.log/multiqc/<stage>.samovar.json` (FastQC/fastp-style summaries). When MultiQC is on PATH, `exec` (or `samovar multiqc`) runs the **real** `multiqc` CLI on `multiqc_samovar/` so you can tick plots in the HTML report and dump PNG/SVG/PDF with `--export`. You can also run it yourself:
+
+```bash
+multiqc samovar_out/multiqc_samovar -o samovar_out/multiqc -p --interactive
+```
 
 Toy indexes built from `data/test_genomes` **omit Escherichia from Kraken2 and Phage Phi X from Kaiju** (`--example-omit`). That is only an example of a missing-taxon gap; the build prints a warning. Do not use it for production databases.
 

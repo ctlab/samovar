@@ -4,6 +4,7 @@ from samovar.paths import (
     PACKAGE_VERSION,
     annotation_regenerate_r,
     collect_runtime_path_dirs,
+    discover_multiqc,
     discover_opal,
     iss_executable,
     ncbi_email,
@@ -15,7 +16,7 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.12"
+    assert PACKAGE_VERSION == "0.10.13"
 
 
 def test_discover_opal_from_config(tmp_path, monkeypatch):
@@ -28,6 +29,19 @@ def test_discover_opal_from_config(tmp_path, monkeypatch):
     monkeypatch.delenv("SAMOVAR_OPAL_PATH", raising=False)
     monkeypatch.delenv("SAMOVAR_OPAL_BIN", raising=False)
     assert discover_opal() == str(script.resolve())
+
+
+def test_discover_multiqc_from_config(tmp_path, monkeypatch):
+    exe = tmp_path / "multiqc"
+    exe.write_text("#!/usr/bin/env python3\nprint('multiqc')\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {"multiqc_path": str(exe)},
+    )
+    monkeypatch.delenv("SAMOVAR_MULTIQC_PATH", raising=False)
+    monkeypatch.delenv("SAMOVAR_MULTIQC_BIN", raising=False)
+    assert discover_multiqc() == str(exe.resolve())
 
 
 def test_collect_runtime_path_dirs_includes_opal(tmp_path):

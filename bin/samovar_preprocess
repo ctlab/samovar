@@ -78,6 +78,22 @@ def main():
         action='store_true',
         help='Allow truncated bundled data/test_genomes (ISS/CI only; never for real metagenomes)',
     )
+    parser.set_defaults(run_multiqc=None)
+    mq_group = parser.add_mutually_exclusive_group()
+    mq_group.add_argument(
+        '--multiqc',
+        dest='run_multiqc',
+        action='store_const',
+        const=True,
+        help='Run MultiQC at the end of exec (default: on if MultiQC is installed)',
+    )
+    mq_group.add_argument(
+        '--no-multiqc',
+        dest='run_multiqc',
+        action='store_const',
+        const=False,
+        help='Do not run MultiQC from exec (stage JSON is still written)',
+    )
 
     # Parse known args first to get output_dir
     args, remaining = parser.parse_known_args()

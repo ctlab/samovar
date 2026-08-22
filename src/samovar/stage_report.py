@@ -296,13 +296,154 @@ def _html_comment(meta: Dict[str, str]) -> str:
     for key, value in meta.items():
         if value is None:
             continue
-        lines.append(f"{key}: {value}")
+        lines.append(f"{key}: {json.dumps(value)}")
     lines.append("-->")
     return "\n".join(lines) + "\n"
 
 
 def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_")
+
+
+def plot_parent(out_dir: PathLike) -> tuple:
+    name = as_path(out_dir).name
+    for stage, dirs in STAGE_DIRS.items():
+        if name in dirs:
+            info = STAGE_INFO[stage]
+            return f"samovar_{stage}", info["title"], info["description"]
+    return "samovar_plots", "Annotation plots", ""
+
+
+def _heatmap_pconfig(plot_id: str, title: str, xlab: str, ylab: str) -> Dict[str, Any]:
+    # Keep FPC / true-vs-pred order; do not treat taxIDs as sample names.
+    return {
+        "id": plot_id,
+        "title": title,
+        "xlab": xlab,
+        "ylab": ylab,
+        "min": 0,
+        "square": False,
+        "xcats_samples": False,
+        "ycats_samples": False,
+        "cluster_rows": False,
+        "cluster_cols": False,
+    }
+
+
+def write_heatmap_mqc(
+    matrix,
+    path: PathLike,
+    *,
+    section_name: str,
+    description: str,
+    xlab: str,
+    ylab: str,
+    plot_id: Optional[str] = None,
+    parent_id: Optional[str] = None,
+    parent_name: Optional[str] = None,
+) -> Path:
+    """Native MultiQC heatmap (selectable + ``--export``)."""
+    dest = as_path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pid, pname, pdesc = plot_parent(dest.parent)
+    stem = dest.stem.replace("_mqc", "")
+    cid = plot_id or f"{pid}_{stem}"
+    values = matrix.to_numpy(dtype=float).tolist()
+    payload = {
+        "id": cid,
+        "section_id": cid,
+        "parent_id": parent_id or pid,
+        "parent_name": parent_name or pname,
+        "parent_description": pdesc,
+        "section_name": section_name,
+        "description": description,
+        "plot_type": "heatmap",
+        "xcats": [str(c) for c in matrix.columns],
+        "ycats": [str(c) for c in matrix.index],
+        "pconfig": _heatmap_pconfig(f"{cid}_plot", section_name, xlab, ylab),
+        "data": values,
+    }
+    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    return dest
+
+
+def write_scatter_mqc(
+    table,
+    path: PathLike,
+    *,
+    section_name: str,
+    description: str,
+    xlab: str,
+    ylab: str,
+    x: str = "pred_n",
+    y: str = "true_n",
+    label: str = "true",
+    plot_id: Optional[str] = None,
+    parent_id: Optional[str] = None,
+    parent_name: Optional[str] = None,
+) -> Path:
+    """Native MultiQC scatter (selectable + ``--export``)."""
+    dest = as_path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pid, pname, pdesc = plot_parent(dest.parent)
+    stem = dest.stem.replace("_mqc", "")
+    cid = plot_id or f"{pid}_{stem}"
+    data = {}
+    for _, row in table.iterrows():
+        key = str(row.get(label, len(data)))
+        data[key] = {"x": float(row[x]), "y": float(row[y])}
+    payload = {
+        "id": cid,
+        "section_id": cid,
+        "parent_id": parent_id or pid,
+        "parent_name": parent_name or pname,
+        "parent_description": pdesc,
+        "section_name": section_name,
+        "description": description,
+        "plot_type": "scatter",
+        "pconfig": {
+            "id": f"{cid}_plot",
+            "title": section_name,
+            "xlab": xlab,
+            "ylab": ylab,
+        },
+        "data": data,
+    }
+    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    return dest
+
+
+def _normalize_mqc_json(
+    payload: Dict[str, Any],
+    *,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    stem: str,
+) -> Dict[str, Any]:
+    """Make IDs unique per stage and fix Plotly defaults that break taxID heatmaps."""
+    cid = f"{parent_id}_{stem}"
+    payload["id"] = cid
+    payload["section_id"] = cid
+    payload["parent_id"] = parent_id
+    payload["parent_name"] = parent_name
+    payload["parent_description"] = parent_description
+    section = str(payload.get("section_name") or stem).strip()
+    if parent_name and not section.startswith(parent_name):
+        payload["section_name"] = f"{parent_name} — {section}"
+    pconfig = dict(payload.get("pconfig") or {})
+    pconfig["id"] = f"{cid}_plot"
+    if payload.get("plot_type") == "heatmap":
+        pconfig.setdefault("xcats_samples", False)
+        pconfig.setdefault("ycats_samples", False)
+        pconfig.setdefault("cluster_rows", False)
+        pconfig.setdefault("cluster_cols", False)
+        pconfig.setdefault("square", False)
+    if payload.get("plot_type") == "bargraph":
+        pconfig.setdefault("stacking", "group")
+        pconfig.setdefault("cpswitch", False)
+    payload["pconfig"] = pconfig
+    return payload
 
 
 def _altair_caption(stem: str) -> tuple:
@@ -379,21 +520,41 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
     info = STAGE_INFO.get(stage, {"title": stage, "description": ""})
     parent_id = f"samovar_{stage}"
     prefix = f"{order:02d}_{_slug(info['title'])}"
+    for src in sorted(plots.glob("*_mqc.json")):
+        try:
+            payload = json.loads(src.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        payload = _normalize_mqc_json(
+            payload,
+            parent_id=parent_id,
+            parent_name=info["title"],
+            parent_description=info["description"],
+            stem=src.stem.replace("_mqc", ""),
+        )
+        out = dest / f"{prefix}_{src.name}"
+        out.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+        written.append(out)
     for src in sorted(plots.glob("*.html")):
-        if not src.is_file():
+        if not src.is_file() or src.name.endswith("_mqc.html"):
             continue
         stem = _slug(src.stem)
         title, caption = _altair_caption(src.stem)
+        html_id = f"{parent_id}_{stem}_altair"
         meta = {
-            "id": f"{parent_id}_{stem}",
+            "id": html_id,
+            "section_id": html_id,
             "parent_id": parent_id,
             "parent_name": info["title"],
+            "parent_description": info["description"],
             "section_name": f"{info['title']} — {title}",
             "description": caption,
             "plot_type": "html",
         }
-        out = dest / f"{prefix}_{stem}_mqc.html"
-        out.write_text(_altair_mqc_html(src, meta, f"vis_{parent_id}_{stem}"), encoding="utf-8")
+        out = dest / f"{prefix}_{stem}_altair_mqc.html"
+        out.write_text(_altair_mqc_html(src, meta, f"vis_{html_id}"), encoding="utf-8")
         written.append(out)
     scores = _read_scores_table(plots)
     if scores:
@@ -412,8 +573,10 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
             data[name] = entry
         payload = {
             "id": f"{parent_id}_quality_scores",
+            "section_id": f"{parent_id}_quality_scores",
             "parent_id": parent_id,
             "parent_name": info["title"],
+            "parent_description": info["description"],
             "section_name": f"{info['title']} — quality scores",
             "description": (
                 "Per-annotator classification and OPAL-style profile metrics "
@@ -458,8 +621,10 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
                 }
             bar_payload = {
                 "id": f"{parent_id}_score_bars",
+                "section_id": f"{parent_id}_score_bars",
                 "parent_id": parent_id,
                 "parent_name": info["title"],
+                "parent_description": info["description"],
                 "section_name": f"{info['title']} — score bars",
                 "description": "Interactive MultiQC bar graph of the main 0–1 quality metrics.",
                 "plot_type": "bargraph",
@@ -469,6 +634,8 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
                     "ylab": "Score",
                     "ymin": 0,
                     "ymax": 1,
+                    "stacking": "group",
+                    "cpswitch": False,
                 },
                 "data": bars,
             }
@@ -491,8 +658,9 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
     parts = [
         "<p>SamovaR writes one JSON summary per pipeline stage "
         "(<code>.log/multiqc/*.samovar.json</code>), in the same spirit as FastQC/fastp. "
-        "This MultiQC report embeds the Altair charts from each visualization "
-        "stage, with a short description of every pipeline step.</p><ol>"
+        "This MultiQC report includes native Plotly heatmaps, scatters, and bars "
+        "(tick a plot to export PNG/SVG/PDF) plus Altair HTML for the same charts, "
+        "and a short description of every pipeline step.</p><ol>"
     ]
     for i, stage in enumerate(CHECKPOINT_STEPS, start=1):
         info = STAGE_INFO[stage]
@@ -524,37 +692,58 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
         "title": "SamovaR",
         "subtitle": f"Ensemble annotation report (v{PACKAGE_VERSION})",
         "intro_text": (
-            "Interactive MultiQC view of SamovaR: Altair heatmaps, scatters, and "
-            "score bars, plus a short description of each pipeline stage."
+            "Interactive MultiQC view of SamovaR: native Plotly plots (selectable "
+            "export) plus Altair HTML, and a short description of each pipeline stage."
         ),
         "run_names": True,
     }
-    (dest / "multiqc_config.yaml").write_text(
-        "title: {title}\nsubtitle: {subtitle}\nintro_text: |\n  {intro}\n".format(
-            title=json.dumps(config["title"]),
-            subtitle=json.dumps(config["subtitle"]),
-            intro=config["intro_text"],
-        ),
-        encoding="utf-8",
+    order = ["samovar_overview"] + [f"samovar_{stage}" for stage in CHECKPOINT_STEPS]
+    config_text = (
+        "title: {title}\n"
+        "subtitle: {subtitle}\n"
+        "intro_text: |\n"
+        "  {intro}\n"
+        "custom_content:\n"
+        "  order:\n{order}\n"
+    ).format(
+        title=json.dumps(config["title"]),
+        subtitle=json.dumps(config["subtitle"]),
+        intro=config["intro_text"],
+        order="\n".join(f"    - {item}" for item in order),
     )
+    (dest / "multiqc_config.yaml").write_text(config_text, encoding="utf-8")
     return dest
 
 
 def run_multiqc(output_dir: PathLike, extra_args: Optional[Sequence[str]] = None) -> int:
-    import shutil as _sh
+    """Invoke the real MultiQC CLI on staged ``*_mqc`` files.
+
+    Extra args are passed through (after an optional ``--``), so you can do
+    ``samovar multiqc --output_dir RUN -- --export --module custom_content``.
+    Native Plotly plots (heatmap / scatter / bar / table) show MultiQC's
+    in-report export checkboxes; ``--export`` / ``-p`` writes png/svg/pdf.
+    """
     import subprocess
+
+    from samovar.paths import discover_multiqc
 
     staged = bundle_multiqc(output_dir)
     out = as_path(output_dir) / "multiqc"
     out.mkdir(parents=True, exist_ok=True)
     cfg = staged / "multiqc_config.yaml"
-    exe = _sh.which("multiqc")
+    extra = list(extra_args or [])
+    if extra and extra[0] == "--":
+        extra = extra[1:]
+    exe = discover_multiqc()
     if exe:
         cmd = [exe, str(staged), "-o", str(out), "-f", "-c", str(cfg)]
     else:
         cmd = [sys.executable, "-m", "multiqc", str(staged), "-o", str(out), "-f", "-c", str(cfg)]
-    if extra_args:
-        cmd.extend(list(extra_args))
+    if extra:
+        cmd.extend(extra)
+    else:
+        cmd.append("--interactive")
+    print(" ".join(cmd), flush=True)
     try:
         rc = subprocess.call(cmd)
     except FileNotFoundError:
@@ -562,7 +751,7 @@ def run_multiqc(output_dir: PathLike, extra_args: Optional[Sequence[str]] = None
     if rc != 0:
         print(
             f"MultiQC was not run (exit {rc}). Stage JSON and *_mqc files are in {staged}. "
-            "Install with: pip install multiqc",
+            "Optional install: ./install.sh MultiQC",
             file=sys.stderr,
         )
         return 0
@@ -582,8 +771,9 @@ def _parser() -> argparse.ArgumentParser:
     overview.add_argument("output_dir")
     bundle = sub.add_parser("bundle", help="Stage *_mqc files for MultiQC")
     bundle.add_argument("output_dir")
-    render = sub.add_parser("multiqc", help="Bundle and run MultiQC")
+    render = sub.add_parser("multiqc", help="Bundle and run the MultiQC CLI")
     render.add_argument("output_dir")
+    render.add_argument("multiqc_args", nargs=argparse.REMAINDER, help="Passed to multiqc (use -- first)")
     return parser
 
 
@@ -599,7 +789,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         bundle_multiqc(args.output_dir)
         return 0
     if args.command == "multiqc":
-        return run_multiqc(args.output_dir)
+        return run_multiqc(args.output_dir, extra_args=getattr(args, "multiqc_args", None))
     return 2
 
 

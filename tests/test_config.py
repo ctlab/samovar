@@ -233,6 +233,7 @@ def test_generate_pipeline():
         assert "ckpt_skip" in pipeline_content
         assert "ckpt_finish" in pipeline_content
         assert "samovar.stage_report" in pipeline_content
+        assert "SAMOVAR_MULTIQC" in pipeline_content
         for step in (
             "setup_reads",
             "annotate_initial",
@@ -249,6 +250,38 @@ def test_generate_pipeline():
         ):
             assert f"ckpt_skip {step}" in pipeline_content
             assert f"ckpt_finish {step}" in pipeline_content
+
+
+def test_generate_pipeline_multiqc_flags():
+    test_output_dir = "tests_outs/test_generate_pipeline_multiqc_flags"
+    clean_dir(test_output_dir)
+    os.makedirs(test_output_dir, exist_ok=True)
+    annotators = [
+        AnnotatorConfig(
+            run_name="k2-test",
+            type="kraken2",
+            cmd="/path/to/kraken2",
+            db_path="/path/to/kraken_db",
+        )
+    ]
+    off = PipelineConfig(
+        input_dir="/path/to/input",
+        output_dir=test_output_dir,
+        annotators=annotators,
+        run_multiqc=False,
+    )
+    off_text = Path(off.generate_pipeline(test_output_dir)).read_text()
+    assert 'export SAMOVAR_MULTIQC="${SAMOVAR_MULTIQC:-0}"' in off_text
+    on = PipelineConfig(
+        input_dir="/path/to/input",
+        output_dir=test_output_dir,
+        annotators=annotators,
+        run_multiqc=True,
+    )
+    on_text = Path(on.generate_pipeline(test_output_dir)).read_text()
+    assert 'export SAMOVAR_MULTIQC="${SAMOVAR_MULTIQC:-1}"' in on_text
+    assert "stage_report multiqc" in on_text
+
 
 def test_setup_pipeline():
     test_output_dir = 'tests_outs/test_setup_pipeline'

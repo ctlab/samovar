@@ -1,11 +1,12 @@
 {
-    "version": "0.10.12",
+    "version": "0.10.13",
     "root": "/path/to/samovar",
     "python_path": "/usr/bin/python3",
     "r_path": "/usr/bin/R",
     "r_lib_path": "",
     "iss_path": "/usr/bin/iss",
     "opal_path": "/usr/bin/opal.py",
+    "multiqc_path": "/usr/bin/multiqc",
     "ncbi_email": "test@samovar.com",
     "test_genomes": "/path/to/samovar/data/test_genomes",
     "_comment_test_genomes": "Truncated ISS/CI stubs only. Never used as NCBI substitutes.",

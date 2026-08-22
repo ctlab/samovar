@@ -115,6 +115,7 @@ class PipelineConfig:
     reuse_genomes: bool = True
     use_test_genomes: bool = False
     genome_dirs: Optional[List[str]] = None
+    run_multiqc: Optional[bool] = None
 
     def __post_init__(self):
         if self.annotators is None:
@@ -256,6 +257,8 @@ class PipelineConfig:
             config.reuse_genomes = bool(args.reuse_genomes)
         if getattr(args, "use_test_genomes", False):
             config.use_test_genomes = True
+        if getattr(args, "run_multiqc", None) is not None:
+            config.run_multiqc = bool(args.run_multiqc)
         extra_dirs = getattr(args, "genome_dirs", None)
         if extra_dirs:
             if isinstance(extra_dirs, str):
@@ -369,6 +372,12 @@ class PipelineConfig:
         extra_genome_dirs = ":".join(self.genome_dirs or [])
         reuse_flag = "1" if self.reuse_genomes else "0"
         test_flag = "1" if self.use_test_genomes else "0"
+        from samovar.paths import discover_multiqc
+
+        if self.run_multiqc is None:
+            multiqc_flag = "1" if discover_multiqc() else "0"
+        else:
+            multiqc_flag = "1" if self.run_multiqc else "0"
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
@@ -420,6 +429,7 @@ mkdir -p "$out_dir/initial" "$out_dir/initial_reports" "$out_dir/regenerated" "$
 # NCBI genome cache reuse (truncated data/test_genomes is not a library).
 export SAMOVAR_REUSE_GENOMES="${{SAMOVAR_REUSE_GENOMES:-{reuse_flag}}}"
 export SAMOVAR_ALLOW_TEST_GENOMES="${{SAMOVAR_ALLOW_TEST_GENOMES:-{test_flag}}}"
+export SAMOVAR_MULTIQC="${{SAMOVAR_MULTIQC:-{multiqc_flag}}}"
 export SAMOVAR_GENOME_DIRS="${{SAMOVAR_GENOME_DIRS:+$SAMOVAR_GENOME_DIRS:}}{extra_genome_dirs}"
 export SAMOVAR_RUN_DIR="$out_dir"
 export SAMOVAR_RUN_GENOMES="$out_dir/genomes"
@@ -551,6 +561,10 @@ $PYTHON_PATH {wf / 'ML.py'} \\
 
         footer = """"$PYTHON_PATH" -m samovar.stage_report overview "$out_dir" || true
 "$PYTHON_PATH" -m samovar.stage_report bundle "$out_dir" || true
+if [ "${SAMOVAR_MULTIQC:-0}" != "0" ]; then
+  echo "[multiqc] running MultiQC CLI (--interactive)"
+  "$PYTHON_PATH" -m samovar.stage_report multiqc "$out_dir" -- --interactive || true
+fi
 cleanup_tmp_if_requested
 """
 

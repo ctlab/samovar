@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.12"
+PACKAGE_VERSION = "0.10.13"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -29,6 +29,7 @@ KNOWN_TOOLS = (
     "iss",
     "opal.py",
     "opal",
+    "multiqc",
     "R",
     "Rscript",
     "snakemake",
@@ -302,6 +303,13 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
         return raw
     token = raw.split()[0]
     rest = raw[len(token) :].lstrip()
+    token_path = Path(token).expanduser()
+    if (
+        (token_path.is_absolute() or "/" in token)
+        and token_path.is_file()
+        and os.access(token_path, os.X_OK)
+    ):
+        return f"{str(token_path.resolve())} {rest}".strip()
 
     cfg = load_config()
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
@@ -363,6 +371,9 @@ def discover_tools() -> Dict[str, str]:
     opal = discover_opal()
     if opal:
         found.setdefault("opal.py", opal)
+    multiqc = discover_multiqc()
+    if multiqc:
+        found.setdefault("multiqc", multiqc)
     return found
 
 
@@ -403,6 +414,47 @@ def discover_opal() -> Optional[str]:
         pass
     add(str(Path.home() / ".local" / "bin" / "opal.py"))
     add(str(Path.home() / ".local" / "bin" / "opal"))
+
+    seen = set()
+    for raw in candidates:
+        if raw in seen:
+            continue
+        seen.add(raw)
+        path = Path(raw).expanduser()
+        if path.is_file():
+            return str(path.resolve())
+    return None
+
+
+def discover_multiqc() -> Optional[str]:
+    """Locate the MultiQC CLI (optional, same pattern as OPAL)."""
+    cfg = load_config()
+    candidates: List[str] = []
+
+    def add(raw: Optional[str]) -> None:
+        text = str(raw or "").strip()
+        if text:
+            candidates.append(text.split()[0])
+
+    add(os.environ.get("SAMOVAR_MULTIQC_PATH") or os.environ.get("SAMOVAR_MULTIQC_BIN"))
+    add(str(cfg.get("multiqc_path") or ""))
+    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+    add(str(tools.get("multiqc") or ""))
+    add(shutil.which("multiqc"))
+
+    py = (cfg.get("python_path") or "").strip() or sys.executable
+    py_path = Path(py).expanduser()
+    if py_path.is_file():
+        add(str(py_path.resolve().parent / "multiqc"))
+    try:
+        import sysconfig
+
+        scripts = sysconfig.get_path("scripts")
+        if scripts:
+            add(str(Path(scripts) / "multiqc"))
+    except Exception:
+        pass
+    add(str(Path.home() / ".local" / "bin" / "multiqc"))
 
     seen = set()
     for raw in candidates:

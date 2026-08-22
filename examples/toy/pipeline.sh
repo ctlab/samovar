@@ -43,4 +43,5 @@ samovar prepare \
     --kaiju-test "kaiju $output_dir/.database/kaiju_db"
 
 samovar exec --output_dir "$output_dir"
-samovar multiqc --output_dir "$output_dir"
+# exec already runs MultiQC when it is installed; this re-runs with --export.
+samovar multiqc --output_dir "$output_dir" -- --export --interactive

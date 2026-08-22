@@ -706,6 +706,16 @@ def viz_annotation(
                     out_dir / f"F1_{name}.html",
                     n_cells=int(matrix.size),
                 )
+                from samovar.stage_report import write_heatmap_mqc
+
+                write_heatmap_mqc(
+                    matrix,
+                    out_dir / f"F1_{name}_mqc.json",
+                    section_name=f"F1 heatmap — {name}",
+                    description="Predicted vs true taxa (counts). Select this plot in MultiQC to export PNG/SVG/PDF.",
+                    xlab=taxid_xlab,
+                    ylab=taxid_ylab,
+                )
         results["F1"] = gglist
 
     if "true" in work.columns and types & {"r2"}:
@@ -722,6 +732,16 @@ def viz_annotation(
             if out_dir:
                 _save_scatter_png(table, out_dir / f"R2_{name}.png", name, format_r2_caption(r2, rank_used))
                 _save_altair(_altair_scatter(table, name), out_dir / f"R2_{name}.html")
+                from samovar.stage_report import write_scatter_mqc
+
+                write_scatter_mqc(
+                    table,
+                    out_dir / f"R2_{name}_mqc.json",
+                    section_name=f"Abundance R² — {name}",
+                    description="Predicted vs true taxon counts. Select this plot in MultiQC to export PNG/SVG/PDF.",
+                    xlab="Predicted taxon",
+                    ylab="True taxon",
+                )
         results["R2"] = gglist
 
     if types & {"cv", "cross-validation"}:
@@ -777,6 +797,16 @@ def viz_annotation(
                             _altair_heatmap(matrix, title, name2, name1),
                             out_dir / f"CV_{safe}.html",
                             n_cells=int(matrix.size),
+                        )
+                        from samovar.stage_report import write_heatmap_mqc
+
+                        write_heatmap_mqc(
+                            matrix,
+                            out_dir / f"CV_{safe}_mqc.json",
+                            section_name=f"Cross-validation — {title}",
+                            description="TaxID agreement between two annotators. Select this plot in MultiQC to export PNG/SVG/PDF.",
+                            xlab=name2,
+                            ylab=name1,
                         )
             results["CV"] = gglist
 

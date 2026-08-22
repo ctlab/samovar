@@ -86,6 +86,12 @@ def test_viz_annotation_writes_png(tmp_path):
     assert any(p.name.startswith("CV_") for p in pngs)
     assert (out / "scores.png").is_file()
     assert (out / "quality_scores.csv").is_file()
+    assert list(out.glob("F1_*_mqc.json"))
+    assert list(out.glob("R2_*_mqc.json"))
+    assert list(out.glob("CV_*_mqc.json"))
+    htmls = list(out.glob("F1_*.html"))
+    if htmls:
+        assert "vega" in htmls[0].read_text().lower() or "altair" in htmls[0].read_text().lower() or htmls[0].stat().st_size > 100
 
     import matplotlib.image as mpimg
 
