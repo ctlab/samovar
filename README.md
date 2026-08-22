@@ -86,6 +86,8 @@ Annotators such as `kraken2` and `kaiju` may be given as names on `$PATH` (no fu
 samovar prepare --output_dir samovar_out --kraken2-test "kraken2 $DB_KRAKEN2"
 ```
 
+FASTQ inputs may be `.fastq`, `.fq`, or gzip (`.fastq.gz` / `.fq.gz`). Processed genomes are stored gzip-compressed by default (`samovar prepare --gzip-genomes`, on unless you pass `--no-gzip-genomes`). ISS still gets a temporary uncompressed FASTA; the original `.gz` is left in place. Optional `--gzip-reads` compresses simulated FASTQ after ISS.
+
 ## Usage
 
 ```bash

@@ -111,14 +111,33 @@ def test_process_fasta_directories(test_dir):
         str(test_dir / "123.fa"): "123",
         str(test_dir / "456.fna"): "456",
         str(test_dir / "789.fasta"): "789",
-        str(test_dir / "321.fa"): "321"  # decompressed file
+        str(test_dir / "321.fa.gz"): "321",
     }
     print (expected_files)
     assert result == expected_files
     
-    # Verify that gzipped file was decompressed
-    assert not (test_dir / "321.fa.gz").exists()
-    assert (test_dir / "321.fa").exists()
+    # Gzipped genomes stay compressed
+    assert (test_dir / "321.fa.gz").exists()
+    assert not (test_dir / "321.fa").exists()
+
+def test_read_fasta_gzip(tmp_path):
+    path = tmp_path / "x.fa.gz"
+    with gzip.open(path, "wt") as handle:
+        handle.write(">h\nACGT\n")
+    seqs = read_fasta(str(path))
+    assert seqs == [("h", "ACGT")]
+
+
+def test_preprocess_fasta_writes_gzip(tmp_path):
+    src = tmp_path / "562.fa"
+    src.write_text(">s\nATCGATCG\n")
+    dest = tmp_path / "562-processed.fasta.gz"
+    preprocess_fasta(str(src), str(dest), 0.0, 100.0)
+    with gzip.open(dest, "rt") as handle:
+        text = handle.read()
+    assert "taxid:562" in text
+    assert "ATCGATCG" in text
+
 
 def test_process_fasta_directories_nonexistent():
     """Test handling of non-existent directory."""

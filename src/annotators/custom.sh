@@ -32,7 +32,11 @@ TMP_DIR="$(dirname "$OUT")/tmp_$(basename "$OUT" .out)"
 mkdir -p "$TMP_DIR"
 
 # Check if input FASTQ is virtually empty to prevent downstream tool crashes
-LINES=$(wc -l < "$R1")
+if [[ "$R1" == *.gz ]]; then
+  LINES=$(gzip -dc "$R1" | wc -l)
+else
+  LINES=$(wc -l < "$R1")
+fi
 if [ "$LINES" -lt 4 ]; then
     echo "[WARNING] Input fastq is empty or malformed. Generating empty output."
     touch "$OUT"
@@ -62,8 +66,13 @@ case "$TOOL" in
     # metauto expects a directory of FASTQ files. We symlink them.
     FQ_DIR="$TMP_DIR/fastq"
     mkdir -p "$FQ_DIR"
-    ln -sf "$(realpath "$R1")" "$FQ_DIR/R1.fastq"
-    ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq"
+    if [[ "$R1" == *.gz ]]; then
+      ln -sf "$(realpath "$R1")" "$FQ_DIR/R1.fastq.gz"
+      ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq.gz"
+    else
+      ln -sf "$(realpath "$R1")" "$FQ_DIR/R1.fastq"
+      ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq"
+    fi
 
     # Run the python script
     python "$SCRIPT_DIR/metauto.py" work "$FQ_DIR" "$DB"

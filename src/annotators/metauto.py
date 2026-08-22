@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import gzip
 import os
 from collections import Counter
 from itertools import product
@@ -15,11 +14,14 @@ from sklearn.preprocessing import LabelEncoder
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+from samovar.seqio import list_fasta_files, open_text, taxid_from_fasta_name
+
+
 # ----------------------------
 # FASTA / FASTQ readers
 # ----------------------------
 def read_fasta(path):
-    with open(path) as f:
+    with open_text(path) as f:
         seq = ""
         for line in f:
             if line.startswith(">"):
@@ -33,8 +35,7 @@ def read_fasta(path):
 
 
 def read_fastq(path):
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt") as f:
+    with open_text(path) as f:
         while True:
             # Extract header to preserve the exact read ID required by parser_annotators
             h = f.readline().strip()
@@ -104,14 +105,9 @@ def train(input_dir, out_model, k=4, epochs=10):
 
     print("[INFO] Loading genomes...")
 
-    for fname in os.listdir(input_dir):
-        if not fname.endswith(".fa"):
-            continue
-
-        taxid = fname.replace(".fa", "")
-        path = os.path.join(input_dir, fname)
-
-        for seq in read_fasta(path):
+    for path in list_fasta_files(input_dir, nucleotide=True, protein=False):
+        taxid = taxid_from_fasta_name(path) or path.name
+        for seq in read_fasta(str(path)):
             vec = seq_to_vec(seq.upper(), k, kmer_index)
             X.append(vec)
             y.append(taxid)

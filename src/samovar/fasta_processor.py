@@ -5,29 +5,37 @@ from typing import List, Tuple
 from pathlib import Path
 import argparse
 
+from samovar.seqio import (
+    fasta_handle,
+    is_fasta_name,
+    open_text,
+    taxid_from_fasta_name,
+)
+
+
 def read_fasta(file_path: str) -> List[Tuple[str, str]]:
-    """Read FASTA file and return list of (header, sequence) tuples."""
+    """Read FASTA file (plain or gzipped) and return (header, sequence) tuples."""
     sequences = []
     current_header = None
     current_sequence = []
-    
-    with open(file_path, 'r') as f:
+
+    with fasta_handle(file_path) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-                
-            if line.startswith('>'):
+
+            if line.startswith(">"):
                 if current_header is not None:
-                    sequences.append((current_header, ''.join(current_sequence)))
+                    sequences.append((current_header, "".join(current_sequence)))
                 current_header = line[1:]
                 current_sequence = []
             else:
                 current_sequence.append(line)
-    
+
     if current_header is not None:
-        sequences.append((current_header, ''.join(current_sequence)))
-    
+        sequences.append((current_header, "".join(current_sequence)))
+
     return sequences
 
 def apply_mutations(sequence: str, mutation_rate: float) -> str:
@@ -54,13 +62,21 @@ def apply_mutations(sequence: str, mutation_rate: float) -> str:
 def preprocess_fasta(input_file: str, output_file: str, mutation_rate: float, include_percent: float):
     """Process FASTA file, apply mutations and split sequences."""
     sequences = read_fasta(input_file)
-    input_filename = Path(input_file).stem
-    
-    with open(output_file, 'w') as f:
+    input_filename = taxid_from_fasta_name(input_file) or Path(
+        str(input_file).removesuffix(".gz")
+    ).stem
+
+    out_parent = Path(output_file).parent
+    if str(out_parent):
+        out_parent.mkdir(parents=True, exist_ok=True)
+
+    with open_text(output_file, "wt") as f:
         for i, (header, sequence) in enumerate(sequences):
             # Calculate length of sequence to include
             include_length = int(len(sequence) * include_percent / 100)
-            
+            if include_length <= 0:
+                include_length = len(sequence) or 1
+
             # Split sequence into parts
             for j in range(0, len(sequence), include_length):
                 part = sequence[j:j + include_length]
@@ -78,43 +94,24 @@ def preprocess_fasta(input_file: str, output_file: str, mutation_rate: float, in
 def process_fasta_directories(directories: List[str]) -> dict:
     """
     Process FASTA files from input directories and extract taxids from filenames.
-    Handles various FASTA extensions and gzipped files.
-    
-    Args:
-        directories: List of directory paths containing FASTA files
-        
-    Returns:
-        Dictionary mapping input files to their taxids
+    Handles various FASTA extensions and gzipped files without decompressing them.
     """
     result = {}
-    
+
     for directory in directories:
         dir_path = Path(directory)
         if not dir_path.exists():
             continue
-            
-        # Look for all possible FASTA files
-        for fasta_file in dir_path.glob("*.*"):
-            # Handle gzipped files first
-            if fasta_file.suffix.lower() == '.gz':
-                # Decompress the file
-                import subprocess
-                try:
-                    subprocess.run(['gzip', '-d', str(fasta_file)], check=True)
-                    # Update the file path to point to the decompressed file
-                    fasta_file = fasta_file.with_suffix('')
-                except subprocess.CalledProcessError:
-                    continue
-            
-            # Skip if not a FASTA file
-            if not fasta_file.suffix.lower() in ['.fa', '.fna', '.fasta', '.faa', '.frn']:
+
+        for fasta_file in dir_path.iterdir():
+            if not fasta_file.is_file():
                 continue
-            
-            # Extract taxid from filename (assuming format like '12345.fa')
-            taxid = fasta_file.stem
-            if taxid.isdigit():
+            if not is_fasta_name(fasta_file.name, protein=True, nucleotide=True):
+                continue
+            taxid = taxid_from_fasta_name(fasta_file)
+            if taxid:
                 result[str(fasta_file)] = taxid
-    
+
     return result
 
 def main():
@@ -130,4 +127,4 @@ def main():
     preprocess_fasta(args.input_file, args.output_file, args.mutation_rate, args.include_percent)
 
 if __name__ == '__main__':
-    main() 
+    main()

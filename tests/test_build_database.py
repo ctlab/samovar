@@ -1,3 +1,4 @@
+import gzip
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -101,6 +102,27 @@ def test_nucleotide_to_orf_records_min_length(tmp_path):
     _write_fasta(fna, [SeqRecord(Seq("ATGAAATAA"), id="short")])  # MK*
     recs = nucleotide_to_orf_records(str(fna), "1", min_aa=10)
     assert recs == []
+
+
+def test_process_fasta_kraken2_gzipped_input(tmp_path):
+    fna = tmp_path / "562.fna.gz"
+    with gzip.open(fna, "wt") as handle:
+        SeqIO.write([SeqRecord(Seq("ACGTACGT"), id="c1")], handle, "fasta")
+    out = process_fasta_kraken2(str(fna), "562")
+    recs = list(SeqIO.parse(out, "fasta"))
+    os.remove(out)
+    assert recs[0].id == "seq0|kraken:taxid|562"
+
+
+def test_find_local_proteome_gzipped_faa(tmp_path):
+    fna = tmp_path / "123.fna"
+    faa = tmp_path / "123.faa.gz"
+    _write_fasta(fna, [SeqRecord(Seq("AAAAAA"), id="genome")])
+    with gzip.open(faa, "wt") as handle:
+        SeqIO.write([SeqRecord(Seq("MKKLL"), id="prot")], handle, "fasta")
+    kind, path = find_local_proteome_or_gff(str(fna), "123")
+    assert kind == "protein"
+    assert path == str(faa)
 
 
 def test_process_fasta_kraken2_keeps_all_contigs(tmp_path):

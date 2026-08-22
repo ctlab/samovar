@@ -5,7 +5,6 @@ Module for converting tables to simulated reads using ISS-like functionality.
 import os
 import re
 import glob
-import gzip
 import random
 import pandas as pd
 import subprocess
@@ -18,6 +17,20 @@ import warnings
 import shutil
 from pathlib import Path
 from samovar.paths import annotation_regenerate_r, iss_executable, load_config, resolve_executable, user_config_dir
+from samovar.seqio import (
+    concat_fastq_files,
+    fastq_pair_paths,
+    find_genome_file,
+    gzip_file,
+    gunzip_file,
+    is_gzip_path,
+    iter_fastq_records,
+    list_fasta_files,
+    open_text,
+    sequence_stem,
+    uncompressed_fasta_for_tool,
+    write_text_lines,
+)
 
 
 # Thin R CLI used with the optional samovaR package (GitHub branch r-package).
@@ -143,23 +156,10 @@ def parse_annotation_table(table_path: str) -> pd.DataFrame:
 
 def get_genome_file(genome_dir: str, taxid: str) -> str:
     """
-    Get the path to a genome file, checking multiple possible extensions.
-    
-    Args:
-        genome_dir: Directory containing genome files
-        taxid: Taxonomy ID of the genome
-        
-    Returns:
-        Path to the genome file if found, None otherwise
+    Get the path to a genome file, checking multiple possible extensions
+    (processed, gzipped, and uncompressed FASTA).
     """
-    extensions = ['-processed.fa', '-processed.fna', '-processed.fasta',
-                  '.fa', '.fna', '.fasta', '.fa.gz', '.fna.gz', '.fasta.gz']
-    
-    for ext in extensions:
-        genome_file = os.path.join(genome_dir, f"{taxid}{ext}")
-        if os.path.exists(genome_file):
-            return genome_file
-    return None
+    return find_genome_file(genome_dir, taxid)
 
 
 def _n_columns(df: pd.DataFrame) -> List[str]:
@@ -177,22 +177,11 @@ def _safe_fasta_id(value: str) -> str:
 
 
 def _genome_id_from_path(path: str) -> str:
-    name = os.path.basename(path)
-    for ext in (
-        ".fasta.gz", ".fna.gz", ".fa.gz",
-        "-processed.fasta", "-processed.fna", "-processed.fa",
-        ".fasta", ".fna", ".fa",
-    ):
-        if name.endswith(ext):
-            name = name[: -len(ext)]
-            break
-    return _safe_fasta_id(name)
+    return _safe_fasta_id(sequence_stem(path))
 
 
 def _open_text(path: str):
-    if path.endswith(".gz"):
-        return gzip.open(path, "rt")
-    return open(path, "rt")
+    return open_text(path)
 
 
 def _read_fasta_concat(path: str) -> str:
@@ -222,7 +211,7 @@ def _scale_amounts(amount: Sequence[int], total_amount: Optional[int]) -> List[i
 def _write_empty_fastq_pair(r1: str, r2: str) -> None:
     for path in (r1, r2):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w") as handle:
+        with open_text(path, "wt") as handle:
             handle.write("\n")
 
 
@@ -232,6 +221,8 @@ def _cleanup_iss_tmp(prefix: str) -> None:
     for path in glob.glob(os.path.join(directory, f"{base}*")):
         name = os.path.basename(path)
         if name.endswith("_R1.fastq") or name.endswith("_R2.fastq"):
+            continue
+        if name.endswith("_R1.fastq.gz") or name.endswith("_R2.fastq.gz"):
             continue
         if os.path.isfile(path):
             try:
@@ -257,26 +248,17 @@ def _source_id_from_header(header: str) -> str:
 
 
 def _iter_fastq_pairs(r1_path: str, r2_path: str):
-    with open(r1_path) as handle_r1, open(r2_path) as handle_r2:
-        while True:
-            rec1 = [handle_r1.readline() for _ in range(4)]
-            rec2 = [handle_r2.readline() for _ in range(4)]
-            if not rec1[0] or not rec2[0]:
-                break
-            if not rec1[0].strip():
-                continue
-            yield rec1, rec2
+    rec1_iter = iter_fastq_records(r1_path)
+    rec2_iter = iter_fastq_records(r2_path)
+    for rec1, rec2 in zip(rec1_iter, rec2_iter):
+        if not rec1[0].strip():
+            continue
+        yield list(rec1), list(rec2)
 
 
 def _write_fastq_records(path: str, records: Iterable[List[str]]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    wrote = False
-    with open(path, "w") as handle:
-        for record in records:
-            handle.write("".join(record))
-            wrote = True
-        if not wrote:
-            handle.write("\n")
+    write_text_lines(path, ("".join(record) for record in records))
 
 
 def _allocate_counts(available: int, requested: Dict[str, int]) -> Dict[str, int]:
@@ -381,6 +363,7 @@ def split_metagenome_to_samples(
     sample_source_counts: Dict[str, Dict[str, int]],
     output_dir: str,
     annotator_name: str,
+    gzip_reads: bool = False,
 ) -> Dict[str, int]:
     """
     Split a mixed metagenome FASTQ into per-sample files, preserving source composition.
@@ -393,10 +376,12 @@ def split_metagenome_to_samples(
     written = {sample: 0 for sample in samples}
 
     for sample in samples:
-        r1_out = os.path.join(output_dir, f"{sample}_{annotator_name}_R1.fastq")
-        r2_out = os.path.join(output_dir, f"{sample}_{annotator_name}_R2.fastq")
+        r1_out, r2_out = fastq_pair_paths(
+            os.path.join(output_dir, f"{sample}_{annotator_name}"),
+            gzip_reads=gzip_reads,
+        )
         os.makedirs(output_dir, exist_ok=True)
-        output_handles[sample] = (open(r1_out, "w"), open(r2_out, "w"))
+        output_handles[sample] = (open_text(r1_out, "wt"), open_text(r2_out, "wt"))
 
     try:
         if not os.path.exists(r1_path) or not os.path.exists(r2_path):
@@ -432,11 +417,27 @@ def split_metagenome_to_samples(
     finally:
         for r1_handle, r2_handle in output_handles.values():
             for handle in (r1_handle, r2_handle):
-                if handle.tell() == 0:
+                try:
+                    empty = handle.tell() == 0
+                except OSError:
+                    empty = False
+                if empty:
                     handle.write("\n")
                 handle.close()
 
     return written
+
+
+def _maybe_gzip_fastq_pair(r1: str, r2: str, gzip_reads: bool) -> Tuple[str, str]:
+    if not gzip_reads:
+        return r1, r2
+    out = []
+    for path in (r1, r2):
+        if path and os.path.exists(path) and not is_gzip_path(path):
+            out.append(str(gzip_file(path)))
+        else:
+            out.append(path)
+    return out[0], out[1]
 
 
 def generate_reads_genome(
@@ -447,34 +448,32 @@ def generate_reads_genome(
     model: str = "hiseq",
     cpus: int = 2,
     seed: Optional[int] = None,
-) -> None:
+    gzip_reads: bool = False,
+) -> Tuple[str, str]:
     """
     Generate simulated reads from a genome file.
-    
-    Args:
-        genome_file: Path to genome FASTA file
-        output_file: Path to output FASTQ file
-        amount: Number of reads to generate
-        read_length: Length of reads to generate
-        model: Model to use for simulation
-        cpus: ISS worker count
-        seed: Optional ISS seed
+
+    ISS requires an uncompressed FASTA path; gzipped genomes are decompressed
+    to a temp file for the ISS call only.
     """
-    
+    r1 = f"{output_file}_R1.fastq"
+    r2 = f"{output_file}_R2.fastq"
     if genome_file is not None and os.path.exists(genome_file):
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        cmd = _iss_cmd(
-            "generate",
-            "--genomes", genome_file,
-            "--model", model,
-            "--output", output_file,
-            "--n_reads", str(int(amount)),
-            "--cpus", str(cpus),
-        )
-        if seed is not None:
-            cmd.extend(["--seed", str(seed)])
-        _run_iss(cmd)
+        with uncompressed_fasta_for_tool(genome_file) as plain_fasta:
+            cmd = _iss_cmd(
+                "generate",
+                "--genomes", plain_fasta,
+                "--model", model,
+                "--output", output_file,
+                "--n_reads", str(int(amount)),
+                "--cpus", str(cpus),
+            )
+            if seed is not None:
+                cmd.extend(["--seed", str(seed)])
+            _run_iss(cmd)
         _cleanup_iss_tmp(output_file)
+    return _maybe_gzip_fastq_pair(r1, r2, gzip_reads)
 
 
 def generate_reads_metagenome(
@@ -489,12 +488,12 @@ def generate_reads_metagenome(
     genome_ids: Optional[Sequence[str]] = None,
     cpus: int = 2,
     seed: Optional[int] = None,
+    gzip_reads: bool = False,
 ) -> Tuple[str, str]:
     """
     Generate simulated reads from a metagenome in a single ISS invocation.
 
-    All genomes are combined into one community (readcount-weighted), then ISS
-    writes the mixed R1/R2 FASTQ directly — no per-genome ISS calls.
+    Combined genomes are written uncompressed for ISS, then gzipped afterwards.
     """
     amount = _scale_amounts(amount, total_amount)
     if annotator_name is None:
@@ -514,7 +513,7 @@ def generate_reads_metagenome(
     ]
     if not pairs:
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
-        return output_file_R1, output_file_R2
+        return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 
     work_dir = os.path.join(output_dir, ".iss_full")
     os.makedirs(work_dir, exist_ok=True)
@@ -532,9 +531,13 @@ def generate_reads_metagenome(
         written_ids,
         [amount_by_id[gid] for gid in written_ids],
     )
-    if total_reads <= 0 or os.path.getsize(combined_fasta) == 0:
+    if (
+        total_reads <= 0
+        or not os.path.exists(combined_fasta)
+        or os.path.getsize(combined_fasta) == 0
+    ):
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
-        return output_file_R1, output_file_R2
+        return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 
     cmd = _iss_cmd(
         "generate",
@@ -548,13 +551,18 @@ def generate_reads_metagenome(
         cmd.extend(["--seed", str(seed)])
     _run_iss(cmd)
     _cleanup_iss_tmp(output_prefix)
+    if os.path.exists(combined_fasta):
+        try:
+            gzip_file(combined_fasta)
+        except OSError:
+            pass
 
     if not os.path.exists(output_file_R1) or not os.path.exists(output_file_R2):
         raise RuntimeError(
             f"ISS did not produce reads for {output_prefix}"
         )
 
-    return output_file_R1, output_file_R2
+    return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 
 def regenerate_metagenome(
     genome_files: List[str],
@@ -568,6 +576,7 @@ def regenerate_metagenome(
     genome_ids: Optional[Sequence[str]] = None,
     cpus: int = 2,
     seed: Optional[int] = None,
+    gzip_reads: bool = False,
 ) -> Tuple[str, str]:
     """
     Regenerate metagenome reads from a list of genome files.
@@ -584,6 +593,7 @@ def regenerate_metagenome(
         genome_ids=genome_ids,
         cpus=cpus,
         seed=seed,
+        gzip_reads=gzip_reads,
     )
 
 def process_annotation_table(
@@ -631,6 +641,7 @@ def _resolve_genomes_for_taxids(
     email: str,
     reference_only: bool,
     max_genomes: Optional[int] = None,
+    gzip_genomes: bool = True,
 ) -> Dict[str, str]:
     available = {}
     for taxid in taxids:
@@ -643,12 +654,23 @@ def _resolve_genomes_for_taxids(
         if genome_file is None:
             try:
                 genome_file = fetch_genome(
-                    taxid, genome_dir, email, reference_only=reference_only
+                    taxid,
+                    genome_dir,
+                    email,
+                    reference_only=reference_only,
+                    gzip_genomes=gzip_genomes,
                 )
             except Exception as exc:
                 warnings.warn(f"Failed to fetch genome for taxid {taxid}: {exc}")
                 genome_file = None
         if genome_file is not None:
+            try:
+                if gzip_genomes and not is_gzip_path(genome_file):
+                    genome_file = str(gzip_file(genome_file))
+                elif not gzip_genomes and is_gzip_path(genome_file):
+                    genome_file = str(gunzip_file(genome_file, remove_source=True))
+            except OSError as exc:
+                warnings.warn(f"Could not apply gzip_genomes={gzip_genomes} to {genome_file}: {exc}")
             available[taxid] = genome_file
     return available
 
@@ -657,14 +679,16 @@ def _emit_empty_for_annotators(
     output_dir: str,
     sample_names: Sequence[str],
     annotator_names: Sequence[str],
+    gzip_reads: bool = False,
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
     for sample_name in sample_names:
         for annotator_name in annotator_names:
-            _write_empty_fastq_pair(
-                os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq"),
-                os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq"),
+            r1, r2 = fastq_pair_paths(
+                os.path.join(output_dir, f"{sample_name}_{annotator_name}"),
+                gzip_reads=gzip_reads,
             )
+            _write_empty_fastq_pair(r1, r2)
 
 
 def process_abundance_table(
@@ -676,7 +700,9 @@ def process_abundance_table(
     reference_only: bool = True,
     model: str = "hiseq",
     read_length: int = 150,
-    sample_name: str = None
+    sample_name: str = None,
+    gzip_genomes: bool = True,
+    gzip_reads: bool = False,
 ) -> pd.DataFrame:
     """
     Process abundance table and generate simulated reads for each taxid.
@@ -709,14 +735,18 @@ def process_abundance_table(
     email = email or default_entrez_email()
 
     if "taxid" not in abundance_table.columns:
-        _emit_empty_for_annotators(output_dir, [sample_name], ["any"])
+        _emit_empty_for_annotators(output_dir, [sample_name], ["any"], gzip_reads=gzip_reads)
         warnings.warn("Abundance table has no taxid column; emitted empty FASTQ files")
         return None
 
     abundance_table = abundance_table.copy()
     abundance_table["taxid"] = abundance_table["taxid"].astype(str).str.split(".").str[0]
     available_genomes = _resolve_genomes_for_taxids(
-        abundance_table["taxid"], genome_dir, email, reference_only
+        abundance_table["taxid"],
+        genome_dir,
+        email,
+        reference_only,
+        gzip_genomes=gzip_genomes,
     )
 
     N_cols = _n_columns(abundance_table)
@@ -724,7 +754,7 @@ def process_abundance_table(
 
     # Gracefully handle all-unclassified/unknown samples.
     if not available_genomes:
-        _emit_empty_for_annotators(output_dir, [sample_name], annotators)
+        _emit_empty_for_annotators(output_dir, [sample_name], annotators, gzip_reads=gzip_reads)
         warnings.warn("No genome files available for any taxid; emitted empty FASTQ files")
         return None
 
@@ -749,6 +779,7 @@ def process_abundance_table(
             model=model,
             annotator_name=annotator_name,
             genome_ids=genome_ids,
+            gzip_reads=gzip_reads,
         )
 
     return filtered_table
@@ -814,6 +845,8 @@ def process_annotation_tables(
     max_genomes: Optional[int] = None,
     annotation_dir: Optional[str] = None,
     regeneration_config: Optional[dict] = None,
+    gzip_genomes: bool = True,
+    gzip_reads: bool = False,
 ) -> None:
     """
     Generate one full metagenome per annotator, then split reads into samples.
@@ -875,7 +908,9 @@ def process_annotation_tables(
             sample_tables[sample_name] = table
 
     if not sample_tables:
-        _emit_empty_for_annotators(output_dir, sample_names or ["1"], ["any"])
+        _emit_empty_for_annotators(
+            output_dir, sample_names or ["1"], ["any"], gzip_reads=gzip_reads
+        )
         warnings.warn("No annotation or abundance tables to process; emitted empty FASTQ files")
         return
 
@@ -898,9 +933,10 @@ def process_annotation_tables(
         email,
         reference_only,
         max_genomes=max_genomes,
+        gzip_genomes=gzip_genomes,
     )
     if not available_genomes:
-        _emit_empty_for_annotators(output_dir, sample_names, annotators)
+        _emit_empty_for_annotators(output_dir, sample_names, annotators, gzip_reads=gzip_reads)
         warnings.warn("No genome files available for any taxid; emitted empty FASTQ files")
         return
 
@@ -931,7 +967,9 @@ def process_annotation_tables(
 
         genome_ids = [taxid for taxid, n_reads in total_by_taxid.items() if n_reads > 0]
         if not genome_ids:
-            _emit_empty_for_annotators(output_dir, sample_names, [annotator_name])
+            _emit_empty_for_annotators(
+                output_dir, sample_names, [annotator_name], gzip_reads=gzip_reads
+            )
             continue
 
         r1_full, r2_full = generate_reads_metagenome(
@@ -952,6 +990,7 @@ def process_annotation_tables(
             sample_source_counts,
             output_dir,
             annotator_name,
+            gzip_reads=gzip_reads,
         )
 
     shutil.rmtree(pool_dir, ignore_errors=True)
@@ -990,11 +1029,7 @@ def generate_iss_test_samples(
         ]
         genome_files = [path for path in genome_files if os.path.exists(path)]
     else:
-        genome_files = sorted(
-            glob.glob(os.path.join(genome_dir, "*.fa"))
-            + glob.glob(os.path.join(genome_dir, "*.fna"))
-            + glob.glob(os.path.join(genome_dir, "*.fasta"))
-        )
+        genome_files = [str(p) for p in list_fasta_files(genome_dir, nucleotide=True, protein=False)]
 
     pool_dir = os.path.join(output_dir, ".iss_full")
     os.makedirs(pool_dir, exist_ok=True)
@@ -1056,20 +1091,7 @@ def generate_iss_test_samples(
             ("R2", tmp_host[sample][1], tmp_meta[sample][1]),
         ):
             dest = os.path.join(output_dir, f"{sample}_full_{mate}.fastq")
-            with open(dest, "w") as out:
-                wrote = False
-                for src in (host_path, meta_path):
-                    if not os.path.exists(src):
-                        continue
-                    with open(src) as handle:
-                        text = handle.read()
-                    if text.strip():
-                        out.write(text)
-                        if not text.endswith("\n"):
-                            out.write("\n")
-                        wrote = True
-                if not wrote:
-                    out.write("\n")
+            concat_fastq_files([host_path, meta_path], dest)
             outputs.append(dest)
 
     shutil.rmtree(pool_dir, ignore_errors=True)

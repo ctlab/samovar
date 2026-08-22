@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.4"
+PACKAGE_VERSION = "0.10.5"
 
 KNOWN_TOOLS = (
     "kraken2",

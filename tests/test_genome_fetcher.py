@@ -2,6 +2,7 @@
 Tests for genome fetching and taxonomy parsing functionality
 """
 
+import gzip
 import os
 import pytest
 import pandas as pd
@@ -28,6 +29,14 @@ def test_annotation_table(test_output_dir):
     file_path = os.path.join(test_output_dir, 'test_taxonomy.tsv')
     df.to_csv(file_path, sep='\t', index=False)
     return file_path
+
+def test_fetch_genome_reuses_gzipped_processed(tmp_path):
+    dest = tmp_path / "562-processed.fasta.gz"
+    with gzip.open(dest, "wt") as handle:
+        handle.write(">x\nACGT\n")
+    result = fetch_genome("562", str(tmp_path), "test@example.com")
+    assert result == str(dest)
+
 
 def test_fetch_genome_invalid_taxid(test_output_dir):
     """Test fetching genome for an invalid taxid"""

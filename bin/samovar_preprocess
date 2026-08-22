@@ -19,6 +19,37 @@ def main():
     parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
     parser.add_argument('--max_genomes', type=int, default=50,
                         help='Max taxids to fetch for annotation2iss (top by abundance)')
+    parser.set_defaults(gzip_genomes=None, gzip_reads=None)
+    gzip_group = parser.add_mutually_exclusive_group()
+    gzip_group.add_argument(
+        '--gzip-genomes',
+        dest='gzip_genomes',
+        action='store_const',
+        const=True,
+        help='Keep downloaded/processed genomes gzip-compressed (default: on)',
+    )
+    gzip_group.add_argument(
+        '--no-gzip-genomes',
+        dest='gzip_genomes',
+        action='store_const',
+        const=False,
+        help='Write uncompressed processed FASTA genomes',
+    )
+    reads_group = parser.add_mutually_exclusive_group()
+    reads_group.add_argument(
+        '--gzip-reads',
+        dest='gzip_reads',
+        action='store_const',
+        const=True,
+        help='Gzip ISS-generated FASTQ after simulation (annotators read .gz)',
+    )
+    reads_group.add_argument(
+        '--no-gzip-reads',
+        dest='gzip_reads',
+        action='store_const',
+        const=False,
+        help='Leave simulated FASTQ uncompressed (default)',
+    )
     
     # Parse known args first to get output_dir
     args, remaining = parser.parse_known_args()

@@ -13,6 +13,14 @@ import yaml
 from .fasta_processor import process_fasta_directories
 from .fasta_processor import preprocess_fasta
 from .genome_fetcher import fetch_gff, fetch_proteome, default_entrez_email
+from .seqio import (
+    gzip_file,
+    gunzip_file,
+    is_gzip_path,
+    iter_seqio_fasta,
+    open_text,
+    sibling_candidates,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,7 +123,7 @@ def process_fasta_kraken2(input_file: str,
     """
     temp_fasta = tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False)
     records = []
-    for i, record in enumerate(SeqIO.parse(input_file, "fasta")):
+    for i, record in enumerate(iter_seqio_fasta(input_file)):
         record.id = f"seq{i}|kraken:taxid|{taxid}"
         record.description = ""
         records.append(record)
@@ -147,14 +155,20 @@ def add_database_kraken2(
     else:
         temp_fasta = process_fasta_kraken2(input_file, taxid)
 
-    add_cmd = [
-        "kraken2-build", 
-        "--add-to-library", 
-        temp_fasta, 
-        "--db", 
-        db_path
-    ]
-    run_command(add_cmd)
+    try:
+        add_cmd = [
+            "kraken2-build",
+            "--add-to-library",
+            temp_fasta,
+            "--db",
+            db_path
+        ]
+        run_command(add_cmd)
+    finally:
+        try:
+            os.remove(temp_fasta)
+        except OSError:
+            pass
 
     logger.info(f"Database successfully added to {db_path}")
 
@@ -247,9 +261,9 @@ def _parse_gff_attributes(attr_field: str) -> dict:
 
 def translate_cds_from_gff(fasta_path: str, gff_path: str, taxid: str, min_aa: int = 10) -> List[SeqRecord]:
     """Translate CDS features from GFF/GTF using a nucleotide FASTA."""
-    sequences = SeqIO.to_dict(SeqIO.parse(fasta_path, "fasta"))
+    sequences = SeqIO.to_dict(iter_seqio_fasta(fasta_path))
     cds_groups: Dict[str, list] = {}
-    with open(gff_path) as handle:
+    with open_text(gff_path) as handle:
         for line in handle:
             if not line or line.startswith("#"):
                 continue
@@ -312,7 +326,7 @@ def nucleotide_to_frame_records(input_file: str, taxid: str) -> List[SeqRecord]:
     """
     records: List[SeqRecord] = []
     taxid = str(taxid).split(".")[0]
-    for seq_index, nucl in enumerate(SeqIO.parse(input_file, "fasta")):
+    for seq_index, nucl in enumerate(iter_seqio_fasta(input_file)):
         seq = str(nucl.seq).upper().replace("U", "T")
         strand_i = 0
         for strand_seq in (Seq(seq), Seq(seq).reverse_complement()):
@@ -339,7 +353,7 @@ def nucleotide_to_orf_records(input_file: str, taxid: str, min_aa: int = 15) -> 
     """Translate nucleotide FASTA in 6 frames (stop-free ORFs, taxid-only headers)."""
     records: List[SeqRecord] = []
     taxid = str(taxid).split(".")[0]
-    for nucl in SeqIO.parse(input_file, "fasta"):
+    for nucl in iter_seqio_fasta(input_file):
         seq = str(nucl.seq).upper().replace("U", "T")
         for strand_seq in (Seq(seq), Seq(seq).reverse_complement()):
             for frame in range(3):
@@ -360,22 +374,12 @@ def nucleotide_to_orf_records(input_file: str, taxid: str, min_aa: int = 15) -> 
 
 def find_local_proteome_or_gff(input_file: str, taxid: str) -> Tuple[Optional[str], Optional[str]]:
     """Return ('protein'|'gff', path) for a sibling annotation file if present."""
-    path = Path(input_file)
-    parent = path.parent
-    candidates_faa = [
-        path.with_suffix(".faa"),
-        parent / f"{taxid}.faa",
-        parent / f"{path.stem}.faa",
-    ]
-    for cand in candidates_faa:
-        if cand.exists():
+    for cand in sibling_candidates(input_file, taxid, (".faa", ".faa.gz")):
+        if cand.exists() and (cand.suffix.lower() == ".faa" or cand.name.lower().endswith(".faa.gz")):
             return "protein", str(cand)
-    candidates_gff = []
-    for ext in (".gff", ".gff3", ".gtf"):
-        candidates_gff.extend(
-            [path.with_suffix(ext), parent / f"{taxid}{ext}", parent / f"{path.stem}{ext}"]
-        )
-    for cand in candidates_gff:
+    for cand in sibling_candidates(
+        input_file, taxid, (".gff", ".gff3", ".gtf", ".gff.gz", ".gff3.gz", ".gtf.gz")
+    ):
         if cand.exists():
             return "gff", str(cand)
     return None, None
@@ -403,10 +407,10 @@ def process_fasta_kaiju(input_file: str,
     temp_fasta.close()
     records: List[SeqRecord] = []
 
-    suffix = Path(input_file).suffix.lower()
+    suffix = Path(str(input_file).removesuffix(".gz")).suffix.lower()
     is_protein = protein or suffix == ".faa"
     if is_protein:
-        for rec in SeqIO.parse(input_file, "fasta"):
+        for rec in iter_seqio_fasta(input_file):
             aa = str(rec.seq).replace("*", "").replace("X", "")
             if len(aa) < min_aa:
                 continue
@@ -424,7 +428,7 @@ def process_fasta_kaiju(input_file: str,
                     kind, annot_path = "gff", gff
 
         if kind == "protein":
-            for rec in SeqIO.parse(annot_path, "fasta"):
+            for rec in iter_seqio_fasta(annot_path):
                 aa = str(rec.seq).replace("*", "").replace("X", "")
                 if len(aa) < min_aa:
                     continue
@@ -481,8 +485,11 @@ def add_database_kaiju(
         input_file, taxid, db_path, protein, email=email, fetch_missing=fetch_missing
     )
     
-    # Append to the library file
+    # Append to the library file (gunzip a previous compressed library if needed)
     library_file = os.path.join(db_path, "library.faa")
+    library_gz = library_file + ".gz"
+    if not os.path.exists(library_file) and os.path.exists(library_gz):
+        gunzip_file(library_gz, library_file, remove_source=True)
     with open(processed_file, 'r') as infile, open(library_file, 'a') as outfile:
         outfile.write(infile.read())
     
@@ -514,6 +521,9 @@ def build_database_kaiju(
     os.makedirs(db_path, exist_ok=True)
     
     library_file = os.path.join(db_path, "library.faa")
+    library_gz = library_file + ".gz"
+    if not os.path.exists(library_file) and os.path.exists(library_gz):
+        gunzip_file(library_gz, library_file, remove_source=False)
     base_name = os.path.join(db_path, "kaiju_db")
     
     # First build the BWT
@@ -529,6 +539,8 @@ def build_database_kaiju(
     bwt_file = f"{base_name}.bwt"
     if not os.path.exists(bwt_file) and os.path.exists(f"{base_name}.fmi"):
         logger.info("kaiju-mkbwt already produced an FM-index; skipping kaiju-mkfmi")
+        if os.path.exists(library_file):
+            gzip_file(library_file)
         return
     if not os.path.exists(bwt_file):
         raise FileNotFoundError(
@@ -549,6 +561,10 @@ def build_database_kaiju(
     bwt_file = f"{base_name}.bwt"
     if os.path.exists(bwt_file):
         os.remove(bwt_file)
+
+    # Classification uses the FM-index, not the protein library.
+    if os.path.exists(library_file):
+        gzip_file(library_file)
     
     logger.info(f"Kaiju database successfully built at {db_path}")
 
@@ -573,7 +589,7 @@ def process_fasta_krakenunique(input_file: str, taxid: str, genome_name: str, db
     # Create genomes.map entry
     map_file = os.path.join(db_path, "genomes.map")
     with open(map_file, 'a') as map_out:
-        for record in SeqIO.parse(processed_fasta, "fasta"):
+        for record in iter_seqio_fasta(processed_fasta):
             # Get sequence ID (header without '>' up to first space)
             seq_id = record.id.split()[0]
             # Write to genomes.map
@@ -679,7 +695,10 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
             preferred[taxid] = path
             continue
         # Prefer nucleotide genomes so proteome + ORF indexing can both run.
-        nucleotide = (".fna", ".fa", ".fasta", ".fna.gz")
+        nucleotide = (
+            ".fna", ".fa", ".fasta", ".fsa", ".ffn",
+            ".fna.gz", ".fa.gz", ".fasta.gz", ".fsa.gz", ".ffn.gz",
+        )
         if path.endswith(nucleotide) and not prev.endswith(nucleotide):
             preferred[taxid] = path
     file_taxid_map = {path: taxid for taxid, path in preferred.items()}
@@ -695,12 +714,15 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
         library_file = os.path.join(db_path, "library.faa")
         if os.path.exists(library_file):
             os.remove(library_file)
+        library_gz = library_file + ".gz"
+        if os.path.exists(library_gz):
+            os.remove(library_gz)
         for input_file, taxid in zip(input_files, taxids):
             add_database_kaiju(
                 input_file,
                 taxid,
                 db_path=db_path,
-                protein=str(input_file).endswith(".faa"),
+                protein=str(input_file).endswith(".faa") or str(input_file).endswith(".faa.gz"),
                 fetch_missing=True,
             )
         get_taxonomy_db(db_path=db_path)

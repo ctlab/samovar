@@ -9,11 +9,16 @@ import urllib.request
 from Bio import Entrez
 from pathlib import Path
 import random
-import gzip
-import shutil
 from tqdm import tqdm
 import time
 from samovar.fasta_processor import preprocess_fasta
+from samovar.seqio import (
+    find_existing_processed_genome,
+    gunzip_file,
+    gzip_file,
+    is_gzip_path,
+    processed_genome_path,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -102,14 +107,19 @@ def _download_assembly_file(
     dest_name: str,
     silent: bool = False,
 ) -> Optional[str]:
-    """Download an NCBI assembly file (suffix like '_protein.faa.gz') and gunzip it."""
+    """Download an NCBI assembly file (suffix like '_protein.faa.gz').
+
+    Files stay gzipped on disk; callers that need plain text open them via seqio.
+    """
     taxid = _normalize_taxid(taxid)
     output_path = Path(output_folder)
     output_path.mkdir(parents=True, exist_ok=True)
     dest = output_path / dest_name
-    if dest.exists():
-        return str(dest)
-    gz_dest = Path(str(dest) + ".gz")
+    dest_gz = dest if is_gzip_path(dest) else Path(str(dest) + ".gz")
+    dest_plain = Path(str(dest).removesuffix(".gz")) if is_gzip_path(dest) else dest
+    for candidate in (dest, dest_gz, dest_plain):
+        if candidate.exists():
+            return str(candidate)
     try:
         ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
         if not ftp_path:
@@ -118,14 +128,8 @@ def _download_assembly_file(
         url = f"{ftp_path}/{asm_name}{suffix}".replace("ftp://", "https://")
         if not silent:
             logger.info(f"Downloading {url}")
-        urllib.request.urlretrieve(url, gz_dest)
-        with gzip.open(gz_dest, "rb") as f_in, open(dest, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
-        try:
-            gz_dest.unlink()
-        except OSError:
-            pass
-        return str(dest)
+        urllib.request.urlretrieve(url, dest_gz)
+        return str(dest_gz)
     except Exception as e:
         if not silent:
             logger.error(f"Failed to download {suffix} for taxid {taxid}: {e}")
@@ -140,7 +144,12 @@ def fetch_proteome(
 ) -> Optional[str]:
     """Download NCBI protein FASTA (`_protein.faa.gz`) for a taxid."""
     return _download_assembly_file(
-        taxid, output_folder, email, "_protein.faa.gz", f"{_normalize_taxid(taxid)}.faa", silent
+        taxid,
+        output_folder,
+        email,
+        "_protein.faa.gz",
+        f"{_normalize_taxid(taxid)}.faa.gz",
+        silent,
     )
 
 
@@ -152,7 +161,12 @@ def fetch_gff(
 ) -> Optional[str]:
     """Download NCBI genomic GFF (`_genomic.gff.gz`) for a taxid."""
     return _download_assembly_file(
-        taxid, output_folder, email, "_genomic.gff.gz", f"{_normalize_taxid(taxid)}.gff", silent
+        taxid,
+        output_folder,
+        email,
+        "_genomic.gff.gz",
+        f"{_normalize_taxid(taxid)}.gff.gz",
+        silent,
     )
 
 
@@ -201,32 +215,28 @@ def fetch_genome(
     output_folder: str,
     email: str,
     reference_only: bool = True,
-    silent: bool = False
+    silent: bool = False,
+    gzip_genomes: bool = True,
     ) -> Optional[str]:
     
     if isinstance(taxid, str):
         taxid = taxid.split(".")[0]
-    
-    output_path = os.path.join(output_folder, f"{taxid}-processed.fasta")
-    if os.path.exists(output_path):
+
+    existing = find_existing_processed_genome(output_folder, taxid)
+    if existing is not None:
+        if gzip_genomes and not is_gzip_path(existing):
+            existing = gzip_file(existing)
+        elif not gzip_genomes and is_gzip_path(existing):
+            existing = gunzip_file(existing, remove_source=True)
         if not silent:
-            logger.info(f"Processed genome for taxid {taxid} already exists at {output_path}")
-        return output_path
+            logger.info(f"Processed genome for taxid {taxid} already exists at {existing}")
+        return str(existing)
+
+    output_path = processed_genome_path(output_folder, taxid, gzip_genomes=gzip_genomes)
 
     genome_path = fetch_genome_raw(taxid, output_folder, email, reference_only, silent)
     if genome_path is None:
         return None
-    if genome_path.endswith(".gz"):
-        try:
-            with (
-                gzip.open(genome_path, "rb") as f_in,
-                open(genome_path[:-3], "wb") as f_out,
-            ):
-                shutil.copyfileobj(f_in, f_out)
-            logger.info(f"Unzipped {genome_path} to {genome_path[:-3]}")
-            genome_path = genome_path[:-3]
-        except Exception as e:
-            logger.error(f"Failed to unzip {genome_path}: {str(e)}")
 
     try:
         preprocess_fasta(
@@ -236,7 +246,7 @@ def fetch_genome(
             include_percent=100.0,
         )
         logger.info(f"Successfully processed genome for taxid {taxid}")
-        return output_path
+        return str(output_path)
     except Exception as e:
         logger.error(f"Failed to process genome for taxid {taxid}: {str(e)}")
         return None
@@ -374,6 +384,19 @@ def main():
                       help='Suppress logging output and show progress bars instead')
     parser.add_argument('--max-genome-mb', type=float, default=100.0,
                       help='Skip assemblies larger than this many MB (0 disables)')
+    parser.add_argument(
+        '--gzip-genomes',
+        dest='gzip_genomes',
+        action='store_true',
+        default=True,
+        help='Keep processed genomes gzip-compressed (default)',
+    )
+    parser.add_argument(
+        '--no-gzip-genomes',
+        dest='gzip_genomes',
+        action='store_false',
+        help='Write uncompressed processed FASTA',
+    )
     
     args = parser.parse_args()
     args.email = args.email or default_entrez_email()
@@ -409,27 +432,36 @@ def main():
         if not args.silent:
             logger.info(f"Processing taxid {taxid}")
         
-        genome_path = fetch_genome(taxid, str(output_dir), args.email, silent=args.silent)
+        genome_path = fetch_genome(
+            taxid,
+            str(output_dir),
+            args.email,
+            silent=args.silent,
+            gzip_genomes=args.gzip_genomes,
+        )
         if not genome_path:
             if not args.silent:
                 logger.warning(f"Failed to fetch genome for taxid {taxid}")
             continue
-        processed = output_dir / f"{taxid}-processed.fasta"
-        if processed.exists():
+        processed = find_existing_processed_genome(output_dir, taxid)
+        if processed is not None:
             successes += 1
     
-    # Step 3: Cleanup - remove all files except processed FASTA files
+    # Step 3: Cleanup - remove all files except processed FASTA (plain or gzipped)
     if not args.silent:
         logger.info("Cleaning up intermediate files...")
     for file in output_dir.glob("*"):
-        if not file.name.endswith("-processed.fasta"):
-            try:
-                file.unlink()
-                if not args.silent:
-                    logger.info(f"Removed {file}")
-            except Exception as e:
-                if not args.silent:
-                    logger.error(f"Failed to remove {file}: {str(e)}")
+        name = file.name
+        keep = "-processed.fasta" in name or "-processed.fna" in name or "-processed.fa" in name
+        if keep:
+            continue
+        try:
+            file.unlink()
+            if not args.silent:
+                logger.info(f"Removed {file}")
+        except Exception as e:
+            if not args.silent:
+                logger.error(f"Failed to remove {file}: {str(e)}")
     
     if not args.silent:
         logger.info(f"Processing complete! Got {successes}/{args.N} genomes.")

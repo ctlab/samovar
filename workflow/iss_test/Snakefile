@@ -1,6 +1,7 @@
 import os
 import glob
 
+from samovar.seqio import is_fasta_name
 from samovar.table2iss import generate_iss_test_samples
 
 configfile: "config.yaml"
@@ -10,7 +11,7 @@ if not config.get("genomes"):
     config["genomes"] = [
         os.path.basename(g)
         for g in genome_files
-        if g.endswith((".fa", ".fna", ".fasta"))
+        if is_fasta_name(os.path.basename(g), protein=False, nucleotide=True)
     ]
     print(f"Found genomes: {config['genomes']}")
 

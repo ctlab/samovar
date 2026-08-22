@@ -1,12 +1,19 @@
 import os
-import glob
 
 from samovar.annotators_wrapper import get_annotator_instance
+from samovar.seqio import find_fastq_mate, list_fastq_samples
 
-# Get all samples from input directories
+# Get all samples from input directories (plain or gzipped FASTQ / FQ)
 def get_samples():
-    r1_files = glob.glob(os.path.join(config['r1_dir'], "*_R1.fastq"))
-    return [os.path.basename(f).replace('_R1.fastq', '') for f in r1_files]
+    return list_fastq_samples(config["r1_dir"])
+
+def r1_input(wildcards):
+    found = find_fastq_mate(config["r1_dir"], wildcards.sample, "R1")
+    return str(found) if found else os.path.join(config["r1_dir"], f"{wildcards.sample}_R1.fastq")
+
+def r2_input(wildcards):
+    found = find_fastq_mate(config["r2_dir"], wildcards.sample, "R2")
+    return str(found) if found else os.path.join(config["r2_dir"], f"{wildcards.sample}_R2.fastq")
 
 SAMPLES = get_samples()
 
@@ -36,8 +43,8 @@ rule all:
 # ==========================================
 rule custom_tool:
     input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+        r1 = r1_input,
+        r2 = r2_input
     output:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.custom_{{tool_name}}.out"
     threads:
@@ -60,8 +67,8 @@ rule custom_tool:
 # ==========================================
 rule kraken2:
     input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+        r1 = r1_input,
+        r2 = r2_input
     output:
         report = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.report",
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.out"
@@ -82,8 +89,8 @@ rule kraken2:
 
 rule kaiju:
     input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+        r1 = r1_input,
+        r2 = r2_input
     output:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
     threads:
@@ -103,8 +110,8 @@ rule kaiju:
 
 rule metaphlan4:
     input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+        r1 = r1_input,
+        r2 = r2_input
     output:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.out",
         raw = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.raw",
@@ -126,8 +133,8 @@ rule metaphlan4:
 
 rule kraken:
     input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+        r1 = r1_input,
+        r2 = r2_input
     output:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken.out"
     threads:
@@ -147,8 +154,8 @@ rule kraken:
 
 rule krakenuniq:
     input:
-        r1 = f"{config['r1_dir']}/{{sample}}_R1.fastq",
-        r2 = f"{config['r2_dir']}/{{sample}}_R2.fastq"
+        r1 = r1_input,
+        r2 = r2_input
     output:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.krakenuniq.out"
     threads:

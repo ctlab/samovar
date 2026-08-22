@@ -3,6 +3,7 @@ import glob
 import logging
 
 from samovar.regenerate import normalize_regeneration_mode, synthetic_sample_names
+from samovar.seqio import fastq_pair_paths
 from samovar.table2iss import process_annotation_tables
 
 # Set up logging
@@ -36,6 +37,8 @@ REGENERATION_CONFIG = {
 }
 if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])
+GZIP_GENOMES = bool(config.get("gzip_genomes", True))
+GZIP_READS = bool(config.get("gzip_reads", False))
 
 # Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -88,8 +91,11 @@ logger.info(f"Using samples: {SAMPLES}")
 ALL_OUTPUT_FILES = []
 for sample in SAMPLES:
     for annotator in ANNOTATORS:
-        ALL_OUTPUT_FILES.append(os.path.join(OUTPUT_DIR, f"{sample}_{annotator}_R1.fastq"))
-        ALL_OUTPUT_FILES.append(os.path.join(OUTPUT_DIR, f"{sample}_{annotator}_R2.fastq"))
+        r1, r2 = fastq_pair_paths(
+            os.path.join(OUTPUT_DIR, f"{sample}_{annotator}"),
+            gzip_reads=GZIP_READS,
+        )
+        ALL_OUTPUT_FILES.extend([r1, r2])
 
 logger.info(f"Generating {len(ALL_OUTPUT_FILES)} output files")
 
@@ -126,6 +132,8 @@ rule process_annotations:
                 cpus=params.cpus,
                 annotation_dir=params.annotation_dir,
                 regeneration_config=params.regeneration_config,
+                gzip_genomes=GZIP_GENOMES,
+                gzip_reads=GZIP_READS,
             )
             logger.info(
                 "Generated a full metagenome per annotator and split it into %s samples",

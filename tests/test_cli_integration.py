@@ -102,8 +102,13 @@ def test_build_from_config_invokes_kaiju_indexers(tmp_path):
         build_database_from_config(str(cfg), db_type="kaiju", db_path=str(db_path))
 
     library = db_path / "library.faa"
-    assert library.exists()
-    content = library.read_text()
+    library_gz = db_path / "library.faa.gz"
+    if library_gz.exists() and not library.exists():
+        import gzip as _gzip
+        content = _gzip.open(library_gz, "rt").read()
+    else:
+        assert library.exists()
+        content = library.read_text()
     assert "_562" in content or content.startswith(">562")
     assert "*" not in content.replace(">\n", "")
 

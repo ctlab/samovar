@@ -3,26 +3,24 @@
 import argparse
 from pathlib import Path
 
+from samovar.seqio import (
+    iter_fastq_records,
+    list_r1_files,
+    open_text,
+    r2_for_r1,
+)
+
 
 def read_fastq_records(path: Path):
     records = []
-    with path.open("r", encoding="utf-8") as fh:
-        while True:
-            h = fh.readline()
-            if not h:
-                break
-            s = fh.readline()
-            p = fh.readline()
-            q = fh.readline()
-            if not (s and p and q):
-                break
-            key = h.split()[0].replace("/1", "").replace("/2", "")
-            records.append((key, h, s, p, q))
+    for h, s, p, q in iter_fastq_records(path):
+        key = h.split()[0].replace("/1", "").replace("/2", "")
+        records.append((key, h, s, p, q))
     return records
 
 
 def write_fastq_records(path: Path, records):
-    with path.open("w", encoding="utf-8") as fh:
+    with open_text(path, "wt") as fh:
         for _, h, s, p, q in records:
             fh.write(h)
             fh.write(s)
@@ -37,6 +35,20 @@ def sort_paired_files(r1_path: Path, r2_path: Path):
     write_fastq_records(r2_path, r2)
 
 
+def _r1_files(out_dir: Path):
+    seen = set()
+    files = []
+    for directory in (out_dir, out_dir / "regenerated", out_dir / "initial"):
+        if not directory.is_dir():
+            continue
+        for r1 in list_r1_files(directory):
+            key = str(r1.resolve())
+            if key not in seen:
+                seen.add(key)
+                files.append(r1)
+    return files
+
+
 def main():
     parser = argparse.ArgumentParser(description="Sort paired FASTQ files by read ID")
     parser.add_argument("--output_dir", default=".", help="Directory with FASTQ files")
@@ -47,9 +59,8 @@ def main():
     if not out_dir.exists():
         raise SystemExit(f"Output directory not found: {out_dir}")
 
-    r1_files = sorted(out_dir.glob("*_R1.fastq"))
-    for r1_path in r1_files:
-        r2_path = out_dir / r1_path.name.replace("_R1.fastq", "_R2.fastq")
+    for r1_path in _r1_files(out_dir):
+        r2_path = r2_for_r1(r1_path)
         if r2_path.exists():
             sort_paired_files(r1_path, r2_path)
 

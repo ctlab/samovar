@@ -39,6 +39,8 @@ class PipelineConfig:
     regeneration_n_reads: int = 1000
     regeneration_seed: int = 42
     rescale_abundance: bool = False
+    gzip_genomes: bool = True
+    gzip_reads: bool = False
 
     def __post_init__(self):
         if self.annotators is None:
@@ -75,6 +77,10 @@ class PipelineConfig:
                 config.rescale_abundance = bool(
                     input_config.get('rescale_abundance', config.rescale_abundance)
                 )
+                if 'gzip_genomes' in input_config:
+                    config.gzip_genomes = bool(input_config.get('gzip_genomes'))
+                if 'gzip_reads' in input_config:
+                    config.gzip_reads = bool(input_config.get('gzip_reads'))
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -157,6 +163,11 @@ class PipelineConfig:
                         extra=extra
                     ))
 
+        if getattr(args, "gzip_genomes", None) is not None:
+            config.gzip_genomes = bool(args.gzip_genomes)
+        if getattr(args, "gzip_reads", None) is not None:
+            config.gzip_reads = bool(args.gzip_reads)
+
         return config
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
@@ -203,6 +214,8 @@ class PipelineConfig:
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
             'rescale_abundance': self.rescale_abundance,
+            'gzip_genomes': self.gzip_genomes,
+            'gzip_reads': self.gzip_reads,
         }
         if self.regeneration_n:
             annotation2iss_config['N'] = self.regeneration_n
@@ -273,7 +286,7 @@ if [ -n "{self.input_dir}" ] && [ -d "{self.input_dir}" ]; then
     src_dir=$(readlink -f "{self.input_dir}")
     dst_dir=$(readlink -f "$out_dir/initial")
     if [ "$src_dir" != "$dst_dir" ]; then
-        ln -sf $(readlink -f {self.input_dir}/*_R*.fastq) $out_dir/initial/ 2>/dev/null || cp {self.input_dir}/*_R*.fastq $out_dir/initial/
+        $PYTHON_PATH -c "from samovar.seqio import link_or_copy_reads; link_or_copy_reads('$src_dir', '$dst_dir')"
     fi
 fi
 
@@ -319,7 +332,7 @@ snakemake -s {wf / 'annotation2iss' / 'Snakefile'} \\
     echo "Warning: Some cleanup operations failed"
 }}
 
-if ! ls $out_dir/regenerated/*_R1.fastq >/dev/null 2>&1; then
+if ! $PYTHON_PATH -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads('$out_dir/regenerated') else 1)"; then
     echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
     exit 0
 fi
@@ -348,7 +361,7 @@ $PYTHON_PATH {wf / 'compare_annotations.py'} \\
 # Train and test ML
 if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
-    cat $out_dir/initial/*_R1.fastq > $out_dir/combined_temporary_R1.fastq
+    $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial', '$out_dir/combined_temporary_R1.fastq')"
     $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} $out_dir/combined_temporary_R1.fastq -o $out_dir/features.tsv --chunk_size 50000
     rm -f $out_dir/combined_temporary_R1.fastq
     FEATURE_ARG="--features $out_dir/features.tsv"

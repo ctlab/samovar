@@ -16,7 +16,7 @@ mkdir -p "$output_dir/.genomes" "$output_dir/.database" "$output_dir/.log"
 # Protista has no RefSeq "complete genome" hits; use Alveolata as protist proxy.
 # NOTE: do not name this GROUPS — bash reserves GROUPS as the user GID list
 ORG_GROUPS=(Archaea Bacteria Viridiplantae Alveolata Fungi Metazoa Viruses)
-existing_genomes="$(find "${output_dir}/.genomes" -maxdepth 1 -name '*-processed.fasta' 2>/dev/null | wc -l)"
+existing_genomes="$(find "${output_dir}/.genomes" -maxdepth 1 \( -name '*-processed.fasta' -o -name '*-processed.fasta.gz' \) 2>/dev/null | wc -l)"
 
 if [[ "$existing_genomes" -ge 21 ]]; then
     echo "Found ${existing_genomes} genomes under ${output_dir}/.genomes; skipping fetch"
@@ -37,7 +37,7 @@ else
         sleep 2
 
         shopt -s nullglob
-        for f in "${tmp_dir}"/*-processed.fasta; do
+        for f in "${tmp_dir}"/*-processed.fasta "${tmp_dir}"/*-processed.fasta.gz; do
             base="$(basename "$f")"
             dest="${output_dir}/.genomes/${base}"
             if [[ -e "$dest" ]]; then
@@ -48,7 +48,7 @@ else
         shopt -u nullglob
         rm -rf "$tmp_dir"
 
-        got="$(find "${output_dir}/.genomes" -maxdepth 1 -name '*-processed.fasta' | wc -l)"
+        got="$(find "${output_dir}/.genomes" -maxdepth 1 \( -name '*-processed.fasta' -o -name '*-processed.fasta.gz' \) | wc -l)"
         echo "  total genomes so far: ${got}"
     done
 fi
