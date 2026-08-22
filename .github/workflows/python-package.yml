@@ -1,4 +1,4 @@
-# python package
+# Python package (install.sh)
 
 name: Python package
 
@@ -10,8 +10,10 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
     strategy:
       fail-fast: false
       matrix:
@@ -19,32 +21,22 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+    - uses: conda-incubator/setup-miniconda@v3
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
+        auto-update-conda: true
+        activate-environment: samovar
+        environment-file: environment.yml
+    - name: Install via install.sh
+      env:
+        CI: "true"
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install flake8 pytest pytest-cov
-        pip install -e .[dev]
-    - name: Create local config
-      run: |
-        mkdir -p build
-        # Prefer a real R on PATH; leave "R" so the Python wrapper can resolve/skip cleanly.
-        cat > build/config.json <<EOF
-        {
-            "python_path": "$(which python3)",
-            "r_path": "$(command -v R || echo R)",
-            "r_lib_path": ""
-        }
-        EOF
+        chmod +x install.sh
+        ./install.sh
     - name: Lint with flake8
       run: |
-        # stop the build if there are Python syntax errors or undefined names
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       run: |
-        pytest
+        pytest -q --tb=short

@@ -1,126 +1,77 @@
 #!/bin/bash
+# Conda-friendly installer for the Python SamovaR pipeline.
+# R / samovaR is optional (generative abundance models on the r-package branch).
+set -euo pipefail
 
-# Exit on error
-set -e
+echo "Installing SamovaR (Python pipeline)..."
 
-echo "Installing SamovaR..."
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+mkdir -p build bin
 
-# Set default values
-DEFAULT_R_PATH="R"
-DEFAULT_PYTHON_PATH="python"
-
-# Get paths from user if specified in config.json
-if [ -f build/config.json ]; then
-    PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' build/config.json | sed 's/"python_path": *"\(.*\)"/\1/')
-    R_PATH=$(grep -o '"r_path": *"[^"]*"' build/config.json | sed 's/"r_path": *"\(.*\)"/\1/')
-    R_LIB_PATH=$(grep -o '"r_lib_path": *"[^"]*"' build/config.json | sed 's/"r_lib_path": *"\(.*\)"/\1/')
+if [ -n "${CONDA_PREFIX:-}" ] && [ -x "${CONDA_PREFIX}/bin/python" ]; then
+    PYTHON_PATH="${PYTHON_PATH:-${CONDA_PREFIX}/bin/python}"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_PATH="${PYTHON_PATH:-python3}"
+else
+    PYTHON_PATH="${PYTHON_PATH:-python}"
 fi
 
-# Check for custom R library path
-if [ -z "$R_LIB_PATH" ]; then
-    if [ -f .Rprofile ]; then
-        R_LIB_PATH=$(grep "libPaths" .Rprofile | grep -o "'.*'" | tr -d "'")
-    elif [ -f ~/.Renviron ]; then
-        R_LIB_PATH=$(grep "R_LIBS*=" ~/.Renviron | cut -d'=' -f2 | tr -d '"')
-    elif [ -f ~/.Rprofile ]; then
-        R_LIB_PATH=$(grep "libPaths" ~/.Rprofile | grep -o "'.*'" | tr -d "'")
+if [ -f build/config.json ]; then
+    CFG_PY=$(grep -o '"python_path": *"[^"]*"' build/config.json | sed 's/"python_path": *"\(.*\)"/\1/' || true)
+    if [ -n "${CFG_PY:-}" ] && command -v "$CFG_PY" >/dev/null 2>&1; then
+        PYTHON_PATH="$CFG_PY"
     fi
 fi
 
-# Set default values if not provided
-PYTHON_PATH=${PYTHON_PATH:-$DEFAULT_PYTHON_PATH}
-R_PATH=${R_PATH:-$DEFAULT_R_PATH}
-
-# If R_LIB_PATH is not provided, get it from R
-if [ -z "$R_LIB_PATH" ]; then
-    R_LIB_PATH=$($R_PATH --quiet -e "cat(.libPaths()[1])" | head -2 | tail +2 | tr -d ' >')
+if ! command -v "$PYTHON_PATH" >/dev/null 2>&1; then
+    echo "Python 3 is not installed. Create a conda env first, e.g.:"
+    echo "  conda env create -f environment.yml && conda activate samovar"
+    exit 1
 fi
 
-# Create or update config.json with all settings
+PYTHON_VERSION=$("$PYTHON_PATH" --version)
+echo "Using $PYTHON_VERSION ($PYTHON_PATH)"
+if [ -n "${CONDA_PREFIX:-}" ]; then
+    echo "Conda prefix: $CONDA_PREFIX"
+fi
+
+echo "Installing Python package (editable)..."
+"$PYTHON_PATH" -m pip install --upgrade pip
+"$PYTHON_PATH" -m pip install -e ".[dev]"
+
 cat > build/config.json << EOF
 {
-    "r_path": "$R_PATH",
-    "python_path": "$PYTHON_PATH",
-    "r_lib_path": "$R_LIB_PATH"
+    "python_path": "$(command -v "$PYTHON_PATH")",
+    "r_path": "$(command -v R 2>/dev/null || echo "")",
+    "r_lib_path": ""
 }
 EOF
 
-# Check if R is installed
-if ! command -v $R_PATH &> /dev/null; then
-    echo "R is not installed. Please install R first."
-    exit 1
-fi
+chmod +x bin/* workflow/database_prep/samovar_build_database.sh workflow/database_prep/samovar_build_database.py workflow/compare_annotations.py 2>/dev/null || true
 
-# Check if Python is installed
-if ! command -v $PYTHON_PATH &> /dev/null; then
-    echo "Python 3 is not installed. Please install Python 3 first."
-    exit 1
-fi
-
-# Get python version
-PYTHON_VERSION=$($PYTHON_PATH --version | grep "Python" | awk '{print $2}')
-echo "Detected Python version: $PYTHON_VERSION"
-
-# Get R version
-R_VERSION=$($R_PATH --version | grep "R version" | awk '{print $3}')
-echo "Detected R version: $R_VERSION"
-
-# If no custom path found, use default
-if [ -z "$R_LIB_PATH" ]; then
-    R_LIB_PATH=$($R_PATH --quiet -e "cat(.libPaths()[1])" | head -2 | tail +2)
-fi
-
-echo "Detected R library path: $R_LIB_PATH"
-
-# Install R dependencies
-echo "Installing R dependencies..."
-$R_PATH --quiet -e "if (!require('remotes', lib='$R_LIB_PATH')) install.packages('remotes', repos='https://cloud.r-project.org/', lib='$R_LIB_PATH')" &> /dev/null
-$R_PATH --quiet -e "if (!require('samovaR', lib='$R_LIB_PATH')) library(remotes, lib='$R_LIB_PATH'); remotes::install_deps(dependencies = TRUE, lib='$R_LIB_PATH')" &> /dev/null
-
-# Install R package
-echo "Installing R package..."
-$R_PATH --quiet -e "library(remotes, lib='$R_LIB_PATH'); remotes::install_local('.', lib='$R_LIB_PATH')" &> /dev/null
-
-# Install Python dependencies
-echo "Installing Python dependencies..."
-$PYTHON_PATH -m pip install --upgrade pip&> /dev/null
-$PYTHON_PATH -m pip install -e .
-
-# Create necessary directories
-mkdir -p build
-mkdir -p bin
-
-# Make scripts executable
-chmod +x bin/*
-chmod +x workflow/database_prep/samovar_build_database.sh
-chmod +x workflow/database_prep/samovar_build_database.py
-
-# Build the C++ annotation sort-merge combiner
 echo "Building C++ annotation combiner..."
-if command -v g++ &> /dev/null; then
+if command -v g++ >/dev/null 2>&1; then
     make -C src/cpp
-    chmod +x bin/samovar_combine_annotations
+    chmod +x bin/samovar_combine_annotations 2>/dev/null || true
 else
     echo "Warning: g++ not found; annotation merge will try to compile on first use."
 fi
 
-# Add bin directory to PATH in .bashrc if not already present
-if ! grep -q "export PATH=\$PATH:$(pwd)/bin" ~/.bashrc; then
-    echo "export PATH=\$PATH:$(pwd)/bin" >> ~/.bashrc
-    echo "Added SamovaR bin directory to PATH in ~/.bashrc"
-    echo "Please run 'source ~/.bashrc' or restart your terminal to update PATH"
+if [ "${SAMOVAR_INSTALL_R:-0}" != "0" ] && command -v R >/dev/null 2>&1; then
+    echo "SAMOVAR_INSTALL_R=1: installing optional R package..."
+    R --quiet -e "if (!require('remotes')) install.packages('remotes', repos='https://cloud.r-project.org/')"
+    R --quiet -e "library(remotes); remotes::install_local('.', upgrade='never')"
+else
+    echo "Skipping R package (not required for samovar prepare/exec). Set SAMOVAR_INSTALL_R=1 to install it."
 fi
 
-# Create config.json if it doesn't exist
-if [ ! -f build/config.json ]; then
-    echo "Creating build/config.json..."
-    cat > build/config.json << EOF
-{
-    "python_path": "$(which python3)",
-    "r_path": "$(which R)",
-    "r_lib_path": "$(R -e 'cat(.libPaths()[1])' 2>/dev/null)"
-}
-EOF
+if [ -z "${CI:-}" ] && [ -f "${HOME}/.bashrc" ]; then
+    if ! grep -q "export PATH=\$PATH:${ROOT}/bin" "${HOME}/.bashrc"; then
+        echo "export PATH=\$PATH:${ROOT}/bin" >> "${HOME}/.bashrc"
+        echo "Added ${ROOT}/bin to PATH in ~/.bashrc"
+    fi
 fi
 
 echo "Installation completed successfully!"
+echo "Config: $ROOT/build/config.json"

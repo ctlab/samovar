@@ -1,265 +1,101 @@
-# SamovaR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a> 
-### Automated re-profiling & benchmarking of metagenomic tools based on artificial data generation
+# SamovaR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a>
+### Ensemble taxonomic annotation, cross-validation, and ML re-profiling of metagenomes
 
-
-[![R package](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml/badge.svg?branch=main)](https://github.com/ctlab/samovar/actions/workflows/R-CMD-check.yaml)
+[![ITMO](https://raw.githubusercontent.com/aimclub/open-source-ops/43bb283758b43d75ec1df0a6bb4ae3eb20066323/badges/ITMO_badge.svg)](https://itmo.ru/)
 [![python package](https://github.com/ctlab/samovar/actions/workflows/python-package.yml/badge.svg?branch=main)](https://github.com/ctlab/samovar/actions/workflows/python-package.yml)
 
-There is a fundamental problem in modern ***metagenomics***: there are huge differences between methodological approaches that strongly influence the results, while remaining outside the attention of researchers. 
+In metagenomics, we often do not know which tool to use (or, which is much worse - know because they are SOTA). SAMOVAR team try to solve this problem with the automated benchmark based on the real inputed data to include in the model selection process information about the real community properties
 
-The use of golden practice and open code, while allowing data to be analyzed reproducibly, locks scientists into a single, far from perfect approach, with its own bias.
+Metagenomic classifiers disagree. SAMOVAR treats **multiple annotators as an ensemble**: it runs them on the same reads, cross-validates calls, regenerates in-silico communities from those calls, and trains a supervised **re-profiler** (SAMOVAR) that combines the tools.
 
-Therefore, we propose an approach that utilizes de novo generation of the artificial metagenomes - `SamovaR`.
+## Ensemble annotation
 
-## Installation
+Built-in ensemble members (wired through `samovar prepare`):
 
-### Quick Installation
+| Tool | Role in the ensemble |
+|------|----------------------|
+| **Kraken2** | k-mer LCA classifier |
+| **Kaiju** | protein-level (translated) classifier |
+| **Kraken / KrakenUniq** | additional k-mer votes |
+| **MetaPhlAn** | marker-gene profiler |
+| **Custom** | extra votes; can be easily additionally implemented for the developers |
 
-<b><font color="red">Warning:</font></b> beta
+Workflow:
 
-Use installation script:
-
-```bash
-git clone https://github.com/ctlab/samovar
-cd samovar
-chmod +x install.sh
-./install.sh
-```
-
-***Attention**: the script automatically detects custom R library paths from `.Renviron` (R_LIBS) or `.Rprofile` (libPaths())*
-
-### Manual Installation
-
-Install **R** package:
-
-```r
-devtools::install_github("https://github.com/ctlab/samovar/")
-```
-
-***Attention:*** *check that samovar can be loaded with* ```Rscript -e 'library(samovar)'```, *especially in case of several R versions installed*
-
-Install **python** package:
-
-```bash
-git clone https://github.com/ctlab/samovar
-cd samovar
-pip install -e .
-```
-***Attention:*** *most samovar usage require properly configurated file in build/config.json*
-
-## Usage
-### Cross-validation and re-profiling
-
-Example usage:
-```bash
-# Generate reads for benchmarking (skip for real data)
-samovar generate \
-    --genome_dir $SAMOVAR/data/test_genomes/meta \
-    --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
-    --output_dir samovar
-
-# Generate pipeline (for example, kraken2 + kaiju )
-## specify --input_dir for real data
-samovar preprocess \
-    --output_dir samovar \
-    --kraken2-test "kraken2 $DB_KRAKEN2" \
-    --kaiju-test "kaiju $DB_KAIJU"
-
-# Run the pipeline(s)
-samovar exec --output_dir samovar
-```
-
-Results and flexibility of the tool can be improved with specification of config files. Please folow wiki, or see {samovar_function} -h
-
-Manual example:
-```bash
-cd samovar
-bash workflow/pipeline.sh
-```
+1. Annotate real or ISS-simulated reads with every configured tool.
+2. Cross-validate taxIDs across tools (CV heatmaps) and against known truth when available (F1 / R²).
+3. Re-simulate a community from the annotation table (annotation2iss).
+4. Re-annotate the synthetic reads and train an ML ensemble (`workflow/ML.py`: RandomForest / AdaBoost) that maps tool votes → corrected taxID.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
 graph TD
     subgraph Input
-        subgraph Metagenomes
-            A1[FastQ files]
-            A2([InSilicoSeq config])
-        end
-        A3([SAMOVAR config])
+        A1[FastQ / ISS genomes]
+        A3[Annotator configs]
     end
 
-    subgraph Processing
-        Metagenomes --> C[Initial annotation]
+    subgraph Ensemble
+        A1 --> C[Initial annotation]
         A3 --> C
-        A3 --> F
-        A3 --> E[Metagenome generation]
-        C --> E
+        C --> CV[Cross-validation]
+        C --> E[Metagenome regeneration]
         E --> F[Re-annotation]
     end
-    
 
-    subgraph Results
-        F --> G1[Annotators scores]
+    subgraph Re-profiling
+        C --> ML[Train ensemble]
         F --> ML
-        subgraph Re-profiling
-            C --> R
-            ML --> R[Corrected results]
-        end
-        C --> C1[Cross-validation]
+        ML --> R[taxid_SAMOVAR]
     end
-
-    style Input fill:#90ee9020,stroke:#333,stroke-width:2px
-    style Metagenomes fill:#b2ee9020,stroke:#333,stroke-width:2px
-    style Processing fill:#ee90bf20,stroke:#333,stroke-width:2px
-    style Results fill:#90d8ee20,stroke:#333,stroke-width:2px
-    style Re-profiling fill:#90a4ee20,stroke:#333,stroke-width:2px
 ```
 
-### Artificial metagenome reneration
-Basic usage described in <a href="./vignettes">**vignettes**</a> and <a href="https://github.com/ctlab/samovar/wiki">**wiki**</a>
+## Installation
 
-You can also try the generator with <a href="https://dsmutin.shinyapps.io/samovaR/">**web** shiny app</a>
-
-
-#### R generation
-
-<a href="https://github.com/ctlab/samovar/blob/main/samovaR.pdf">See description</a> or <a href="vignettes/samovar-basic.Rmd">source</a> a vignette
-
-``` r
-library(samovaR)
-
-# download data
-teatree <- GMrepo_type2data(number_to_process = 2000)
-
-# filter
-tealeaves <- teatree %>%
-  teatree_trim(treshhold_species = 3, treshhold_samples = 3, treshhold_amount = 10^(-3))
-
-# normalizing
-teabag <- tealeaves %>%
-  tealeaves_pack()
-
-# clustering
-concotion <- teabag %>%
-  teabag_brew(min_cluster_size = 4, max_cluster_size = 6)
-
-# building samovar
-samovar <- concotion %>%
-  concotion_pour()
-
-# generating new data
-new_data <- samovar %>%
-  samovar_boil(n = 100)
-```
-
-<a src="https://github.com/ctlab/samovar/blob/main/samovaR_man.pdf">Documentation</a> for the **R package**
-
-#### Custom annotators (OOP wrapper)
-
-Unknown tools are routed through `CustomAnnotator` → `src/annotators/custom.sh`. Built-in custom routes:
-
-| `-p` / `--tool` | What it runs |
-|-----------------|--------------|
-| `dummy` / `constant9606` | assign taxID 9606 to every read |
-| `centrifuge` | Centrifuge FM-index (`-x DB`) |
-| `metauto` | k-mer autoencoder (`src/annotators/metauto.py`) |
-| `assembly_hybrid` | MEGAHIT → Bowtie2 → Kraken2 on contigs |
+Python 3.10+; **conda is recommended**. R is not required.
 
 ```bash
-samovar prepare --output_dir samovar_out \
-    --kaiju "kaiju $DB_KAIJU" \
-    --centrifuge "centrifuge $DB_CENTRIFUGE" \
-    --custom-test "metauto $DB_METAUTO"
+git clone https://github.com/ctlab/samovar
+cd samovar
+conda env create -f environment.yml
+conda activate samovar
+chmod +x install.sh
+./install.sh
 ```
 
-Thin wrappers (`src/annotators/centrifuge.sh`, `metauto.sh`, `assembly_hybrid.sh`) forward the same `custom.sh` flags. Per-read features for the ML ensemble can be extracted with `src/annotators/fastq_annotator.py` and passed as `workflow/ML.py --features features.tsv`, or by setting `SAMOVAR_ML_FEATURES=1` before `samovar exec`.
+Or without conda:
 
-Taxonomic rank collapse for plots uses ete3, with `src/samovar/taxonomy_engine.py` (`NCBITaxonomyParser`) as a lightweight `nodes.dmp` fallback.
-
-#### Pipeline
-
-<img src="data/img/additional/algo.png" width = 50%>
-
-## Components
-
-- **R** package `samova.R` for the artificial abundance table generation
-- Pipeline for the automated benchmarking and re-profiling
-
-## Project Structure
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
-graph LR
-    A[SamovaR] --> G1[Abundance table generation]
-    G1 --> B[R Package]
-    A --> G2[Automated re-profiling]
-    G2 --> C[snakemake + Python Pipeline]
-    G1 --> G[Shiny App]
-
-    B --> B1[R/]
-    B --> B2[man/]
-    B --> B3[vignettes/]
-
-    C --> C1[workflow/]
-    C --> C2[src/]
-
-    G --> H[shiny/]
+```bash
+python3 -m pip install -e ".[dev]"
+./install.sh
 ```
 
+`install.sh` writes `build/config.json` (python path only). Optional R package: `SAMOVAR_INSTALL_R=1 ./install.sh` (see branch `r-package`).
+
+## Usage
+
+```bash
+# Generate metagenome (skip for running SAMOVAR on real data as ensemble)
+samovar generate \
+    --genome_dir $SAMOVAR/data/test_genomes/meta \
+    --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
+    --output_dir samovar_out
+
+# Prepare workflow & scripts, create generation config
+samovar prepare \
+    --output_dir samovar_out \
+    --kraken2-test "kraken2 $DB_KRAKEN2" \
+    --kaiju-test "kaiju $DB_KAIJU"
+
+# Do SAMOVARing
+samovar exec --output_dir samovar_out
+```
+
+
+## R package
+
+Generative abundance models (`samovar_boil`, GMrepo helpers, Shiny) are **not** part of prepare/exec. They remain on the **`r-package`** branch.
 
 ## References
+
 - Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
-
-Custom-annotator OOP wrappers, Centrifuge / Metauto / assembly-hybrid routes, `taxonomy_engine`, and FASTQ feature extraction: Konstantin Yamschikov (Bioinformatic Institute, ITMO).
-
-
-## Dependencies
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
-graph LR
-    subgraph "R Package Dependencies"
-        subgraph "Main"
-            direction LR
-            tidyverse
-            scclust
-            Matrix
-            methods
-        end
-        
-        subgraph "Visualization"
-            direction LR
-            ggplot
-            plotly
-            ggnewscale
-        end
-        
-        subgraph "API"
-            direction LR
-            httr
-            jsonlite
-            xml2
-        end
-    end
-    
-    subgraph "Automated Benchmarking"
-        subgraph "Major"
-            direction LR
-            samova.R
-            R::yaml
-            SnakeMake
-            InSilicoSeq
-        end
-        
-        subgraph "Python packages"
-            direction LR
-            numpy
-            pandas
-            requests
-            ete3
-            scikit-learn
-        end
-    end
-    
-    linkStyle default stroke:#000
-```

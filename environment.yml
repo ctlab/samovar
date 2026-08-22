@@ -1,0 +1,11 @@
+name: samovar
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python>=3.10,<3.14
+  - pip
+  - cxx-compiler
+  - make
+  - snakemake-minimal>=7.0

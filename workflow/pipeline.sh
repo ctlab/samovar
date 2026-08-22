@@ -3,12 +3,11 @@ set -e
 
 if [ -f build/config.json ]; then
     PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' build/config.json | sed 's/"python_path": *"\(.*\)"/\1/')
-    R_PATH=$(grep -o '"r_path": *"[^"]*"' build/config.json | sed 's/"r_path": *"\(.*\)"/\1/')
-    R_LIB_PATH=$(grep -o '"r_lib_path": *"[^"]*"' build/config.json | sed 's/"r_lib_path": *"\(.*\)"/\1/')
 else
     echo "SamovaR is not installed: check build/config.json"
     exit 1
 fi
+PYTHON_PATH=${PYTHON_PATH:-python3}
 
 out_dir="tests_outs"
 mkdir -p $out_dir
@@ -46,8 +45,7 @@ $PYTHON_PATH workflow/combine_annotation_tables.py \
     -o tests_outs/benchmarking/initial_annotations
 
 # Visualize annotations
-$R_PATH -s -f "workflow/compare_annotations.R" \
-    --args \
+$PYTHON_PATH workflow/compare_annotations.py \
     --annotation_dir tests_outs/benchmarking/initial_annotations \
     --output_dir tests_outs/benchmarking/initial_annotations_plots
 
@@ -79,8 +77,7 @@ $PYTHON_PATH workflow/combine_annotation_tables.py \
     -s 2
 
 # Visualize & combine results
-$R_PATH -s -f "workflow/compare_annotations.R" \
-    --args \
+$PYTHON_PATH workflow/compare_annotations.py \
     --annotation_dir tests_outs/benchmarking/regenerated_annotations \
     --output_dir tests_outs/benchmarking/regenerated_annotations_plots \
     --csv tests_outs/benchmarking/regenerated_annotations/combined_annotation_table.csv
@@ -92,8 +89,7 @@ $PYTHON_PATH workflow/ML.py \
     --output_dir tests_outs/benchmarking/reprofiled_annotations
 
 # Check reprofiled results
-$R_PATH -s -f "workflow/compare_annotations.R" \
-    --args \
+$PYTHON_PATH workflow/compare_annotations.py \
     --annotation_dir tests_outs/benchmarking/reprofiled_annotations \
     --output_dir tests_outs/benchmarking/reprofiled_annotations_plots \
     --csv tests_outs/benchmarking/reprofiled_annotations/combined_annotation_table.csv

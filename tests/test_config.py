@@ -161,7 +161,9 @@ def test_generate_pipeline():
         # Check basic structure
         assert "set -e" in pipeline_content
         assert "PYTHON_PATH=" in pipeline_content
-        assert "R_PATH=" in pipeline_content
+        assert "workflow/compare_annotations.py" in pipeline_content
+        assert "workflow/compare_annotations.R" not in pipeline_content
+        assert "R_PATH=" not in pipeline_content
         
         # Check config file paths
         assert f"out_dir=\"{test_output_dir}\"" in pipeline_content
@@ -172,7 +174,7 @@ def test_generate_pipeline():
         
         # Check Python and R commands
         assert "workflow/combine_annotation_tables.py" in pipeline_content
-        assert "workflow/compare_annotations.R" in pipeline_content
+        assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/ML.py" in pipeline_content
 
 def test_setup_pipeline():

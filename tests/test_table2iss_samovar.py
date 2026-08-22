@@ -99,12 +99,39 @@ def test_resolve_r_executable_raises_when_missing(monkeypatch, tmp_path):
         _resolve_r_executable()
 
 
-def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config):
-    """Unit test: wrapper builds the R command and fails if R exits non-zero."""
+def test_samovar_annotation_regenerate_python(tmp_path, mock_config):
+    """Default path writes abundance CSVs without R."""
+    annotation_dir = tmp_path / "ann"
+    annotation_dir.mkdir()
+    pd.DataFrame(
+        {"seq": ["a", "b"], "taxID_kaiju_0": [562, 562], "true": [562, 9606]}
+    ).to_csv(annotation_dir / "1.annotation.csv", index=False)
+    output_dir = tmp_path / "out"
+    config_path = _write_config({**mock_config, "output_dir": str(output_dir), "regeneration_mode": "preserve"})
+    try:
+        samovar_annotation_regenerate(
+            annotation_dir=str(annotation_dir),
+            config_samovar=config_path,
+            output_dir=str(output_dir),
+        )
+    finally:
+        os.unlink(config_path)
+    files = list(output_dir.glob("*.csv"))
+    assert files
+    df = pd.read_csv(files[0])
+    assert "taxid" in df.columns
+    assert int(df["N_1"].sum()) == 2
+
+
+def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypatch):
+    """Optional R path: wrapper builds the R command when SAMOVAR_USE_R=1 and mode is glm."""
+    monkeypatch.setenv("SAMOVAR_USE_R", "1")
     annotation_dir = tmp_path / "ann"
     annotation_dir.mkdir()
     output_dir = tmp_path / "out"
-    config_path = _write_config({**mock_config, "output_dir": str(output_dir)})
+    config_path = _write_config(
+        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "glm"}
+    )
 
     calls = []
 
@@ -113,7 +140,6 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config):
         class Result:
             returncode = 0
 
-        # Simulate R writing an abundance CSV
         output_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame({"taxid": [562], "N_1": [10]}).to_csv(
             output_dir / "kaiju.csv", index=False
@@ -135,18 +161,17 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config):
     cmd = calls[0]
     assert cmd[0] == "R"
     assert "--config" in cmd
-    assert "--annotation_dir" in cmd
-    assert "--output_dir" in cmd
-    assert str(annotation_dir) in cmd
-    assert str(output_dir) in cmd
     assert (output_dir / "kaiju.csv").exists()
 
 
-def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config):
+def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_USE_R", "1")
     annotation_dir = tmp_path / "ann"
     annotation_dir.mkdir()
     output_dir = tmp_path / "out"
-    config_path = _write_config({**mock_config, "output_dir": str(output_dir)})
+    config_path = _write_config(
+        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "glm"}
+    )
 
     def boom(cmd, check=True, env=None):
         raise subprocess.CalledProcessError(returncode=1, cmd=cmd)

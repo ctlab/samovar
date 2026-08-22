@@ -2,6 +2,7 @@ import os
 import glob
 import logging
 
+from samovar.regenerate import normalize_regeneration_mode
 from samovar.table2iss import process_annotation_tables
 
 # Set up logging
@@ -21,6 +22,16 @@ COVERAGE = config["coverage"]
 MODEL = config.get("model", "hiseq")
 MAX_GENOMES = config.get("max_genomes", None)
 CORES = int(config.get("cores", 2))
+REGENERATION_MODE = normalize_regeneration_mode(config.get("regeneration_mode", "preserve"))
+REGENERATION_CONFIG = {
+    "regeneration_mode": REGENERATION_MODE,
+    "N": int(config.get("N", 10)),
+    "N_reads": int(config.get("N_reads", 1000)),
+    "seed": config.get("seed", 42),
+    "threshold_amount": config.get("threshold_amount", config.get("treshhold_amount", 1e-5)),
+    "vae_latent_dim": config.get("vae_latent_dim", 4),
+    "rescale_abundance": config.get("rescale_abundance", False),
+}
 
 # Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -56,11 +67,17 @@ ANNOTATORS = get_annotators()
 logger.info(f"Using annotators: {ANNOTATORS}")
 
 def get_sample_names():
-    sample_names = []
-    for file in get_annotation_files():
+    annotation_files = get_annotation_files()
+    original = []
+    for file in annotation_files:
         sample_name = os.path.basename(file).split(".")[0]
-        sample_names.append(sample_name)
-    return sample_names
+        original.append(sample_name)
+    if REGENERATION_MODE != "preserve":
+        n = REGENERATION_CONFIG["N"]
+        if len(original) == n:
+            return original
+        return [f"synth_{i}" for i in range(1, n + 1)]
+    return original
 
 SAMPLES = get_sample_names()
 logger.info(f"Using samples: {SAMPLES}")
@@ -90,6 +107,8 @@ rule process_annotations:
         read_length = READ_LENGTH,
         max_genomes = MAX_GENOMES,
         cpus = CORES,
+        annotation_dir = ANNOTATION_DIR,
+        regeneration_config = REGENERATION_CONFIG,
     run:
         try:
             process_annotation_tables(
@@ -102,6 +121,8 @@ rule process_annotations:
                 read_length=params.read_length,
                 max_genomes=params.max_genomes,
                 cpus=params.cpus,
+                annotation_dir=params.annotation_dir,
+                regeneration_config=params.regeneration_config,
             )
             logger.info(
                 "Generated a full metagenome per annotator and split it into %s samples",

@@ -32,6 +32,10 @@ class PipelineConfig:
     email: str = None
     cores: int = 1
     max_genomes: int = 50
+    regeneration_mode: str = "preserve"
+    regeneration_n: int = 10
+    regeneration_n_reads: int = 1000
+    regeneration_seed: int = 42
 
     def __post_init__(self):
         if self.annotators is None:
@@ -60,6 +64,14 @@ class PipelineConfig:
                 config.read_length = input_config.get('read_length', config.read_length)
                 config.coverage = input_config.get('coverage', config.coverage)
                 config.email = input_config.get('email', config.email)
+                config.regeneration_mode = input_config.get(
+                    'regeneration_mode', config.regeneration_mode
+                )
+                config.regeneration_n = input_config.get('N', config.regeneration_n)
+                config.regeneration_n_reads = input_config.get(
+                    'N_reads', config.regeneration_n_reads
+                )
+                config.regeneration_seed = input_config.get('seed', config.regeneration_seed)
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -182,6 +194,10 @@ class PipelineConfig:
             'coverage': self.coverage,
             'max_genomes': getattr(self, 'max_genomes', 50),
             'cores': self.cores,
+            'regeneration_mode': self.regeneration_mode,
+            'N': self.regeneration_n,
+            'N_reads': self.regeneration_n_reads,
+            'seed': self.regeneration_seed,
         }
         annotation2iss_path = configs_dir / 'config_annotation2iss.yaml'
         with open(annotation2iss_path, 'w') as f:
@@ -230,12 +246,11 @@ set -e
 
 if [ -f build/config.json ]; then
     PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' build/config.json | sed 's/"python_path": *"\\(.*\\)"/\\1/')
-    R_PATH=$(grep -o '"r_path": *"[^"]*"' build/config.json | sed 's/"r_path": *"\\(.*\\)"/\\1/')
-    R_LIB_PATH=$(grep -o '"r_lib_path": *"[^"]*"' build/config.json | sed 's/"r_lib_path": *"\\(.*\\)"/\\1/')
 else
     echo "SamovaR is not installed: check build/config.json"
     exit 1
 fi
+PYTHON_PATH=${{PYTHON_PATH:-python3}}
 
 out_dir="{base_dir}"
 mkdir -p $out_dir
@@ -261,17 +276,18 @@ $PYTHON_PATH workflow/combine_annotation_tables.py \\
     -i $out_dir/initial_reports \\
     -o $out_dir/initial_annotations
 
-# Visualize annotations
-$R_PATH -s -f "workflow/compare_annotations.R" \\
-    --args \\
+# Visualize annotations (Python: altair + cnsplots; never abort the pipeline)
+$PYTHON_PATH workflow/compare_annotations.py \\
     --annotation_dir $out_dir/initial_annotations \\
     --output_dir $out_dir/initial_annotations_plots \\
-    --show_top 0
+    --show_top 0 || echo "Warning: initial visualization failed; continuing"
 
-# Add pre-downloaded genomes to the genome directory
+# Add pre-downloaded genomes to the genome directory unless already present
 mkdir -p $out_dir/genomes
-cp data/test_genomes/meta/* $out_dir/genomes
-cp data/test_genomes/host/* $out_dir/genomes
+if ! ls $out_dir/genomes/* >/dev/null 2>&1; then
+    cp data/test_genomes/meta/* $out_dir/genomes
+    cp data/test_genomes/host/* $out_dir/genomes
+fi
 
 # Translate annotation table to new reads set
 snakemake -s workflow/annotation2iss/Snakefile \\
@@ -308,12 +324,11 @@ $PYTHON_PATH workflow/combine_annotation_tables.py \\
     -s 2
 
 # Visualize & combine results
-$R_PATH -s -f "workflow/compare_annotations.R" \\
-    --args \\
+$PYTHON_PATH workflow/compare_annotations.py \\
     --annotation_dir $out_dir/regenerated_annotations \\
     --output_dir $out_dir/regenerated_annotations_plots \\
     --csv $out_dir/regenerated_annotations/combined_annotation_table.csv \\
-    --show_top 0
+    --show_top 0 || echo "Warning: regenerated visualization failed; continuing"
 
 # Train and test ML
 if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
@@ -332,18 +347,18 @@ $PYTHON_PATH workflow/ML.py \\
     $FEATURE_ARG
 
 # Check reprofiled results
-$R_PATH -s -f "workflow/compare_annotations.R" \\
-    --args \\
+$PYTHON_PATH workflow/compare_annotations.py \\
     --annotation_dir $out_dir/reprofiled_annotations \\
     --output_dir $out_dir/reprofiled_annotations_plots \\
     --csv $out_dir/reprofiled_annotations/combined_annotation_table.csv \\
-    --show_top 0
+    --show_top 0 || echo "Warning: reprofiled visualization failed; continuing"
 """
-        
+
         with open(pipeline_path, 'w') as f:
             f.write(pipeline_content)
         
         return str(pipeline_path)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='SamovaR Pipeline Configuration')

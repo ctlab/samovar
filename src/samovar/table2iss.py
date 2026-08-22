@@ -686,6 +686,51 @@ def process_abundance_table(
     return filtered_table
 
 
+def _sample_tables_from_abundance_dir(
+    abundance_dir: str,
+    sample_names_hint: Optional[Sequence[str]] = None,
+) -> Dict[str, pd.DataFrame]:
+    """Build per-sample abundance tables from regenerated annotator CSVs."""
+    from pathlib import Path
+
+    from samovar.regenerate import sample_names_from_abundance_columns
+
+    by_annotator: Dict[str, pd.DataFrame] = {}
+    for path in sorted(Path(abundance_dir).glob("*.csv")):
+        by_annotator[path.stem] = pd.read_csv(path)
+    if not by_annotator:
+        return {}
+
+    ref = next(iter(by_annotator.values()))
+    n_cols = _n_columns(ref)
+    if not n_cols:
+        return {}
+
+    sample_names = sample_names_from_abundance_columns(
+        n_cols,
+        list(sample_names_hint) if sample_names_hint else None,
+    )
+    sample_tables: Dict[str, pd.DataFrame] = {}
+    for idx, n_col in enumerate(n_cols):
+        sample_name = sample_names[idx]
+        parts: List[pd.DataFrame] = []
+        for ann_name, df in by_annotator.items():
+            if n_col not in df.columns:
+                continue
+            sub = df[["taxid", n_col]].copy()
+            sub.columns = ["taxid", f"N_{ann_name}"]
+            parts.append(sub)
+        if not parts:
+            continue
+        merged = parts[0]
+        for part in parts[1:]:
+            merged = merged.merge(part, on="taxid", how="outer")
+        merged = merged.fillna(0)
+        merged["taxid"] = merged["taxid"].astype(str)
+        sample_tables[sample_name] = merged
+    return sample_tables
+
+
 def process_annotation_tables(
     table_paths: Sequence[str],
     genome_dir: str,
@@ -699,6 +744,8 @@ def process_annotation_tables(
     cpus: int = 2,
     seed: Optional[int] = None,
     max_genomes: Optional[int] = None,
+    annotation_dir: Optional[str] = None,
+    regeneration_config: Optional[dict] = None,
 ) -> None:
     """
     Generate one full metagenome per annotator, then split reads into samples.
@@ -708,7 +755,16 @@ def process_annotation_tables(
     Args:
         max_genomes: If set, only resolve/fetch the top-N taxids by total
             abundance across samples (critical for large public DBs).
+        annotation_dir: Directory of per-sample ``*.annotation.csv`` files.
+            Required when ``regeneration_config`` selects a generative mode.
+        regeneration_config: SamovaR-style regeneration settings (``regeneration_mode``,
+            ``N``, ``N_reads``, ``seed``, etc.).
     """
+    from samovar.regenerate import normalize_regeneration_mode, write_samovar_config_defaults
+
+    regen_cfg = write_samovar_config_defaults(dict(regeneration_config or {}))
+    mode = normalize_regeneration_mode(regen_cfg.get("regeneration_mode"))
+
     table_paths = list(table_paths)
     email = email or default_entrez_email()
     if sample_names is None:
@@ -720,12 +776,36 @@ def process_annotation_tables(
         ]
 
     sample_tables: Dict[str, pd.DataFrame] = {}
-    for path, sample_name in zip(table_paths, sample_names):
-        table = parse_annotation_table(path)
-        if not table.empty and "taxid" in table.columns:
-            table = table.copy()
-            table["taxid"] = table["taxid"].astype(str).str.split(".").str[0]
-        sample_tables[sample_name] = table
+    if mode != "preserve" and annotation_dir:
+        regen_dir = os.path.join(output_dir, ".regenerated_abundance")
+        cfg_out = dict(regen_cfg)
+        cfg_out["output_dir"] = regen_dir
+        cfg_out["regeneration_mode"] = mode
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
+            yaml.dump(cfg_out, tmp)
+            tmp_config = tmp.name
+        try:
+            samovar_annotation_regenerate(
+                annotation_dir=str(annotation_dir),
+                config_samovar=tmp_config,
+                output_dir=regen_dir,
+            )
+        finally:
+            os.unlink(tmp_config)
+        sample_tables = _sample_tables_from_abundance_dir(regen_dir, sample_names)
+        sample_names = list(sample_tables.keys())
+    else:
+        for path, sample_name in zip(table_paths, sample_names):
+            table = parse_annotation_table(path)
+            if not table.empty and "taxid" in table.columns:
+                table = table.copy()
+                table["taxid"] = table["taxid"].astype(str).str.split(".").str[0]
+            sample_tables[sample_name] = table
+
+    if not sample_tables:
+        _emit_empty_for_annotators(output_dir, sample_names or ["1"], ["any"])
+        warnings.warn("No annotation or abundance tables to process; emitted empty FASTQ files")
+        return
 
     annotator_cols: Dict[str, str] = {}
     taxid_totals: Dict[str, int] = {}
@@ -952,8 +1032,20 @@ def _resolve_r_executable() -> Tuple[str, Optional[str]]:
 
     raise FileNotFoundError(
         f"R executable not found ({configured!r}). "
-        "Install R, put it on PATH, or set build/config.json 'r_path'."
+        "The R generative package is optional; use the Python regenerator "
+        "or set SAMOVAR_USE_R=1 after installing R / samovaR."
     )
+
+
+def _samovar_annotation_regenerate_python(
+    annotation_dir: str,
+    config_samovar_dict: dict,
+    output_dir: str,
+) -> None:
+    from samovar.regenerate import regenerate_annotation_tables, write_samovar_config_defaults
+
+    cfg = write_samovar_config_defaults(config_samovar_dict)
+    regenerate_annotation_tables(annotation_dir, output_dir, cfg)
 
 
 def samovar_annotation_regenerate(
@@ -961,14 +1053,17 @@ def samovar_annotation_regenerate(
     config_samovar: str = None,
     output_dir: str = None
 ) -> None:
-    """
-    Regenerate taxonomy tables to a SAMOVAR table.
+    """Regenerate taxonomy tables to abundance CSVs.
 
-    Args:
-        config_samovar: Path to SAMOVAR config file in yaml format. Default if None.
-        annotation_dir: Path to annotation directory
-        output_dir: Path to output directory
+    Modes (``regeneration_mode`` in config):
+
+    - ``preserve`` (default): observed counts, no generative remodelling.
+    - ``glm``: R samovaR boil when ``SAMOVAR_USE_R=1``, else Python glm analog.
+    - ``bootstrap``: column bootstrap of observed profiles.
+    - ``vae``: latent-factor generative sampling.
     """
+    from samovar.regenerate import normalize_regeneration_mode
+
     if config_samovar is None:
         tmp_file = tempfile.mktemp()
         with open(tmp_file, 'w') as f:
@@ -976,16 +1071,26 @@ def samovar_annotation_regenerate(
                 'threshold_amount': 1e-5,
                 'plot_log': False,
                 'N': 10,
-                'N_reads': 1000
+                'N_reads': 1000,
+                'regeneration_mode': 'preserve',
             }, f)
         config_samovar = tmp_file
 
-    # Read config file as YAML
     with open(config_samovar, 'r') as f:
-        config_samovar_dict = yaml.safe_load(f)
+        config_samovar_dict = yaml.safe_load(f) or {}
 
     if output_dir is None:
-        output_dir = config_samovar_dict['output_dir']
+        output_dir = config_samovar_dict.get('output_dir')
+        if not output_dir:
+            raise ValueError("output_dir is required")
+
+    mode = normalize_regeneration_mode(config_samovar_dict.get("regeneration_mode", "preserve"))
+    use_r = os.environ.get("SAMOVAR_USE_R", "0").strip().lower() in {"1", "true", "yes"}
+    if mode != "glm" or not use_r:
+        _samovar_annotation_regenerate_python(
+            annotation_dir, config_samovar_dict, output_dir
+        )
+        return
 
     here = os.path.dirname(os.path.abspath(__file__))
     annotation_regenerate = os.path.abspath(

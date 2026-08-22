@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "samovar"
-version = "0.9.0"
+version = "1.0.0"
 description = "Automated re-profiling and benchmarking with SamovaR"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,6 +20,9 @@ dependencies = [
     "insilicoseq>2.0.0",
     "scikit-learn>1.6.0",
     "matplotlib>3.5.0",
+    "seaborn>=0.12.0",
+    "altair>=5.0.0",
+    "cnsplots>=0.6.0",
     "pyyaml>=5.1",
     "tqdm>=4.60.0"
 ]
@@ -33,7 +36,11 @@ dev = [
     "flake8>=4.0"
 ]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --cov=src" 
+addopts = "-v --cov=src"
+ 
