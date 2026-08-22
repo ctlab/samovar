@@ -78,6 +78,12 @@ def mark_done(output_dir: PathLike, name: str) -> Path:
         except OSError:
             pass
         raise
+    try:
+        from samovar.stage_report import write_stage_report
+
+        write_stage_report(output_dir, name)
+    except Exception:
+        pass
     return marker
 
 

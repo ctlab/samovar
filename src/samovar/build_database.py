@@ -673,7 +673,12 @@ def build_database_krakenunique(
     
     logger.info(f"KrakenUniq database successfully built at {db_path}")
 
-def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path: str = "tests_outs/db"):
+def build_database_from_config(
+    config_path: str,
+    db_type: str = "kaiju",
+    db_path: str = "tests_outs/db",
+    example_omit: Optional[bool] = None,
+):
     """
     Build database from config file.
     
@@ -681,13 +686,25 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
         config_path: Path to config YAML file
         db_type: Type of database to build ("kaiju", "kraken2", or "krakenunique")
         db_path: Path to store the database
+        example_omit: If True, apply toy-only taxon gaps (Escherichia off Kraken2,
+            Phage Phi X off Kaiju). If None, honour SAMOVAR_EXAMPLE_OMIT or
+            auto-detect ``test_genomes`` input directories.
     """
+    from samovar.example_db import (
+        filter_example_omit,
+        should_apply_example_omit,
+        warn_example_omit,
+    )
+
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
     # Process input directories
-    file_taxid_map = process_fasta_directories(config['input_dir'])
+    input_dirs = config['input_dir']
+    if isinstance(input_dirs, str):
+        input_dirs = [input_dirs]
+    file_taxid_map = process_fasta_directories(input_dirs)
     preferred = {}
     for path, taxid in file_taxid_map.items():
         prev = preferred.get(taxid)
@@ -702,12 +719,26 @@ def build_database_from_config(config_path: str, db_type: str = "kaiju", db_path
         if path.endswith(nucleotide) and not prev.endswith(nucleotide):
             preferred[taxid] = path
     file_taxid_map = {path: taxid for taxid, path in preferred.items()}
+
+    apply_omit = should_apply_example_omit(input_dirs, explicit=example_omit)
+    omitted: Dict[str, str] = {}
+    if apply_omit and db_type in {"kaiju", "kraken2"}:
+        file_taxid_map, omitted = filter_example_omit(file_taxid_map, db_type)
+        warn_example_omit(db_type, omitted.values())
     
     # Get lists of files and taxids
     input_files = list(file_taxid_map.keys())
     taxids = list(file_taxid_map.values())
     
     print(f"Processing {len(input_files)} files with taxids: {taxids}")
+    if omitted:
+        print(f"EXAMPLE omit ({db_type}): skipped taxids {sorted(set(omitted.values()))}")
+    if not input_files:
+        raise ValueError(
+            f"No genomes left to index for {db_type} after example omit. "
+            "This flag is only for toy tests; use --no-example-omit for a full index."
+        )
+
     
     # Build database based on type
     if db_type == "kaiju":

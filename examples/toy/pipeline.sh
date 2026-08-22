@@ -12,6 +12,8 @@ rm -rf "$output_dir/"
 mkdir -p "$output_dir/.database"
 
 # Build indexes from genomes shipped with the package (no cluster paths).
+# TEST/TOY EXAMPLE ONLY: Kraken2 omits Escherichia; Kaiju omits Phage Phi X.
+# That gap is declared as a warning during build — do not use this for real DBs.
 cat > "$output_dir/.database/config.yaml" << EOF
 input_dir:
   - "${SAMOVAR}/data/test_genomes/meta"
@@ -21,8 +23,8 @@ mutation_rate: 0.02
 include_percent: 70.0
 EOF
 
-samovar build_database --type kraken2 --config_path "$output_dir/.database/config.yaml" --db_path "$output_dir/.database/kraken2_db"
-samovar build_database --type kaiju --config_path "$output_dir/.database/config.yaml" --db_path "$output_dir/.database/kaiju_db"
+samovar build_database --type kraken2 --config_path "$output_dir/.database/config.yaml" --db_path "$output_dir/.database/kraken2_db" --example-omit
+samovar build_database --type kaiju --config_path "$output_dir/.database/config.yaml" --db_path "$output_dir/.database/kaiju_db" --example-omit
 
 # Optional public Kaiju index instead of the toy build:
 # samovar_fetch_archive \
@@ -34,9 +36,11 @@ samovar generate \
     --host_genome "$SAMOVAR/data/test_genomes/host/9606.fna" \
     --output_dir "$output_dir"
 
-samovar preprocess \
+samovar prepare \
     --output_dir "$output_dir" \
+    --test-genomes \
     --kraken2-test "kraken2 $output_dir/.database/kraken2_db" \
     --kaiju-test "kaiju $output_dir/.database/kaiju_db"
 
 samovar exec --output_dir "$output_dir"
+samovar multiqc --output_dir "$output_dir"

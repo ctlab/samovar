@@ -10,6 +10,8 @@ show_usage() {
     echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique)"
     echo "  --config_path PATH Path to config YAML file"
     echo "  --db_path PATH    Path to store the database"
+    echo "  --example-omit    TEST/TOY ONLY: drop Escherichia from Kraken2 and Phage Phi X from Kaiju"
+    echo "  --no-example-omit Keep every taxon even when building from data/test_genomes"
     echo ""
     echo "Example:"
     echo "  samovar build_database --type kaiju --config_path config.yaml --db_path ./database"
@@ -19,6 +21,7 @@ show_usage() {
 type=""
 config_path=""
 db_path=""
+omit_args=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -33,6 +36,10 @@ while [[ $# -gt 0 ]]; do
         --db_path)
             db_path="$2"
             shift 2
+            ;;
+        --example-omit|--no-example-omit)
+            omit_args+=("$1")
+            shift
             ;;
         *)
             echo "Error: Unknown option '$1'"
@@ -62,4 +69,4 @@ snakemake -s $(dirname "$0")/Snakefile \
     --cores 1
 
 # Run the database build script
-python "$(dirname "$0")/samovar_build_database.py" --type "$type" --config_path "$config_path" --db_path "$db_path" 
+python "$(dirname "$0")/samovar_build_database.py" --type "$type" --config_path "$config_path" --db_path "$db_path" "${omit_args[@]}" 

@@ -42,6 +42,7 @@ def test_cli_help_lists_prepare_build_exec():
     assert "prepare" in out
     assert "build" in out
     assert "exec" in out
+    assert "multiqc" in out
     assert "--redo" in out
     assert "--cleanup-tmp" in out
 

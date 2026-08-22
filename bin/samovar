@@ -29,6 +29,7 @@ show_usage() {
     echo "  prepare     Generate main pipeline configuration (alias: preprocess)"
     echo "  build       Build Kaiju or Kraken2 database from config (alias: build_database)"
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
+    echo "  multiqc     Bundle stage JSON + plots and render a MultiQC report"
     echo "  generate    Generate ISS test configuration and pipeline"
     echo "  tools       Various utility tools"
     echo "  help        Show this help message"
@@ -41,6 +42,7 @@ show_usage() {
     echo "  samovar exec --output_dir [...]"
     echo "  samovar exec --output_dir [...] --redo"
     echo "  samovar exec --output_dir [...] --cleanup-tmp"
+    echo "  samovar multiqc --output_dir [...]"
     echo "  samovar tools --sort --output_dir [...]"
 }
 
@@ -104,6 +106,28 @@ case "${1:-}" in
             set -- "$@" "--output_dir" "."
         fi
         "$SCRIPT_DIR/samovar_exec" "$@"
+        ;;
+    "multiqc")
+        shift
+        if ! echo "$*" | grep -q -- "--output_dir"; then
+            set -- "$@" "--output_dir" "."
+        fi
+        OUT="."
+        EXTRA=()
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --output_dir)
+                    OUT="$2"
+                    shift 2
+                    ;;
+                *)
+                    EXTRA+=("$1")
+                    shift
+                    ;;
+            esac
+        done
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.stage_report multiqc "$OUT" "${EXTRA[@]}"
         ;;
     "tools")
         shift

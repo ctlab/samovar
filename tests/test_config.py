@@ -232,6 +232,7 @@ def test_generate_pipeline():
         assert "samovar.exec_control" in pipeline_content
         assert "ckpt_skip" in pipeline_content
         assert "ckpt_finish" in pipeline_content
+        assert "samovar.stage_report" in pipeline_content
         for step in (
             "setup_reads",
             "annotate_initial",

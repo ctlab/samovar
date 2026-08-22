@@ -95,3 +95,8 @@ def test_fix2_style_generate_prepare_exec(tmp_path):
     reports = out / "initial_reports"
     assert reports.is_dir()
     assert list(reports.glob("*.csv")) or list(reports.glob("*.out"))
+    json_dir = out / ".log" / "multiqc"
+    assert (json_dir / "setup_reads.samovar.json").is_file()
+    staged = out / "multiqc_samovar"
+    assert staged.is_dir()
+    assert (staged / "00_SamovaR_pipeline_mqc.html").is_file()

@@ -549,7 +549,9 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --show_top 0""",
         )
 
-        footer = """cleanup_tmp_if_requested
+        footer = """"$PYTHON_PATH" -m samovar.stage_report overview "$out_dir" || true
+"$PYTHON_PATH" -m samovar.stage_report bundle "$out_dir" || true
+cleanup_tmp_if_requested
 """
 
         pipeline_content = "\n".join(

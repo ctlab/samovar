@@ -11,11 +11,30 @@ def main():
                       help='Path to config YAML file')
     parser.add_argument('--db_path', required=True,
                       help='Path to store the database')
-    
+    parser.set_defaults(example_omit=None)
+    omit = parser.add_mutually_exclusive_group()
+    omit.add_argument(
+        '--example-omit',
+        dest='example_omit',
+        action='store_true',
+        help='Toy/test only: omit Escherichia from Kraken2 and Phage Phi X from Kaiju',
+    )
+    omit.add_argument(
+        '--no-example-omit',
+        dest='example_omit',
+        action='store_false',
+        help='Do not apply toy taxon gaps even if input_dir is data/test_genomes',
+    )
+
     args = parser.parse_args()
     # If type is 'kraken', use krakenunique processing
     db_type = 'krakenunique' if args.type == 'kraken' else args.type
-    build_database_from_config(args.config_path, db_type=db_type, db_path=args.db_path)
+    build_database_from_config(
+        args.config_path,
+        db_type=db_type,
+        db_path=args.db_path,
+        example_omit=args.example_omit,
+    )
 
 if __name__ == '__main__':
     main() 

@@ -108,7 +108,14 @@ samovar prepare \
 samovar exec --output_dir samovar_out
 # Optional: drop `.tmp` / ISS scratch after a successful run
 # samovar exec --output_dir samovar_out --cleanup-tmp
+# Interactive MultiQC report (Altair + cnsplots + OPAL, plus stage JSON like fastp)
+# samovar multiqc --output_dir samovar_out
 ```
+
+Each exec step writes `.log/multiqc/<stage>.samovar.json` (FastQC/fastp-style summaries). `samovar multiqc` restages those files plus **Altair** HTML (F1, R², CV, scores) as stock MultiQC `*_mqc.html` under `multiqc_samovar/` and writes `multiqc/multiqc_report.html`.
+
+Toy indexes built from `data/test_genomes` **omit Escherichia from Kraken2 and Phage Phi X from Kaiju** (`--example-omit`). That is only an example of a missing-taxon gap; the build prints a warning. Do not use it for production databases.
+
 
 Annotators in **another conda env or module** go in `~/.config/samovar/config.json` (copied to `build/config.json` on install):
 
