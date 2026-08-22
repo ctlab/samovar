@@ -114,6 +114,8 @@ def test_generate_pipeline():
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "snakemake -s " in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
+        assert "samovar/env" in pipeline_content
+        assert "SAMOVAR_PATH" in pipeline_content
 
 def test_setup_iss_test():
     test_output_dir = 'tests_outs/test_setup_iss_test'

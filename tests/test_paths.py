@@ -3,6 +3,7 @@ from pathlib import Path
 from samovar.paths import (
     PACKAGE_VERSION,
     annotation_regenerate_r,
+    collect_runtime_path_dirs,
     iss_executable,
     ncbi_email,
     repo_root,
@@ -53,8 +54,6 @@ def test_resolve_executable_absolute(tmp_path):
 
 
 def test_collect_runtime_path_dirs_tools_path_and_envs(tmp_path):
-    from samovar.paths import collect_runtime_path_dirs
-
     py = tmp_path / "conda" / "bin" / "python"
     py.parent.mkdir(parents=True)
     py.write_text("#!/bin/sh\n")
@@ -80,6 +79,31 @@ def test_collect_runtime_path_dirs_tools_path_and_envs(tmp_path):
     assert str(kaiju_bin) in dirs
     assert str(extra_env / "bin") in dirs
     assert str(k2_prefix / "bin") in dirs
+
+
+def test_collect_runtime_path_dirs_missing_bin_not_doubled():
+    dirs = collect_runtime_path_dirs(
+        {
+            "path": ["/opt/other-env/bin"],
+            "tools": {"kraken2": "/opt/kraken/bin/kraken2"},
+            "tool_envs": {"kaiju": "/opt/conda/envs/kaiju"},
+        }
+    )
+    assert "/opt/other-env/bin" in dirs
+    assert "/opt/other-env/bin/bin" not in dirs
+    assert "/opt/conda/envs/kaiju/bin" in dirs
+    assert "/opt/kraken/bin" in dirs
+
+
+def test_resolve_executable_from_path(tmp_path, monkeypatch):
+    exe = tmp_path / "kaiju"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr("samovar.paths.load_config", lambda: {})
+    resolved = resolve_executable("kaiju --verbose", tool_key="kaiju")
+    assert resolved.startswith(str(exe.resolve()))
+    assert resolved.endswith("--verbose")
 
 
 def test_resolve_executable_uses_tool_envs(tmp_path, monkeypatch):

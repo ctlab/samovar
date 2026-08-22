@@ -52,7 +52,8 @@ class BaseAnnotator:
         from samovar.paths import resolve_executable
 
         raw_cmd = run_config.get("cmd") or self.default_cmd
-        self.cmd = resolve_executable(raw_cmd, tool_key=str(raw_cmd).split()[0] if raw_cmd else None)
+        first = str(raw_cmd).split()[0] if raw_cmd else ""
+        self.cmd = resolve_executable(raw_cmd, tool_key=Path(first).name if first else None)
 
     @property
     def default_cmd(self) -> str:

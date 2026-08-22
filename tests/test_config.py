@@ -260,7 +260,7 @@ def test_setup_pipeline():
         kraken2=[["/path/to/kraken2 /path/to/kraken_db --minK 2 --maxK 10"]],
         kaiju=[["/path/to/kaiju /path/to/kaiju kaiju_db.fmi"]]
     )
-    
+
     result = setup_pipeline(args)
     
     # Check that all expected files exist
@@ -278,4 +278,41 @@ def test_setup_pipeline():
     # Verify pipeline content
     with open(pipeline_path, 'r') as f:
         pipeline_content = f.read()
-        assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content 
+        assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
+
+
+def test_generate_pipeline_bakes_tool_env_bins(tmp_path, monkeypatch):
+    env = tmp_path / "kaiju_env"
+    (env / "bin").mkdir(parents=True)
+    kaiju = env / "bin" / "kaiju"
+    kaiju.write_text("#!/bin/sh\n")
+    kaiju.chmod(0o755)
+    extra = tmp_path / "other_env" / "bin"
+    extra.mkdir(parents=True)
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {
+            "path": [str(extra.parent)],
+            "tool_envs": {"kaiju": str(env)},
+            "tools": {"kaiju": str(kaiju)},
+        },
+    )
+    out = tmp_path / "out"
+    (tmp_path / "reads").mkdir()
+    config = PipelineConfig(
+        input_dir=str(tmp_path / "reads"),
+        output_dir=str(out),
+        annotators=[
+            AnnotatorConfig(
+                run_name="kaiju-test",
+                type="kaiju",
+                cmd="kaiju",
+                db_path=str(tmp_path / "db"),
+            )
+        ],
+    )
+    script = Path(config.generate_pipeline(str(out))).read_text()
+    assert str(env / "bin") in script
+    assert str(extra) in script
+    assert "samovar/env" in script
+    assert "SAMOVAR_PATH" in script

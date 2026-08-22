@@ -151,17 +151,27 @@ def _dir_for_path_entry(raw: str, *, env_prefix: bool = False) -> Optional[str]:
     if not text:
         return None
     path = Path(text).expanduser()
+    # Bare command names live on PATH; they are not directories to prepend.
+    if not path.is_absolute() and len(path.parts) == 1:
+        return None
     if path.is_file():
         return str(path.resolve().parent)
+    bindir = path / "bin"
     if path.is_dir():
-        bindir = path / "bin"
-        if env_prefix or (path.name != "bin" and bindir.is_dir()):
-            return str((bindir if bindir.is_dir() else path).resolve())
+        if path.name == "bin":
+            return str(path.resolve())
+        if bindir.is_dir():
+            return str(bindir.resolve())
         return str(path.resolve())
+    # Not on disk yet (other HPC / module not loaded). Keep .../bin as-is;
+    # treat other env_prefix values as conda/module prefixes.
+    if path.name == "bin":
+        return str(path)
     if env_prefix:
-        return str(path / "bin")
+        return str(bindir)
     if path.name in KNOWN_TOOLS or path.suffix:
-        return str(path.parent)
+        parent = path.parent
+        return None if str(parent) in {".", ""} else str(parent)
     return str(path)
 
 
@@ -196,7 +206,9 @@ def collect_runtime_path_dirs(cfg: Optional[Dict[str, Any]] = None) -> List[str]
     for extra in _split_path_value(cfg.get("path") or cfg.get("extra_path")):
         add(extra, env_prefix=True)
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    for value in tools.values():
+    for key, value in tools.items():
+        if str(key).startswith("_"):
+            continue
         add(str(value) if value is not None else "")
     envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
     for key, value in envs.items():
@@ -246,17 +258,19 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
 
     cfg = load_config()
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    key = tool_key or Path(token).name
-    mapped = str(tools.get(key) or tools.get(Path(token).stem) or "").strip()
+    name = Path(tool_key or token).name
+    mapped = str(tools.get(name) or tools.get(Path(name).stem) or "").strip()
     envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
-    env_root = str(envs.get(key) or envs.get(Path(token).stem) or "").strip()
+    env_root = str(envs.get(name) or envs.get(Path(name).stem) or "").strip()
     env_candidates: List[str] = []
     if env_root:
         root = Path(env_root).expanduser()
-        env_candidates.append(str(root / "bin" / Path(token).name))
-        env_candidates.append(str(root / Path(token).name))
+        env_candidates.append(str(root / "bin" / name))
+        env_candidates.append(str(root / name))
 
-    candidates = [mapped, *env_candidates, token]
+    # Other-env prefixes in tool_envs beat a same-named binary already on PATH
+    # (and beat tools.* discovered at install time).
+    candidates = [*env_candidates, mapped, token]
     for cand in candidates:
         if not cand:
             continue
@@ -264,6 +278,8 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
         if path.is_file() and os.access(path, os.X_OK):
             resolved = str(path.resolve())
             return f"{resolved} {rest}".strip()
+        if path.is_absolute():
+            continue
         which = shutil.which(cand)
         if which:
             return f"{which} {rest}".strip()

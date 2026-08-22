@@ -7,6 +7,7 @@
     "iss_path": "/usr/bin/iss",
     "ncbi_email": "test@samovar.com",
     "test_genomes": "/path/to/samovar/data/test_genomes",
+    "_comment_path": "Extra bin dirs or conda prefixes prepended so bash .log/samovar.sh finds tools without module load / conda activate",
     "path": [
         "/opt/other-env/bin"
     ],
@@ -14,6 +15,7 @@
         "kraken2": "/usr/bin/kraken2",
         "kaiju": "/opt/conda/envs/kaiju/bin/kaiju"
     },
+    "_comment_tool_envs": "Map tool name -> conda/module prefix; <prefix>/bin is prepended and used to resolve that tool",
     "tool_envs": {
         "kaiju": "/opt/conda/envs/kaiju"
     }
