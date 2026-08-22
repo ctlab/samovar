@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -75,22 +74,24 @@ def opal_enabled() -> bool:
 
 def opal_executable() -> Optional[str]:
     """Path to ``opal.py`` / ``opal`` if the optional CAMI tool is installed."""
-    from samovar.paths import load_config, resolve_executable
+    from samovar.paths import discover_opal
 
-    cfg = load_config()
-    configured = str(cfg.get("opal_path") or "").strip()
-    env = os.environ.get("SAMOVAR_OPAL_PATH", "").strip()
-    for token in (env, configured, "opal.py", "opal"):
-        if not token:
-            continue
-        resolved = resolve_executable(token, tool_key="opal.py")
-        path = (resolved or token).split()[0]
-        if path and Path(path).is_file() and os.access(path, os.X_OK):
-            return str(Path(path).resolve())
-        found = shutil.which(Path(token).name) or shutil.which(token)
-        if found:
-            return found
+    found = discover_opal()
+    if found:
+        return found
     return None
+
+
+def opal_command() -> Optional[List[str]]:
+    """Argv prefix to invoke OPAL (script, or ``python opal.py`` if not executable)."""
+    exe = opal_executable()
+    if not exe:
+        return None
+    if exe.endswith(".py") or not os.access(exe, os.X_OK):
+        from samovar.paths import python_path
+
+        return [python_path(), exe]
+    return [exe]
 
 
 def write_cami_profile(
@@ -307,7 +308,7 @@ def run_opal(
     """Invoke OPAL if installed. Returns the output directory on success."""
     if not opal_enabled() or not profiles:
         return None
-    exe = opal_executable()
+    exe = opal_command()
     if not exe:
         logger.info("OPAL not installed; skipping CAMI HTML (./install.sh OPAL)")
         return None
@@ -317,7 +318,7 @@ def run_opal(
     files = [str(path) for _, path in profiles]
     rank_name = cami_rank(rank)
     cmd = [
-        exe,
+        *exe,
         "-g",
         str(gold),
         "-o",

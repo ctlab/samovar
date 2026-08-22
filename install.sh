@@ -135,40 +135,51 @@ install_opal() {
         return 1
     fi
     echo "Installing optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL) ..."
-    if ! "$PYTHON_PATH" -m pip install "cami-opal" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
+    # cami-opal pins exact numpy/pandas/scipy; those pins fight the SamovaR env
+    # and can hang pip. Install the package only; scientific stack is already here.
+    if ! "$PYTHON_PATH" -m pip install "cami-opal" --no-deps "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
         echo "Warning: pip install cami-opal failed. Profiling HTML from OPAL will be skipped."
         echo "Install later with: ./install.sh OPAL"
         return 1
     fi
+    "$PYTHON_PATH" -m pip install "bokeh>=3" "jinja2>=3" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}" || true
     hash -r 2>/dev/null || true
-    local opal_bin=""
-    opal_bin="$(command -v opal.py 2>/dev/null || true)"
-    if [ -z "$opal_bin" ] && [ -x "$PY_BIN/opal.py" ]; then
-        opal_bin="$PY_BIN/opal.py"
-    fi
-    if [ -z "$opal_bin" ]; then
-        opal_bin="$(command -v opal 2>/dev/null || true)"
-    fi
-    if [ -z "$opal_bin" ]; then
-        echo "Warning: cami-opal installed but opal.py is not on PATH."
-        return 1
-    fi
-    echo "OPAL: $opal_bin"
-    export SAMOVAR_OPAL_BIN="$opal_bin"
+    export PY_BIN
     "$PYTHON_PATH" - <<'PY'
-import os, shutil
+import os, shutil, stat, sys
 from pathlib import Path
+
 try:
-    from samovar.paths import load_config, write_config
+    from samovar.paths import discover_opal, load_config, write_config
 except ImportError:
     print("Warning: samovar is not importable yet; re-run ./install.sh to record opal_path")
     raise SystemExit(0)
+
+found = discover_opal()
+py_bin = Path(os.environ.get("PY_BIN") or Path(sys.executable).parent)
+for extra in (py_bin / "opal.py", Path.home() / ".local" / "bin" / "opal.py"):
+    if extra.is_file() and (not found):
+        found = str(extra.resolve())
+        break
+if not found:
+    print("Warning: cami-opal installed but opal.py was not found on PATH or next to Python.")
+    print("Add it with: opal_path in ~/.config/samovar/config.json")
+    raise SystemExit(1)
+path = Path(found)
+if not os.access(path, os.X_OK):
+    try:
+        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        pass
 cfg = load_config()
-cfg["opal_path"] = os.environ.get("SAMOVAR_OPAL_BIN") or shutil.which("opal.py") or ""
+cfg["opal_path"] = str(path)
+tools = dict(cfg.get("tools") or {})
+tools["opal.py"] = str(path)
+cfg["tools"] = tools
 write_config(cfg)
+print("OPAL:", path)
 print("Updated config opal_path:", cfg.get("opal_path"))
 PY
-    return 0
 }
 
 if [ "${1:-}" = "R-package" ] || [ "${1:-}" = "r-package" ]; then
@@ -312,6 +323,7 @@ from pathlib import Path
 from samovar.paths import (
     PACKAGE_VERSION,
     collect_runtime_path_dirs,
+    discover_opal,
     discover_tools,
     load_config,
     write_config,
@@ -333,7 +345,7 @@ payload = {
     "r_path": shutil.which("R") or "",
     "r_lib_path": existing.get("r_lib_path", ""),
     "iss_path": shutil.which("iss") or tools.get("iss", ""),
-    "opal_path": existing.get("opal_path") or shutil.which("opal.py") or shutil.which("opal") or "",
+    "opal_path": existing.get("opal_path") or discover_opal() or shutil.which("opal.py") or shutil.which("opal") or "",
     "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
     "test_genomes": os.path.join(root, "data", "test_genomes"),
     "genomes": existing.get("genomes") or str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"),
@@ -349,18 +361,26 @@ if tool_envs:
     payload["tool_envs"] = tool_envs
 if existing.get("annotation_regenerate_r"):
     payload["annotation_regenerate_r"] = existing["annotation_regenerate_r"]
+if payload.get("opal_path"):
+    tools.setdefault("opal.py", payload["opal_path"])
+    payload["tools"] = tools
 write_config(payload)
 user_cfg = Path(os.environ["USER_CFG_DIR"])
 user_cfg.mkdir(parents=True, exist_ok=True)
 email = os.environ.get("NCBI_EMAIL", "")
 dirs = collect_runtime_path_dirs()
 path_export = ":".join(dirs + ["$PATH"])
+conda_lib = ""
+prefix = os.environ.get("CONDA_PREFIX") or ""
+if prefix and Path(prefix, "lib").is_dir():
+    conda_lib = f'export LD_LIBRARY_PATH="{prefix}/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"\n'
 env_path = user_cfg / "env"
 env_path.write_text(
     f'export NCBI_EMAIL="{email}"\n'
     f'export SAMOVAR_ROOT="{root}"\n'
     f'export PYTHON_PATH="{python_path}"\n'
-    f'export PATH="{path_export}"\n',
+    f'export PATH="{path_export}"\n'
+    f"{conda_lib}",
     encoding="utf-8",
 )
 print("Wrote user + repo config")
@@ -382,6 +402,10 @@ print("  samovar prepare --no-reuse-genomes   # download into the genomes cache"
 print("  samovar prepare --genome-dirs DIR[:DIR]")
 print("  samovar prepare --test-genomes       # allow truncated stubs (ISS/CI only)")
 print("Prefer symlinks into $out_dir/genomes; copy with a warning if linking fails.")
+if payload.get("opal_path"):
+    print(f"OPAL (cami-opal): {payload['opal_path']}")
+else:
+    print("OPAL: not found. ./install.sh OPAL to install CAMI OPAL and record opal_path.")
 PY
 
 BIN_DIR="$ROOT/bin"
@@ -422,6 +446,10 @@ else
     echo "Load this install with: source $USER_CFG_DIR/env"
 fi
 
+if [ -n "${CONDA_PREFIX:-}" ] && [ -d "${CONDA_PREFIX}/lib" ]; then
+    export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 echo "Running install smoke test..."
 SMOKE_FAIL=0
 "$PYTHON_PATH" -c "from samovar.paths import smoke_test; p=smoke_test();
@@ -449,6 +477,7 @@ fi
 if [ ! -f "$ROOT/workflow/annotators/Snakefile" ]; then
     echo "  workflow: MISSING"; SMOKE_FAIL=1
 fi
+"$PYTHON_PATH" -c "from samovar.opal import opal_executable; p=opal_executable(); print('  opal.py:', p or 'not found (optional; ./install.sh OPAL)')" || true
 if [ "$SMOKE_FAIL" != "0" ]; then
     echo "Smoke test reported missing pieces (see above). Core Python package may still work."
 else

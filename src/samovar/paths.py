@@ -249,6 +249,7 @@ def collect_runtime_path_dirs(cfg: Optional[Dict[str, Any]] = None) -> List[str]
     add(cfg.get("python_path"))
     add(cfg.get("iss_path"))
     add(cfg.get("r_path"))
+    add(cfg.get("opal_path"))
     for extra in _split_path_value(cfg.get("path") or cfg.get("extra_path")):
         add(extra, env_prefix=True)
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
@@ -359,7 +360,59 @@ def discover_tools() -> Dict[str, str]:
         path = shutil.which(name)
         if path:
             found[name] = path
+    opal = discover_opal()
+    if opal:
+        found.setdefault("opal.py", opal)
     return found
+
+
+def discover_opal() -> Optional[str]:
+    """Locate ``opal.py`` from env, config, PATH, or the install Python's scripts dir.
+
+    ``cami-opal`` ships ``opal.py`` as a setuptools script (often under the
+    interpreter's ``bin/`` or ``~/.local/bin``, which may not be on PATH).
+    """
+    cfg = load_config()
+    candidates: List[str] = []
+
+    def add(raw: Optional[str]) -> None:
+        text = str(raw or "").strip()
+        if text:
+            candidates.append(text.split()[0])
+
+    add(os.environ.get("SAMOVAR_OPAL_PATH") or os.environ.get("SAMOVAR_OPAL_BIN"))
+    add(str(cfg.get("opal_path") or ""))
+    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+    add(str(tools.get("opal.py") or tools.get("opal") or ""))
+    add(shutil.which("opal.py"))
+    add(shutil.which("opal"))
+
+    py = (cfg.get("python_path") or "").strip() or sys.executable
+    py_path = Path(py).expanduser()
+    if py_path.is_file():
+        add(str(py_path.resolve().parent / "opal.py"))
+        add(str(py_path.resolve().parent / "opal"))
+    try:
+        import sysconfig
+
+        scripts = sysconfig.get_path("scripts")
+        if scripts:
+            add(str(Path(scripts) / "opal.py"))
+            add(str(Path(scripts) / "opal"))
+    except Exception:
+        pass
+    add(str(Path.home() / ".local" / "bin" / "opal.py"))
+    add(str(Path.home() / ".local" / "bin" / "opal"))
+
+    seen = set()
+    for raw in candidates:
+        if raw in seen:
+            continue
+        seen.add(raw)
+        path = Path(raw).expanduser()
+        if path.is_file():
+            return str(path.resolve())
+    return None
 
 
 def annotation_regenerate_r() -> Optional[Path]:

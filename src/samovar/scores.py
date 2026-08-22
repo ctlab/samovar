@@ -405,6 +405,21 @@ def scores_long(table: pd.DataFrame, display: Optional[Dict[str, str]] = None) -
     return long
 
 
+_SCORE_SAVE_DPI = 300
+
+
+def _panel_ylim(vals: np.ndarray) -> tuple:
+    finite = vals[np.isfinite(vals)]
+    if finite.size == 0:
+        return (-0.04, 1.08)
+    data_min = float(np.min(finite))
+    data_max = float(np.max(finite))
+    if data_min >= -0.05 and data_max <= 1.2:
+        return (-0.04, 1.08)
+    pad = max(0.08, 0.06 * abs(data_max - min(0.0, data_min)))
+    return (min(0.0, data_min) - pad, max(data_max, 0.0) + pad)
+
+
 def save_scores_barplot(
     table: pd.DataFrame,
     path,
@@ -412,7 +427,8 @@ def save_scores_barplot(
     display: Optional[Dict[str, str]] = None,
     ymax: Optional[float] = None,
 ) -> None:
-    """Grouped barplot of quality metrics per annotator (PNG)."""
+    """One panel per metric, exported at 300 dpi."""
+    from math import ceil
     from pathlib import Path
 
     import matplotlib
@@ -428,58 +444,56 @@ def save_scores_barplot(
         return
 
     labels = display or SCORE_DISPLAY
-    cns = _setup_cns()
+    _setup_cns()
     metrics = [m for m in labels if m in table.columns]
     if not metrics:
         return
+    _ = ymax
     annotators = [str(a) for a in table["annotator"].tolist()]
-    n_ann = len(annotators)
+    n_ann = max(len(annotators), 1)
     n_met = len(metrics)
+    ncols = min(3, n_met)
+    nrows = ceil(n_met / ncols)
+    panel_w = max(3.4, 0.72 * n_ann + 1.8)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(panel_w * ncols, 2.85 * nrows + 0.55),
+        squeeze=False,
+    )
     x = np.arange(n_ann, dtype=float)
-    width = 0.8 / max(n_met, 1)
-
-    if cns is not None and hasattr(cns, "figure"):
-        cns.figure(max(220, 48 * n_ann + 90), 190)
-        ax = plt.gca()
-    else:
-        fig_w = max(7.2, 1.15 * n_ann + 2.4)
-        _, ax = plt.subplots(figsize=(fig_w, 5.2))
-
     for i, metric in enumerate(metrics):
+        ax = axes[i // ncols][i % ncols]
         vals = pd.to_numeric(table[metric], errors="coerce").to_numpy(dtype=float)
-        offset = (i - (n_met - 1) / 2) * width
         ax.bar(
-            x + offset,
+            x,
             vals,
-            width,
-            label=labels[metric],
+            width=0.72,
             color=BAR_COLORS.get(metric, "0.5"),
             edgecolor="white",
-            linewidth=0.4,
+            linewidth=0.6,
         )
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(annotators, rotation=25, ha="right")
-    ax.set_ylabel("Score")
-    ax.set_xlabel("Annotator")
-    ax.set_title(title or "Annotation quality")
-    finite = pd.to_numeric(table[metrics].stack(), errors="coerce")
-    data_max = float(np.nanmax(finite.to_numpy())) if len(finite) else 1.0
-    data_min = float(np.nanmin(finite.to_numpy())) if len(finite) else 0.0
-    top = ymax if ymax is not None else max(1.0, data_max)
-    ax.set_ylim(min(0.0, data_min) - 0.05, top + 0.08)
-    ax.axhline(0, color="0.6", linewidth=0.6)
-    ax.legend(frameon=False, ncol=min(n_met, 4), loc="upper center", bbox_to_anchor=(0.5, -0.28))
-    ax.set_axisbelow(True)
-    ax.yaxis.grid(True, linestyle=":", linewidth=0.5, color="0.8")
-    fig = ax.figure
-    fig.tight_layout()
+        ax.set_title(labels[metric])
+        ax.set_xticks(x)
+        ax.set_xticklabels(annotators, rotation=30, ha="right")
+        ax.set_xlim(-0.7, n_ann - 0.3)
+        ax.set_ylim(*_panel_ylim(vals))
+        ax.axhline(0, color="0.55", linewidth=0.7)
+        ax.set_axisbelow(True)
+        ax.yaxis.grid(True, linestyle=":", linewidth=0.6, color="0.78")
+        if i % ncols == 0:
+            ax.set_ylabel("Score")
+    for j in range(n_met, nrows * ncols):
+        axes[j // ncols][j % ncols].set_visible(False)
+    fig.suptitle(title or "Annotation quality")
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.88, bottom=0.14, hspace=0.38, wspace=0.28)
     fig.savefig(
         path,
-        dpi=150,
+        dpi=_SCORE_SAVE_DPI,
         bbox_inches="tight",
-        pad_inches=0.35,
+        pad_inches=0.25,
         facecolor="white",
+        transparent=False,
         edgecolor="none",
     )
     plt.close("all")

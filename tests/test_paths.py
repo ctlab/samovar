@@ -4,6 +4,7 @@ from samovar.paths import (
     PACKAGE_VERSION,
     annotation_regenerate_r,
     collect_runtime_path_dirs,
+    discover_opal,
     iss_executable,
     ncbi_email,
     repo_root,
@@ -15,6 +16,26 @@ from samovar.paths import (
 
 def test_package_version():
     assert PACKAGE_VERSION == "0.10.11"
+
+
+def test_discover_opal_from_config(tmp_path, monkeypatch):
+    script = tmp_path / "opal.py"
+    script.write_text("#!/usr/bin/env python3\nprint('opal')\n")
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {"opal_path": str(script)},
+    )
+    monkeypatch.delenv("SAMOVAR_OPAL_PATH", raising=False)
+    monkeypatch.delenv("SAMOVAR_OPAL_BIN", raising=False)
+    assert discover_opal() == str(script.resolve())
+
+
+def test_collect_runtime_path_dirs_includes_opal(tmp_path):
+    opal = tmp_path / "bin" / "opal.py"
+    opal.parent.mkdir()
+    opal.write_text("#!/usr/bin/env python3\n")
+    dirs = collect_runtime_path_dirs({"opal_path": str(opal)})
+    assert str(opal.parent.resolve()) in dirs
 
 
 def test_portable_annotator_cmd_warns_when_missing(capsys, monkeypatch):

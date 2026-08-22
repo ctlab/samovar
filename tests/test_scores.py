@@ -138,6 +138,12 @@ def test_viz_annotation_writes_scores_barplot(tmp_path):
     assert "tnr" in csv.columns
     assert "completeness" in csv.columns
     assert (out / "opal_scores.png").is_file()
+    import matplotlib.image as mpimg
+
+    for name in ("scores.png", "opal_scores.png"):
+        arr = mpimg.imread(out / name)
+        assert arr.shape[1] >= 1400, f"{name} width {arr.shape[1]} is too low-res"
+        assert arr.shape[0] >= 700, f"{name} height {arr.shape[0]} is too low-res"
     assert "f1" in csv.columns
     assert "r2" in csv.columns
     assert "SAMOVAR" in set(csv["annotator"].astype(str))

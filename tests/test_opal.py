@@ -7,6 +7,7 @@ import pytest
 
 from samovar.opal import (
     confusion_rates,
+    opal_command,
     opal_executable,
     opal_style_metrics,
     series_to_counts,
@@ -59,6 +60,16 @@ def test_series_to_counts_skips_unclassified():
 def test_opal_executable_optional():
     exe = opal_executable()
     assert exe is None or Path(exe).exists()
+
+
+def test_opal_command_uses_python_for_script(tmp_path, monkeypatch):
+    script = tmp_path / "opal.py"
+    script.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr("samovar.opal.opal_executable", lambda: str(script))
+    cmd = opal_command()
+    assert cmd is not None
+    assert cmd[-1] == str(script)
+    assert len(cmd) >= 1
 
 
 def test_score_table_includes_opal_and_tn(tmp_path):
