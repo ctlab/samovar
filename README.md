@@ -108,7 +108,7 @@ samovar exec --output_dir samovar_out
 
 ## R package
 
-Generative abundance models (`samovar_boil`, GMrepo helpers, Shiny) are **not** part of prepare/exec. They remain on the **`r-package`** branch.
+Generative abundance models (`samovar_boil`, GMrepo helpers, Shiny) are **not** part of the Python install. Use `regeneration_mode: samovar` after installing that optional R component (anywhere) and pointing `SAMOVAR_R_REGENERATE` (or config `annotation_regenerate_r`) at `annotation_regenerate.R`. The Python modes are `direct` (default; same samples), `bootstrap`, `vae`, and `glm`. Rescaling column totals to `N_reads` is opt-in via `rescale_abundance: true`.
 
 ## References
 

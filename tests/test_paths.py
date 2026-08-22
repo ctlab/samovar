@@ -2,6 +2,7 @@ from pathlib import Path
 
 from samovar.paths import (
     PACKAGE_VERSION,
+    annotation_regenerate_r,
     iss_executable,
     ncbi_email,
     repo_root,
@@ -12,7 +13,7 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.2"
+    assert PACKAGE_VERSION == "0.10.3"
 
 
 def test_repo_root_contains_workflow():
@@ -72,3 +73,19 @@ def test_iss_executable_uses_config(tmp_path, monkeypatch):
         lambda: {"iss_path": str(exe)},
     )
     assert iss_executable() == str(exe.resolve())
+
+
+def test_annotation_regenerate_r_from_env(monkeypatch, tmp_path):
+    script = tmp_path / "custom_annotation_regenerate.R"
+    script.write_text("# optional R regenerator\n")
+    monkeypatch.setenv("SAMOVAR_R_REGENERATE", str(script))
+    monkeypatch.delenv("SAMOVAR_ANNOTATION_REGENERATE_R", raising=False)
+    assert annotation_regenerate_r() == script
+
+
+def test_annotation_regenerate_r_missing_when_unbundled(monkeypatch, tmp_path):
+    monkeypatch.delenv("SAMOVAR_R_REGENERATE", raising=False)
+    monkeypatch.delenv("SAMOVAR_ANNOTATION_REGENERATE_R", raising=False)
+    monkeypatch.setattr("samovar.paths.load_config", lambda: {})
+    monkeypatch.setattr("samovar.paths.workflow_dir", lambda: tmp_path / "empty_workflow")
+    assert annotation_regenerate_r() is None

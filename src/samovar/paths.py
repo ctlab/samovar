@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.2"
+PACKAGE_VERSION = "0.10.3"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -191,12 +191,29 @@ def discover_tools() -> Dict[str, str]:
     return found
 
 
-def annotation_regenerate_r() -> Path:
+def annotation_regenerate_r() -> Optional[Path]:
+    """Locate the optional R regenerator script.
+
+    Lookup order (first hit wins):
+
+    1. ``$SAMOVAR_R_REGENERATE`` / ``$SAMOVAR_ANNOTATION_REGENERATE_R``
+    2. config key ``annotation_regenerate_r``
+    3. bundled ``workflow/annotation_regenerate.R`` if that file exists
+
+    Returns ``None`` when the optional R component is not installed.
+    """
+    for key in ("SAMOVAR_R_REGENERATE", "SAMOVAR_ANNOTATION_REGENERATE_R"):
+        env = os.environ.get(key, "").strip()
+        if env:
+            return Path(env)
     cfg = load_config()
-    override = cfg.get("annotation_regenerate_r")
+    override = str(cfg.get("annotation_regenerate_r") or "").strip()
     if override:
         return Path(override)
-    return workflow_dir() / "annotation_regenerate.R"
+    bundled = workflow_dir() / "annotation_regenerate.R"
+    if bundled.is_file():
+        return bundled
+    return None
 
 
 def cxx_compiler() -> Optional[str]:

@@ -107,7 +107,7 @@ def test_samovar_annotation_regenerate_python(tmp_path, mock_config):
         {"seq": ["a", "b"], "taxID_kaiju_0": [562, 562], "true": [562, 9606]}
     ).to_csv(annotation_dir / "1.annotation.csv", index=False)
     output_dir = tmp_path / "out"
-    config_path = _write_config({**mock_config, "output_dir": str(output_dir), "regeneration_mode": "preserve"})
+    config_path = _write_config({**mock_config, "output_dir": str(output_dir), "regeneration_mode": "direct"})
     try:
         samovar_annotation_regenerate(
             annotation_dir=str(annotation_dir),
@@ -124,13 +124,17 @@ def test_samovar_annotation_regenerate_python(tmp_path, mock_config):
 
 
 def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypatch):
-    """Optional R path: wrapper builds the R command when SAMOVAR_USE_R=1 and mode is glm."""
-    monkeypatch.setenv("SAMOVAR_USE_R", "1")
+    """Optional R path: wrapper builds the R command only for mode=samovar."""
     annotation_dir = tmp_path / "ann"
     annotation_dir.mkdir()
     output_dir = tmp_path / "out"
+    script = tmp_path / "annotation_regenerate.R"
+    script.write_text("# optional R regenerator\n")
+    monkeypatch.setattr(
+        "samovar.table2iss.annotation_regenerate_r", lambda: script
+    )
     config_path = _write_config(
-        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "glm"}
+        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "samovar"}
     )
 
     calls = []
@@ -161,16 +165,63 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypa
     cmd = calls[0]
     assert cmd[0] == "R"
     assert "--config" in cmd
+    assert str(script) in cmd
     assert (output_dir / "kaiju.csv").exists()
 
 
-def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config, monkeypatch):
-    monkeypatch.setenv("SAMOVAR_USE_R", "1")
+def test_glm_does_not_invoke_r(tmp_path, mock_config):
+    annotation_dir = tmp_path / "ann"
+    annotation_dir.mkdir()
+    pd.DataFrame(
+        {"seq": ["a", "b"], "taxID_kaiju_0": [562, 562], "true": [562, 9606]}
+    ).to_csv(annotation_dir / "1.annotation.csv", index=False)
+    output_dir = tmp_path / "out"
+    config_path = _write_config(
+        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "glm"}
+    )
+    try:
+        with patch("samovar.table2iss.subprocess.run") as mock_run:
+            samovar_annotation_regenerate(
+                annotation_dir=str(annotation_dir),
+                config_samovar=config_path,
+                output_dir=str(output_dir),
+            )
+            mock_run.assert_not_called()
+    finally:
+        os.unlink(config_path)
+    assert list(output_dir.glob("*.csv"))
+
+
+def test_samovar_mode_requires_r_script(tmp_path, mock_config, monkeypatch):
+    monkeypatch.setattr("samovar.table2iss.annotation_regenerate_r", lambda: None)
     annotation_dir = tmp_path / "ann"
     annotation_dir.mkdir()
     output_dir = tmp_path / "out"
     config_path = _write_config(
-        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "glm"}
+        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "samovar"}
+    )
+    try:
+        with pytest.raises(FileNotFoundError, match="optional R regenerator"):
+            samovar_annotation_regenerate(
+                annotation_dir=str(annotation_dir),
+                config_samovar=config_path,
+                output_dir=str(output_dir),
+            )
+    finally:
+        os.unlink(config_path)
+
+
+def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config, monkeypatch):
+    annotation_dir = tmp_path / "ann"
+    annotation_dir.mkdir()
+    output_dir = tmp_path / "out"
+    script = tmp_path / "annotation_regenerate.R"
+    script.write_text("# optional R regenerator\n")
+    monkeypatch.setattr(
+        "samovar.table2iss.annotation_regenerate_r", lambda: script
+    )
+    config_path = _write_config(
+        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "samovar"}
     )
 
     def boom(cmd, check=True, env=None):
@@ -193,7 +244,7 @@ def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config
 def test_samovar_annotation_regenerate_basic(test_data_dir, test_output_dir, mock_config):
     """Integration: real R + samovaR regeneration produces abundance CSVs."""
     assert test_data_dir.exists(), f"Missing fixture annotations at {test_data_dir}"
-    config_path = _write_config(mock_config)
+    config_path = _write_config({**mock_config, "regeneration_mode": "samovar"})
 
     try:
         for stale in test_output_dir.glob("*.csv"):
@@ -223,7 +274,7 @@ def test_samovar_annotation_regenerate_basic(test_data_dir, test_output_dir, moc
 @requires_r_samovar
 def test_samovar_annotation_regenerate_integration(test_data_dir, test_output_dir, mock_config):
     """Integration: regenerated tables feed process_abundance_table."""
-    config_path = _write_config(mock_config)
+    config_path = _write_config({**mock_config, "regeneration_mode": "samovar"})
 
     try:
         for stale in test_output_dir.glob("*.csv"):

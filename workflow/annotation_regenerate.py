@@ -20,8 +20,8 @@ def main() -> None:
     parser.add_argument("--config", help="YAML config (samovaR-style keys)")
     parser.add_argument(
         "--regeneration_mode",
-        default="preserve",
-        choices=["preserve", "glm", "bootstrap", "vae"],
+        default="direct",
+        choices=["direct", "preserve", "glm", "bootstrap", "vae", "samovar"],
     )
     parser.add_argument(
         "--N",
@@ -40,7 +40,7 @@ def main() -> None:
     else:
         cfg = {}
     cfg["regeneration_mode"] = normalize_regeneration_mode(
-        args.regeneration_mode or cfg.get("regeneration_mode", "preserve")
+        args.regeneration_mode or cfg.get("regeneration_mode", "direct")
     )
     if args.N is not None:
         cfg["N"] = args.N

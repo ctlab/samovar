@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from samovar.paths import ncbi_email, python_path, repo_root, resolve_executable, test_genomes_dir
+from samovar.regenerate import normalize_regeneration_mode
 
 DEFAULT_OUTPUT_DIR = "samovar_out"
 
@@ -33,10 +34,11 @@ class PipelineConfig:
     email: str = None
     cores: int = 1
     max_genomes: int = 50
-    regeneration_mode: str = "preserve"
+    regeneration_mode: str = "direct"
     regeneration_n: Optional[int] = None
     regeneration_n_reads: int = 1000
     regeneration_seed: int = 42
+    rescale_abundance: bool = False
 
     def __post_init__(self):
         if self.annotators is None:
@@ -62,14 +64,17 @@ class PipelineConfig:
                 config.read_length = input_config.get('read_length', config.read_length)
                 config.coverage = input_config.get('coverage', config.coverage)
                 config.email = input_config.get('email', config.email)
-                config.regeneration_mode = input_config.get(
-                    'regeneration_mode', config.regeneration_mode
+                config.regeneration_mode = normalize_regeneration_mode(
+                    input_config.get('regeneration_mode', config.regeneration_mode)
                 )
                 config.regeneration_n = input_config.get('N', config.regeneration_n)
                 config.regeneration_n_reads = input_config.get(
                     'N_reads', config.regeneration_n_reads
                 )
                 config.regeneration_seed = input_config.get('seed', config.regeneration_seed)
+                config.rescale_abundance = bool(
+                    input_config.get('rescale_abundance', config.rescale_abundance)
+                )
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -197,6 +202,7 @@ class PipelineConfig:
             'regeneration_mode': self.regeneration_mode,
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
+            'rescale_abundance': self.rescale_abundance,
         }
         if self.regeneration_n:
             annotation2iss_config['N'] = self.regeneration_n

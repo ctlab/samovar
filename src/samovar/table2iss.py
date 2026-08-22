@@ -16,6 +16,7 @@ import json
 import tempfile
 import warnings
 import shutil
+from pathlib import Path
 from samovar.paths import annotation_regenerate_r, iss_executable, load_config, resolve_executable
 
 
@@ -768,7 +769,11 @@ def process_annotation_tables(
         regeneration_config: SamovaR-style regeneration settings (``regeneration_mode``,
             ``N``, ``N_reads``, ``seed``, etc.).
     """
-    from samovar.regenerate import normalize_regeneration_mode, write_samovar_config_defaults
+    from samovar.regenerate import (
+        is_direct_mode,
+        normalize_regeneration_mode,
+        write_samovar_config_defaults,
+    )
 
     regen_cfg = write_samovar_config_defaults(dict(regeneration_config or {}))
     mode = normalize_regeneration_mode(regen_cfg.get("regeneration_mode"))
@@ -784,7 +789,7 @@ def process_annotation_tables(
         ]
 
     sample_tables: Dict[str, pd.DataFrame] = {}
-    if mode != "preserve" and annotation_dir:
+    if not is_direct_mode(mode) and annotation_dir:
         regen_dir = os.path.join(output_dir, ".regenerated_abundance")
         cfg_out = dict(regen_cfg)
         cfg_out["output_dir"] = regen_dir
@@ -1026,8 +1031,9 @@ def _resolve_r_executable() -> Tuple[str, Optional[str]]:
         return found, r_lib_path
     raise FileNotFoundError(
         f"R executable not found ({configured!r}). "
-        "The R generative package is optional; use the Python regenerator "
-        "or set SAMOVAR_USE_R=1 after installing R / samovaR."
+        "Mode 'samovar' needs R plus the optional samovaR regenerator. "
+        "Install them separately and set r_path / SAMOVAR_R_REGENERATE, "
+        "or use regeneration_mode=direct|bootstrap|vae|glm (Python)."
     )
 
 
@@ -1042,6 +1048,21 @@ def _samovar_annotation_regenerate_python(
     regenerate_annotation_tables(annotation_dir, output_dir, cfg)
 
 
+def _optional_r_regenerator_script() -> Path:
+    script = annotation_regenerate_r()
+    if script is None or not Path(script).is_file():
+        looked = str(script) if script is not None else (
+            "SAMOVAR_R_REGENERATE or config annotation_regenerate_r"
+        )
+        raise FileNotFoundError(
+            "regeneration_mode='samovar' requires the optional R regenerator. "
+            "Install samovaR separately and set SAMOVAR_R_REGENERATE "
+            "(or annotation_regenerate_r in config) to annotation_regenerate.R. "
+            f"Looked up: {looked}"
+        )
+    return Path(script)
+
+
 def samovar_annotation_regenerate(
     annotation_dir: str,
     config_samovar: str = None,
@@ -1051,10 +1072,9 @@ def samovar_annotation_regenerate(
 
     Modes (``regeneration_mode`` in config):
 
-    - ``preserve`` (default): observed counts, no generative remodelling.
-    - ``glm``: R samovaR boil when ``SAMOVAR_USE_R=1``, else Python glm analog.
-    - ``bootstrap``: column bootstrap of observed profiles.
-    - ``vae``: latent-factor generative sampling.
+    - ``direct`` (default; alias ``preserve``): observed counts, same samples.
+    - ``bootstrap`` / ``vae`` / ``glm``: Python generative models.
+    - ``samovar``: optional R regenerator (not part of the Python install).
     """
     from samovar.regenerate import normalize_regeneration_mode
 
@@ -1064,7 +1084,7 @@ def samovar_annotation_regenerate(
             "threshold_amount": 1e-5,
             "plot_log": False,
             "N_reads": 1000,
-            "regeneration_mode": "preserve",
+            "regeneration_mode": "direct",
         }
     else:
         with open(config_samovar, "r") as f:
@@ -1075,19 +1095,16 @@ def samovar_annotation_regenerate(
         if not output_dir:
             raise ValueError("output_dir is required")
 
-    mode = normalize_regeneration_mode(config_samovar_dict.get("regeneration_mode", "preserve"))
-    use_r = os.environ.get("SAMOVAR_USE_R", "0").strip().lower() in {"1", "true", "yes"}
-    if mode != "glm" or not use_r:
+    mode = normalize_regeneration_mode(
+        config_samovar_dict.get("regeneration_mode", "direct")
+    )
+    if mode != "samovar":
         _samovar_annotation_regenerate_python(
             annotation_dir, config_samovar_dict, output_dir
         )
         return
 
-    annotation_regenerate = str(annotation_regenerate_r())
-    if not os.path.isfile(annotation_regenerate):
-        raise FileNotFoundError(
-            f"annotation_regenerate.R not found at {annotation_regenerate}"
-        )
+    annotation_regenerate = str(_optional_r_regenerator_script())
 
     r_path, r_lib_path = _resolve_r_executable()
     os.makedirs(output_dir, exist_ok=True)

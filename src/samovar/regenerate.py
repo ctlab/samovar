@@ -1,12 +1,14 @@
 """Regenerate metagenome abundance tables from annotation directories.
 
-Modes mirror the R ``annotation_regenerate.R`` workflow:
+Modes:
 
-- ``preserve`` (default): observed taxID counts, no generative remodelling.
-- ``glm``: correlation-aware synthetic communities (Python) or R samovaR when
-  ``SAMOVAR_USE_R=1``.
-- ``bootstrap``: column bootstrap resampling of observed sample profiles.
+- ``direct`` (default; aliases: preserve, exact, raw): observed taxID counts,
+  same sample names, no generative remodelling.
+- ``bootstrap``: column bootstrap of observed sample profiles.
 - ``vae``: latent-factor generative model (FactorAnalysis on log abundances).
+- ``glm``: correlation-aware synthetic communities (Python).
+- ``samovar``: optional R regenerator (not part of the Python install). Looked
+  up via ``SAMOVAR_R_REGENERATE`` / config ``annotation_regenerate_r``.
 """
 
 from __future__ import annotations
@@ -21,22 +23,31 @@ import pandas as pd
 
 from samovar.annotation_io import read_annotation_dir
 
-PRESERVE_MODES = frozenset({"preserve", "none", "exact", "raw", "off", "false", ""})
+DIRECT_MODES = frozenset(
+    {"direct", "preserve", "none", "exact", "raw", "off", "false", ""}
+)
 GENERATIVE_MODES = frozenset({"glm", "bootstrap", "vae"})
+SAMOVAR_R_MODES = frozenset({"samovar", "r", "boil"})
 
 
 def normalize_regeneration_mode(mode: Optional[str]) -> str:
     if mode is None:
-        return "preserve"
+        return "direct"
     key = str(mode).strip().lower()
-    if key in PRESERVE_MODES:
-        return "preserve"
+    if key in DIRECT_MODES:
+        return "direct"
     if key in GENERATIVE_MODES:
         return key
+    if key in SAMOVAR_R_MODES:
+        return "samovar"
     raise ValueError(
         f"Unknown regeneration_mode={mode!r}. "
-        "Use preserve, glm, bootstrap, or vae."
+        "Use direct, bootstrap, vae, glm, or samovar."
     )
+
+
+def is_direct_mode(mode: Optional[str]) -> bool:
+    return normalize_regeneration_mode(mode) == "direct"
 
 
 def _taxid_columns(df: pd.DataFrame) -> List[str]:
@@ -71,18 +82,28 @@ def _count_matrix(
     return counts
 
 
-def _filter_taxa(matrix: pd.DataFrame, threshold_amount: float, n_reads: Optional[int]) -> pd.DataFrame:
+def _filter_taxa(
+    matrix: pd.DataFrame,
+    threshold_amount: float,
+    n_reads: Optional[int] = None,
+    rescale: bool = False,
+) -> pd.DataFrame:
     if matrix.empty:
         return matrix
     mat = matrix.copy()
-    if n_reads and n_reads > 0:
+    if rescale and n_reads and n_reads > 0:
         totals = mat.sum(axis=0).replace(0, 1)
         mat = mat / totals * float(n_reads)
-    if threshold_amount and threshold_amount > 0:
-        if n_reads and n_reads > 0:
+        if threshold_amount and threshold_amount > 0:
             keep = mat.max(axis=1) >= threshold_amount * float(n_reads)
-        else:
-            keep = mat.max(axis=1) >= threshold_amount
+            mat = mat.loc[keep]
+        return mat
+    if threshold_amount and threshold_amount > 0:
+        totals = mat.sum(axis=0).replace(0, 1)
+        fracs = mat / totals
+        keep = fracs.max(axis=1) >= float(threshold_amount)
+        if not bool(keep.any()):
+            keep = mat.max(axis=1) > 0
         mat = mat.loc[keep]
     return mat
 
@@ -103,6 +124,16 @@ def _scale_columns_to_n_reads(matrix: pd.DataFrame, n_reads: Optional[int]) -> p
             scaled.loc[idx] = scaled.loc[idx] + diff
         out[col] = scaled
     return out.round()
+
+
+def _apply_abundance_scale(
+    matrix: pd.DataFrame,
+    n_reads: Optional[int],
+    rescale: bool,
+) -> pd.DataFrame:
+    if rescale:
+        return _scale_columns_to_n_reads(matrix, n_reads)
+    return matrix.round()
 
 
 def _abundance_table_from_matrix(matrix: pd.DataFrame, annotator_name: str) -> pd.DataFrame:
@@ -131,11 +162,8 @@ def regenerate_preserve(
         sample_col = "sample"
     for col in _taxid_columns(data):
         mat = _count_matrix(data, col, sample_col)
-        mat = _filter_taxa(mat, threshold_amount, n_reads if rescale else None)
-        if rescale and n_reads:
-            mat = _scale_columns_to_n_reads(mat, n_reads)
-        else:
-            mat = mat.round()
+        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
+        mat = _apply_abundance_scale(mat, n_reads, rescale)
         name = _annotator_name(col)
         result[name] = _abundance_table_from_matrix(mat, name)
     return result
@@ -147,6 +175,7 @@ def regenerate_bootstrap(
     n_reads: Optional[int] = None,
     threshold_amount: float = 1e-5,
     seed: Optional[int] = 42,
+    rescale: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """Bootstrap resample observed sample columns to synthesize new profiles."""
     rng = np.random.default_rng(seed)
@@ -169,8 +198,8 @@ def regenerate_bootstrap(
                 combined = combined.add(mat.iloc[:, int(idx)], fill_value=0)
             synth[name] = combined
         synth_mat = pd.DataFrame(synth)
-        synth_mat = _filter_taxa(synth_mat, threshold_amount, n_reads)
-        synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
+        synth_mat = _filter_taxa(synth_mat, threshold_amount, n_reads, rescale=rescale)
+        synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
         name = _annotator_name(col)
         result[name] = _abundance_table_from_matrix(synth_mat, name)
     return result
@@ -183,6 +212,7 @@ def regenerate_vae(
     threshold_amount: float = 1e-5,
     latent_dim: int = 4,
     seed: Optional[int] = 42,
+    rescale: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """Sample synthetic profiles with a latent linear generative model (FA)."""
     from sklearn.decomposition import FactorAnalysis
@@ -195,7 +225,7 @@ def regenerate_vae(
         work[sample_col] = "1"
     for col in _taxid_columns(work):
         mat = _count_matrix(work, col, sample_col)
-        mat = _filter_taxa(mat, threshold_amount, n_reads)
+        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
         names = synthetic_sample_names(list(mat.columns), n_samples)
         if mat.shape[0] < 2 or mat.shape[1] < 2:
             synth = {}
@@ -204,7 +234,7 @@ def regenerate_vae(
                 src = cols[i % len(cols)]
                 synth[name] = mat[src] if src in mat.columns else mat.iloc[:, 0]
             synth_mat = pd.DataFrame(synth, index=mat.index)
-            synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
+            synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
             name = _annotator_name(col)
             result[name] = _abundance_table_from_matrix(synth_mat, name)
             continue
@@ -224,7 +254,7 @@ def regenerate_vae(
             decoded = np.expm1(np.maximum(decoded, 0))
             synth_cols[name] = decoded
         synth_mat = pd.DataFrame(synth_cols, index=mat.index)
-        synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
+        synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
         name = _annotator_name(col)
         result[name] = _abundance_table_from_matrix(synth_mat, name)
     return result
@@ -237,6 +267,7 @@ def regenerate_glm_python(
     threshold_amount: float = 1e-5,
     seed: Optional[int] = 42,
     noise_scale: float = 0.15,
+    rescale: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """Correlation-perturbed resampling (Python analog of glm-based generation)."""
     rng = np.random.default_rng(seed)
@@ -247,7 +278,7 @@ def regenerate_glm_python(
         work[sample_col] = "1"
     for col in _taxid_columns(work):
         mat = _count_matrix(work, col, sample_col)
-        mat = _filter_taxa(mat, threshold_amount, n_reads)
+        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
         if mat.empty:
             continue
         names = synthetic_sample_names(list(mat.columns), n_samples)
@@ -269,7 +300,7 @@ def regenerate_glm_python(
             decoded = np.expm1(np.maximum(profile, 0))
             synth[name] = decoded
         synth_mat = pd.DataFrame(synth, index=mat.index)
-        synth_mat = _scale_columns_to_n_reads(synth_mat, n_reads)
+        synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
         name = _annotator_name(col)
         result[name] = _abundance_table_from_matrix(synth_mat, name)
     return result
@@ -283,7 +314,7 @@ def regenerate_annotation_tables(
 ) -> Dict[str, pd.DataFrame]:
     """Regenerate per-annotator abundance CSVs from an annotation directory."""
     cfg = dict(config or {})
-    mode = normalize_regeneration_mode(cfg.get("regeneration_mode", "preserve"))
+    mode = normalize_regeneration_mode(cfg.get("regeneration_mode", "direct"))
     n_reads = cfg.get("N_reads")
     if n_reads is not None:
         n_reads = int(n_reads)
@@ -296,7 +327,7 @@ def regenerate_annotation_tables(
         data = read_annotation_dir(annotation_dir)
     n_samples = _n_samples_or_observed(data, cfg.get("N"))
 
-    if mode == "preserve":
+    if mode == "direct":
         tables = regenerate_preserve(
             data,
             n_reads=n_reads,
@@ -310,6 +341,7 @@ def regenerate_annotation_tables(
             n_reads=n_reads,
             threshold_amount=threshold,
             seed=seed,
+            rescale=rescale,
         )
     elif mode == "vae":
         tables = regenerate_vae(
@@ -319,14 +351,22 @@ def regenerate_annotation_tables(
             threshold_amount=threshold,
             latent_dim=latent_dim,
             seed=seed,
+            rescale=rescale,
         )
-    else:  # glm
+    elif mode == "glm":
         tables = regenerate_glm_python(
             data,
             n_samples=n_samples,
             n_reads=n_reads,
             threshold_amount=threshold,
             seed=seed,
+            rescale=rescale,
+        )
+    else:
+        raise ValueError(
+            "regeneration_mode='samovar' uses the optional R regenerator. "
+            "Call samovar_annotation_regenerate() after installing it, or set "
+            "SAMOVAR_R_REGENERATE to annotation_regenerate.R."
         )
 
     out = Path(output_dir)
@@ -346,7 +386,7 @@ def write_samovar_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         "min_cluster_size": 2,
         "max_cluster_size": 100,
         "N_reads": 1000,
-        "regeneration_mode": "preserve",
+        "regeneration_mode": "direct",
         "seed": 42,
         "vae_latent_dim": 4,
         "rescale_abundance": False,

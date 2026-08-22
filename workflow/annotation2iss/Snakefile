@@ -22,7 +22,7 @@ COVERAGE = config["coverage"]
 MODEL = config.get("model", "hiseq")
 MAX_GENOMES = config.get("max_genomes", None)
 CORES = int(config.get("cores", 2))
-REGENERATION_MODE = normalize_regeneration_mode(config.get("regeneration_mode", "preserve"))
+REGENERATION_MODE = normalize_regeneration_mode(config.get("regeneration_mode", "direct"))
 REGENERATION_CONFIG = {
     "regeneration_mode": REGENERATION_MODE,
     "N_reads": int(config.get("N_reads", 1000)),
@@ -73,7 +73,7 @@ def get_sample_names():
     for file in annotation_files:
         sample_name = os.path.basename(file).split(".")[0]
         original.append(sample_name)
-    if REGENERATION_MODE == "preserve":
+    if REGENERATION_MODE == "direct":
         return original
     n_cfg = REGENERATION_CONFIG.get("N")
     n = int(n_cfg) if n_cfg not in (None, "", 0) else 0
