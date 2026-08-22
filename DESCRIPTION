@@ -1,7 +1,7 @@
 Package: samovaR
 Type: Package
 Title: R package for generating model metagenomes with specified properties
-Version: 1.0.0
+Version: 0.10.1
 Authors@R: c(
   person("Daniil", "Smutin", email = "dvsmutin@gmail.com", role = c("aut", "cre"),
     comment = c(ORCID = "0009-0009-1460-4108")),

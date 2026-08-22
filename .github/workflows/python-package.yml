@@ -30,6 +30,8 @@ jobs:
     - name: Install via install.sh
       env:
         CI: "true"
+        NCBI_EMAIL: test@samovar.com
+        SAMOVAR_INSTALL_DEV: "1"
       run: |
         chmod +x install.sh
         ./install.sh
@@ -39,4 +41,4 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       run: |
-        pytest -q --tb=short
+        pytest -q --tb=short --cov=src

@@ -76,12 +76,13 @@ def _write_config(mock_config):
 
 
 def test_resolve_r_executable_uses_path_when_config_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "samovar.table2iss.os.path.dirname",
-        lambda _path: str(tmp_path),
-    )
+    monkeypatch.setattr("samovar.table2iss.load_config", lambda: {})
     monkeypatch.setattr(
         "samovar.table2iss.shutil.which",
+        lambda name: "/usr/bin/R" if name == "R" else None,
+    )
+    monkeypatch.setattr(
+        "samovar.paths.shutil.which",
         lambda name: "/usr/bin/R" if name == "R" else None,
     )
     resolved, lib = _resolve_r_executable()
@@ -90,11 +91,10 @@ def test_resolve_r_executable_uses_path_when_config_missing(tmp_path, monkeypatc
 
 
 def test_resolve_r_executable_raises_when_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "samovar.table2iss.os.path.dirname",
-        lambda _path: str(tmp_path),
-    )
+    monkeypatch.setattr("samovar.table2iss.load_config", lambda: {"r_path": "R-not-installed"})
     monkeypatch.setattr("samovar.table2iss.shutil.which", lambda _name: None)
+    monkeypatch.setattr("samovar.paths.shutil.which", lambda _name: None)
+    monkeypatch.delenv("PATH", raising=False)
     with pytest.raises(FileNotFoundError, match="R executable not found"):
         _resolve_r_executable()
 

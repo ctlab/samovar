@@ -1,14 +1,27 @@
 #!/bin/bash
+# SamovaR CLI. Does not require the current directory to be the repo root.
 
-set -e
+set -euo pipefail
 
-# Check if we're in a SamovaR project directory
-if [ ! -f build/config.json ]; then
-    echo "Error: Not in a SamovaR project directory (build/config.json not found)"
-    exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 
-# Function to show usage
+_find_cfg() {
+    if [ -n "${SAMOVAR_CONFIG:-}" ] && [ -f "$SAMOVAR_CONFIG" ]; then
+        echo "$SAMOVAR_CONFIG"
+        return
+    fi
+    if [ -f "$XDG_CONFIG_HOME/samovar/config.json" ]; then
+        echo "$XDG_CONFIG_HOME/samovar/config.json"
+        return
+    fi
+    if [ -f "$SCRIPT_DIR/../build/config.json" ]; then
+        echo "$SCRIPT_DIR/../build/config.json"
+        return
+    fi
+    return 1
+}
+
 show_usage() {
     echo "Usage: samovar [command] [options]"
     echo ""
@@ -28,33 +41,62 @@ show_usage() {
     echo "  samovar tools --sort --output_dir [...]"
 }
 
-# Parse command
-case "$1" in
+CFG=""
+if CFG="$(_find_cfg)"; then
+    :
+else
+    if [ "${1:-}" = "help" ] || [ -z "${1:-}" ]; then
+        ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+        export SAMOVAR_ROOT="$ROOT"
+        show_usage
+        exit 0
+    fi
+    echo "Error: SamovaR is not installed (no ~/.config/samovar/config.json or build/config.json)."
+    echo "Run ./install.sh from the SamovaR source tree."
+    exit 1
+fi
+
+ROOT="${SAMOVAR_ROOT:-}"
+if [ -z "$ROOT" ] && command -v python3 >/dev/null 2>&1; then
+    ROOT="$(python3 -c "import json; print(json.load(open(r'''$CFG''')).get('root','') or '')" 2>/dev/null || true)"
+fi
+if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
+    ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
+export SAMOVAR_ROOT="$ROOT"
+export PATH="$SCRIPT_DIR:$ROOT/bin:$PATH"
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+
+if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
+    # shellcheck disable=SC1090
+    . "$XDG_CONFIG_HOME/samovar/env"
+fi
+
+case "${1:-}" in
     "generate")
         shift
-        samovar_generate "$@"
+        "$SCRIPT_DIR/samovar_generate" "$@"
         ;;
     "prepare"|"preprocess")
         shift
-        samovar_preprocess "$@"
+        "$SCRIPT_DIR/samovar_preprocess" "$@"
         ;;
     "exec")
         shift
-        # If no output-dir is specified, use the current directory
-        if ! echo "$@" | grep -q -- "--output_dir"; then
+        if ! echo "$*" | grep -q -- "--output_dir"; then
             set -- "$@" "--output_dir" "."
         fi
-        samovar_exec "$@"
+        "$SCRIPT_DIR/samovar_exec" "$@"
         ;;
     "tools")
         shift
-        case "$1" in
+        case "${1:-}" in
             "--sort")
                 shift
-                "$(dirname "$0")/samovar_sort_reads" "$@"
+                "$SCRIPT_DIR/samovar_sort_reads" "$@"
                 ;;
             *)
-                echo "Error: Unknown tool '$1'"
+                echo "Error: Unknown tool '${1:-}'"
                 echo "Available tools: --sort"
                 exit 1
                 ;;
@@ -62,7 +104,7 @@ case "$1" in
         ;;
     "build"|"build_database")
         shift
-        "$(dirname "$0")/../workflow/database_prep/samovar_build_database.sh" "$@"
+        "$ROOT/workflow/database_prep/samovar_build_database.sh" "$@"
         ;;
     "help"|"")
         show_usage

@@ -1,9 +1,6 @@
 import os
 import glob
-import sys
 
-# Add src directory to PYTHONPATH to allow importing SamovaR modules
-sys.path.append(os.path.abspath("src"))
 from samovar.annotators_wrapper import get_annotator_instance
 
 # Get all samples from input directories

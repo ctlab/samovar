@@ -21,12 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 def default_entrez_email() -> str:
-    """NCBI Entrez contact email from the environment (never a personal default)."""
-    for key in ("NCBI_EMAIL", "ENTREZ_EMAIL", "SAMOVAR_EMAIL"):
-        value = os.environ.get(key, "").strip()
-        if value:
-            return value
-    return "anonymous@example.com"
+    """NCBI Entrez contact email from the environment or install config."""
+    from samovar.paths import ncbi_email
+
+    return ncbi_email()
 
 def _entrez_retry(func, max_retries=8, initial_delay=2):
     """

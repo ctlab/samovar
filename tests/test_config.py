@@ -169,13 +169,17 @@ def test_generate_pipeline():
         assert f"out_dir=\"{test_output_dir}\"" in pipeline_content
         
         # Check snakemake commands
-        assert "snakemake -s workflow/annotators/Snakefile" in pipeline_content
-        assert "snakemake -s workflow/annotation2iss/Snakefile" in pipeline_content
+        assert "snakemake -s " in pipeline_content
+        assert "workflow/annotators/Snakefile" in pipeline_content
+        assert "workflow/annotation2iss/Snakefile" in pipeline_content
         
         # Check Python and R commands
         assert "workflow/combine_annotation_tables.py" in pipeline_content
         assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/ML.py" in pipeline_content
+        assert "cp data/test_genomes" not in pipeline_content
+        assert "export PYTHONPATH=" in pipeline_content
+        assert "export SAMOVAR_ROOT=" in pipeline_content
 
 def test_setup_pipeline():
     test_output_dir = 'tests_outs/test_setup_pipeline'

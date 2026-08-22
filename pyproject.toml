@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "samovar"
-version = "1.0.0"
+version = "0.10.1"
 description = "Automated re-profiling and benchmarking with SamovaR"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -42,5 +42,5 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --cov=src"
+addopts = "-v"
  

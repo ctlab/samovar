@@ -5,12 +5,10 @@ from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
 
+from samovar.paths import ncbi_email, python_path, repo_root, resolve_executable, test_genomes_dir
+
 def _default_email() -> str:
-    for key in ("NCBI_EMAIL", "ENTREZ_EMAIL", "SAMOVAR_EMAIL"):
-        value = os.environ.get(key, "").strip()
-        if value:
-            return value
-    return "anonymous@example.com"
+    return ncbi_email()
 
 @dataclass
 class AnnotatorConfig:
@@ -116,7 +114,7 @@ class PipelineConfig:
                     config.annotators.append(AnnotatorConfig(
                         run_name=run_name,
                         type=type_name,
-                        cmd=cmd,
+                        cmd=resolve_executable(cmd, tool_key=type_name),
                         db_path=db_path,
                         extra=extra
                     ))
@@ -147,7 +145,7 @@ class PipelineConfig:
                     config.annotators.append(AnnotatorConfig(
                         run_name=type_name if attr != "dummy" else "dummy",
                         type=type_name,
-                        cmd=cmd,
+                        cmd=resolve_executable(cmd, tool_key=type_name),
                         db_path=db_path,
                         extra=extra
                     ))
@@ -239,17 +237,21 @@ class PipelineConfig:
         
         # Get config paths
         configs = self.generate_configs(base_dir)
+        root = repo_root()
+        py = python_path()
+        wf = root / "workflow"
+        src = root / "src"
+        genomes = test_genomes_dir()
+        email = self.email or ncbi_email()
         
-        # Generate pipeline script
+        # Generate pipeline script (absolute paths so exec works from any cwd)
         pipeline_content = f"""# Setup
 set -e
-
-if [ -f build/config.json ]; then
-    PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' build/config.json | sed 's/"python_path": *"\\(.*\\)"/\\1/')
-else
-    echo "SamovaR is not installed: check build/config.json"
-    exit 1
-fi
+export SAMOVAR_ROOT="{root}"
+export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"
+export PATH="{root}/bin:$PATH"
+export PYTHONPATH="{src}${{PYTHONPATH:+:$PYTHONPATH}}"
+PYTHON_PATH="{py}"
 PYTHON_PATH=${{PYTHON_PATH:-python3}}
 
 out_dir="{base_dir}"
@@ -267,30 +269,34 @@ if [ -n "{self.input_dir}" ] && [ -d "{self.input_dir}" ]; then
 fi
 
 # Run annotators on initial reads
-snakemake -s workflow/annotators/Snakefile \\
+snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['init_annotator']} \\
     --cores {self.cores}
 
 # Combine annotation tables
-$PYTHON_PATH workflow/combine_annotation_tables.py \\
+$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -i $out_dir/initial_reports \\
     -o $out_dir/initial_annotations
 
 # Visualize annotations (Python: altair + cnsplots; never abort the pipeline)
-$PYTHON_PATH workflow/compare_annotations.py \\
+$PYTHON_PATH {wf / 'compare_annotations.py'} \\
     --annotation_dir $out_dir/initial_annotations \\
     --output_dir $out_dir/initial_annotations_plots \\
     --show_top 0 || echo "Warning: initial visualization failed; continuing"
 
-# Add pre-downloaded genomes to the genome directory unless already present
+# Seed toy genomes only when the destination is empty and bundled test genomes exist.
 mkdir -p $out_dir/genomes
 if ! ls $out_dir/genomes/* >/dev/null 2>&1; then
-    cp data/test_genomes/meta/* $out_dir/genomes
-    cp data/test_genomes/host/* $out_dir/genomes
+    if [ -d "{genomes}/meta" ]; then
+        cp "{genomes}/meta/"* $out_dir/genomes/ 2>/dev/null || true
+    fi
+    if [ -d "{genomes}/host" ]; then
+        cp "{genomes}/host/"* $out_dir/genomes/ 2>/dev/null || true
+    fi
 fi
 
 # Translate annotation table to new reads set
-snakemake -s workflow/annotation2iss/Snakefile \\
+snakemake -s {wf / 'annotation2iss' / 'Snakefile'} \\
     --configfile {configs['annotation2iss']} \\
     --cores {self.cores}
 
@@ -310,21 +316,21 @@ if ! ls $out_dir/regenerated/*_R1.fastq >/dev/null 2>&1; then
 fi
 
 # Sort paired-end reads to ensure matching order
-bin/samovar tools --sort --output_dir $out_dir
+{root / 'bin' / 'samovar'} tools --sort --output_dir $out_dir
 
 # Run annotators on new reads set
-snakemake -s workflow/annotators/Snakefile \\
+snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['reannotate']} \\
     --cores {self.cores}
 
 # Combine annotation tables
-$PYTHON_PATH workflow/combine_annotation_tables.py \\
+$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -i $out_dir/regenerated_reports \\
     -o $out_dir/regenerated_annotations \\
     -s 2
 
 # Visualize & combine results
-$PYTHON_PATH workflow/compare_annotations.py \\
+$PYTHON_PATH {wf / 'compare_annotations.py'} \\
     --annotation_dir $out_dir/regenerated_annotations \\
     --output_dir $out_dir/regenerated_annotations_plots \\
     --csv $out_dir/regenerated_annotations/combined_annotation_table.csv \\
@@ -334,20 +340,20 @@ $PYTHON_PATH workflow/compare_annotations.py \\
 if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
     cat $out_dir/initial/*_R1.fastq > $out_dir/combined_temporary_R1.fastq
-    $PYTHON_PATH src/annotators/fastq_annotator.py $out_dir/combined_temporary_R1.fastq -o $out_dir/features.tsv --chunk_size 50000
+    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} $out_dir/combined_temporary_R1.fastq -o $out_dir/features.tsv --chunk_size 50000
     rm -f $out_dir/combined_temporary_R1.fastq
     FEATURE_ARG="--features $out_dir/features.tsv"
 else
     FEATURE_ARG=""
 fi
-$PYTHON_PATH workflow/ML.py \\
+$PYTHON_PATH {wf / 'ML.py'} \\
     --reprofiling_dir $out_dir/initial_annotations \\
     --validation_file $out_dir/regenerated_annotations/combined_annotation_table.csv \\
     --output_dir $out_dir/reprofiled_annotations \\
     $FEATURE_ARG
 
 # Check reprofiled results
-$PYTHON_PATH workflow/compare_annotations.py \\
+$PYTHON_PATH {wf / 'compare_annotations.py'} \\
     --annotation_dir $out_dir/reprofiled_annotations \\
     --output_dir $out_dir/reprofiled_annotations_plots \\
     --csv $out_dir/reprofiled_annotations/combined_annotation_table.csv \\

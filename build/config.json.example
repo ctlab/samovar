@@ -1,5 +1,14 @@
 {
+    "version": "0.10.1",
+    "root": "/path/to/samovar",
     "python_path": "/usr/bin/python3",
     "r_path": "/usr/bin/R",
-    "r_lib_path": "/usr/local/lib/R/site-library"
+    "r_lib_path": "",
+    "iss_path": "/usr/bin/iss",
+    "ncbi_email": "test@samovar.com",
+    "test_genomes": "/path/to/samovar/data/test_genomes",
+    "tools": {
+        "kraken2": "/usr/bin/kraken2",
+        "kaiju": "/usr/bin/kaiju"
+    }
 }

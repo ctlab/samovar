@@ -1,4 +1,4 @@
-CXX ?= g++
+CXX ?= $(shell command -v g++ 2>/dev/null || command -v c++ 2>/dev/null || command -v clang++ 2>/dev/null || echo g++)
 CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wno-unused-parameter
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)

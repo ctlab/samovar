@@ -69,21 +69,23 @@ class ISSTestConfig:
         config_path = self.generate_config(base_dir)
         
         # Generate pipeline script
+        from samovar.paths import python_path, repo_root
+
+        root = repo_root()
+        py = python_path()
+        snakefile = root / "workflow" / "iss_test" / "Snakefile"
         pipeline_content = f"""# Setup
 set -e
-
-if [ -f build/config.json ]; then
-    PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' build/config.json | sed 's/"python_path": *"\\(.*\\)"/\\1/')
-else
-    echo "SamovaR is not installed: check build/config.json"
-    exit 1
-fi
+export SAMOVAR_ROOT="{root}"
+export PATH="{root}/bin:$PATH"
+export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
+PYTHON_PATH="{py}"
 
 out_dir="{base_dir}"
 mkdir -p $out_dir
 
 # Generate reads with InSilicoSeq
-snakemake -s workflow/iss_test/Snakefile \\
+snakemake -s {snakefile} \\
     --configfile {config_path} \\
     --cores {self.cores}
 """

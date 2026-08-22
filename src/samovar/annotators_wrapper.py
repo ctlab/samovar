@@ -49,8 +49,10 @@ class BaseAnnotator:
         self.threads = run_config.get("threads", 1)
         self.extra = run_config.get("extra", "")
 
-        # Use custom command if provided in config, otherwise fall back to the tool's default
-        self.cmd = run_config.get("cmd", self.default_cmd)
+        from samovar.paths import resolve_executable
+
+        raw_cmd = run_config.get("cmd") or self.default_cmd
+        self.cmd = resolve_executable(raw_cmd, tool_key=str(raw_cmd).split()[0] if raw_cmd else None)
 
     @property
     def default_cmd(self) -> str:

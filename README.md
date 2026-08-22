@@ -66,11 +66,24 @@ chmod +x install.sh
 Or without conda:
 
 ```bash
-python3 -m pip install -e ".[dev]"
+python3 -m pip install -e .
 ./install.sh
 ```
 
-`install.sh` writes `build/config.json` (python path only). Optional R package: `SAMOVAR_INSTALL_R=1 ./install.sh` (see branch `r-package`).
+`install.sh` writes `~/.config/samovar/config.json` (and a copy at `build/config.json`) with the repo root, Python path, NCBI email, and any annotators found on `$PATH`. After that, `samovar` can be run from any directory.
+
+It will prompt for an NCBI Entrez email (genome downloads). In CI the default is `test@samovar.com`. Override with `NCBI_EMAIL=you@institution.edu`.
+
+- Production install: `./install.sh` (no pytest extras)
+- Dev / CI: `SAMOVAR_INSTALL_DEV=1 ./install.sh`
+- Air-gapped: `SAMOVAR_OFFLINE=1 SAMOVAR_WHEELHOUSE=/path/to/wheels ./install.sh`
+- Optional R package: `SAMOVAR_INSTALL_R=1 ./install.sh` (see branch `r-package`)
+
+Annotators such as `kraken2` and `kaiju` may be given as names on `$PATH` (no full path required):
+
+```bash
+samovar prepare --output_dir samovar_out --kraken2-test "kraken2 $DB_KRAKEN2"
+```
 
 ## Usage
 

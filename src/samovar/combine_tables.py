@@ -16,11 +16,25 @@ from samovar.parse_annotators import (
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parent.parent.parent
+    from samovar.paths import repo_root as _root
+
+    return _root()
 
 
 def combine_binary() -> Path:
     return repo_root() / "bin" / "samovar_combine_annotations"
+
+
+def _cxx() -> str:
+    from samovar.paths import cxx_compiler
+
+    found = cxx_compiler()
+    if not found:
+        raise FileNotFoundError(
+            "No C++ compiler found (g++, c++, or clang++). "
+            "Install a compiler or set CXX."
+        )
+    return found
 
 
 def ensure_combine_binary() -> Path:
@@ -35,11 +49,13 @@ def ensure_combine_binary() -> Path:
     )
     if needs_build:
         if makefile.exists():
-            subprocess.check_call(["make", "-C", str(makefile.parent)])
+            env = os.environ.copy()
+            env["CXX"] = _cxx()
+            subprocess.check_call(["make", "-C", str(makefile.parent)], env=env)
         else:
             binary.parent.mkdir(parents=True, exist_ok=True)
             subprocess.check_call(
-                ["g++", "-O3", "-std=c++17", "-o", str(binary), str(source)]
+                [_cxx(), "-O3", "-std=c++17", "-o", str(binary), str(source)]
             )
     if not os.access(binary, os.X_OK):
         raise RuntimeError(f"C++ combiner is not executable: {binary}")

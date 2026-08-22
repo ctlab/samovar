@@ -61,7 +61,8 @@ def test_prepare_writes_pipeline_and_configs(tmp_path):
     pipeline = Path(result["pipeline"])
     assert pipeline.exists()
     text = pipeline.read_text()
-    assert "snakemake -s workflow/annotators/Snakefile" in text
+    assert "snakemake -s " in text
+    assert "workflow/annotators/Snakefile" in text
     assert "workflow/combine_annotation_tables.py" in text
     assert "workflow/ML.py" in text
     assert str(tmp_path / "reads") in text

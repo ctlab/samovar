@@ -112,7 +112,8 @@ def test_generate_pipeline():
         assert "set -e" in pipeline_content
         assert "PYTHON_PATH=" in pipeline_content
         assert f"out_dir=\"{test_output_dir}\"" in pipeline_content
-        assert "snakemake -s workflow/iss_test/Snakefile" in pipeline_content
+        assert "snakemake -s " in pipeline_content
+        assert "workflow/iss_test/Snakefile" in pipeline_content
 
 def test_setup_iss_test():
     test_output_dir = 'tests_outs/test_setup_iss_test'
@@ -158,4 +159,5 @@ def test_setup_iss_test():
         assert "set -e" in pipeline_content
         assert "PYTHON_PATH=" in pipeline_content
         assert f"out_dir=\"{test_output_dir}\"" in pipeline_content
-        assert "snakemake -s workflow/iss_test/Snakefile" in pipeline_content 
+        assert "snakemake -s " in pipeline_content
+        assert "workflow/iss_test/Snakefile" in pipeline_content 

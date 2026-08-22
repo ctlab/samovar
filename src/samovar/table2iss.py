@@ -16,6 +16,7 @@ import json
 import tempfile
 import warnings
 import shutil
+from samovar.paths import annotation_regenerate_r, load_config, resolve_executable
 
 
 SKIP_TAXIDS = {"0", "nan", "None", ""}
@@ -1004,32 +1005,18 @@ def generate_iss_test_samples(
     return outputs
 
 def _resolve_r_executable() -> Tuple[str, Optional[str]]:
-    """Resolve R binary and optional library path from build/config.json / PATH."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(here, "../../build/config.json")
-    configured = "R"
-    r_lib_path = None
-    try:
-        with open(config_path, encoding="utf-8") as handle:
-            cfg = json.load(handle)
-        configured = (cfg.get("r_path") or "R").strip() or "R"
-        lib = (cfg.get("r_lib_path") or "").strip()
-        r_lib_path = lib or None
-    except (OSError, json.JSONDecodeError, TypeError, AttributeError):
-        pass
-
-    if os.path.isabs(configured) and os.path.isfile(configured) and os.access(configured, os.X_OK):
-        return configured, r_lib_path
-
-    found = shutil.which(configured)
+    """Resolve R binary and optional library path from user/repo config or PATH."""
+    cfg = load_config()
+    configured = (cfg.get("r_path") or "R").strip() or "R"
+    lib = (cfg.get("r_lib_path") or "").strip()
+    r_lib_path = lib or None
+    resolved = resolve_executable(configured, tool_key="R")
+    token = (resolved or configured).split()[0]
+    if os.path.isfile(token) and os.access(token, os.X_OK):
+        return token, r_lib_path
+    found = shutil.which(configured) or shutil.which("R") or shutil.which("Rscript")
     if found:
         return found, r_lib_path
-
-    for fallback in ("R", "Rscript"):
-        found = shutil.which(fallback)
-        if found:
-            return found, r_lib_path
-
     raise FileNotFoundError(
         f"R executable not found ({configured!r}). "
         "The R generative package is optional; use the Python regenerator "
@@ -1092,10 +1079,7 @@ def samovar_annotation_regenerate(
         )
         return
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    annotation_regenerate = os.path.abspath(
-        os.path.join(here, "../../workflow/annotation_regenerate.R")
-    )
+    annotation_regenerate = str(annotation_regenerate_r())
     if not os.path.isfile(annotation_regenerate):
         raise FileNotFoundError(
             f"annotation_regenerate.R not found at {annotation_regenerate}"
