@@ -16,7 +16,7 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.14"
+    assert PACKAGE_VERSION == "0.10.16"
 
 
 def test_discover_opal_from_config(tmp_path, monkeypatch):
@@ -192,6 +192,39 @@ def test_cli_help_from_other_directory(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert "prepare" in proc.stdout.lower() or "Usage:" in proc.stdout
+
+
+def test_discover_nanosim_from_tool_envs(tmp_path, monkeypatch):
+    from samovar.paths import discover_nanosim
+
+    env = tmp_path / "nanosim"
+    bindir = env / "bin"
+    bindir.mkdir(parents=True)
+    exe = bindir / "simulator.py"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {"tool_envs": {"nanosim": str(env)}},
+    )
+    monkeypatch.delenv("SAMOVAR_NANOSIM", raising=False)
+    monkeypatch.delenv("SAMOVAR_NANOSIM_BIN", raising=False)
+    assert discover_nanosim() == str(exe.resolve())
+
+
+def test_format_install_status_lists_required():
+    from samovar.paths import format_install_status, install_status_rows
+
+    text = format_install_status()
+    assert "SamovaR tool status" in text
+    assert "Required:" in text
+    assert "Optional:" in text
+    assert "NanoSim" in text
+    names = {row["name"] for row in install_status_rows()}
+    assert "python" in names
+    assert "iss" in names
+    assert "CAMISIM" in names
+    assert "ART" in names
 
 
 def test_iss_executable_uses_config(tmp_path, monkeypatch):

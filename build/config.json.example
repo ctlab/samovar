@@ -1,5 +1,5 @@
 {
-    "version": "0.10.14",
+    "version": "0.10.16",
     "root": "/path/to/samovar",
     "python_path": "/usr/bin/python3",
     "r_path": "/usr/bin/R",
@@ -7,6 +7,11 @@
     "iss_path": "/usr/bin/iss",
     "opal_path": "/usr/bin/opal.py",
     "multiqc_path": "/usr/bin/multiqc",
+    "camisim_path": "/home/user/.cache/samovar/CAMISIM",
+    "nextflow_path": "/usr/bin/nextflow",
+    "nanosim_path": "/home/user/.cache/samovar/envs/nanosim/bin/simulator.py",
+    "art_path": "/home/user/.cache/samovar/envs/art/bin/art_illumina",
+    "wgsim_path": "/usr/bin/wgsim",
     "ncbi_email": "test@samovar.com",
     "test_genomes": "/path/to/samovar/data/test_genomes",
     "_comment_test_genomes": "Truncated ISS/CI stubs only. Never used as NCBI substitutes.",
@@ -21,10 +26,14 @@
     ],
     "tools": {
         "kraken2": "/usr/bin/kraken2",
-        "kaiju": "/opt/conda/envs/kaiju/bin/kaiju"
+        "kaiju": "/opt/conda/envs/kaiju/bin/kaiju",
+        "simulator.py": "/home/user/.cache/samovar/envs/nanosim/bin/simulator.py",
+        "art_illumina": "/home/user/.cache/samovar/envs/art/bin/art_illumina"
     },
-    "_comment_tool_envs": "Map tool name -> conda/module prefix; <prefix>/bin is prepended and used to resolve that tool",
+    "_comment_tool_envs": "Map tool name -> conda/module prefix; <prefix>/bin is prepended and used to resolve that tool. Fragile simulators (NanoSim, ART) should live here, not in the SamovaR env.",
     "tool_envs": {
-        "kaiju": "/opt/conda/envs/kaiju"
+        "kaiju": "/opt/conda/envs/kaiju",
+        "nanosim": "/home/user/.cache/samovar/envs/nanosim",
+        "art": "/home/user/.cache/samovar/envs/art"
     }
 }

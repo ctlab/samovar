@@ -8,6 +8,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from samovar.table2iss import (
+    _scale_amounts,
     generate_iss_test_samples,
     generate_reads_metagenome,
     process_annotation_tables,
@@ -28,6 +29,11 @@ def _count_fastq_records(path):
 
 def _is_iss_cmd(cmd):
     return isinstance(cmd, (list, tuple)) and cmd and Path(str(cmd[0])).name == "iss"
+
+
+def test_scale_amounts_preserves_requested_total():
+    assert _scale_amounts([1, 1, 1], 200) == [67, 67, 66]
+    assert sum(_scale_amounts([3, 2, 1], 17)) == 17
 
 
 def test_generate_reads_metagenome_single_iss_call(tmp_path):

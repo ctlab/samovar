@@ -147,6 +147,41 @@ std::string extract_kraken2_taxid(const std::string& taxa) {
     return "0";
 }
 
+std::string extract_read_type(const std::string& seq) {
+    const std::string key = "read_type:";
+    for (size_t i = 0; i < seq.size(); ++i) {
+        bool match = true;
+        for (size_t j = 0; j < key.size(); ++j) {
+            if (i + j >= seq.size()) {
+                match = false;
+                break;
+            }
+            char a = static_cast<char>(std::tolower(static_cast<unsigned char>(seq[i + j])));
+            if (a != key[j]) {
+                match = false;
+                break;
+            }
+        }
+        if (!match) {
+            continue;
+        }
+        size_t k = i + key.size();
+        std::string token;
+        while (k < seq.size()) {
+            unsigned char c = static_cast<unsigned char>(seq[k]);
+            if (!(std::isalnum(c) || seq[k] == '_' || seq[k] == '+' || seq[k] == '-')) {
+                break;
+            }
+            token.push_back(static_cast<char>(std::tolower(c)));
+            ++k;
+        }
+        if (!token.empty()) {
+            return token;
+        }
+    }
+    return "";
+}
+
 std::string extract_true_taxid(const std::string& seq) {
     const std::string key = "taxid:";
     for (size_t i = 0; i < seq.size(); ++i) {
@@ -454,7 +489,7 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
     for (size_t i = 0; i < tools.size(); ++i) {
         out << ",taxID_" << tools[i] << '_' << i;
     }
-    out << ",length,true\n";
+    out << ",length,true,read_type\n";
 
     uint64_t n = 0;
     while (true) {
@@ -492,7 +527,8 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
         for (const auto& t : tax) {
             out << ',' << csv_escape(t);
         }
-        out << ',' << csv_escape(length) << ',' << csv_escape(extract_true_taxid(min_seq)) << '\n';
+        out << ',' << csv_escape(length) << ',' << csv_escape(extract_true_taxid(min_seq))
+            << ',' << csv_escape(extract_read_type(min_seq)) << '\n';
         ++n;
     }
     std::cerr << "Exported " << csv_path.filename().string() << " (" << n << " rows)\n";

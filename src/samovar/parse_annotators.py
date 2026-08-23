@@ -73,6 +73,13 @@ def extract_true_taxid(seq_id: str, pattern: Optional[str] = None) -> str:
     return ""
 
 
+def extract_read_type(seq_id: str) -> str:
+    """``read_type:<token>`` from a read/sequence identifier (hybrid CAMISIM)."""
+    text = "" if seq_id is None else str(seq_id)
+    match = re.search(r"read_type:([A-Za-z0-9_+\-]+)", text, flags=re.IGNORECASE)
+    return match.group(1).lower() if match else ""
+
+
 ncbi = None
 _taxonomy_parent_rank = None
 
@@ -836,6 +843,9 @@ class Annotation:
             self.id += 1
 
         self.DataFrame = self.DataFrame.fillna("0")
+        self.DataFrame["read_type"] = [
+            extract_read_type(seq_id) for seq_id in self.DataFrame.index
+        ]
 
         # Extract true annotations if pattern provided
         self.true_annotation = []
@@ -845,6 +855,10 @@ class Annotation:
                 for seq_id in self.DataFrame.index
             ]
             print("True annotations extracted")
+
+        self.DataFrame["read_type"] = [
+            extract_read_type(seq_id) for seq_id in self.DataFrame.index
+        ]
 
         # Get unique annotations and ranks
         set_columns = []

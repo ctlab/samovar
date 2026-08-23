@@ -108,6 +108,61 @@ def test_exec_redo_clears_checkpoints(tmp_path):
     assert "Pipeline execution completed" in result.stdout
 
 
+def test_exec_requires_prepare_after_generate(tmp_path):
+    gen = tmp_path / ".generate"
+    gen.mkdir()
+    (gen / "generate.sh").write_text("#!/bin/bash\necho generated\n")
+    (gen / "generate.sh").chmod(0o755)
+    (tmp_path / "initial").mkdir()
+    (tmp_path / "initial" / "1_full_R1.fastq").write_text("@r\nA\n+\nI\n")
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO / "bin" / "samovar_exec"),
+            "--output_dir",
+            str(tmp_path),
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO / "src")},
+    )
+    assert result.returncode == 1
+    assert "samovar.sh is missing" in result.stdout
+    assert "samovar prepare" in result.stdout
+    assert "Skipping generate" in result.stdout
+
+
+def test_exec_skips_generate_when_reads_exist(tmp_path):
+    gen = tmp_path / ".generate"
+    gen.mkdir()
+    marker = tmp_path / "generated.flag"
+    (gen / "generate.sh").write_text(f"#!/bin/bash\ntouch '{marker}'\n")
+    (gen / "generate.sh").chmod(0o755)
+    (tmp_path / "initial").mkdir()
+    (tmp_path / "initial" / "1_full_R1.fastq").write_text("@r\nA\n+\nI\n")
+    log = tmp_path / ".log"
+    log.mkdir()
+    (log / "samovar.sh").write_text("#!/bin/bash\necho ran-main\n")
+    (log / "samovar.sh").chmod(0o755)
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO / "bin" / "samovar_exec"),
+            "--output_dir",
+            str(tmp_path),
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "PYTHONPATH": str(REPO / "src")},
+    )
+    assert "Skipping generate" in result.stdout
+    assert "ran-main" in result.stdout
+    assert not marker.exists()
+
+
 def test_exec_cleanup_tmp_flag(tmp_path):
     log = tmp_path / ".log"
     log.mkdir()

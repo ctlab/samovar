@@ -473,7 +473,7 @@ fi""",
         seed_genomes = _checkpoint_block(
             "seed_genomes",
             """# Reuse NCBI/user genome libraries (never the truncated data/test_genomes
-# stubs, unless this run's ISS generate.yaml pointed at them or
+# stubs, unless this run's ISS/CAMISIM generate YAML pointed at them or
 # SAMOVAR_ALLOW_TEST_GENOMES / --test-genomes is set).
 mkdir -p "$out_dir/genomes"
 "$PYTHON_PATH" -m samovar.genome_cache seed --dest "$out_dir/genomes" --generate-dir "$out_dir" --genome-dirs "$SAMOVAR_GENOME_DIRS"

@@ -1,9 +1,10 @@
 import os
 import re
+import shlex
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import pandas as pd
 
@@ -23,6 +24,55 @@ CUSTOM_WRAPPER_SCRIPTS = {
     "metauto.sh",
     "assembly_hybrid.sh",
 }
+
+
+def skip_empty_reads_cmd(input_r1: str, outputs: Sequence[str], run_cmd: str) -> str:
+    """If R1 is empty, touch expected outputs instead of running the classifier.
+
+    Kraken2/Kaiju on a 0-byte FASTQ can exit 0 without writing ``--output``.
+    """
+    r1 = shlex.quote(str(input_r1))
+    outs = " ".join(shlex.quote(str(path)) for path in outputs)
+    return f"if [ ! -s {r1} ]; then touch {outs}; else {run_cmd.strip()}; fi"
+
+
+def single_or_paired_reads_cmd(
+    input_r1: str,
+    input_r2: str,
+    outputs: Sequence[str],
+    *,
+    single_cmd: str,
+    paired_cmd: str,
+) -> str:
+    """Run a classifier in paired mode only when R2 contains reads."""
+    r1 = shlex.quote(str(input_r1))
+    r2 = shlex.quote(str(input_r2))
+    outs = " ".join(shlex.quote(str(path)) for path in outputs)
+    return (
+        f"if [ ! -s {r1} ]; then touch {outs}; "
+        f"elif [ -s {r2} ]; then {paired_cmd.strip()}; "
+        f"else {single_cmd.strip()}; fi"
+    )
+
+
+def _empty_taxid_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["seq", "taxID"])
+
+
+def _read_table_or_empty(file_path: str) -> Optional[pd.DataFrame]:
+    path = Path(file_path)
+    try:
+        if not path.is_file() or path.stat().st_size == 0:
+            return None
+    except OSError:
+        return None
+    try:
+        df = pd.read_table(file_path, header=None)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError):
+        return None
+    if df is None or df.empty:
+        return None
+    return df
 
 
 class BaseAnnotator:
@@ -97,20 +147,27 @@ class Kraken2Annotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         report_file, out_file = outputs
-        cmd = (
+        common = (
             f"{self.cmd} "
             f"--use-names "
             f"--db {self.db_path} "
             f"--threads {self.threads} "
-            f"--paired {input_r1} {input_r2} "
             f"--report {report_file} "
             f"--output {out_file} "
             f"{self.extra}"
         )
-        return cmd
+        return single_or_paired_reads_cmd(
+            input_r1,
+            input_r2,
+            outputs,
+            single_cmd=f"{common} {input_r1}",
+            paired_cmd=f"{common} --paired {input_r1} {input_r2}",
+        )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
-        df = pd.read_table(file_path, header=None)
+        df = _read_table_or_empty(file_path)
+        if df is None:
+            return _empty_taxid_frame()
         df.columns = ["classified", "seq", "taxa", "length", "k-mer"]
 
         def extract_taxid(taxa_string):
@@ -148,20 +205,27 @@ class KaijuAnnotator(BaseAnnotator):
         default_nodes = os.path.join(os.path.dirname(db_file_path), "nodes.dmp")
         db_nodes = self.run_config.get("db_nodes", default_nodes)
 
-        cmd = (
+        common = (
             f"{self.cmd} "
             f"-t {db_nodes} "
             f"-f {db_file_path} "
             f"-i {input_r1} "
-            f"-j {input_r2} "
             f"-z {self.threads} "
             f"-o {out_file} "
             f"{self.extra}"
         )
-        return cmd
+        return single_or_paired_reads_cmd(
+            input_r1,
+            input_r2,
+            outputs,
+            single_cmd=common,
+            paired_cmd=f"{common} -j {input_r2}",
+        )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
-        df = pd.read_table(file_path, header=None)
+        df = _read_table_or_empty(file_path)
+        if df is None:
+            return _empty_taxid_frame()
         df.columns = ["classified", "seq", "taxID"]
         return df[["seq", "taxID"]]
 
@@ -195,7 +259,7 @@ class MetaPhlanAnnotator(BaseAnnotator):
             f"&& "
             f"bzcat {bowtie_file} | awk -F'\\t' '{{print $1 \"\\t\" $3}}' > {out_file}"
         )
-        return cmd
+        return skip_empty_reads_cmd(input_r1, outputs, cmd)
 
     def _get_db_mapping(self) -> Dict[str, str]:
         if not self.db_path:
@@ -260,10 +324,12 @@ class Kraken1Annotator(BaseAnnotator):
             f"--output {out_file} "
             f"{self.extra}"
         )
-        return cmd
+        return skip_empty_reads_cmd(input_r1, outputs, cmd)
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
-        df = pd.read_table(file_path, header=None)
+        df = _read_table_or_empty(file_path)
+        if df is None:
+            return _empty_taxid_frame()
         df.columns = ["classified", "seq", "taxID", "length", "k-mer"]
         return df[["seq", "taxID"]]
 
@@ -291,10 +357,12 @@ class KrakenUniqAnnotator(BaseAnnotator):
             f"--output {out_file} "
             f"{self.extra}"
         )
-        return cmd
+        return skip_empty_reads_cmd(input_r1, outputs, cmd)
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
-        df = pd.read_table(file_path, header=None)
+        df = _read_table_or_empty(file_path)
+        if df is None:
+            return _empty_taxid_frame()
         df.columns = ["classified", "seq", "taxID", "length", "k-mer"]
         return df[["seq", "taxID"]]
 

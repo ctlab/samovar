@@ -311,7 +311,7 @@ def score_annotators(
     if true_col not in work.columns:
         return pd.DataFrame(columns=list(SCORE_COLUMNS))
     true = work[true_col]
-    names = list(annotators)
+    names = [n for n in annotators if str(n).lower() != "read_type"]
     tools = tool_annotators(names)
     rows = []
 
@@ -347,7 +347,37 @@ def score_annotators(
     table = table[list(SCORE_COLUMNS)]
     ordered = order_annotators(list(table["annotator"]))
     table["annotator"] = pd.Categorical(table["annotator"], categories=ordered, ordered=True)
-    return table.sort_values("annotator").reset_index(drop=True)
+    table = table.sort_values("annotator").reset_index(drop=True)
+
+    type_col = "read_type" if "read_type" in work.columns else None
+    if type_col:
+        types = sorted(
+            {
+                str(x).strip().lower()
+                for x in work[type_col].fillna("")
+                if str(x).strip()
+            }
+        )
+        if len(types) >= 2:
+            table["read_type"] = "all"
+            parts = [table]
+            grouped = work.copy()
+            grouped["_rt"] = grouped[type_col].astype(str).str.strip().str.lower()
+            for rt, sub in grouped.groupby("_rt"):
+                if not rt or sub.empty:
+                    continue
+                sub_tab = score_annotators(
+                    sub.drop(columns=["read_type", "_rt"], errors="ignore"),
+                    names,
+                    true_col=true_col,
+                    include_consensus=include_consensus,
+                )
+                if sub_tab.empty:
+                    continue
+                sub_tab["read_type"] = str(rt)
+                parts.append(sub_tab)
+            table = pd.concat(parts, ignore_index=True)
+    return table
 
 
 SCORE_DISPLAY = {
@@ -395,8 +425,9 @@ BAR_COLORS = {
 def scores_long(table: pd.DataFrame, display: Optional[Dict[str, str]] = None) -> pd.DataFrame:
     labels = display or SCORE_DISPLAY
     metrics = [c for c in labels if c in table.columns]
+    id_vars = ["annotator"] + (["read_type"] if "read_type" in table.columns else [])
     long = table.melt(
-        id_vars=["annotator"],
+        id_vars=id_vars,
         value_vars=metrics,
         var_name="metric",
         value_name="score",

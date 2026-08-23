@@ -30,12 +30,13 @@ show_usage() {
     echo "  build       Build Kaiju or Kraken2 database from config (alias: build_database)"
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
-    echo "  generate    Generate ISS test configuration and pipeline"
-    echo "  tools       Various utility tools"
+    echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
+    echo "  tools       --sort reads, or --status for required/optional programs"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
     echo "  samovar generate --genome_dir [...] --output_dir [...] --host_genome [...]"
+    echo "  samovar generate --simulator camisim --camisim-mode table --output_dir samovar/camisim-table ..."
     echo "  samovar prepare --input_dir [...] --output_dir [...]"
     echo "  samovar prepare --reuse-genomes --genome-dirs DIR[:DIR]"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...]"
@@ -45,6 +46,7 @@ show_usage() {
     echo "  samovar prepare --output_dir [...] --no-multiqc"
     echo "  samovar multiqc --output_dir [...] -- --export"
     echo "  samovar tools --sort --output_dir [...]"
+    echo "  samovar tools --status"
 }
 
 CFG=""
@@ -137,9 +139,13 @@ case "${1:-}" in
                 shift
                 "$PYTHON" "$SCRIPT_DIR/samovar_sort_reads" "$@"
                 ;;
+            "--status")
+                PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+                    "$PYTHON" -c "from samovar.paths import format_install_status; print(format_install_status())"
+                ;;
             *)
                 echo "Error: Unknown tool '${1:-}'"
-                echo "Available tools: --sort"
+                echo "Available tools: --sort  --status"
                 exit 1
                 ;;
         esac

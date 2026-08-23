@@ -75,6 +75,15 @@ def test_fastq_discovery(tmp_path):
     assert dest.read_text().count("@") == 2
 
 
+def test_fastq_ignores_camisim_tech_duplicates(tmp_path):
+    (tmp_path / "1_full_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (tmp_path / "1_full_R2.fastq").write_text("@a\nT\n+\nI\n")
+    (tmp_path / "1_wgsim_R1.fastq").write_text("@b\nA\n+\nI\n")
+    (tmp_path / "1_wgsim_R2.fastq").write_text("@b\nT\n+\nI\n")
+    (tmp_path / "2_full_R1.fastq").write_text("@c\nA\n+\nI\n")
+    assert list_fastq_samples(tmp_path) == ["1_full", "2_full"]
+
+
 def test_fastq_pair_paths():
     assert fastq_pair_paths("/tmp/s_k1") == ("/tmp/s_k1_R1.fastq", "/tmp/s_k1_R2.fastq")
     r1, r2 = fastq_pair_paths("/tmp/s_k1", gzip_reads=True)

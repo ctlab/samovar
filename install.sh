@@ -6,7 +6,11 @@
 #   ./install.sh                 Python pipeline only
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
-#   ./install.sh MultiQC         optional MultiQC reports (https://seqera.io/multiqc/)
+#   ./install.sh MultiQC         optional MultiQC HTML reports
+#   ./install.sh CAMISIM         optional CAMISIM community/read simulator
+#   ./install.sh NanoSim         optional NanoSim in a separate conda env (ONT / hybrid)
+#   ./install.sh ART             optional ART Illumina simulator in a separate conda env
+#   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
 #
 # Environment:
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
@@ -14,6 +18,10 @@
 #   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
 #   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
 #   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
+#   SAMOVAR_INSTALL_CAMISIM=1  also clone optional CAMISIM (same as ./install.sh CAMISIM)
+#   SAMOVAR_INSTALL_NANOSIM=1  also sidecar-conda NanoSim (same as ./install.sh NanoSim)
+#   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
+#   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
@@ -228,36 +236,178 @@ print("Updated config multiqc_path:", cfg.get("multiqc_path"))
 PY
 }
 
-if [ "${1:-}" = "R-package" ] || [ "${1:-}" = "r-package" ]; then
-    echo "R-package mode (Python tree is unchanged)."
-    install_samovar_r_package
-    exit $?
-fi
-
-if [ "${1:-}" = "OPAL" ] || [ "${1:-}" = "opal" ]; then
-    echo "OPAL mode (optional CAMI profiler assessment)."
-    PIP_OPTS=()
+install_camisim() {
     if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
-        PIP_OPTS+=(--offline --no-build-isolation)
-        if [ -n "${SAMOVAR_WHEELHOUSE:-}" ]; then
-            PIP_OPTS+=(--no-index --find-links "$SAMOVAR_WHEELHOUSE")
-        fi
+        echo "Skipping CAMISIM clone in offline mode."
+        return 1
     fi
-    install_opal
-    exit $?
-fi
+    echo "Installing optional CAMISIM (https://github.com/CAMI-challenge/CAMISIM) ..."
+    if ! command -v git >/dev/null 2>&1; then
+        echo "Warning: git is required to clone CAMISIM."
+        return 1
+    fi
+    export PYTHON_PATH
+    "$PYTHON_PATH" - <<'PY'
+import os, shutil, subprocess, sys
+from pathlib import Path
 
-if [ "${1:-}" = "MultiQC" ] || [ "${1:-}" = "multiqc" ]; then
-    echo "MultiQC mode (optional HTML report; native plot picker + --export)."
-    PIP_OPTS=()
+try:
+    from samovar.paths import load_config, user_cache_dir, write_config
+except ImportError:
+    print("Warning: samovar is not importable yet; re-run ./install.sh CAMISIM after the Python package is installed")
+    raise SystemExit(0)
+
+dest = Path(os.environ.get("SAMOVAR_CAMISIM") or (user_cache_dir() / "CAMISIM"))
+if (dest / "main.nf").is_file() or (dest / "metagenomesimulation.py").is_file():
+    print("CAMISIM already present:", dest)
+else:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and not any(dest.iterdir()):
+        dest.rmdir()
+    print("Cloning CAMISIM into", dest)
+    subprocess.check_call(
+        ["git", "clone", "--depth", "1", "https://github.com/CAMI-challenge/CAMISIM", str(dest)]
+    )
+cfg = load_config()
+cfg["camisim_path"] = str(dest)
+nxt = shutil.which("nextflow") or ""
+if nxt:
+    cfg["nextflow_path"] = nxt
+tools = dict(cfg.get("tools") or {})
+tools["camisim"] = str(dest)
+if nxt:
+    tools["nextflow"] = nxt
+cfg["tools"] = tools
+write_config(cfg)
+print("CAMISIM:", dest)
+print("Nextflow:", nxt or "not found (install nextflow to run CAMISIM 2.0 read simulation)")
+print("Updated config camisim_path")
+if not nxt:
+    print("Note: `samovar generate --camisim-mode table` still works (community design + ISS).")
+    print("Illumina/ONT/wgsim/hybrid need Nextflow + CAMISIM simulators (ART / NanoSim / wgsim).")
+    print("ONT/hybrid: ./install.sh NanoSim   (separate conda env; do not mix with SamovaR Python)")
+    print("Illumina:   ./install.sh ART       (optional sidecar; Nextflow can also create ART via conda)")
+PY
+}
+
+install_nanosim() {
     if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
-        PIP_OPTS+=(--offline --no-build-isolation)
-        if [ -n "${SAMOVAR_WHEELHOUSE:-}" ]; then
-            PIP_OPTS+=(--no-index --find-links "$SAMOVAR_WHEELHOUSE")
-        fi
+        echo "Skipping NanoSim sidecar env in offline mode."
+        return 1
     fi
-    install_multiqc
-    exit $?
+    echo "Installing optional NanoSim in a separate conda env (Python 3.8; not the SamovaR env) ..."
+    if ! "$PYTHON_PATH" -m samovar.sidecar nanosim; then
+        echo "Warning: NanoSim sidecar install failed."
+        echo "Install later with: ./install.sh NanoSim"
+        echo "Or: conda create -p ~/.cache/samovar/envs/nanosim -c conda-forge -c bioconda python=3.8 nanosim=3.2 htseq gffutils numpy=1.23.5 scikit-learn=0.23.2"
+        echo "Then set tool_envs.nanosim and nanosim_path in ~/.config/samovar/config.json"
+        return 1
+    fi
+}
+
+install_art() {
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Skipping ART sidecar env in offline mode."
+        return 1
+    fi
+    echo "Installing optional ART (art_illumina) in a separate conda env ..."
+    if ! "$PYTHON_PATH" -m samovar.sidecar art; then
+        echo "Warning: ART sidecar install failed."
+        echo "Install later with: ./install.sh ART"
+        echo "Or: conda create -p ~/.cache/samovar/envs/art -c bioconda -c conda-forge art samtools"
+        echo "Then set tool_envs.art and art_path in ~/.config/samovar/config.json"
+        return 1
+    fi
+}
+
+print_install_status() {
+    "$PYTHON_PATH" - <<'PY' || true
+try:
+    from samovar.paths import format_install_status
+    print("")
+    print(format_install_status())
+except Exception as exc:
+    print("Could not print tool status:", exc)
+PY
+}
+
+normalize_optional_arg() {
+    local raw="${1:-}"
+    local lower
+    lower="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    case "$lower" in
+        r-package|rpackage|r) echo "r-package" ;;
+        opal) echo "opal" ;;
+        multiqc) echo "multiqc" ;;
+        camisim) echo "camisim" ;;
+        nanosim|nanosim3) echo "nanosim" ;;
+        art|art_illumina) echo "art" ;;
+        nextflow) echo "nextflow" ;;
+        *) echo "" ;;
+    esac
+}
+
+run_optional_named() {
+    local name="$1"
+    case "$name" in
+        r-package) install_samovar_r_package ;;
+        opal)
+            PIP_OPTS=()
+            if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+                PIP_OPTS+=(--offline --no-build-isolation)
+                if [ -n "${SAMOVAR_WHEELHOUSE:-}" ]; then
+                    PIP_OPTS+=(--no-index --find-links "$SAMOVAR_WHEELHOUSE")
+                fi
+            fi
+            install_opal
+            ;;
+        multiqc)
+            PIP_OPTS=()
+            if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+                PIP_OPTS+=(--offline --no-build-isolation)
+                if [ -n "${SAMOVAR_WHEELHOUSE:-}" ]; then
+                    PIP_OPTS+=(--no-index --find-links "$SAMOVAR_WHEELHOUSE")
+                fi
+            fi
+            install_multiqc
+            ;;
+        camisim) install_camisim ;;
+        nanosim) install_nanosim ;;
+        art) install_art ;;
+        nextflow)
+            echo "Nextflow is not bundled. Install with: conda install -c bioconda nextflow"
+            echo "or https://www.nextflow.io/docs/latest/install.html"
+            echo "Then set nextflow_path in ~/.config/samovar/config.json"
+            if command -v nextflow >/dev/null 2>&1; then
+                echo "Found: $(command -v nextflow)"
+            else
+                return 1
+            fi
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+OPTIONAL_ONLY_ARGS=()
+if [ "$#" -gt 0 ]; then
+    ALL_OPTIONAL=1
+    for arg in "$@"; do
+        mapped="$(normalize_optional_arg "$arg")"
+        if [ -z "$mapped" ]; then
+            ALL_OPTIONAL=0
+            break
+        fi
+        OPTIONAL_ONLY_ARGS+=("$mapped")
+    done
+    if [ "$ALL_OPTIONAL" = "1" ] && [ "${#OPTIONAL_ONLY_ARGS[@]}" -gt 0 ]; then
+        FAIL=0
+        for name in "${OPTIONAL_ONLY_ARGS[@]}"; do
+            echo "Optional install: $name"
+            run_optional_named "$name" || FAIL=1
+        done
+        print_install_status
+        exit "$FAIL"
+    fi
 fi
 
 PYTHON_VERSION=$("$PYTHON_PATH" --version)
@@ -378,6 +528,24 @@ else
     echo "Skipping MultiQC (not required). Use ./install.sh MultiQC to install MultiQC."
 fi
 
+if [ "${SAMOVAR_INSTALL_CAMISIM:-0}" != "0" ]; then
+    install_camisim || echo "Warning: optional CAMISIM install did not complete."
+else
+    echo "Skipping CAMISIM (not required). Use ./install.sh CAMISIM to clone https://github.com/CAMI-challenge/CAMISIM"
+fi
+
+if [ "${SAMOVAR_INSTALL_NANOSIM:-0}" != "0" ]; then
+    install_nanosim || echo "Warning: optional NanoSim sidecar install did not complete."
+else
+    echo "Skipping NanoSim (not required). Use ./install.sh NanoSim for a separate conda env (CAMISIM ONT/hybrid)."
+fi
+
+if [ "${SAMOVAR_INSTALL_ART:-0}" != "0" ]; then
+    install_art || echo "Warning: optional ART sidecar install did not complete."
+else
+    echo "Skipping ART (not required). Use ./install.sh ART for a separate conda env (CAMISIM Illumina)."
+fi
+
 # Write ~/.config/samovar/config.json (and build/config.json copy)
 export USER_CFG_DIR
 export SAMOVAR_ROOT="$ROOT"
@@ -394,6 +562,18 @@ from samovar.paths import (
     load_config,
     write_config,
 )
+try:
+    from samovar.camisim import discover_camisim
+except Exception:
+    def discover_camisim():
+        return None
+try:
+    from samovar.paths import discover_art, discover_nanosim
+except Exception:
+    def discover_art():
+        return None
+    def discover_nanosim():
+        return None
 
 root = os.environ["SAMOVAR_ROOT"]
 python_path = os.environ["PYTHON_PATH"]
@@ -446,6 +626,10 @@ payload = {
     "iss_path": shutil.which("iss") or tools.get("iss", ""),
     "opal_path": existing.get("opal_path") or discover_opal() or shutil.which("opal.py") or shutil.which("opal") or "",
     "multiqc_path": existing.get("multiqc_path") or discover_multiqc() or shutil.which("multiqc") or "",
+    "camisim_path": existing.get("camisim_path") or discover_camisim() or "",
+    "nextflow_path": existing.get("nextflow_path") or shutil.which("nextflow") or "",
+    "nanosim_path": existing.get("nanosim_path") or discover_nanosim() or "",
+    "art_path": existing.get("art_path") or discover_art() or "",
     "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
     "test_genomes": os.path.join(root, "data", "test_genomes"),
     "genomes": genomes,
@@ -464,6 +648,19 @@ if payload.get("opal_path"):
     payload["tools"] = tools
 if payload.get("multiqc_path"):
     tools.setdefault("multiqc", payload["multiqc_path"])
+    payload["tools"] = tools
+if payload.get("camisim_path"):
+    tools.setdefault("camisim", payload["camisim_path"])
+    payload["tools"] = tools
+if payload.get("nextflow_path"):
+    tools.setdefault("nextflow", payload["nextflow_path"])
+    payload["tools"] = tools
+if payload.get("nanosim_path"):
+    tools.setdefault("simulator.py", payload["nanosim_path"])
+    tools.setdefault("nanosim", payload["nanosim_path"])
+    payload["tools"] = tools
+if payload.get("art_path"):
+    tools.setdefault("art_illumina", payload["art_path"])
     payload["tools"] = tools
 write_config(payload)
 user_cfg = Path(os.environ["USER_CFG_DIR"])
@@ -511,6 +708,18 @@ if payload.get("multiqc_path"):
     print(f"MultiQC: {payload['multiqc_path']}")
 else:
     print("MultiQC: not found. ./install.sh MultiQC to install MultiQC and record multiqc_path.")
+if payload.get("camisim_path"):
+    print(f"CAMISIM: {payload['camisim_path']}")
+else:
+    print("CAMISIM: not found. ./install.sh CAMISIM")
+if payload.get("nanosim_path"):
+    print(f"NanoSim: {payload['nanosim_path']}")
+else:
+    print("NanoSim: not found. ./install.sh NanoSim (separate conda env for CAMISIM ONT)")
+if payload.get("art_path"):
+    print(f"ART: {payload['art_path']}")
+else:
+    print("ART: not found. ./install.sh ART (separate conda env) or let CAMISIM Nextflow create it")
 PY
 
 BIN_DIR="$ROOT/bin"
@@ -584,11 +793,16 @@ if [ ! -f "$ROOT/workflow/annotators/Snakefile" ]; then
 fi
 "$PYTHON_PATH" -c "from samovar.opal import opal_executable; p=opal_executable(); print('  opal.py:', p or 'not found (optional; ./install.sh OPAL)')" || true
 "$PYTHON_PATH" -c "from samovar.paths import discover_multiqc; p=discover_multiqc(); print('  multiqc:', p or 'not found (optional; ./install.sh MultiQC)')" || true
+"$PYTHON_PATH" -c "from samovar.camisim import discover_camisim; p=discover_camisim(); print('  CAMISIM:', p or 'not found (optional; ./install.sh CAMISIM)')" || true
+"$PYTHON_PATH" -c "from samovar.paths import discover_nanosim; p=discover_nanosim(); print('  NanoSim:', p or 'not found (optional; ./install.sh NanoSim)')" || true
+"$PYTHON_PATH" -c "from samovar.paths import discover_art; p=discover_art(); print('  ART:', p or 'not found (optional; ./install.sh ART)')" || true
 if [ "$SMOKE_FAIL" != "0" ]; then
     echo "Smoke test reported missing pieces (see above). Core Python package may still work."
 else
     echo "Smoke test passed."
 fi
+
+print_install_status
 
 echo "Installation completed successfully!"
 echo "Config: $USER_CFG_DIR/config.json"

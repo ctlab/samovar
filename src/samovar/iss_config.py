@@ -125,7 +125,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--n_samples', type=int, default=10,
                        help='Number of samples to generate')
     parser.add_argument('--total_reads', type=int, default=2000,
-                       help='Total number of reads to generate')
+                       help=(
+                           'Sequencing records per sample: paired fragments for '
+                           'ISS/Illumina/wgsim, single reads for ONT'
+                       ))
     parser.add_argument('--host_fraction', default="RANDOM",
                        help='Fraction of host reads')
     parser.add_argument('--seed', type=int, default=42,
@@ -134,13 +137,44 @@ def parse_args() -> argparse.Namespace:
                        help='Sequencing model to use')
     parser.add_argument('--cores', type=int, default=1,
                        help='Number of cores for snakemake')
+    parser.add_argument(
+        '--simulator',
+        default='iss',
+        choices=['iss', 'camisim'],
+        help='Read/community generator: InSilicoSeq (default) or optional CAMISIM',
+    )
+    parser.add_argument(
+        '--camisim-mode',
+        default=None,
+        help='CAMISIM mode: table (abundance then ISS), illumina, ont, wgsim, hybrid',
+    )
+    parser.add_argument(
+        '--camisim-config',
+        default=None,
+        help='Existing CAMISIM YAML to overlay (still overwritten by CLI critical values)',
+    )
+    parser.add_argument(
+        '--size-gbp',
+        type=float,
+        default=None,
+        help='CAMISIM sample size in Gbp (default: derived from --total_reads)',
+    )
     
     return parser.parse_args()
 
 def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
-    """Main function to set up the ISS test configuration"""
+    """Main function to set up the ISS or CAMISIM generate configuration"""
     if args is None:
         args = parse_args()
+
+    simulator = str(getattr(args, "simulator", None) or "iss").strip().lower()
+    camisim_mode = getattr(args, "camisim_mode", None)
+    if camisim_mode and simulator == "iss":
+        simulator = "camisim"
+    if simulator == "camisim":
+        from samovar.camisim import setup_camisim_generate
+
+        return setup_camisim_generate(args)
     
     config = ISSTestConfig.from_args(args)
     config_path = config.generate_config(config.output_dir)

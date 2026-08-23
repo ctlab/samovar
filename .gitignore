@@ -32,5 +32,7 @@ build/bdist.*/
 build/temp.*/
 build/scripts-*/
 project/
+# Local GitHub wiki drafts (uploaded manually to github.com/ctlab/samovar/wiki)
+/wiki/
 generate_docs_pdf.R
 taxdump.tar.gz

@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.14"
+PACKAGE_VERSION = "0.10.16"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -29,9 +29,16 @@ KNOWN_TOOLS = (
     "metaphlan4",
     "centrifuge",
     "iss",
+    "nextflow",
     "opal.py",
     "opal",
     "multiqc",
+    "camisim",
+    "simulator.py",
+    "nanosim",
+    "art_illumina",
+    "wgsim",
+    "samtools",
     "R",
     "Rscript",
     "snakemake",
@@ -280,6 +287,10 @@ def collect_runtime_path_dirs(cfg: Optional[Dict[str, Any]] = None) -> List[str]
     add(cfg.get("iss_path"))
     add(cfg.get("r_path"))
     add(cfg.get("opal_path"))
+    add(cfg.get("multiqc_path"))
+    add(cfg.get("nextflow_path"))
+    add(cfg.get("nanosim_path"))
+    add(cfg.get("art_path"))
     for extra in _split_path_value(cfg.get("path") or cfg.get("extra_path")):
         add(extra, env_prefix=True)
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
@@ -403,6 +414,27 @@ def discover_tools() -> Dict[str, str]:
     multiqc = discover_multiqc()
     if multiqc:
         found.setdefault("multiqc", multiqc)
+    try:
+        from samovar.camisim import discover_camisim as _discover_camisim
+
+        camisim = _discover_camisim()
+        if camisim:
+            found.setdefault("camisim", camisim)
+    except Exception:
+        pass
+    nxt = shutil.which("nextflow")
+    if nxt:
+        found.setdefault("nextflow", nxt)
+    nano = discover_nanosim()
+    if nano:
+        found.setdefault("simulator.py", nano)
+        found.setdefault("nanosim", nano)
+    art = discover_art()
+    if art:
+        found.setdefault("art_illumina", art)
+    wgs = discover_wgsim()
+    if wgs:
+        found.setdefault("wgsim", wgs)
     return found
 
 
@@ -556,3 +588,370 @@ def smoke_test() -> List[str]:
     except Exception as exc:
         problems.append(str(exc))
     return problems
+
+
+def sidecar_envs_dir() -> Path:
+    """Conda prefixes for fragile optional tools (NanoSim, ART, …)."""
+    return user_cache_dir() / "envs"
+
+
+def tool_env_prefix(name: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Absolute conda/module prefix from ``tool_envs.<name>`` if it exists."""
+    cfg = dict(cfg or load_config())
+    envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
+    aliases = (name, name.replace("-", "_"), Path(name).stem)
+    for key in aliases:
+        raw = str(envs.get(key) or "").strip()
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        try:
+            if path.is_dir():
+                return str(path.resolve())
+        except OSError:
+            continue
+        return str(path)
+    return None
+
+
+def _first_existing_executable(candidates: List[str]) -> Optional[str]:
+    seen = set()
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        path = Path(text).expanduser()
+        try:
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path.resolve())
+        except OSError:
+            continue
+        found = shutil.which(text)
+        if found:
+            return found
+    return None
+
+
+def discover_nanosim() -> Optional[str]:
+    """Locate NanoSim ``simulator.py`` (optional; keep it out of the main env)."""
+    cfg = load_config()
+    candidates: List[str] = []
+
+    def add(raw: Optional[str]) -> None:
+        text = str(raw or "").strip()
+        if text:
+            candidates.append(text.split()[0])
+
+    add(os.environ.get("SAMOVAR_NANOSIM") or os.environ.get("SAMOVAR_NANOSIM_BIN"))
+    add(str(cfg.get("nanosim_path") or ""))
+    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+    add(str(tools.get("simulator.py") or tools.get("nanosim") or tools.get("nanosim3") or ""))
+    prefix = tool_env_prefix("nanosim", cfg) or tool_env_prefix("nanosim3", cfg)
+    if prefix:
+        add(str(Path(prefix) / "bin" / "simulator.py"))
+        add(str(Path(prefix) / "bin" / "nanosim"))
+    default_prefix = sidecar_envs_dir() / "nanosim"
+    add(str(default_prefix / "bin" / "simulator.py"))
+    add(shutil.which("simulator.py"))
+    add(shutil.which("nanosim"))
+    return _first_existing_executable(candidates)
+
+
+def discover_art() -> Optional[str]:
+    """Locate ``art_illumina`` (optional ART Illumina simulator)."""
+    cfg = load_config()
+    candidates: List[str] = []
+
+    def add(raw: Optional[str]) -> None:
+        text = str(raw or "").strip()
+        if text:
+            candidates.append(text.split()[0])
+
+    add(os.environ.get("SAMOVAR_ART") or os.environ.get("SAMOVAR_ART_ILLUMINA"))
+    add(str(cfg.get("art_path") or ""))
+    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+    add(str(tools.get("art_illumina") or tools.get("art") or ""))
+    prefix = tool_env_prefix("art", cfg) or tool_env_prefix("art_illumina", cfg)
+    if prefix:
+        add(str(Path(prefix) / "bin" / "art_illumina"))
+    add(str(sidecar_envs_dir() / "art" / "bin" / "art_illumina"))
+    add(shutil.which("art_illumina"))
+    return _first_existing_executable(candidates)
+
+
+def discover_wgsim() -> Optional[str]:
+    cfg = load_config()
+    candidates: List[str] = []
+
+    def add(raw: Optional[str]) -> None:
+        text = str(raw or "").strip()
+        if text:
+            candidates.append(text.split()[0])
+
+    add(os.environ.get("SAMOVAR_WGSIM"))
+    add(str(cfg.get("wgsim_path") or ""))
+    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+    add(str(tools.get("wgsim") or ""))
+    prefix = tool_env_prefix("wgsim", cfg)
+    if prefix:
+        add(str(Path(prefix) / "bin" / "wgsim"))
+    add(shutil.which("wgsim"))
+    return _first_existing_executable(candidates)
+
+
+def conda_prefix_for_executable(exe: Optional[str]) -> Optional[str]:
+    """If ``exe`` lives in ``<prefix>/bin``, return that conda-style prefix."""
+    if not exe:
+        return None
+    path = Path(exe).expanduser()
+    try:
+        if not path.is_file():
+            return None
+        parent = path.resolve().parent
+    except OSError:
+        return None
+    if parent.name == "bin" and parent.parent.is_dir():
+        return str(parent.parent)
+    return None
+
+
+def _existing_tool(name: str) -> Optional[str]:
+    resolved = resolve_executable(name, tool_key=name)
+    token = str(resolved or "").split()[0]
+    if not token:
+        return None
+    path = Path(token)
+    try:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+    except OSError:
+        pass
+    return shutil.which(name)
+
+
+def install_status_rows() -> List[Dict[str, Any]]:
+    """Required and optional tools: path, role, how to install, config key."""
+    cfg = load_config()
+    iss = iss_executable()
+    iss_ok = bool(iss and (Path(iss).is_file() or shutil.which(str(iss).split()[0])))
+    combiner = repo_root() / "bin" / "samovar_combine_annotations"
+    viz = ""
+    try:
+        from samovar.viz_annotation import require_viz_backend
+
+        viz = require_viz_backend()
+    except Exception:
+        viz = ""
+
+    def row(
+        name: str,
+        *,
+        required: bool,
+        role: str,
+        path: Optional[str],
+        config_key: str,
+        install: str,
+    ) -> Dict[str, Any]:
+        found = bool(path)
+        return {
+            "name": name,
+            "required": required,
+            "role": role,
+            "path": path or "",
+            "found": found,
+            "config_key": config_key,
+            "install": install,
+        }
+
+    py = python_path()
+    rows = [
+        row(
+            "python",
+            required=True,
+            role="SamovaR runtime",
+            path=py if Path(py).is_file() else shutil.which("python3"),
+            config_key="python_path",
+            install="conda env create -f environment.yml",
+        ),
+        row(
+            "iss",
+            required=True,
+            role="InSilicoSeq read simulation (default generate)",
+            path=iss if iss_ok else None,
+            config_key="iss_path",
+            install="pip install 'insilicoseq>2.0.0'  (or conda: insilicoseq)",
+        ),
+        row(
+            "snakemake",
+            required=True,
+            role="Annotator workflow runner",
+            path=shutil.which("snakemake"),
+            config_key="tools.snakemake",
+            install="pip install 'snakemake>=7.0'  (or conda: snakemake-minimal)",
+        ),
+        row(
+            "C++ combiner",
+            required=True,
+            role="Merge annotator reports",
+            path=str(combiner) if combiner.is_file() else cxx_compiler(),
+            config_key="",
+            install="g++ / make -C src/cpp  (install.sh builds this)",
+        ),
+        row(
+            "viz backend",
+            required=True,
+            role="Pipeline plots (cnsplots or altair)",
+            path=viz or None,
+            config_key="",
+            install="pip install 'cnsplots>=0.6.0' altair",
+        ),
+        row(
+            "kraken2",
+            required=False,
+            role="k-mer LCA annotator",
+            path=_existing_tool("kraken2"),
+            config_key="tools.kraken2 / tool_envs.kraken2",
+            install="conda create -c bioconda -n kraken2 kraken2; set tool_envs.kraken2",
+        ),
+        row(
+            "kaiju",
+            required=False,
+            role="protein-level annotator",
+            path=_existing_tool("kaiju"),
+            config_key="tools.kaiju / tool_envs.kaiju",
+            install="conda create -c bioconda -n kaiju kaiju; set tool_envs.kaiju",
+        ),
+        row(
+            "metaphlan",
+            required=False,
+            role="marker-gene profiler",
+            path=shutil.which("metaphlan") or shutil.which("metaphlan4"),
+            config_key="tools.metaphlan / tool_envs.metaphlan",
+            install="conda install -c bioconda metaphlan",
+        ),
+        row(
+            "centrifuge",
+            required=False,
+            role="optional annotator",
+            path=shutil.which("centrifuge"),
+            config_key="tools.centrifuge / tool_envs.centrifuge",
+            install="conda install -c bioconda centrifuge",
+        ),
+        row(
+            "OPAL",
+            required=False,
+            role="CAMI HTML profile assessment (metrics always computed in Python)",
+            path=discover_opal(),
+            config_key="opal_path",
+            install="./install.sh OPAL",
+        ),
+        row(
+            "MultiQC",
+            required=False,
+            role="HTML report of SamovaR plots",
+            path=discover_multiqc(),
+            config_key="multiqc_path",
+            install="./install.sh MultiQC",
+        ),
+        row(
+            "CAMISIM",
+            required=False,
+            role="Optional generate backend (community design / ART / NanoSim / wgsim)",
+            path=None,
+            config_key="camisim_path",
+            install="./install.sh CAMISIM",
+        ),
+        row(
+            "Nextflow",
+            required=False,
+            role="CAMISIM 2.0 runner (table mode does not need it)",
+            path=shutil.which("nextflow") or str(cfg.get("nextflow_path") or "") or None,
+            config_key="nextflow_path / tool_envs.nextflow",
+            install="conda install -c bioconda nextflow   or https://nextflow.io",
+        ),
+        row(
+            "NanoSim",
+            required=False,
+            role="ONT reads for CAMISIM --camisim-mode ont|hybrid (separate env)",
+            path=discover_nanosim(),
+            config_key="nanosim_path / tool_envs.nanosim",
+            install="./install.sh NanoSim",
+        ),
+        row(
+            "ART",
+            required=False,
+            role="Illumina reads for CAMISIM --camisim-mode illumina|hybrid",
+            path=discover_art(),
+            config_key="art_path / tool_envs.art",
+            install="./install.sh ART",
+        ),
+        row(
+            "wgsim",
+            required=False,
+            role="Simple paired reads for CAMISIM --camisim-mode wgsim",
+            path=discover_wgsim(),
+            config_key="wgsim_path / tool_envs.wgsim",
+            install="conda install -c bioconda wgsim   (or ./install.sh ART which can share samtools)",
+        ),
+        row(
+            "R",
+            required=False,
+            role="Optional samovaR regenerator (GitHub r-package branch)",
+            path=shutil.which("R") or str(cfg.get("r_path") or "") or None,
+            config_key="r_path",
+            install="./install.sh R-package",
+        ),
+    ]
+    try:
+        from samovar.camisim import discover_camisim as _dc
+
+        cam = _dc()
+    except Exception:
+        cam = str(cfg.get("camisim_path") or "") or None
+    for item in rows:
+        if item["name"] == "CAMISIM":
+            item["path"] = cam or ""
+            item["found"] = bool(cam)
+        if item["name"] == "Nextflow":
+            nxt = str(cfg.get("nextflow_path") or "").strip() or shutil.which("nextflow")
+            token = str(nxt or "").split()[0]
+            ok = bool(token and (Path(token).is_file() or shutil.which("nextflow")))
+            item["path"] = (str(Path(token).resolve()) if token and Path(token).is_file() else shutil.which("nextflow")) or ""
+            item["found"] = ok and bool(item["path"])
+    return rows
+
+
+def format_install_status() -> str:
+    """Human-readable required/optional tool table for ``install.sh`` and ``samovar tools --status``."""
+    rows = install_status_rows()
+    lines = [
+        "SamovaR tool status",
+        "===================",
+        "Required:",
+    ]
+    for item in rows:
+        if not item["required"]:
+            continue
+        mark = "ok" if item["found"] else "MISSING"
+        loc = item["path"] or item["install"]
+        lines.append(f"  [{mark:7}] {item['name']:<14} {loc}")
+    lines.append("Optional:")
+    for item in rows:
+        if item["required"]:
+            continue
+        mark = "ok" if item["found"] else "—"
+        loc = item["path"] if item["found"] else item["install"]
+        lines.append(f"  [{mark:7}] {item['name']:<14} {loc}")
+        if not item["found"]:
+            lines.append(f"           {item['role']}")
+            if item["config_key"]:
+                lines.append(f"           config: {item['config_key']}")
+    missing = [i["name"] for i in rows if i["required"] and not i["found"]]
+    if missing:
+        lines.append("")
+        lines.append("Required tools missing: " + ", ".join(missing))
+    else:
+        lines.append("")
+        lines.append("All required programs are present.")
+    return "\n".join(lines)

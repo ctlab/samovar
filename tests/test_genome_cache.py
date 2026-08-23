@@ -103,6 +103,24 @@ def test_seed_from_generate_sources_not_registered(tmp_path, monkeypatch):
     assert not any("test_genomes" in d for d in dirs)
 
 
+def test_seed_from_camisim_generate_yaml(tmp_path, monkeypatch):
+    _isolate_config(tmp_path, monkeypatch)
+    run = tmp_path / "run"
+    gen_cfg = run / ".generate" / "configs"
+    gen_cfg.mkdir(parents=True)
+    meta = bundled_test_genomes_dir() / "meta"
+    host = bundled_test_genomes_dir() / "host" / "9606.fna"
+    (gen_cfg / "camisim.yaml").write_text(
+        f"simulator: camisim\ngenome_dir: {meta}\nhost_genome: {host}\n",
+        encoding="utf-8",
+    )
+    dest = run / "genomes"
+    stats = seed_run_genomes(dest, reuse=True, generate_output_dir=run)
+    assert stats["linked"] or stats["copied"]
+    assert any(p.name.startswith("562") for p in dest.iterdir())
+    assert any(p.name.startswith("9606") for p in dest.iterdir())
+
+
 def test_seed_reuses_prefixed_processed(tmp_path, monkeypatch):
     _isolate_config(tmp_path, monkeypatch)
     src = tmp_path / "realistic"

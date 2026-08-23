@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import os
+import re
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -268,6 +269,26 @@ def find_fastq_mate(directory: PathLike, sample: str, mate: str = "R1") -> Optio
     return None
 
 
+# CAMISIM harvest writes ``{n}_{tech}_R1.fastq`` then copies to ``{n}_full_``.
+# Annotators must only see the ISS-style ``*_full`` names.
+_CAMISIM_TECH_SAMPLE = re.compile(
+    r"^(?P<n>\d+)_(illumina|ont|wgsim|nanosim3|art)$",
+    re.IGNORECASE,
+)
+_FULL_SAMPLE = re.compile(r"^(?P<n>\d+)_full$", re.IGNORECASE)
+
+
+def _drop_duplicate_camisim_tech_samples(samples: Sequence[str]) -> List[str]:
+    full_ns = {m.group("n") for s in samples if (m := _FULL_SAMPLE.match(s))}
+    if not full_ns:
+        return list(samples)
+    return [
+        s
+        for s in samples
+        if not ((m := _CAMISIM_TECH_SAMPLE.match(s)) and m.group("n") in full_ns)
+    ]
+
+
 def list_fastq_samples(directory: PathLike) -> List[str]:
     directory = as_path(directory)
     if not directory.is_dir():
@@ -285,7 +306,7 @@ def list_fastq_samples(directory: PathLike) -> List[str]:
                     seen.add(sample)
                     samples.append(sample)
                 break
-    return samples
+    return _drop_duplicate_camisim_tech_samples(samples)
 
 
 def list_r1_files(directory: PathLike) -> List[Path]:

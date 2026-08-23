@@ -16,7 +16,7 @@ import tempfile
 import warnings
 import shutil
 from pathlib import Path
-from samovar.paths import annotation_regenerate_r, iss_executable, load_config, resolve_executable, user_config_dir
+from samovar.paths import annotation_regenerate_r, iss_executable, load_config, user_config_dir
 from samovar.seqio import (
     concat_fastq_files,
     fastq_pair_paths,
@@ -204,8 +204,23 @@ def _scale_amounts(amount: Sequence[int], total_amount: Optional[int]) -> List[i
     scaled = [max(0, int(n)) for n in amount]
     total = sum(scaled)
     if total_amount is not None and total > 0:
-        scaled = [int(n / total * total_amount) for n in scaled]
+        target = max(0, int(total_amount))
+        raw = [n / total * target for n in scaled]
+        scaled = [int(value) for value in raw]
+        remainder = target - sum(scaled)
+        order = sorted(
+            range(len(raw)),
+            key=lambda i: (raw[i] - scaled[i], -i),
+            reverse=True,
+        )
+        for i in order[:remainder]:
+            scaled[i] += 1
     return scaled
+
+
+def _iss_reads_for_pairs(n_pairs: int) -> int:
+    """ISS counts individual reads; SamovaR abundance rows count read pairs."""
+    return max(0, int(n_pairs)) * 2
 
 
 def _write_empty_fastq_pair(r1: str, r2: str) -> None:
@@ -451,7 +466,7 @@ def generate_reads_genome(
     gzip_reads: bool = False,
 ) -> Tuple[str, str]:
     """
-    Generate simulated reads from a genome file.
+    Generate ``amount`` paired records from a genome file.
 
     ISS requires an uncompressed FASTA path; gzipped genomes are decompressed
     to a temp file for the ISS call only.
@@ -466,7 +481,7 @@ def generate_reads_genome(
                 "--genomes", plain_fasta,
                 "--model", model,
                 "--output", output_file,
-                "--n_reads", str(int(amount)),
+                "--n_reads", str(_iss_reads_for_pairs(amount)),
                 "--cpus", str(cpus),
             )
             if seed is not None:
@@ -491,9 +506,11 @@ def generate_reads_metagenome(
     gzip_reads: bool = False,
 ) -> Tuple[str, str]:
     """
-    Generate simulated reads from a metagenome in a single ISS invocation.
+    Generate paired records from a metagenome in a single ISS invocation.
 
-    Combined genomes are written uncompressed for ISS, then gzipped afterwards.
+    ``amount`` and ``total_amount`` count pairs. ISS's readcount file counts
+    individual reads, so each value is doubled at the CLI boundary. Combined
+    genomes are written uncompressed for ISS, then gzipped afterwards.
     """
     amount = _scale_amounts(amount, total_amount)
     if annotator_name is None:
@@ -529,7 +546,7 @@ def generate_reads_metagenome(
     total_reads = write_readcount_file(
         readcount_path,
         written_ids,
-        [amount_by_id[gid] for gid in written_ids],
+        [_iss_reads_for_pairs(amount_by_id[gid]) for gid in written_ids],
     )
     if (
         total_reads <= 0
@@ -1114,13 +1131,18 @@ def _resolve_r_executable() -> Tuple[str, Optional[str]]:
     configured = (cfg.get("r_path") or "R").strip() or "R"
     lib = (cfg.get("r_lib_path") or "").strip()
     r_lib_path = lib or None
-    resolved = resolve_executable(configured, tool_key="R")
-    token = (resolved or configured).split()[0]
+    token = configured.split()[0]
     if os.path.isfile(token) and os.access(token, os.X_OK):
         return token, r_lib_path
-    found = shutil.which(configured) or shutil.which("R") or shutil.which("Rscript")
+    found = shutil.which(configured)
     if found:
         return found, r_lib_path
+    # Only the default lookup may fall back to Rscript. An explicit invalid
+    # r_path is a configuration error and must not be silently ignored.
+    if configured == "R":
+        found = shutil.which("Rscript")
+        if found:
+            return found, r_lib_path
     raise FileNotFoundError(
         f"R executable not found ({configured!r}). "
         "Mode 'samovar' needs R plus the optional samovaR regenerator. "

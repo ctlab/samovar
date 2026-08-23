@@ -81,6 +81,13 @@ It will prompt for an NCBI Entrez email (genome downloads). In CI the default is
 - Optional R package: `./install.sh R-package` (installs `samovaR` from GitHub branch [`r-package`](https://github.com/ctlab/samovar/tree/r-package) if it is not already present; warns with the installed version if it is)
 - Optional [CAMI OPAL](https://github.com/CAMI-challenge/OPAL): `./install.sh OPAL` (or `SAMOVAR_INSTALL_OPAL=1 ./install.sh`). Pipeline plots always include OPAL-style metrics; `opal.py` adds the CAMI HTML report when present. Disable a run with `SAMOVAR_OPAL=0`.
 - Optional [MultiQC](https://seqera.io/multiqc/): `./install.sh MultiQC` (or `SAMOVAR_INSTALL_MULTIQC=1 ./install.sh`). `samovar prepare` turns the end-of-run report **on by default when MultiQC is installed** (`--multiqc` / `--no-multiqc`). Native heatmaps/scatters/bars use MultiQC's plot picker and `--export`; Altair HTML is included as extra interactive views. Disable a run with `SAMOVAR_MULTIQC=0`.
+- Optional [CAMISIM](https://github.com/CAMI-challenge/CAMISIM): `./install.sh CAMISIM` (or `SAMOVAR_INSTALL_CAMISIM=1 ./install.sh`). Clones the CAMISIM tree and records `camisim_path`. `samovar generate --simulator camisim` writes an editable `.generate/configs/camisim.yaml`. Modes: `table` (community design, then ISS), `illumina` / `ont` / `wgsim` (CAMISIM reads, no ISS), `hybrid` (same community, mixed technologies; annotation tables get a `read_type` column). Illumina/ONT/wgsim need Nextflow + ART/NanoSim/wgsim; `table` works without them.
+- Optional [NanoSim](https://github.com/bcgsc/NanoSim): `./install.sh NanoSim` (or `SAMOVAR_INSTALL_NANOSIM=1`). **Separate profile-compatible conda env** (Python 3.8, NumPy 1.23.5, scikit-learn 0.23.2; do not mix with SamovaR). Needed for CAMISIM `--camisim-mode ont` / `hybrid`.
+- Optional [ART](https://www.niehs.nih.gov/research/resources/software/biostatistics/art): `./install.sh ART` (or `SAMOVAR_INSTALL_ART=1`). Separate conda env for CAMISIM Illumina; Nextflow can also create ART via conda on first run.
+
+After `./install.sh` (and after `./install.sh NanoSim` / `CAMISIM` / …) a short **required vs optional** tool list is printed. Re-check any time with `samovar tools --status`. Full option list, sidecar envs, and config keys: GitHub wiki [Installation](https://github.com/ctlab/samovar/wiki/Installation).
+
+You can stack optionals without reinstalling the core: `./install.sh CAMISIM NanoSim ART`.
 
 Annotators such as `kraken2` and `kaiju` may be given as names on `$PATH` (no full path required):
 
@@ -98,6 +105,15 @@ samovar generate \
     --genome_dir $SAMOVAR/data/test_genomes/meta \
     --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
     --output_dir samovar_out
+
+# Optional CAMISIM community design (then ISS), or native CAMISIM reads
+# samovar generate --simulator camisim --camisim-mode table \
+#     --genome_dir $SAMOVAR/data/test_genomes/meta \
+#     --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
+#     --n_samples 4 --total_reads 2000 --seed 42 \
+#     --output_dir samovar/camisim-table
+# Edit .generate/configs/camisim.yaml then bash .generate/generate.sh
+# Other modes: --camisim-mode illumina|ont|wgsim|hybrid (no ISS when CAMISIM can simulate)
 
 # Prepare workflow & scripts, create generation config
 samovar prepare \

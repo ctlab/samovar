@@ -320,13 +320,7 @@ def ensure_genome_config() -> Dict[str, Any]:
     return cfg
 
 
-def generate_source_genome_dirs(output_dir: PathLike) -> List[Path]:
-    """ISS ``genome_dir`` / host parent from ``.generate/configs/iss_config.yaml``.
-
-    These are the assemblies used to *simulate* this run. They may be truncated
-    test genomes; they are not registered as an NCBI library.
-    """
-    yaml_path = _as_path(output_dir) / ".generate" / "configs" / "iss_config.yaml"
+def _genome_dirs_from_generate_yaml(yaml_path: Path) -> List[Path]:
     if not _path_is_file(yaml_path):
         return []
     try:
@@ -336,6 +330,8 @@ def generate_source_genome_dirs(output_dir: PathLike) -> List[Path]:
     try:
         data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
+        return []
+    if not isinstance(data, dict):
         return []
     dirs: List[Path] = []
     seen = set()
@@ -359,6 +355,28 @@ def generate_source_genome_dirs(output_dir: PathLike) -> List[Path]:
 
     add(data.get("genome_dir"))
     add(data.get("host_genome"))
+    return dirs
+
+
+def generate_source_genome_dirs(output_dir: PathLike) -> List[Path]:
+    """ISS/CAMISIM ``genome_dir`` / host parent from ``.generate/configs/*.yaml``.
+
+    These are the assemblies used to *simulate* this run. They may be truncated
+    test genomes; they are not registered as an NCBI library.
+    """
+    cfg_dir = _as_path(output_dir) / ".generate" / "configs"
+    dirs: List[Path] = []
+    seen = set()
+    for name in ("iss_config.yaml", "camisim.yaml"):
+        for path in _genome_dirs_from_generate_yaml(cfg_dir / name):
+            try:
+                key = str(path.resolve())
+            except OSError:
+                key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            dirs.append(path)
     return dirs
 
 

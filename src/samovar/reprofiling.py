@@ -21,7 +21,7 @@ def _tool_name_from_column(col: str) -> Optional[str]:
     if not match:
         return None
     tool = match.group(1)
-    if tool in {"samovar", "true", "length", "sample"}:
+    if tool in {"samovar", "true", "length", "sample", "read"}:
         return None
     return tool
 
@@ -113,6 +113,10 @@ def preprocess_data(df):
     if 'length' not in df.columns:
         df['length'] = 0
     df['length'] = pd.to_numeric(df['length'], errors='coerce').fillna(0).astype(int)
+
+    if 'read_type' in df.columns:
+        codes, _uniques = pd.factorize(df['read_type'].fillna('').astype(str), sort=True)
+        df['read_type'] = pd.Series(codes, index=df.index).astype(int)
 
     # Optional biological features from fastq_annotator (gc, shannon, kmer_pca_*, …)
     skip = {"true", "length"}

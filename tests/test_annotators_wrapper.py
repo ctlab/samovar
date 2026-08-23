@@ -11,6 +11,7 @@ from samovar.annotators_wrapper import (
     ConstantTaxidAnnotator,
     CustomAnnotator,
     KaijuAnnotator,
+    Kraken2Annotator,
     get_annotator_instance,
 )
 from samovar.config import setup_pipeline
@@ -116,6 +117,54 @@ def test_prepare_wires_dummy_custom_type(tmp_path):
     assert "constant9606" in types
     run_names = {run["run_name"] for run in init_cfg["run_config"]}
     assert "dummy" in run_names
+
+
+def test_skip_empty_reads_and_parse_empty_kraken2(tmp_path):
+    from samovar.annotators_wrapper import skip_empty_reads_cmd
+
+    empty = tmp_path / "empty_R1.fastq"
+    empty.write_text("")
+    report = tmp_path / "s.kraken2.report"
+    out = tmp_path / "s.kraken2.out"
+    cmd = skip_empty_reads_cmd(str(empty), [str(report), str(out)], "false")
+    assert "touch" in cmd
+    assert "false" in cmd
+    rc = os.system(cmd)
+    assert rc == 0
+    assert report.exists() and out.exists()
+    annotator = Kraken2Annotator(
+        {"run_name": "kraken2-test", "cmd": "kraken2", "db_path": "."},
+        {},
+    )
+    parsed = annotator.parse_output(str(out))
+    assert list(parsed.columns) == ["seq", "taxID"]
+    assert parsed.empty
+
+
+def test_kaiju_and_kraken2_commands_support_single_end_fastq(tmp_path):
+    r1 = str(tmp_path / "ont_R1.fastq")
+    r2 = str(tmp_path / "ont_R2.fastq")
+
+    kaiju = KaijuAnnotator(
+        {"run_name": "k", "cmd": "kaiju", "db_path": "/db/kaiju.fmi"},
+        {},
+    )
+    kaiju_cmd = kaiju.get_snakemake_shell_cmd(
+        r1, r2, [str(tmp_path / "k.out")]
+    )
+    assert f"elif [ -s {r2} ]" in kaiju_cmd
+    assert f"-j {r2}" in kaiju_cmd
+    assert f"else {kaiju.cmd}" in kaiju_cmd
+
+    kraken = Kraken2Annotator(
+        {"run_name": "k2", "cmd": "kraken2", "db_path": "/db/k2"},
+        {},
+    )
+    outputs = kraken.get_expected_outputs("ont", str(tmp_path))
+    kraken_cmd = kraken.get_snakemake_shell_cmd(r1, r2, outputs)
+    assert f"elif [ -s {r2} ]" in kraken_cmd
+    assert f"--paired {r1} {r2}" in kraken_cmd
+    assert f"else {kraken.cmd}" in kraken_cmd
 
 
 def test_snakemake_custom_dummy_rule(tmp_path):

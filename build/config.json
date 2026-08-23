@@ -11,7 +11,8 @@
   "genomes": "/nfs/home/dsmutin/.cache/samovar/genomes",
   "processed_genomes": "/nfs/home/dsmutin/.cache/samovar/genomes",
   "genome_dirs": [
-    "/mnt/tank/scratch/dsmutin/tools/my/samovar/samovar/samovar_realistic/.genomes"
+    "/mnt/tank/scratch/dsmutin/tools/my/samovar/samovar/samovar_realistic/.genomes",
+    "/nfs/home/dsmutin/.cache/samovar/genomes"
   ],
   "tools": {
     "kraken2": "/nfs/home/dsmutin/miniconda3/bin/kraken2",
@@ -24,7 +25,20 @@
     "Rscript": "/nfs/home/dsmutin/local/bin/Rscript",
     "snakemake": "/nfs/home/dsmutin/miniconda3/bin/snakemake",
     "python": "/nfs/home/dsmutin/miniconda3/bin/python",
-    "python3": "/nfs/home/dsmutin/miniconda3/bin/python3"
+    "python3": "/nfs/home/dsmutin/miniconda3/bin/python3",
+    "camisim": "/nfs/home/dsmutin/.cache/samovar/CAMISIM",
+    "nextflow": "/nfs/home/dsmutin/miniconda3/bin/nextflow",
+    "nanosim": "/nfs/home/dsmutin/.cache/samovar/envs/nanosim/bin/simulator.py",
+    "nanosim3": "/nfs/home/dsmutin/.cache/samovar/envs/nanosim/bin/simulator.py",
+    "simulator.py": "/nfs/home/dsmutin/.cache/samovar/envs/nanosim/bin/simulator.py"
   },
-  "annotation_regenerate_r": "/nfs/home/dsmutin/.config/samovar/annotation_regenerate.R"
+  "annotation_regenerate_r": "/nfs/home/dsmutin/.config/samovar/annotation_regenerate.R",
+  "camisim_path": "/nfs/home/dsmutin/.cache/samovar/CAMISIM",
+  "nextflow_path": "/nfs/home/dsmutin/miniconda3/bin/nextflow",
+  "nanosim_path": "/nfs/home/dsmutin/.cache/samovar/envs/nanosim/bin/simulator.py",
+  "tool_envs": {
+    "nanosim": "/nfs/home/dsmutin/.cache/samovar/envs/nanosim",
+    "nanosim3": "/nfs/home/dsmutin/.cache/samovar/envs/nanosim",
+    "simulator.py": "/nfs/home/dsmutin/.cache/samovar/envs/nanosim"
+  }
 }

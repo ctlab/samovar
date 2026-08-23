@@ -143,7 +143,7 @@ def _strip_annotator_prefixes(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _annotator_names(df: pd.DataFrame) -> List[str]:
-    skip = {"length", "sample", "true", "seq"}
+    skip = {"length", "sample", "true", "seq", "read_type"}
     names = []
     for col in df.columns:
         if col in skip or "confidence" in str(col).lower() or str(col).endswith("_conf"):
@@ -579,7 +579,7 @@ def viz_annotation(
     work = _strip_annotator_prefixes(work)
     # After stripping, selected names lost prefixes
     annotators = []
-    skip_meta = {"length", "sample", "true", "seq"}
+    skip_meta = {"length", "sample", "true", "seq", "read_type"}
     for col in work.columns:
         if col in skip_meta or "confidence" in str(col).lower() or str(col).endswith("_conf"):
             continue

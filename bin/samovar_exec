@@ -60,16 +60,32 @@ if [ "${SAMOVAR_REDO:-0}" != "0" ]; then
         rm -f "$OUTPUT_DIR/.log/checkpoints/"*.done 2>/dev/null || true
 fi
 
-# Check for .generate directory and run its pipeline if it exists
+# Check for .generate directory and run its pipeline if it exists.
+# Skip when initial/ already has reads (CAMISIM Nextflow is slow to redo)
+# unless --redo / SAMOVAR_REDO=1.
 if [ -d "$OUTPUT_DIR/.generate" ] && [ -f "$OUTPUT_DIR/.generate/generate.sh" ]; then
-    echo "Running ISS test generation pipeline..."
-    bash "$OUTPUT_DIR/.generate/generate.sh"
+    if [ "${SAMOVAR_REDO:-0}" = "0" ] && PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON" -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads(r'''$OUTPUT_DIR/initial''') else 1)"; then
+        echo "Skipping generate: $OUTPUT_DIR/initial already has reads (use --redo to regenerate)"
+    else
+        echo "Running generate pipeline..."
+        bash "$OUTPUT_DIR/.generate/generate.sh"
+    fi
 fi
 
 # Check for .log directory and run its pipeline if it exists
 if [ -d "$OUTPUT_DIR/.log" ] && [ -f "$OUTPUT_DIR/.log/samovar.sh" ]; then
     echo "Running main SamovaR pipeline..."
     bash "$OUTPUT_DIR/.log/samovar.sh"
+else
+    echo "Error: $OUTPUT_DIR/.log/samovar.sh is missing."
+    echo "Generate only writes reads under $OUTPUT_DIR/initial/."
+    echo "Continue with prepare, then exec, for example:"
+    echo "  samovar prepare --output_dir $OUTPUT_DIR --test-genomes \\"
+    echo "    --kraken2-test 'kraken2 /path/to/kraken2_db' \\"
+    echo "    --kaiju-test 'kaiju /path/to/kaiju_db'"
+    echo "  samovar exec --output_dir $OUTPUT_DIR"
+    exit 1
 fi
 
 _cleanup_tmp_if_requested

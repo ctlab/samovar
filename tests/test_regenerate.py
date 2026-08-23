@@ -572,6 +572,7 @@ def test_iss_readcounts_match_regenerated_glm_tables(
     expected_total = int(glm[n_cols].sum().sum())
     kaiju_key = next(k for k in captured if "kaiju" in k)
     iss_total = sum(int(line.split()[-1]) for line in captured[kaiju_key].splitlines() if line.strip())
-    assert iss_total == expected_total
+    # Abundance rows count pairs; ISS's readcount file counts individual reads.
+    assert iss_total == expected_total * 2
     assert expected_total > 0
 

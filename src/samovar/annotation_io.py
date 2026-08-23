@@ -68,6 +68,8 @@ def annotator_columns(df: pd.DataFrame) -> list:
         if "confidence" in name.lower():
             continue
         if name.startswith("taxID_") or name.startswith("N_"):
+            if name.lower() == "read_type":
+                continue
             cols.append(col)
     return cols
 
