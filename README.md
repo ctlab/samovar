@@ -1,5 +1,5 @@
 # SAMOVAR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a>
-### Ensemble taxonomic annotation, cross-validation, and ML re-profiling of metagenomes
+### Metagenomic ensemble taxonomic annotation, cross-validation, and ML re-profiling
 
 [![ITMO](https://raw.githubusercontent.com/aimclub/open-source-ops/43bb283758b43d75ec1df0a6bb4ae3eb20066323/badges/ITMO_badge.svg)](https://itmo.ru/)
 [![python package](https://github.com/ctlab/samovar/actions/workflows/python-package.yml/badge.svg?branch=main)](https://github.com/ctlab/samovar/actions/workflows/python-package.yml)
@@ -8,13 +8,13 @@ In metagenomics, we often do not know which tool to use (or, which is much worse
 
 Metagenomic classifiers disagree. SAMOVAR treats **multiple annotators as an ensemble**: it runs them on the same reads, cross-validates calls, regenerates in-silico communities from those calls, and trains a supervised **re-profiler** (SAMOVAR) that combines the tools.
 
-What does the tool do? It gets the metagenome input & taxonomy profiling tools and SAMOVAR that (regenerate artficial metagenomes, evaluate & combine the tools). 
+What does the tool do? It gets the metagenome input & taxonomy profiling tools and SAMOVAR that (regenerate artficial metagenomes, evaluate & combine the tools).
 
 We strongly recommend to understand SAMOVAR main concepts before the installation & usage, because the workflow is large & depends on a lot of other different tools
 
 ## Installation
 
-Python 3.10+; **conda is recommended**. R is not required.
+Python 3.10+; **conda is recommended**.
 
 ```bash
 git clone https://github.com/ctlab/samovar
@@ -79,15 +79,6 @@ samovar generate \
     --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
     --output_dir samovar_out
 
-# Optional CAMISIM community design (then ISS), or native CAMISIM reads
-# samovar generate --simulator camisim --camisim-mode table \
-#     --genome_dir $SAMOVAR/data/test_genomes/meta \
-#     --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
-#     --n_samples 4 --total_reads 2000 --seed 42 \
-#     --output_dir samovar/camisim-table
-# Edit .generate/configs/camisim.yaml then bash .generate/generate.sh
-# Other modes: --camisim-mode illumina|ont|wgsim|hybrid (no ISS when CAMISIM can simulate)
-
 # Prepare workflow & scripts, create generation config
 samovar prepare \
     --output_dir samovar_out \
@@ -96,10 +87,8 @@ samovar prepare \
 
 # Do SAMOVARing (resumes from `.log/checkpoints`; `--redo` reruns every step)
 samovar exec --output_dir samovar_out
-# Optional: drop `.tmp` / ISS scratch after a successful run
-# samovar exec --output_dir samovar_out --cleanup-tmp
-# MultiQC (optional, like OPAL): default on at prepare-time if MultiQC is installed.
-# samovar prepare --output_dir samovar_out --no-multiqc
+
+# MultiQC report: optional
 # samovar multiqc --output_dir samovar_out -- --export --interactive
 ```
 
