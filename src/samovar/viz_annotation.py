@@ -604,16 +604,33 @@ def viz_annotation(
             name_map = {}
 
     types = {str(t).lower() for t in type}
+    from samovar.scores import (
+        ENSEMBLE_NAME,
+        has_usable_truth,
+        is_platform_read_type,
+        majority_vote,
+        rows_with_usable_truth,
+        tool_annotators,
+    )
 
-    if "true" in work.columns and types & {"scores", "score", "purity"}:
+    truth_frame = rows_with_usable_truth(work) if has_usable_truth(work) else None
+    platform_types = []
+    if "read_type" in work.columns:
+        platform_types = sorted(
+            {
+                str(x).strip().lower()
+                for x in work["read_type"].fillna("")
+                if is_platform_read_type(x)
+            }
+        )
+
+    if types & {"scores", "score", "purity"}:
         from samovar.scores import (
             OPAL_DISPLAY,
-            majority_vote,
             purity_by_taxon,
             save_scores_altair,
             save_scores_barplot,
             score_annotators,
-            tool_annotators,
         )
 
         scores_table = score_annotators(work, annotators)
@@ -639,24 +656,29 @@ def viz_annotation(
                 out_dir / "opal_scores.html",
                 display=OPAL_DISPLAY,
             )
-            taxon_frames = []
-            tools = tool_annotators(annotators)
-            for name in scores_table["annotator"].astype(str):
-                if name == "consensus":
-                    pred = majority_vote(work, tools)
-                elif name not in work.columns:
-                    continue
-                else:
-                    pred = work[name]
-                per = purity_by_taxon(work["true"], pred)
-                if per.empty:
-                    continue
-                per.insert(0, "annotator", name)
-                taxon_frames.append(per)
-            if taxon_frames:
-                pd.concat(taxon_frames, ignore_index=True).to_csv(
-                    out_dir / "purity_by_taxon.csv", index=False
-                )
+            if truth_frame is not None:
+                taxon_frames = []
+                tools = tool_annotators(annotators)
+                seen = set()
+                for name in scores_table["annotator"].astype(str):
+                    if name in seen:
+                        continue
+                    seen.add(name)
+                    if name == ENSEMBLE_NAME and name not in work.columns:
+                        pred = majority_vote(work, tools).reindex(truth_frame.index)
+                    elif name not in work.columns:
+                        continue
+                    else:
+                        pred = work[name].reindex(truth_frame.index)
+                    per = purity_by_taxon(truth_frame["true"], pred)
+                    if per.empty:
+                        continue
+                    per.insert(0, "annotator", name)
+                    taxon_frames.append(per)
+                if taxon_frames:
+                    pd.concat(taxon_frames, ignore_index=True).to_csv(
+                        out_dir / "purity_by_taxon.csv", index=False
+                    )
             try:
                 from samovar.opal import maybe_run_opal
 
@@ -674,14 +696,15 @@ def viz_annotation(
 
                 logging.getLogger(__name__).warning("OPAL step skipped: %s", exc)
 
-    if "true" in work.columns and types & {"f1"}:
+    if truth_frame is not None and types & {"f1"}:
         from samovar.scores import format_f1_caption, standard_classification_metrics
 
         gglist = {}
         true_levels_last: List[str] = []
+        f1_work = truth_frame
         for name in annotators:
-            pred = _collapse_other(work[name], work["true"])
-            true = work["true"].map(normalize_taxon_token)
+            pred = _collapse_other(f1_work[name], f1_work["true"])
+            true = f1_work["true"].map(normalize_taxon_token)
             counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
             if reord == "fpc":
                 fpc_core = fpc_taxon_order(counts, "pred", "true")
@@ -712,19 +735,56 @@ def viz_annotation(
                     matrix,
                     out_dir / f"F1_{name}_mqc.json",
                     section_name=f"F1 heatmap — {name}",
-                    description="Predicted vs true taxa (counts). Select this plot in MultiQC to export PNG/SVG/PDF.",
+                    description="",
                     xlab=taxid_xlab,
                     ylab=taxid_ylab,
                 )
         results["F1"] = gglist
+        if out_dir and len(platform_types) >= 2:
+            from samovar.stage_report import write_heatmap_mqc
 
-    if "true" in work.columns and types & {"r2"}:
+            for rt in platform_types:
+                sub = f1_work[f1_work["read_type"].astype(str).str.strip().str.lower() == rt]
+                if sub.empty or "read_type" not in f1_work.columns:
+                    continue
+                for name in annotators:
+                    pred = _collapse_other(sub[name], sub["true"])
+                    true = sub["true"].map(normalize_taxon_token)
+                    counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
+                    if counts.empty:
+                        continue
+                    if reord == "fpc":
+                        fpc_core = fpc_taxon_order(counts, "pred", "true")
+                    else:
+                        fpc_core = sorted(
+                            {t for t in list(counts["pred"]) + list(counts["true"]) if not is_special_taxon(t)}
+                        )
+                    matrix = _trim_matrix(
+                        _pivot_matrix(
+                            counts,
+                            "true",
+                            "pred",
+                            axis_levels_from_fpc(true, fpc_core),
+                            axis_levels_from_fpc(pred, fpc_core),
+                        )
+                    )
+                    write_heatmap_mqc(
+                        matrix,
+                        out_dir / f"F1_{name}.{rt}_mqc.json",
+                        section_name=f"F1 heatmap — {name}",
+                        description="",
+                        xlab=taxid_xlab,
+                        ylab=taxid_ylab,
+                    )
+
+    if truth_frame is not None and types & {"r2"}:
         from samovar.scores import format_r2_caption
 
         gglist = {}
+        r2_work = truth_frame
         for name in annotators:
-            pred = _collapse_other(work[name], work["true"])
-            true = work["true"].map(normalize_taxon_token)
+            pred = _collapse_other(r2_work[name], r2_work["true"])
+            true = r2_work["true"].map(normalize_taxon_token)
             table, r2 = _r2_table(true, pred)
             if np.isnan(r2):
                 continue
@@ -738,11 +798,32 @@ def viz_annotation(
                     table,
                     out_dir / f"R2_{name}_mqc.json",
                     section_name=f"Abundance R² — {name}",
-                    description="Predicted vs true taxon counts. Select this plot in MultiQC to export PNG/SVG/PDF.",
+                    description="",
                     xlab="Predicted taxon",
                     ylab="True taxon",
                 )
         results["R2"] = gglist
+        if out_dir and len(platform_types) >= 2 and "read_type" in r2_work.columns:
+            from samovar.stage_report import write_scatter_mqc
+
+            for rt in platform_types:
+                sub = r2_work[r2_work["read_type"].astype(str).str.strip().str.lower() == rt]
+                if sub.empty:
+                    continue
+                for name in annotators:
+                    pred = _collapse_other(sub[name], sub["true"])
+                    true = sub["true"].map(normalize_taxon_token)
+                    table, r2 = _r2_table(true, pred)
+                    if np.isnan(r2):
+                        continue
+                    write_scatter_mqc(
+                        table,
+                        out_dir / f"R2_{name}.{rt}_mqc.json",
+                        section_name=f"Abundance R² — {name}",
+                        description="",
+                        xlab="Predicted taxon",
+                        ylab="True taxon",
+                    )
 
     if types & {"cv", "cross-validation"}:
         if len(annotators) >= 2:
@@ -804,11 +885,49 @@ def viz_annotation(
                             matrix,
                             out_dir / f"CV_{safe}_mqc.json",
                             section_name=f"Cross-validation — {title}",
-                            description="TaxID agreement between two annotators. Select this plot in MultiQC to export PNG/SVG/PDF.",
+                            description="",
                             xlab=name2,
                             ylab=name1,
                         )
             results["CV"] = gglist
+            if out_dir and len(platform_types) >= 2:
+                from samovar.stage_report import write_heatmap_mqc
+
+                for rt in platform_types:
+                    sub = work[work["read_type"].astype(str).str.strip().str.lower() == rt]
+                    if sub.empty:
+                        continue
+                    for i, name1 in enumerate(annotators):
+                        for name2 in annotators[:i]:
+                            raw = pd.DataFrame(
+                                {
+                                    name1: sub[name1].map(normalize_taxon_token),
+                                    name2: sub[name2].map(normalize_taxon_token),
+                                }
+                            )
+                            counts = raw.value_counts().rename("Freq").reset_index()
+                            if counts.empty:
+                                continue
+                            counts = counts.rename(columns={name1: "a", name2: "b"})
+                            fpc_core = fpc_taxon_order(counts, "b", "a")
+                            matrix = _trim_matrix(
+                                _pivot_matrix(
+                                    counts.rename(columns={"a": name1, "b": name2}),
+                                    name2,
+                                    name1,
+                                    axis_levels_from_fpc(raw[name2], fpc_core),
+                                    axis_levels_from_fpc(raw[name1], fpc_core),
+                                )
+                            )
+                            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{name1} vs {name2}")
+                            write_heatmap_mqc(
+                                matrix,
+                                out_dir / f"CV_{safe}.{rt}_mqc.json",
+                                section_name=f"Cross-validation — {name1} vs {name2}",
+                                description="",
+                                xlab=name2,
+                                ylab=name1,
+                            )
 
     conf_cols = [c for c in work.columns if str(c).endswith("_conf") or "_conf" in str(c)]
     if types & {"conf", "confidence"} and conf_cols:

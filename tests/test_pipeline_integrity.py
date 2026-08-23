@@ -99,4 +99,4 @@ def test_fix2_style_generate_prepare_exec(tmp_path):
     assert (json_dir / "setup_reads.samovar.json").is_file()
     staged = out / "multiqc_samovar"
     assert staged.is_dir()
-    assert (staged / "00_SamovaR_pipeline_mqc.html").is_file()
+    assert (staged / "00_run_options_mqc.html").is_file()

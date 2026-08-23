@@ -21,7 +21,10 @@ def _taxon_helpers():
 
     return is_special_taxon, normalize_taxon_token
 
+ENSEMBLE_NAME = "SAMOVAR"
 COMBINATION_ANNOTATORS = frozenset({"samovar", "consensus"})
+PLATFORM_READ_TYPE_RE = re.compile(r"^[a-z][a-z0-9_+-]{1,31}$", re.I)
+INVALID_READ_TYPES = frozenset({"", "nan", "none", "na", "all", "0", "unclassified"})
 
 SCORE_COLUMNS = (
     "annotator",
@@ -285,9 +288,46 @@ def annotation_scores(true: Iterable, pred: Iterable) -> Dict[str, float]:
     return stats
 
 
+def _annotator_token(name: str) -> str:
+    return re.sub(r"^taxid[_./]*", "", str(name).strip(), flags=re.I)
+
+
 def _is_combination(name: str) -> bool:
-    token = re.sub(r"^taxid[_./]*", "", str(name).strip(), flags=re.I).lower()
-    return token in COMBINATION_ANNOTATORS
+    return _annotator_token(name).lower() in COMBINATION_ANNOTATORS
+
+
+def canonical_annotator_name(name: str) -> str:
+    """Map majority-vote ``consensus`` onto the SAMOVAR ensemble label."""
+    if _is_combination(name):
+        return ENSEMBLE_NAME
+    return str(name)
+
+
+def is_platform_read_type(token: str) -> bool:
+    """True for hybrid tech labels such as ``illumina`` / ``ont``, not empties or codes."""
+    text = str(token).strip().lower()
+    if text in INVALID_READ_TYPES or text.isdigit():
+        return False
+    return bool(PLATFORM_READ_TYPE_RE.match(text))
+
+
+def has_usable_truth(work: pd.DataFrame, true_col: str = "true") -> bool:
+    """True when a ground-truth column has at least one classified taxID."""
+    if work is None or work.empty or true_col not in work.columns:
+        return False
+    is_special_taxon, normalize_taxon_token = _taxon_helpers()
+    for val in work[true_col]:
+        if not is_special_taxon(normalize_taxon_token(val)):
+            return True
+    return False
+
+
+def rows_with_usable_truth(work: pd.DataFrame, true_col: str = "true") -> Optional[pd.DataFrame]:
+    if not has_usable_truth(work, true_col):
+        return None
+    is_special_taxon, normalize_taxon_token = _taxon_helpers()
+    mask = work[true_col].map(lambda v: not is_special_taxon(normalize_taxon_token(v)))
+    return work.loc[mask].copy()
 
 
 def tool_annotators(names: Sequence[str]) -> List[str]:
@@ -296,9 +336,33 @@ def tool_annotators(names: Sequence[str]) -> List[str]:
 
 def order_annotators(names: Sequence[str]) -> List[str]:
     tools = sorted(tool_annotators(names), key=lambda n: str(n).lower())
-    combo = [n for n in names if _is_combination(n)]
-    combo.sort(key=lambda n: (0 if str(n).lower() == "consensus" else 1, str(n).lower()))
+    combo = []
+    seen = set()
+    for name in names:
+        label = canonical_annotator_name(name)
+        if not _is_combination(label):
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        combo.append(ENSEMBLE_NAME)
     return tools + combo
+
+
+def _empty_score_row(name: str, n_reads: float, n_taxa: float) -> Dict[str, float]:
+    row = {col: np.nan for col in SCORE_COLUMNS}
+    row["annotator"] = name
+    row["n_reads"] = float(n_reads)
+    row["n_taxa"] = float(n_taxa)
+    return row
+
+
+def _pred_counts(pred: pd.Series) -> tuple:
+    is_special_taxon, normalize_taxon_token = _taxon_helpers()
+    tokens = pred.map(normalize_taxon_token)
+    classified = {t for t in tokens if not is_special_taxon(t)}
+    return float(len(tokens)), float(len(classified))
 
 
 def score_annotators(
@@ -307,40 +371,64 @@ def score_annotators(
     true_col: str = "true",
     include_consensus: bool = True,
 ) -> pd.DataFrame:
-    """Score each annotator plus optional majority-vote consensus / SAMOVAR."""
-    if true_col not in work.columns:
-        return pd.DataFrame(columns=list(SCORE_COLUMNS))
-    true = work[true_col]
+    """Score each annotator plus optional majority-vote SAMOVAR ensemble.
+
+    When ``SAMOVAR`` is already a column (re-profiled tables), majority vote is
+    not added again. When ground truth is missing or all-unclassified, F1 / R²
+    and related metrics are left as NaN; ``n_reads`` / ``n_taxa`` are still filled.
+    """
     names = [n for n in annotators if str(n).lower() != "read_type"]
     tools = tool_annotators(names)
+    scored = rows_with_usable_truth(work, true_col) if work is not None else None
+    true = scored[true_col] if scored is not None else None
     rows = []
 
     def _add(name: str, pred: pd.Series) -> None:
+        label = canonical_annotator_name(name)
+        if scored is None or true is None:
+            n_reads, n_taxa = _pred_counts(pred)
+            rows.append(_empty_score_row(label, n_reads, n_taxa))
+            return
         from samovar.viz_annotation import _collapse_other
 
-        collapsed = _collapse_other(pred, true)
-        stats = annotation_scores(true, pred)
-        # Heatmap F1 / R² / sklearn metrics use the same collapsed labels as the plots.
+        aligned = pred.reindex(scored.index)
+        collapsed = _collapse_other(aligned, true)
+        stats = annotation_scores(true, aligned)
         stats["f1"] = _f1_accuracy(true, collapsed)
         stats["r2"] = _r2_abundance(true, collapsed)
         stats.update(standard_classification_metrics(true, collapsed))
         from samovar.opal import opal_style_metrics
 
         stats.update(opal_style_metrics(true, collapsed))
-        rows.append({"annotator": name, **stats})
+        rows.append({"annotator": label, **stats})
 
+    have_ensemble_col = any(
+        _is_combination(n) and n in work.columns for n in names
+    ) if work is not None else False
+    seen_labels = set()
     for name in names:
-        if name not in work.columns:
+        if work is None or name not in work.columns:
             continue
+        label = canonical_annotator_name(name)
+        if label.lower() in seen_labels:
+            continue
+        seen_labels.add(label.lower())
         _add(name, work[name])
 
-    have = {r["annotator"] for r in rows}
-    if include_consensus and len(tools) >= 2 and "consensus" not in have:
-        _add("consensus", majority_vote(work, tools))
+    have = {str(r["annotator"]).lower() for r in rows}
+    if (
+        include_consensus
+        and len(tools) >= 2
+        and ENSEMBLE_NAME.lower() not in have
+        and not have_ensemble_col
+        and work is not None
+    ):
+        _add(ENSEMBLE_NAME, majority_vote(work, tools))
 
     table = pd.DataFrame(rows)
     if table.empty:
-        return pd.DataFrame(columns=list(SCORE_COLUMNS))
+        empty = pd.DataFrame(columns=list(SCORE_COLUMNS))
+        return empty
     for col in SCORE_COLUMNS:
         if col not in table.columns:
             table[col] = np.nan
@@ -349,22 +437,16 @@ def score_annotators(
     table["annotator"] = pd.Categorical(table["annotator"], categories=ordered, ordered=True)
     table = table.sort_values("annotator").reset_index(drop=True)
 
-    type_col = "read_type" if "read_type" in work.columns else None
+    type_col = "read_type" if work is not None and "read_type" in work.columns else None
     if type_col:
-        types = sorted(
-            {
-                str(x).strip().lower()
-                for x in work[type_col].fillna("")
-                if str(x).strip()
-            }
-        )
+        grouped = work.copy()
+        grouped["_rt"] = grouped[type_col].astype(str).str.strip().str.lower()
+        types = sorted({rt for rt in grouped["_rt"] if is_platform_read_type(rt)})
         if len(types) >= 2:
             table["read_type"] = "all"
             parts = [table]
-            grouped = work.copy()
-            grouped["_rt"] = grouped[type_col].astype(str).str.strip().str.lower()
             for rt, sub in grouped.groupby("_rt"):
-                if not rt or sub.empty:
+                if not is_platform_read_type(rt) or sub.empty:
                     continue
                 sub_tab = score_annotators(
                     sub.drop(columns=["read_type", "_rt"], errors="ignore"),
@@ -473,6 +555,10 @@ def save_scores_barplot(
     path.parent.mkdir(parents=True, exist_ok=True)
     if table is None or table.empty:
         return
+    if "read_type" in table.columns:
+        main = table[table["read_type"].astype(str).str.strip().str.lower() == "all"]
+        if not main.empty:
+            table = main
 
     labels = display or SCORE_DISPLAY
     _setup_cns()

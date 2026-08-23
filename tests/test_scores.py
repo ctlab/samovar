@@ -99,10 +99,42 @@ def test_score_annotators_adds_consensus_and_keeps_samovar():
     )
     table = score_annotators(df, ["kaiju", "kraken2", "SAMOVAR"])
     names = list(table["annotator"].astype(str))
-    assert names[-2:] == ["consensus", "SAMOVAR"]
+    assert names[-1] == "SAMOVAR"
+    assert names.count("SAMOVAR") == 1
+    assert "consensus" not in names
     assert "kaiju" in names and "kraken2" in names
     assert (table["accuracy_purity"] >= 0).all()
     assert (table["f1_purity"] >= 0).all()
+
+
+def test_score_annotators_names_majority_vote_samovar():
+    df = pd.DataFrame(
+        {
+            "kaiju": ["562", "562", "9606", "9606"],
+            "kraken2": ["562", "9606", "9606", "9606"],
+            "true": ["562", "562", "9606", "9606"],
+        }
+    )
+    table = score_annotators(df, ["kaiju", "kraken2"])
+    names = list(table["annotator"].astype(str))
+    assert names[-1] == "SAMOVAR"
+    assert "consensus" not in names
+
+
+def test_score_annotators_without_ground_truth():
+    df = pd.DataFrame(
+        {
+            "kaiju": ["562", "562", "9606", "0"],
+            "kraken2": ["562", "9606", "9606", "9606"],
+        }
+    )
+    table = score_annotators(df, ["kaiju", "kraken2"])
+    names = list(table["annotator"].astype(str))
+    assert "kaiju" in names and "kraken2" in names
+    assert names[-1] == "SAMOVAR"
+    assert table["f1"].isna().all()
+    assert table["r2"].isna().all()
+    assert (table["n_reads"] == 4).all()
 
 
 def test_viz_annotation_writes_scores_barplot(tmp_path):
@@ -147,4 +179,4 @@ def test_viz_annotation_writes_scores_barplot(tmp_path):
     assert "f1" in csv.columns
     assert "r2" in csv.columns
     assert "SAMOVAR" in set(csv["annotator"].astype(str))
-    assert "consensus" in set(csv["annotator"].astype(str))
+    assert "consensus" not in set(csv["annotator"].astype(str))

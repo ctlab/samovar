@@ -100,6 +100,33 @@ def test_viz_annotation_writes_png(tmp_path):
     assert img.shape[0] > 50 and img.shape[1] > 50
 
 
+def test_viz_annotation_without_true_keeps_cv(tmp_path):
+    df = pd.DataFrame(
+        {
+            "seq": [f"r{i}" for i in range(12)],
+            "taxID_kaiju_0": [562] * 6 + [9606] * 6,
+            "taxID_kraken2_1": [562] * 4 + [9606] * 8,
+        }
+    )
+    out = tmp_path / "plots"
+    results = viz_annotation(
+        df,
+        type=("f1", "R2", "cv", "scores"),
+        show_top=0,
+        output_dir=str(out),
+        plot=False,
+        rank="none",
+        use_names=False,
+    )
+    assert "F1" not in results
+    assert "R2" not in results
+    assert "CV" in results
+    assert "scores" in results
+    assert results["scores"]["f1"].isna().all()
+    assert list(out.glob("CV_*_mqc.json"))
+    assert not list(out.glob("F1_*_mqc.json"))
+
+
 def test_require_viz_backend():
     from samovar.viz_annotation import require_viz_backend
 
