@@ -8,6 +8,26 @@ In metagenomics, we often do not know which tool to use (or, which is much worse
 
 Metagenomic classifiers disagree. SAMOVAR treats **multiple annotators as an ensemble**: it runs them on the same reads, cross-validates calls, regenerates in-silico communities from those calls, and trains a supervised **re-profiler** (SAMOVAR) that combines the tools.
 
+What does the tool do? It gets the metagenome input & taxonomy profiling tools and SAMOVAR that (regenerate artficial metagenomes, evaluate & combine the tools). 
+
+We strongly recommend to understand SAMOVAR main concepts before the installation & usage, because the workflow is large & depends on a lot of other different tools
+
+## Installation
+
+Python 3.10+; **conda is recommended**. R is not required.
+
+```bash
+git clone https://github.com/ctlab/samovar
+cd samovar
+conda env create -f environment.yml
+conda activate samovar
+chmod +x install.sh
+./install.sh
+```
+
+`install.sh` may ask you some questions, like e-mail for the NCBI API.
+Some tools are optional but may be usefull (samovar R package, CAMISIM, MultiQC and other). More details on the installation github wiki page.
+
 ## Ensemble annotation
 
 Built-in ensemble members (wired through `samovar prepare`):
@@ -50,54 +70,7 @@ graph TD
     end
 ```
 
-## Installation
-
-Python 3.10+; **conda is recommended**. R is not required.
-
-```bash
-git clone https://github.com/ctlab/samovar
-cd samovar
-conda env create -f environment.yml
-conda activate samovar
-chmod +x install.sh
-./install.sh
-```
-
-Or without conda:
-
-```bash
-python3 -m pip install -e .
-./install.sh
-```
-
-`install.sh` writes `~/.config/samovar/config.json` (and a copy at `build/config.json`) with the repo root, Python path, NCBI email, and any annotators found on `$PATH`. After that, `samovar` can be run from any directory.
-
-It will prompt for an NCBI Entrez email (genome downloads). In CI the default is `test@samovar.com`. Override with `NCBI_EMAIL=you@institution.edu`.
-
-- Production install: `./install.sh` (no pytest extras). Adds `bin/` to this session's `PATH` and to `~/.bashrc` unless another `samovar` is already on `PATH`.
-- Shared / HPC (no PATH or bashrc edits): `SAMOVAR_UPDATE_SHELL=0 ./install.sh` then `source ~/.config/samovar/env`
-- Dev / CI: `SAMOVAR_INSTALL_DEV=1 ./install.sh`
-- Air-gapped: `SAMOVAR_OFFLINE=1 SAMOVAR_WHEELHOUSE=/path/to/wheels ./install.sh`
-- Optional R package: `./install.sh R-package` (installs `samovaR` from GitHub branch [`r-package`](https://github.com/ctlab/samovar/tree/r-package) if it is not already present; warns with the installed version if it is)
-- Optional [CAMI OPAL](https://github.com/CAMI-challenge/OPAL): `./install.sh OPAL` (or `SAMOVAR_INSTALL_OPAL=1 ./install.sh`). Pipeline plots always include OPAL-style metrics; `opal.py` adds the CAMI HTML report when present. Disable a run with `SAMOVAR_OPAL=0`.
-- Optional [MultiQC](https://seqera.io/multiqc/): `./install.sh MultiQC` (or `SAMOVAR_INSTALL_MULTIQC=1 ./install.sh`). `samovar prepare` turns the end-of-run report **on by default when MultiQC is installed** (`--multiqc` / `--no-multiqc`). Native heatmaps/scatters/bars use MultiQC's plot picker and `--export`; Altair HTML is included as extra interactive views. Disable a run with `SAMOVAR_MULTIQC=0`.
-- Optional [CAMISIM](https://github.com/CAMI-challenge/CAMISIM): `./install.sh CAMISIM` (or `SAMOVAR_INSTALL_CAMISIM=1 ./install.sh`). Clones the CAMISIM tree and records `camisim_path`. `samovar generate --simulator camisim` writes an editable `.generate/configs/camisim.yaml`. Modes: `table` (community design, then ISS), `illumina` / `ont` / `wgsim` (CAMISIM reads, no ISS), `hybrid` (same community, mixed technologies; annotation tables get a `read_type` column). Illumina/ONT/wgsim need Nextflow + ART/NanoSim/wgsim; `table` works without them.
-- Optional [NanoSim](https://github.com/bcgsc/NanoSim): `./install.sh NanoSim` (or `SAMOVAR_INSTALL_NANOSIM=1`). **Separate profile-compatible conda env** (Python 3.8, NumPy 1.23.5, scikit-learn 0.23.2; do not mix with SamovaR). Needed for CAMISIM `--camisim-mode ont` / `hybrid`.
-- Optional [ART](https://www.niehs.nih.gov/research/resources/software/biostatistics/art): `./install.sh ART` (or `SAMOVAR_INSTALL_ART=1`). Separate conda env for CAMISIM Illumina; Nextflow can also create ART via conda on first run.
-
-After `./install.sh` (and after `./install.sh NanoSim` / `CAMISIM` / …) a short **required vs optional** tool list is printed. Re-check any time with `samovar tools --status`. Full option list, sidecar envs, and config keys: GitHub wiki [Installation](https://github.com/ctlab/samovar/wiki/Installation).
-
-You can stack optionals without reinstalling the core: `./install.sh CAMISIM NanoSim ART`.
-
-Annotators such as `kraken2` and `kaiju` may be given as names on `$PATH` (no full path required):
-
-```bash
-samovar prepare --output_dir samovar_out --kraken2-test "kraken2 $DB_KRAKEN2"
-```
-
-FASTQ inputs may be `.fastq`, `.fq`, or gzip (`.fastq.gz` / `.fq.gz`). Processed genomes are stored gzip-compressed by default (`samovar prepare --gzip-genomes`, on unless you pass `--no-gzip-genomes`). ISS still gets a temporary uncompressed FASTA; the original `.gz` is left in place. Optional `--gzip-reads` compresses simulated FASTQ after ISS.
-
-## Usage
+## Brief Usage
 
 ```bash
 # Generate metagenome (skip for running SAMOVAR on real data as ensemble)
@@ -130,38 +103,10 @@ samovar exec --output_dir samovar_out
 # samovar multiqc --output_dir samovar_out -- --export --interactive
 ```
 
-Each exec step writes `.log/multiqc/<stage>.samovar.json` (FastQC/fastp-style summaries). When MultiQC is on PATH, `exec` (or `samovar multiqc`) runs the **real** `multiqc` CLI on `multiqc_samovar/` so you can tick plots in the HTML report and dump PNG/SVG/PDF with `--export`. You can also run it yourself:
-
-```bash
-multiqc samovar_out/multiqc_samovar -o samovar_out/multiqc -p --interactive
-```
-
-Toy indexes built from `data/test_genomes` **omit Escherichia from Kraken2 and Phage Phi X from Kaiju** (`--example-omit`). That is only an example of a missing-taxon gap; the build prints a warning. Do not use it for production databases.
-
-
-Annotators in **another conda env or module** go in `~/.config/samovar/config.json` (copied to `build/config.json` on install):
-
-```json
-{
-  "path": ["/opt/other-env/bin"],
-  "tools": { "kaiju": "/opt/conda/envs/kaiju/bin/kaiju" },
-  "tool_envs": { "kaiju": "/opt/conda/envs/kaiju" }
-}
-```
-
-`path` and `tool_envs.<name>/bin` plus parent dirs of `tools.*` are prepended in generated `.log/samovar.sh`, so `bash .log/samovar.sh` finds them without `module load`. Extra dirs at runtime: `SAMOVAR_PATH=/more/bin`. 
-
-
-**Important**: if you want to re-use SAMOVAR, it is needed to re-run samovar generate, preprocess & exec stages after the installation, not to reuse pre-existing ones because they have hard-coded information about the environment paths. Also, re-run these stages after editing config. `./install.sh` keeps existing `path` / `tools` / `tool_envs`.
-
 ## R package
 
 The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://github.com/ctlab/samovar/tree/r-package)** branch and is **not** part of this tree. Install it with `./install.sh R-package` (requires R + remotes). That writes a small R driver into `~/.config/samovar/` that only calls exported `samovaR` functions. Then set `regeneration_mode: samovar`.
 
-Python modes (no R): `direct` (default; same samples), `bootstrap` (noisy copies of real samples), `vae`, `glm` (cluster + Gaussian GLM walk, same logic as the R package). Rescaling column totals to `N_reads` is opt-in via `rescale_abundance: true`.
-
 ## References
 
-- Chechenina А., Vaulin N., Ivanov A., Ulyantsev V. Development of in-silico models of metagenomic communities with given properties and a pipeline for their generation. Bioinformatics Institute 2022/23 URL: https://elibrary.ru/item.asp?id=60029330
-
-- Do not forget to cite all annotators used for the ensemble
+See the current citation list in the references github wiki. Also, do not forget to cite all annotators used for the ensemble & inside the SAMOVAR
