@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.17"
+PACKAGE_VERSION = "0.10.18"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -38,6 +38,7 @@ KNOWN_TOOLS = (
     "nanosim",
     "art_illumina",
     "wgsim",
+    "seqtk",
     "samtools",
     "R",
     "Rscript",
@@ -94,22 +95,52 @@ def test_genomes_dir() -> Path:
     return repo_root() / "data" / "test_genomes"
 
 
+def _run_dir() -> Optional[Path]:
+    """Active pipeline outdir from ``SAMOVAR_RUN_DIR`` (set by generated ``samovar.sh``)."""
+    env = os.environ.get("SAMOVAR_RUN_DIR", "").strip()
+    return Path(env).expanduser() if env else None
+
+
 def user_cache_dir() -> Path:
+    """SamovaR cache root.
+
+    Preference order (large artifacts must not land in ``$HOME``):
+
+    1. ``$XDG_CACHE_HOME/samovar``
+    2. ``$SAMOVAR_RUN_DIR/.cache/samovar`` (pipeline outdir)
+    3. ``~/.cache/samovar`` (install-time / interactive only)
+    """
     xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
     if xdg:
         return Path(xdg) / "samovar"
+    run = _run_dir()
+    if run is not None:
+        return run / ".cache" / "samovar"
     return Path.home() / ".cache" / "samovar"
 
 
 def genome_download_dir() -> Path:
-    """Directory where SamovaR stores NCBI-downloaded (full) assemblies."""
+    """Directory where SamovaR stores NCBI-downloaded (full) assemblies.
+
+    Order: ``SAMOVAR_GENOMES`` → ``$SAMOVAR_RUN_DIR/.cache/samovar/genomes`` →
+    install config (ignored if under ``$HOME``) → ``user_cache_dir()/genomes``.
+    """
     env = os.environ.get("SAMOVAR_GENOMES", "").strip()
     if env:
         return Path(env).expanduser()
+    run = _run_dir()
+    if run is not None:
+        return run / ".cache" / "samovar" / "genomes"
     cfg = load_config()
     val = str(cfg.get("genomes") or "").strip()
     if val:
-        return Path(val).expanduser()
+        path = Path(val).expanduser()
+        # Never silently dump multi-GB genomes into a home path from old configs.
+        try:
+            if not path.resolve().is_relative_to(Path.home().resolve()):
+                return path
+        except (OSError, ValueError):
+            return path
     return user_cache_dir() / "genomes"
 
 
@@ -118,10 +149,18 @@ def processed_genomes_dir() -> Path:
     env = os.environ.get("SAMOVAR_PROCESSED_GENOMES", "").strip()
     if env:
         return Path(env).expanduser()
+    run = _run_dir()
+    if run is not None:
+        return run / ".cache" / "samovar" / "genomes"
     cfg = load_config()
     val = str(cfg.get("processed_genomes") or "").strip()
     if val:
-        return Path(val).expanduser()
+        path = Path(val).expanduser()
+        try:
+            if not path.resolve().is_relative_to(Path.home().resolve()):
+                return path
+        except (OSError, ValueError):
+            return path
     return genome_download_dir()
 
 
@@ -893,6 +932,14 @@ def install_status_rows() -> List[Dict[str, Any]]:
             path=discover_wgsim(),
             config_key="wgsim_path / tool_envs.wgsim",
             install="conda install -c bioconda wgsim   (or ./install.sh ART which can share samtools)",
+        ),
+        row(
+            "seqtk",
+            required=False,
+            role="FASTQ subsample / rarefaction (e.g. max depth before prepare)",
+            path=shutil.which("seqtk") or _existing_tool("seqtk"),
+            config_key="tools.seqtk / tool_envs.seqtk",
+            install="./install.sh seqtk",
         ),
         row(
             "R",

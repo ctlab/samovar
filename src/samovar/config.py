@@ -132,6 +132,11 @@ class PipelineConfig:
         config.max_genomes = getattr(args, 'max_genomes', 50)
         if config.max_genomes is None:
             config.max_genomes = 50
+        n_reads = getattr(args, 'N_reads', None)
+        if n_reads is None:
+            n_reads = getattr(args, 'n_reads', None)
+        if n_reads is not None:
+            config.regeneration_n_reads = int(n_reads)
         
         # Handle input source
         if args.input_config:
@@ -269,6 +274,13 @@ class PipelineConfig:
                 ]
             else:
                 config.genome_dirs = [str(p) for p in extra_dirs if str(p).strip()]
+
+        # CLI regeneration depth overrides YAML when both are present.
+        n_reads = getattr(args, "N_reads", None)
+        if n_reads is None:
+            n_reads = getattr(args, "n_reads", None)
+        if n_reads is not None:
+            config.regeneration_n_reads = int(n_reads)
 
         return config
 
@@ -433,6 +445,11 @@ export SAMOVAR_MULTIQC="${{SAMOVAR_MULTIQC:-{multiqc_flag}}}"
 export SAMOVAR_GENOME_DIRS="${{SAMOVAR_GENOME_DIRS:+$SAMOVAR_GENOME_DIRS:}}{extra_genome_dirs}"
 export SAMOVAR_RUN_DIR="$out_dir"
 export SAMOVAR_RUN_GENOMES="$out_dir/genomes"
+# All bulky caches live under outdir — never default to ~/.cache (home quota).
+export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-$out_dir/.cache}}"
+export SAMOVAR_GENOMES="${{SAMOVAR_GENOMES:-$out_dir/.cache/samovar/genomes}}"
+export SAMOVAR_PROCESSED_GENOMES="${{SAMOVAR_PROCESSED_GENOMES:-$out_dir/.cache/samovar/genomes}}"
+mkdir -p "$XDG_CACHE_HOME/samovar/genomes" "$SAMOVAR_RUN_GENOMES"
 """
 
         setup_reads = _checkpoint_block(
