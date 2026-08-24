@@ -304,15 +304,40 @@ def register_genome_dir(path: PathLike, *, force: bool = False) -> Optional[Path
 
 
 def ensure_genome_config() -> Dict[str, Any]:
-    """Write default ``genomes`` / ``processed_genomes`` paths into the install config."""
-    genomes = str(genome_download_dir())
-    processed = str(processed_genomes_dir())
+    """Record non-home genome cache paths in the install config.
+
+    Paths under ``$HOME`` are never persisted: HPC home quotas cannot hold
+    NCBI assemblies. Per-run caches live under ``$SAMOVAR_RUN_DIR/.cache``.
+    """
+    home = Path.home().resolve()
+
+    def _usable(path: Path) -> bool:
+        try:
+            return not path.expanduser().resolve().is_relative_to(home)
+        except (OSError, ValueError):
+            return True
+
+    genomes = genome_download_dir()
+    processed = processed_genomes_dir()
     cfg = load_config()
     updates: Dict[str, Any] = {}
-    if not str(cfg.get("genomes") or "").strip():
-        updates["genomes"] = genomes
-    if not str(cfg.get("processed_genomes") or "").strip():
-        updates["processed_genomes"] = processed
+
+    # Drop stale home-quota landmines from older installs.
+    for key in ("genomes", "processed_genomes"):
+        cur = str(cfg.get(key) or "").strip()
+        if cur:
+            try:
+                if Path(cur).expanduser().resolve().is_relative_to(home):
+                    updates[key] = ""
+            except (OSError, ValueError):
+                pass
+
+    if _usable(genomes) and not str(updates.get("genomes", cfg.get("genomes") or "")).strip():
+        updates["genomes"] = str(genomes)
+    if _usable(processed) and not str(
+        updates.get("processed_genomes", cfg.get("processed_genomes") or "")
+    ).strip():
+        updates["processed_genomes"] = str(processed)
     if "genome_dirs" not in cfg:
         updates["genome_dirs"] = list(_split_dir_value(cfg.get("genome_dirs")))
     if updates:

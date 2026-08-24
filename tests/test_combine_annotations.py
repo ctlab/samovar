@@ -112,6 +112,29 @@ def test_true_taxid_prefix_without_token(tmp_path, combiner):
     assert extract_true_taxid("Scer.fna-NC_001134.8_0_0") == "4932"
 
 
+def test_sample_name_keeps_underscores(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_kaiju(reports / "sample_0_kaiju-test.kaiju.out", [("r0|taxid:562|", "562")])
+    _write_kaiju(reports / "sample_2_kaiju-test.kaiju.out", [("r2|taxid:818|", "818")])
+    _write_kraken2(
+        reports / "1_full_kraken2-test.kraken2.out",
+        [("r1|taxid:9606|", "9606", "150")],
+    )
+    subprocess.check_call(
+        [str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"]
+    )
+    names = sorted(p.name for p in out.glob("*.annotation.csv"))
+    assert names == [
+        "1_full.annotation.csv",
+        "sample_0.annotation.csv",
+        "sample_2.annotation.csv",
+    ]
+    assert "562" in (out / "sample_0.annotation.csv").read_text()
+    assert "818" in (out / "sample_2.annotation.csv").read_text()
+
+
 def test_large_tables_chunked_merge(tmp_path, combiner):
     n = 20000
     reports = tmp_path / "reports"

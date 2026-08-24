@@ -75,13 +75,15 @@ def standardize_taxid_columns(df):
         df[new_name] = coalesced
     return df
 
-def preprocess_data(df):
+def preprocess_data(df, drop_missing_true: bool = True):
     """
     Preprocess the input dataframe for ML training.
-    
+
     Args:
         df (pd.DataFrame): Input dataframe with columns seq, taxID_*, length, true
-        
+        drop_missing_true: Drop rows with NaN in ``true`` (training only; inference
+            on initial annotations keeps rows when ``true`` is unknown).
+
     Returns:
         pd.DataFrame: Preprocessed dataframe ready for ML
     """
@@ -127,12 +129,10 @@ def preprocess_data(df):
     
     # Convert true to numeric and handle NaN values
     if 'true' in df.columns:
-        # First convert to numeric
         df['true'] = pd.to_numeric(df['true'], errors='coerce')
-        # Remove rows with NaN in true column
-        df = df.dropna(subset=['true'])
-        # Convert to int after removing NaN
-        df['true'] = df['true'].astype(int)
+        if drop_missing_true:
+            df = df.dropna(subset=['true'])
+            df['true'] = df['true'].astype(int)
     
     return df
 
@@ -255,8 +255,8 @@ def predict_taxid(df, model_path=None, feature_cols=None):
     # Create a copy to avoid modifying the original
     df = df.copy()
     
-    # Preprocess data
-    df_processed = preprocess_data(df)
+    # Preprocess data (keep rows with unknown truth for inference)
+    df_processed = preprocess_data(df, drop_missing_true=False)
     
     # Use provided feature columns or get them from the dataframe
     if feature_cols is None:

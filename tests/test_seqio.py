@@ -75,6 +75,29 @@ def test_fastq_discovery(tmp_path):
     assert dest.read_text().count("@") == 2
 
 
+def test_fastq_illumina_numeric_mates(tmp_path):
+    r1 = tmp_path / "sample_0_1.fastq"
+    r2 = tmp_path / "sample_0_2.fastq"
+    r1.write_text("@a\nA\n+\nI\n")
+    r2.write_text("@a\nT\n+\nI\n")
+    gz1 = tmp_path / "run_1.fq.gz"
+    gz2 = tmp_path / "run_2.fq.gz"
+    with gzip.open(gz1, "wt") as handle:
+        handle.write("@b\nA\n+\nI\n")
+    with gzip.open(gz2, "wt") as handle:
+        handle.write("@b\nT\n+\nI\n")
+    samples = list_fastq_samples(tmp_path)
+    assert "sample_0" in samples
+    assert "run" in samples
+    assert find_fastq_mate(tmp_path, "sample_0", "R1") == r1
+    assert find_fastq_mate(tmp_path, "sample_0", "R2") == r2
+    # ``_R1`` still wins over the ``_1`` suffix of the same filename.
+    (tmp_path / "keep_R1.fastq").write_text("@c\nA\n+\nI\n")
+    (tmp_path / "keep_R2.fastq").write_text("@c\nT\n+\nI\n")
+    assert "keep" in list_fastq_samples(tmp_path)
+    assert "keep_R" not in list_fastq_samples(tmp_path)
+
+
 def test_fastq_ignores_camisim_tech_duplicates(tmp_path):
     (tmp_path / "1_full_R1.fastq").write_text("@a\nA\n+\nI\n")
     (tmp_path / "1_full_R2.fastq").write_text("@a\nT\n+\nI\n")

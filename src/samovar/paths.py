@@ -630,8 +630,18 @@ def smoke_test() -> List[str]:
 
 
 def sidecar_envs_dir() -> Path:
-    """Conda prefixes for fragile optional tools (NanoSim, ART, …)."""
-    return user_cache_dir() / "envs"
+    """Conda prefixes for fragile optional tools (NanoSim, ART, …).
+
+    Prefer ``$SAMOVAR_ENVS``, then ``$SAMOVAR_ROOT/.cache/samovar/envs`` (or the
+    repo root) — never default to ``~/.cache`` (home quota).
+    """
+    env = os.environ.get("SAMOVAR_ENVS", "").strip()
+    if env:
+        return Path(env).expanduser()
+    root = os.environ.get("SAMOVAR_ROOT", "").strip()
+    if root:
+        return Path(root) / ".cache" / "samovar" / "envs"
+    return repo_root() / ".cache" / "samovar" / "envs"
 
 
 def tool_env_prefix(name: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:

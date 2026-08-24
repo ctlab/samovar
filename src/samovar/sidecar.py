@@ -9,8 +9,9 @@ Install::
     ./install.sh NanoSim
     ./install.sh ART
 
-Prefixes default to ``~/.cache/samovar/envs/<name>`` and are recorded in
-``tool_envs`` / ``nanosim_path`` / ``art_path``.
+Prefixes default to ``$SAMOVAR_ROOT/.cache/samovar/envs/<name>`` (override with
+``SAMOVAR_ENVS``) and are recorded in ``tool_envs`` / ``nanosim_path`` /
+``art_path``. Never under ``~/.cache`` by default (home quota).
 """
 
 from __future__ import annotations

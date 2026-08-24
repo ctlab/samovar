@@ -502,15 +502,7 @@ mkdir -p "$out_dir/genomes"
             f"""snakemake -s {wf / 'annotation2iss' / 'Snakefile'} \\
     --configfile {configs['annotation2iss']} \\
     --cores {self.cores}
-
-{{
-    find "$out_dir/regenerated" -type f -empty -delete || true
-    rm -f "$out_dir/regenerated/"*processed* || true
-    rm -f "$out_dir/regenerated/"*_abundance* || true
-    rm -f "$out_dir/regenerated/"*iss.tmp* || true
-}} || {{
-    echo "Warning: Some cleanup operations failed"
-}}""",
+"$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )
 
         early_exit = """if ! $PYTHON_PATH -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads('$out_dir/regenerated') else 1)"; then

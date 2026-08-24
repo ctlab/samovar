@@ -8,8 +8,8 @@
   "opal_path": "/nfs/home/dsmutin/miniconda3/bin/opal.py",
   "ncbi_email": "anonymous@example.com",
   "test_genomes": "/mnt/tank/scratch/dsmutin/tools/my/samovar/samovar/data/test_genomes",
-  "genomes": "/nfs/home/dsmutin/.cache/samovar/genomes",
-  "processed_genomes": "/nfs/home/dsmutin/.cache/samovar/genomes",
+  "genomes": "/mnt/tank/scratch/partition-metagenomics/smuteam/cami3/samovar/.cache/samovar/genomes",
+  "processed_genomes": "/mnt/tank/scratch/partition-metagenomics/smuteam/cami3/samovar/.cache/samovar/genomes",
   "genome_dirs": [
     "/mnt/tank/scratch/dsmutin/tools/my/samovar/samovar/samovar_realistic/.genomes",
     "/nfs/home/dsmutin/.cache/samovar/genomes"

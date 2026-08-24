@@ -10,6 +10,7 @@
 #   ./install.sh CAMISIM         optional CAMISIM community/read simulator
 #   ./install.sh NanoSim         optional NanoSim in a separate conda env (ONT / hybrid)
 #   ./install.sh ART             optional ART Illumina simulator in a separate conda env
+#   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
 #   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
 #
 # Environment:
@@ -21,6 +22,7 @@
 #   SAMOVAR_INSTALL_CAMISIM=1  also clone optional CAMISIM (same as ./install.sh CAMISIM)
 #   SAMOVAR_INSTALL_NANOSIM=1  also sidecar-conda NanoSim (same as ./install.sh NanoSim)
 #   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
+#   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
@@ -252,12 +254,15 @@ import os, shutil, subprocess, sys
 from pathlib import Path
 
 try:
-    from samovar.paths import load_config, user_cache_dir, write_config
+    from samovar.paths import load_config, write_config
 except ImportError:
     print("Warning: samovar is not importable yet; re-run ./install.sh CAMISIM after the Python package is installed")
     raise SystemExit(0)
 
-dest = Path(os.environ.get("SAMOVAR_CAMISIM") or (user_cache_dir() / "CAMISIM"))
+dest = Path(
+    os.environ.get("SAMOVAR_CAMISIM")
+    or (Path(os.environ["SAMOVAR_ROOT"]) / ".cache" / "CAMISIM")
+)
 if (dest / "main.nf").is_file() or (dest / "metagenomesimulation.py").is_file():
     print("CAMISIM already present:", dest)
 else:
@@ -299,7 +304,7 @@ install_nanosim() {
     if ! "$PYTHON_PATH" -m samovar.sidecar nanosim; then
         echo "Warning: NanoSim sidecar install failed."
         echo "Install later with: ./install.sh NanoSim"
-        echo "Or: conda create -p ~/.cache/samovar/envs/nanosim -c conda-forge -c bioconda python=3.8 nanosim=3.2 htseq gffutils numpy=1.23.5 scikit-learn=0.23.2"
+        echo "Or: conda create -p \"\$SAMOVAR_ROOT/.cache/samovar/envs/nanosim\" -c conda-forge -c bioconda python=3.8 nanosim=3.2 htseq gffutils numpy=1.23.5 scikit-learn=0.23.2"
         echo "Then set tool_envs.nanosim and nanosim_path in ~/.config/samovar/config.json"
         return 1
     fi
@@ -314,10 +319,42 @@ install_art() {
     if ! "$PYTHON_PATH" -m samovar.sidecar art; then
         echo "Warning: ART sidecar install failed."
         echo "Install later with: ./install.sh ART"
-        echo "Or: conda create -p ~/.cache/samovar/envs/art -c bioconda -c conda-forge art samtools"
+        echo "Or: conda create -p \"\$SAMOVAR_ROOT/.cache/samovar/envs/art\" -c bioconda -c conda-forge art samtools"
         echo "Then set tool_envs.art and art_path in ~/.config/samovar/config.json"
         return 1
     fi
+}
+
+install_seqtk() {
+    if command -v seqtk >/dev/null 2>&1; then
+        echo "seqtk: $(command -v seqtk)"
+        return 0
+    fi
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Skipping seqtk install in offline mode. conda install -c bioconda seqtk"
+        return 1
+    fi
+    local conda_bin="${SAMOVAR_CONDA:-}"
+    if [ -z "$conda_bin" ]; then
+        conda_bin="$(command -v mamba || command -v conda || true)"
+    fi
+    if [ -z "$conda_bin" ]; then
+        echo "seqtk is not on PATH and conda/mamba was not found."
+        echo "Install with: conda install -c bioconda seqtk"
+        return 1
+    fi
+    echo "Installing optional seqtk (https://github.com/lh3/seqtk) via bioconda ..."
+    if ! "$conda_bin" install -y -c bioconda -c conda-forge seqtk; then
+        echo "Warning: seqtk install failed. Rarefaction with seqtk sample will be unavailable."
+        return 1
+    fi
+    hash -r 2>/dev/null || true
+    if command -v seqtk >/dev/null 2>&1; then
+        echo "seqtk: $(command -v seqtk)"
+        return 0
+    fi
+    echo "seqtk installed but not on PATH in this shell."
+    return 1
 }
 
 print_install_status() {
@@ -343,6 +380,7 @@ normalize_optional_arg() {
         nanosim|nanosim3) echo "nanosim" ;;
         art|art_illumina) echo "art" ;;
         nextflow) echo "nextflow" ;;
+        seqtk) echo "seqtk" ;;
         *) echo "" ;;
     esac
 }
@@ -374,6 +412,7 @@ run_optional_named() {
         camisim) install_camisim ;;
         nanosim) install_nanosim ;;
         art) install_art ;;
+        seqtk) install_seqtk ;;
         nextflow)
             echo "Nextflow is not bundled. Install with: conda install -c bioconda nextflow"
             echo "or https://www.nextflow.io/docs/latest/install.html"
@@ -546,6 +585,12 @@ else
     echo "Skipping ART (not required). Use ./install.sh ART for a separate conda env (CAMISIM Illumina)."
 fi
 
+if [ "${SAMOVAR_INSTALL_SEQTK:-0}" != "0" ]; then
+    install_seqtk || echo "Warning: optional seqtk install did not complete."
+else
+    echo "Skipping seqtk (not required). Use ./install.sh seqtk for FASTQ subsample / rarefaction."
+fi
+
 # Write ~/.config/samovar/config.json (and build/config.json copy)
 export USER_CFG_DIR
 export SAMOVAR_ROOT="$ROOT"
@@ -584,22 +629,37 @@ for name, path in (existing.get("tools") or {}).items():
         tools[name] = path
 path_extra = existing.get("path") or existing.get("extra_path") or []
 tool_envs = existing.get("tool_envs") or {}
-default_genomes = str(
-    Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "samovar" / "genomes"
-)
+# Large NCBI caches belong under each pipeline outdir ($SAMOVAR_RUN_DIR/.cache),
+# not under $HOME. Install may optionally register a shared scratch library via
+# SAMOVAR_GENOMES or XDG_CACHE_HOME — never default to ~/.cache.
+_home = Path.home().resolve()
 
-def _usable_dir(raw):
+def _not_under_home(path: Path) -> bool:
+    try:
+        return not path.expanduser().resolve().is_relative_to(_home)
+    except (OSError, ValueError):
+        return True
+
+default_genomes = ""
+if os.environ.get("SAMOVAR_GENOMES", "").strip():
+    default_genomes = os.environ["SAMOVAR_GENOMES"].strip()
+elif os.environ.get("XDG_CACHE_HOME", "").strip():
+    default_genomes = str(Path(os.environ["XDG_CACHE_HOME"]) / "samovar" / "genomes")
+
+def _usable_dir(raw, *, allow_home: bool = False):
     text = str(raw or "").strip()
     if not text:
         return ""
     path = Path(text).expanduser()
+    if not allow_home and not _not_under_home(path):
+        return ""
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError:
         return ""
     return str(path)
 
-genomes = _usable_dir(existing.get("genomes")) or default_genomes
+genomes = _usable_dir(existing.get("genomes")) or _usable_dir(default_genomes) or ""
 processed = (
     _usable_dir(existing.get("processed_genomes"))
     or _usable_dir(existing.get("genomes"))
@@ -673,8 +733,9 @@ prefix = os.environ.get("CONDA_PREFIX") or ""
 if prefix and Path(prefix, "lib").is_dir():
     conda_lib = f'export LD_LIBRARY_PATH="{prefix}/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"\n'
 env_path = user_cfg / "env"
+# Do not clobber a runtime NCBI_EMAIL; the saved install value is only the default.
 env_path.write_text(
-    f'export NCBI_EMAIL="{email}"\n'
+    f'export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"\n'
     f'export SAMOVAR_ROOT="{root}"\n'
     f'export PYTHON_PATH="{python_path}"\n'
     f'export PATH="{path_export}"\n'
@@ -688,10 +749,13 @@ processed = payload.get("processed_genomes") or genomes
 lib_dirs = payload.get("genome_dirs") or []
 print("")
 print("Genome cache (NCBI / user assemblies, reused by `samovar prepare`):")
-print(f"  Downloaded genomes:  {genomes}")
-print(f"  Processed genomes:   {processed}")
+print(f"  Downloaded genomes:  {genomes or '(per-run: $out_dir/.cache/samovar/genomes)'}")
+print(f"  Processed genomes:   {processed or '(same as downloaded / per-run outdir)'}")
 print(f"  Extra libraries:     {', '.join(lib_dirs) if lib_dirs else '(none yet; add dirs to genome_dirs in config.json)'}")
 print("")
+print("IMPORTANT: bulky genome caches must NOT live under $HOME (quota).")
+print("  Each `samovar exec` pins XDG_CACHE_HOME/SAMOVAR_GENOMES to $out_dir/.cache.")
+print("  Optional shared scratch library: SAMOVAR_GENOMES=/scratch/... ./install.sh")
 print("IMPORTANT: data/test_genomes contains TRUNCATED assemblies for ISS and CI only.")
 print("They are never used as NCBI substitutes. Real metagenomes reuse only genomes")
 print("previously downloaded by SamovaR or listed in genome_dirs.")

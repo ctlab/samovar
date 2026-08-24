@@ -20,6 +20,9 @@ def main():
     parser.add_argument(
         '--max_genomes', type=int, default=50,
         help='Max taxids to fetch for annotation2iss (top by abundance)')
+    parser.add_argument(
+        '--N_reads', '--n_reads', dest='N_reads', type=int, default=None,
+        help='Read depth of each regenerated sample (default: 1000, or N_reads in --input_config)')
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
     gzip_group = parser.add_mutually_exclusive_group()
     gzip_group.add_argument(
@@ -107,12 +110,21 @@ def main():
             args.input_dir = str(Path(out_dir) / "initial")
     
     # Process remaining arguments to handle dynamic command arguments
+    # (e.g. --kraken2-test "kraken2 /path/to/db"). Do not treat pipeline
+    # flags as annotators if they leak past parse_known_args.
+    reserved_cmd = {
+        "input_dir", "input_config", "output_dir", "cores", "max_genomes",
+        "N_reads", "n_reads", "genome-dirs", "genome_dirs",
+    }
     cmd_args = {}
     i = 0
     while i < len(remaining):
         if remaining[i].startswith('--'):
             # Get the command name and value
             cmd_name = remaining[i][2:]  # Remove '--' prefix
+            if cmd_name in reserved_cmd:
+                print(f"Error: unexpected leftover flag {remaining[i]}")
+                sys.exit(1)
             if i + 1 < len(remaining):
                 cmd_value = remaining[i + 1]
                 cmd_args[cmd_name] = cmd_value

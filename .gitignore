@@ -32,6 +32,12 @@ build/bdist.*/
 build/temp.*/
 build/scripts-*/
 project/
+# Install / tool sidecars (not home — live next to the repo when needed)
+.cache/
+# Classifier litter if a wrapper forgets --report-file / -S paths
+/centrifuge_report.tsv
+/*.kreport
+/*.kraken
 # Local GitHub wiki drafts (uploaded manually to github.com/ctlab/samovar/wiki)
 /wiki/
 generate_docs_pdf.R

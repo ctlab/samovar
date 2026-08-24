@@ -256,6 +256,24 @@ std::string match_tool(const std::string& filename) {
 }
 
 std::string sample_name_from(const std::string& filename, int split_n) {
+    // ``{sample}_{run}.{tool}.out`` or ``{sample}_{run}.custom_{tool}.out``.
+    // Sample ids like ``sample_0`` or ``1_full`` contain underscores, so taking
+    // the first ``-s`` token is wrong. Drop the ``.{tool}.out`` suffix, then
+    // the last ``_`` component (the run name).
+    size_t last_dot = filename.rfind('.');
+    size_t prev_dot = (last_dot == std::string::npos || last_dot == 0)
+        ? std::string::npos
+        : filename.rfind('.', last_dot - 1);
+    if (prev_dot != std::string::npos) {
+        std::string stem = filename.substr(0, prev_dot);
+        size_t us = stem.rfind('_');
+        if (us != std::string::npos && us > 0) {
+            return stem.substr(0, us);
+        }
+        if (!stem.empty()) {
+            return stem;
+        }
+    }
     auto parts = split_underscore(filename);
     if (split_n < 1) {
         split_n = 1;

@@ -86,8 +86,22 @@ case "$TOOL" in
   # ----------------------------------------
   "centrifuge")
     echo "[INFO] Starting Centrifuge classification..."
-    # Run centrifuge
-    centrifuge -x "$DB" -1 "$R1" -2 "$R2" -p "$THREADS" -S "$TMP_DIR/centrifuge.out"
+    # -x wants an index prefix. Accept a directory of *.1.cf, a .1.cf path, or a prefix.
+    INDEX="$DB"
+    if [ -d "$DB" ]; then
+      cf1=$(ls "$DB"/*.1.cf 2>/dev/null | head -n 1 || true)
+      if [ -n "$cf1" ]; then
+        INDEX="${cf1%.1.cf}"
+      fi
+    elif [[ "$DB" == *.1.cf ]]; then
+      INDEX="${DB%.1.cf}"
+    fi
+    echo "[INFO] Centrifuge index prefix: ${INDEX}"
+    # --report-file: centrifuge otherwise writes centrifuge_report.tsv into CWD
+    # (often the repo root when snakemake cds there). Keep all litter in TMP_DIR.
+    centrifuge -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" \
+      -S "$TMP_DIR/centrifuge.out" \
+      --report-file "$TMP_DIR/centrifuge_report.tsv"
     
     # Parse output: skip header (NR>1), only print classified reads (taxID != 0)
     awk -F'\t' '{if ($3 != 0 && NR>1) print $1 "\t" $3}' "$TMP_DIR/centrifuge.out" > "$OUT"

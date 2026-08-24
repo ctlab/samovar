@@ -162,6 +162,31 @@ def test_generate_configs():
         iss_config = yaml.safe_load(f)
         assert iss_config['gzip_genomes'] is True
         assert iss_config['gzip_reads'] is False
+        assert iss_config['N_reads'] == 1000
+        assert iss_config['max_genomes'] == 50
+
+
+def test_pipeline_config_n_reads_cli_overrides_default():
+    test_output_dir = "tests_outs/test_n_reads_cli"
+    clean_dir(test_output_dir)
+    args = argparse.Namespace(
+        input_config=None,
+        input_dir="/path/to/input",
+        output_dir=test_output_dir,
+        kraken2=None,
+        kaiju=None,
+        N_reads=20000,
+        max_genomes=20,
+    )
+    config = PipelineConfig.from_args(args)
+    assert config.regeneration_n_reads == 20000
+    assert config.max_genomes == 20
+    configs = config.generate_configs(test_output_dir)
+    with open(configs["annotation2iss"], "r") as f:
+        iss_config = yaml.safe_load(f)
+    assert iss_config["N_reads"] == 20000
+    assert iss_config["max_genomes"] == 20
+
 
 def test_generate_pipeline():
     test_output_dir = 'tests_outs/test_generate_pipeline'

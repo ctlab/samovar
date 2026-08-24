@@ -286,13 +286,12 @@ def fetch_genome_raw(
     try:
         cache.mkdir(parents=True, exist_ok=True)
     except OSError:
-        from samovar.paths import user_cache_dir
-
-        cache = user_cache_dir() / "genomes"
+        # Fall back to the run genomes dir / caller folder — never $HOME.
+        cache = output_path
         try:
             cache.mkdir(parents=True, exist_ok=True)
         except OSError:
-            cache = output_path
+            pass
     genome_path = cache / f"{taxid}.fna.gz"
     for ext in possible_exts:
         existing_cache = cache / f"{taxid}{ext}"
@@ -372,13 +371,12 @@ def fetch_genome(
     try:
         processed_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
-        from samovar.paths import user_cache_dir
-
-        processed_dir = user_cache_dir() / "genomes"
+        # Never fall back to $HOME — keep artifacts next to the run genomes.
+        processed_dir = Path(output_folder)
         try:
             processed_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
-            processed_dir = Path(output_folder)
+            pass
     cache_processed = processed_genome_path(processed_dir, taxid, gzip_genomes=gzip_genomes)
     run_processed = processed_genome_path(output_folder, taxid, gzip_genomes=gzip_genomes)
 

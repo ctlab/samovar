@@ -23,18 +23,28 @@ GFF_EXTS = (".gff", ".gff3", ".gtf")
 FASTQ_EXTS = (".fastq", ".fq")
 COMPRESSION_EXTS = (".gz",)
 
-# ISS writes ``prefix_R1.fastq``; we accept those plus .fq and gzip variants.
+# ISS writes ``prefix_R1.fastq``; Illumina/CASAVA often uses ``prefix_1.fastq``.
+# Longer ``_R1`` / ``_R2`` suffixes MUST come first: ``foo_R1.fastq`` also ends
+# with ``_1.fastq``.
 FASTQ_R1_SUFFIXES = (
     "_R1.fastq.gz",
     "_R1.fq.gz",
     "_R1.fastq",
     "_R1.fq",
+    "_1.fastq.gz",
+    "_1.fq.gz",
+    "_1.fastq",
+    "_1.fq",
 )
 FASTQ_R2_SUFFIXES = (
     "_R2.fastq.gz",
     "_R2.fq.gz",
     "_R2.fastq",
     "_R2.fq",
+    "_2.fastq.gz",
+    "_2.fq.gz",
+    "_2.fastq",
+    "_2.fq",
 )
 
 PROCESSED_FASTA_EXTS = (

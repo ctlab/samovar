@@ -214,6 +214,9 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
     )
     centrifuge.chmod(centrifuge.stat().st_mode | stat.S_IEXEC)
 
+    db = tmp_path / "db"
+    db.mkdir()
+    (db / "idx.1.cf").write_text("")
     r1 = tmp_path / "s_R1.fastq"
     r2 = tmp_path / "s_R2.fastq"
     _tiny_fastq(r1, n=2)
@@ -230,7 +233,7 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
             "-I",
             str(r2),
             "-d",
-            str(tmp_path / "db"),
+            str(db),
             "-o",
             str(out),
             "-p",
@@ -245,6 +248,7 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
     )
     if proc.returncode != 0:
         pytest.fail(proc.stdout + "\n" + proc.stderr)
+    assert str(db / "idx") in proc.stdout
     df = pd.read_table(out, header=None, names=["seq", "taxID"])
     assert (df["taxID"].astype(str) == "562").all()
     assert "read0" in set(df["seq"].astype(str))

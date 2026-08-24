@@ -16,7 +16,7 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.17"
+    assert PACKAGE_VERSION == "0.10.18"
 
 
 def test_discover_opal_from_config(tmp_path, monkeypatch):
@@ -225,6 +225,7 @@ def test_format_install_status_lists_required():
     assert "iss" in names
     assert "CAMISIM" in names
     assert "ART" in names
+    assert "seqtk" in names
 
 
 def test_iss_executable_uses_config(tmp_path, monkeypatch):
