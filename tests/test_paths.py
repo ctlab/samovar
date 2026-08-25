@@ -16,7 +16,7 @@ from samovar.paths import (
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.18"
+    assert PACKAGE_VERSION == "0.10.19"
 
 
 def test_discover_opal_from_config(tmp_path, monkeypatch):

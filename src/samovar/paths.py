@@ -18,7 +18,24 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PACKAGE_VERSION = "0.10.18"
+from samovar.main_config import (
+    as_install_config,
+    compiler_python,
+    compiler_python_libs,
+    compiler_r,
+    compiler_r_libs,
+    disk_payload,
+    first_dir,
+    iter_tools,
+    ncbi_email_from_cfg,
+    processed_genome_dirs,
+    raw_genome_dirs,
+    test_genome_dirs_from_cfg,
+    tool_env_prefix as tool_entry_env_prefix,
+    tool_path as tool_entry_path,
+)
+
+PACKAGE_VERSION = "0.10.19"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -89,7 +106,8 @@ def workflow_dir() -> Path:
 
 def test_genomes_dir() -> Path:
     cfg = load_config()
-    override = cfg.get("test_genomes") or os.environ.get("SAMOVAR_TEST_GENOMES", "")
+    tests = test_genome_dirs_from_cfg(cfg)
+    override = (tests[0] if tests else "") or os.environ.get("SAMOVAR_TEST_GENOMES", "")
     if override:
         return Path(override)
     return repo_root() / "data" / "test_genomes"
@@ -132,7 +150,7 @@ def genome_download_dir() -> Path:
     if run is not None:
         return run / ".cache" / "samovar" / "genomes"
     cfg = load_config()
-    val = str(cfg.get("genomes") or "").strip()
+    val = first_dir(raw_genome_dirs(cfg))
     if val:
         path = Path(val).expanduser()
         # Never silently dump multi-GB genomes into a home path from old configs.
@@ -153,7 +171,7 @@ def processed_genomes_dir() -> Path:
     if run is not None:
         return run / ".cache" / "samovar" / "genomes"
     cfg = load_config()
-    val = str(cfg.get("processed_genomes") or "").strip()
+    val = first_dir(processed_genome_dirs(cfg))
     if val:
         path = Path(val).expanduser()
         try:
@@ -166,15 +184,15 @@ def processed_genomes_dir() -> Path:
 
 def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict[str, Any]:
     """Merge ``updates`` into the install config and write it back."""
-    cfg = load_config()
-    changed = False
-    for key, value in updates.items():
-        if cfg.get(key) != value:
-            cfg[key] = value
-            changed = True
-    if changed or not user_config_path().is_file():
+    from samovar.main_config import apply_legacy_updates
+
+    cfg = dict(load_config())
+    before = disk_payload(cfg)
+    apply_legacy_updates(cfg, updates)
+    after = disk_payload(cfg)
+    if before != after or not user_config_path().is_file():
         write_config(cfg, also_repo_build=also_repo_build)
-    return cfg
+    return as_install_config(cfg)
 
 
 def absolute_path(path: Optional[str]) -> str:
@@ -212,7 +230,7 @@ def load_config() -> Dict[str, Any]:
         # Exclusive: tests and custom installs must not inherit ~/.config or
         # build/config.json (those can point at unreadable HPC paths).
         data = _read_json(Path(override).expanduser())
-        return dict(data) if isinstance(data, dict) else {}
+        return as_install_config(data if isinstance(data, dict) else {})
 
     candidates = [
         user_config_dir() / "config.json",
@@ -224,12 +242,12 @@ def load_config() -> Dict[str, Any]:
         data = _read_json(path)
         if data is not None:
             merged.update(data)
-    return merged
+    return as_install_config(merged)
 
 
 def python_path() -> str:
     cfg = load_config()
-    configured = (cfg.get("python_path") or "").strip()
+    configured = compiler_python(cfg).strip()
     if configured:
         try:
             present = Path(configured).is_file()
@@ -322,21 +340,22 @@ def collect_runtime_path_dirs(cfg: Optional[Dict[str, Any]] = None) -> List[str]
         ordered.append(directory)
 
     add(str(repo_root() / "bin"))
-    add(cfg.get("python_path"))
-    add(cfg.get("iss_path"))
-    add(cfg.get("r_path"))
-    add(cfg.get("opal_path"))
-    add(cfg.get("multiqc_path"))
-    add(cfg.get("nextflow_path"))
-    add(cfg.get("nanosim_path"))
-    add(cfg.get("art_path"))
-    for extra in _split_path_value(cfg.get("path") or cfg.get("extra_path")):
+    add(compiler_python(cfg))
+    add(tool_entry_path((iter_tools(cfg).get("iss")), "iss") or str(cfg.get("iss_path") or ""))
+    add(compiler_r(cfg))
+    tools_map = iter_tools(cfg)
+    add(tool_entry_path(tools_map.get("opal.py") or tools_map.get("opal"), "opal.py") or str(cfg.get("opal_path") or ""))
+    add(tool_entry_path(tools_map.get("multiqc"), "multiqc") or str(cfg.get("multiqc_path") or ""))
+    add(tool_entry_path(tools_map.get("nextflow"), "nextflow"))
+    add(tool_entry_path(tools_map.get("nanosim") or tools_map.get("simulator.py"), "nanosim"))
+    add(tool_entry_path(tools_map.get("art_illumina") or tools_map.get("art"), "art_illumina"))
+    for extra in compiler_python_libs(cfg) or _split_path_value(cfg.get("path") or cfg.get("extra_path")):
         add(extra, env_prefix=True)
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    for key, value in tools.items():
-        if str(key).startswith("_"):
-            continue
-        add(str(value) if value is not None else "")
+    for name, spec in tools_map.items():
+        add(tool_entry_path(spec, name))
+        prefix = tool_entry_env_prefix(spec, name)
+        if prefix:
+            add(prefix, env_prefix=True)
     envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
     for key, value in envs.items():
         if str(key).startswith("_"):
@@ -352,7 +371,11 @@ def runtime_path_prefix(cfg: Optional[Dict[str, Any]] = None) -> str:
 def iss_executable() -> str:
     """ISS CLI: config ``iss_path``, then PATH."""
     cfg = load_config()
-    configured = (cfg.get("iss_path") or "").strip() or "iss"
+    configured = (
+        tool_entry_path(iter_tools(cfg).get("iss"), "iss").strip()
+        or str(cfg.get("iss_path") or "").strip()
+        or "iss"
+    )
     resolved = resolve_executable(configured, tool_key="iss")
     token = (resolved or "iss").split()[0]
     if token and Path(token).is_file() and os.access(token, os.X_OK):
@@ -367,7 +390,7 @@ def ncbi_email() -> str:
         if value:
             return value
     cfg = load_config()
-    email = str(cfg.get("ncbi_email") or "").strip()
+    email = ncbi_email_from_cfg(cfg)
     if email:
         return email
     return "anonymous@example.com"
@@ -391,11 +414,14 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
         return f"{str(token_path.resolve())} {rest}".strip()
 
     cfg = load_config()
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+    tools_map = iter_tools(cfg)
     name = Path(tool_key or token).name
-    mapped = str(tools.get(name) or tools.get(Path(name).stem) or "").strip()
+    mapped = tool_entry_path(tools_map.get(name) or tools_map.get(Path(name).stem), name)
+    env_root = tool_entry_env_prefix(
+        tools_map.get(name) or tools_map.get(Path(name).stem), name
+    )
     envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
-    env_root = str(envs.get(name) or envs.get(Path(name).stem) or "").strip()
+    env_root = env_root or str(envs.get(name) or envs.get(Path(name).stem) or "").strip()
     env_candidates: List[str] = []
     if env_root:
         root = Path(env_root).expanduser()
@@ -422,7 +448,7 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
 
 def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
     """Write user config (and a copy under ``<repo>/build/config.json``)."""
-    payload = dict(data)
+    payload = disk_payload(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
     dest = user_config_path()
@@ -493,12 +519,11 @@ def discover_opal() -> Optional[str]:
 
     add(os.environ.get("SAMOVAR_OPAL_PATH") or os.environ.get("SAMOVAR_OPAL_BIN"))
     add(str(cfg.get("opal_path") or ""))
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    add(str(tools.get("opal.py") or tools.get("opal") or ""))
+    add(tool_entry_path(iter_tools(cfg).get("opal.py") or iter_tools(cfg).get("opal"), "opal.py"))
     add(shutil.which("opal.py"))
     add(shutil.which("opal"))
 
-    py = (cfg.get("python_path") or "").strip() or sys.executable
+    py = compiler_python(cfg).strip() or sys.executable
     py_path = Path(py).expanduser()
     if py_path.is_file():
         add(str(py_path.resolve().parent / "opal.py"))
@@ -538,11 +563,10 @@ def discover_multiqc() -> Optional[str]:
 
     add(os.environ.get("SAMOVAR_MULTIQC_PATH") or os.environ.get("SAMOVAR_MULTIQC_BIN"))
     add(str(cfg.get("multiqc_path") or ""))
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    add(str(tools.get("multiqc") or ""))
+    add(tool_entry_path(iter_tools(cfg).get("multiqc"), "multiqc"))
     add(shutil.which("multiqc"))
 
-    py = (cfg.get("python_path") or "").strip() or sys.executable
+    py = compiler_python(cfg).strip() or sys.executable
     py_path = Path(py).expanduser()
     if py_path.is_file():
         add(str(py_path.resolve().parent / "multiqc"))
@@ -584,6 +608,9 @@ def annotation_regenerate_r() -> Optional[Path]:
             return Path(env)
     cfg = load_config()
     override = str(cfg.get("annotation_regenerate_r") or "").strip()
+    if not override:
+        regen = iter_tools(cfg).get("annotation_regenerate.R")
+        override = tool_entry_path(regen, "annotation_regenerate.R") if regen else ""
     if override:
         return Path(override)
     xdg = user_config_dir() / "annotation_regenerate.R"
@@ -645,8 +672,19 @@ def sidecar_envs_dir() -> Path:
 
 
 def tool_env_prefix(name: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """Absolute conda/module prefix from ``tool_envs.<name>`` if it exists."""
+    """Absolute conda/module prefix from nested tools or ``tool_envs.<name>``."""
     cfg = dict(cfg or load_config())
+    tools_map = iter_tools(cfg)
+    aliases = (name, name.replace("-", "_"), Path(name).stem)
+    for key in aliases:
+        prefix = tool_entry_env_prefix(tools_map.get(key), key)
+        if prefix:
+            path = Path(prefix).expanduser()
+            try:
+                if path.is_dir():
+                    return str(path.resolve())
+            except OSError:
+                return prefix
     envs = cfg.get("tool_envs") if isinstance(cfg.get("tool_envs"), dict) else {}
     aliases = (name, name.replace("-", "_"), Path(name).stem)
     for key in aliases:
@@ -694,8 +732,8 @@ def discover_nanosim() -> Optional[str]:
 
     add(os.environ.get("SAMOVAR_NANOSIM") or os.environ.get("SAMOVAR_NANOSIM_BIN"))
     add(str(cfg.get("nanosim_path") or ""))
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    add(str(tools.get("simulator.py") or tools.get("nanosim") or tools.get("nanosim3") or ""))
+    tools_map = iter_tools(cfg)
+    add(tool_entry_path(tools_map.get("simulator.py") or tools_map.get("nanosim") or tools_map.get("nanosim3"), "nanosim"))
     prefix = tool_env_prefix("nanosim", cfg) or tool_env_prefix("nanosim3", cfg)
     if prefix:
         add(str(Path(prefix) / "bin" / "simulator.py"))
@@ -719,8 +757,8 @@ def discover_art() -> Optional[str]:
 
     add(os.environ.get("SAMOVAR_ART") or os.environ.get("SAMOVAR_ART_ILLUMINA"))
     add(str(cfg.get("art_path") or ""))
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    add(str(tools.get("art_illumina") or tools.get("art") or ""))
+    tools_map = iter_tools(cfg)
+    add(tool_entry_path(tools_map.get("art_illumina") or tools_map.get("art"), "art_illumina"))
     prefix = tool_env_prefix("art", cfg) or tool_env_prefix("art_illumina", cfg)
     if prefix:
         add(str(Path(prefix) / "bin" / "art_illumina"))
@@ -740,8 +778,7 @@ def discover_wgsim() -> Optional[str]:
 
     add(os.environ.get("SAMOVAR_WGSIM"))
     add(str(cfg.get("wgsim_path") or ""))
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    add(str(tools.get("wgsim") or ""))
+    add(tool_entry_path(iter_tools(cfg).get("wgsim"), "wgsim"))
     prefix = tool_env_prefix("wgsim", cfg)
     if prefix:
         add(str(Path(prefix) / "bin" / "wgsim"))

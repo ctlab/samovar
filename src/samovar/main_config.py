@@ -1,0 +1,1026 @@
+"""Canonical ``~/.config/samovar/config.json`` schema (no duplicated paths).
+
+On disk the file is nested: ``compilers``, ``API``, ``genomes``, ``databases``,
+``workflows``, ``tools``. Readers still accept the old flat keys
+(``python_path``, ``iss_path``, ``tools.<name> = "/bin/..."``, …).
+``write_config`` always stores the nested form.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+
+CANONICAL_TOP = (
+    "version",
+    "root",
+    "compilers",
+    "API",
+    "genomes",
+    "databases",
+    "workflows",
+    "tools",
+)
+
+LEGACY_TOP = (
+    "python_path",
+    "r_path",
+    "r_lib_path",
+    "iss_path",
+    "opal_path",
+    "multiqc_path",
+    "camisim_path",
+    "nextflow_path",
+    "nanosim_path",
+    "art_path",
+    "wgsim_path",
+    "ncbi_email",
+    "test_genomes",
+    "genomes",
+    "processed_genomes",
+    "genome_dirs",
+    "path",
+    "extra_path",
+    "tool_envs",
+    "annotation_regenerate_r",
+)
+
+TOOL_GROUPS = (
+    "runtime",
+    "compiler",
+    "annotator",
+    "reads_generator",
+    "metagenome_generator",
+    "table_reads_generator",
+    "scoring",
+    "workflow",
+)
+
+TOOL_GROUP_BY_NAME: Dict[str, str] = {
+    "bash": "runtime",
+    "python": "runtime",
+    "python3": "runtime",
+    "R": "runtime",
+    "Rscript": "runtime",
+    "g++": "compiler",
+    "c++": "compiler",
+    "clang++": "compiler",
+    "kraken2": "annotator",
+    "kaiju": "annotator",
+    "kraken": "annotator",
+    "krakenuniq": "annotator",
+    "metaphlan": "annotator",
+    "metaphlan4": "annotator",
+    "centrifuge": "annotator",
+    "iss": "reads_generator",
+    "art": "reads_generator",
+    "art_illumina": "reads_generator",
+    "wgsim": "reads_generator",
+    "seqtk": "reads_generator",
+    "samtools": "reads_generator",
+    "camisim": "metagenome_generator",
+    "nanosim": "metagenome_generator",
+    "nanosim3": "metagenome_generator",
+    "simulator.py": "metagenome_generator",
+    "opal": "scoring",
+    "opal.py": "scoring",
+    "multiqc": "scoring",
+    "snakemake": "workflow",
+    "nextflow": "workflow",
+}
+
+DEFAULT_WORKFLOWS: Dict[str, List[str]] = {
+    "snakemake": [
+        "annotators",
+        "annotation2iss",
+        "read_processing",
+        "database_prep",
+        "iss_test",
+    ],
+    "nextflow": ["camisim"],
+    "conda": [],
+}
+
+# Legacy scalar key → (tool name in tools{}, compiler key, or special)
+LEGACY_TOOL_KEYS = {
+    "python_path": "python",
+    "r_path": "R",
+    "iss_path": "iss",
+    "opal_path": "opal.py",
+    "multiqc_path": "multiqc",
+    "camisim_path": "camisim",
+    "nextflow_path": "nextflow",
+    "nanosim_path": "nanosim",
+    "art_path": "art_illumina",
+    "wgsim_path": "wgsim",
+}
+
+PathLike = Union[str, os.PathLike]
+
+
+def _raw_get(cfg: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """Bypass InstallConfig.legacy_view to avoid recursion."""
+    if isinstance(cfg, dict):
+        return dict.get(cfg, key, default)
+    return default
+
+
+def _as_list(value: Any) -> List[str]:
+    if value is None or value is False:
+        return []
+    if isinstance(value, (list, tuple)):
+        out: List[str] = []
+        for item in value:
+            out.extend(_as_list(item))
+        return out
+    text = str(value).strip()
+    if not text or text.startswith("_"):
+        return []
+    return [text]
+
+
+def _split_dirs(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [str(v).strip() for v in value.values() if str(v).strip()]
+    if isinstance(value, (list, tuple)):
+        items: List[str] = []
+        for part in value:
+            items.extend(_split_dirs(part))
+        return items
+    text = str(value).strip()
+    if not text or text.startswith("_"):
+        return []
+    return [
+        piece.strip()
+        for piece in text.replace(";", ":").split(":")
+        if piece.strip() and piece.strip() not in {"$PATH", "${PATH}"}
+    ]
+
+
+def tool_group_for(name: str) -> str:
+    return TOOL_GROUP_BY_NAME.get(name, TOOL_GROUP_BY_NAME.get(Path(name).name, "runtime"))
+
+
+def parse_tool_entry(value: Any, name: str = "") -> List[str]:
+    """Normalize a tools.* value to ``[env, workflow, path, group]``."""
+    group = tool_group_for(name)
+    if value is None or value is False:
+        return ["", "bash", "", group]
+    if isinstance(value, dict):
+        env = str(value.get("env") or "").strip()
+        workflow = str(value.get("workflow") or value.get("workflow_name") or "").strip()
+        path = str(value.get("path") or "").strip()
+        grp = str(value.get("group") or value.get("tool_group") or group).strip() or group
+        if not workflow:
+            workflow = env if env else "bash"
+        return [env, workflow, path, grp]
+    if isinstance(value, (list, tuple)):
+        parts = [str(x).strip() if x is not None else "" for x in value]
+        while len(parts) < 4:
+            parts.append("")
+        env, workflow, path, grp = parts[0], parts[1], parts[2], parts[3]
+        if not path and len(parts) == 1:
+            path = parts[0]
+        if not grp:
+            grp = group
+        if not workflow:
+            workflow = env if env else "bash"
+        return [env, workflow, path, grp]
+    path = str(value).strip()
+    return ["", "bash", path, group]
+
+
+def tool_path(entry: Any, name: str = "") -> str:
+    spec = parse_tool_entry(entry, name)
+    path = spec[2]
+    env = spec[0]
+    if not path:
+        return ""
+    candidate = Path(path).expanduser()
+    if env.lower() == "conda" or (candidate.is_dir() and not candidate.is_file()):
+        binary = name if name not in {"nanosim", "nanosim3"} else "simulator.py"
+        if name == "art":
+            binary = "art_illumina"
+        nested = candidate / "bin" / binary
+        try:
+            if nested.is_file():
+                return str(nested)
+        except OSError:
+            pass
+        nested2 = candidate / binary
+        try:
+            if nested2.is_file():
+                return str(nested2)
+        except OSError:
+            pass
+    return path
+
+
+def tool_env_prefix(entry: Any, name: str = "") -> str:
+    spec = parse_tool_entry(entry, name)
+    env, _workflow, path, _group = spec
+    if not path:
+        return ""
+    candidate = Path(path).expanduser()
+    try:
+        is_dir = candidate.is_dir()
+        is_file = candidate.is_file()
+    except OSError:
+        is_dir = False
+        is_file = False
+    if env.lower() == "conda" and is_dir:
+        return str(candidate)
+    if is_file and candidate.parent.name == "bin":
+        return str(candidate.parent.parent)
+    return ""
+
+
+def iter_tools(cfg: Dict[str, Any]) -> Dict[str, List[str]]:
+    raw = _raw_get(cfg, "tools") if isinstance(_raw_get(cfg, "tools"), dict) else {}
+    out: Dict[str, List[str]] = {}
+    for name, value in raw.items():
+        if str(name).startswith("_"):
+            continue
+        out[str(name)] = parse_tool_entry(value, str(name))
+    return out
+
+
+def set_tool(
+    cfg: Dict[str, Any],
+    name: str,
+    *,
+    path: str = "",
+    env: str = "",
+    workflow: str = "",
+    group: str = "",
+) -> Dict[str, Any]:
+    tools = dict(_raw_get(cfg, "tools") or {})
+    spec = parse_tool_entry(tools.get(name), name)
+    if env:
+        spec[0] = env
+    if workflow:
+        spec[1] = workflow
+    elif env and spec[1] in {"", "bash"}:
+        spec[1] = env
+    if path:
+        spec[2] = path
+    if group:
+        spec[3] = group
+    if not spec[1]:
+        spec[1] = spec[0] if spec[0] else "bash"
+    if not spec[3]:
+        spec[3] = tool_group_for(name)
+    tools[name] = spec
+    dict.__setitem__(cfg, "tools", tools)
+    return cfg
+
+
+def compilers_of(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    block = _raw_get(cfg, "compilers")
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def api_of(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    block = _raw_get(cfg, "API")
+    if isinstance(block, dict):
+        return dict(block)
+    alt = _raw_get(cfg, "api")
+    return dict(alt) if isinstance(alt, dict) else {}
+
+
+def genomes_block(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    block = _raw_get(cfg, "genomes")
+    if isinstance(block, dict):
+        if any(k in block for k in ("test", "raw", "processed", "data")):
+            return dict(block)
+        return dict(block)
+    return {}
+
+
+def _looks_like_path_map_only(block: Dict[str, Any]) -> bool:
+    return False
+
+
+def compiler_python(cfg: Dict[str, Any]) -> str:
+    compilers = compilers_of(cfg)
+    return str(compilers.get("python") or _raw_get(cfg, "python_path") or "").strip()
+
+
+def compiler_r(cfg: Dict[str, Any]) -> str:
+    compilers = compilers_of(cfg)
+    return str(compilers.get("R") or _raw_get(cfg, "r_path") or "").strip()
+
+
+def compiler_r_libs(cfg: Dict[str, Any]) -> List[str]:
+    compilers = compilers_of(cfg)
+    libs = compilers.get("R_libs")
+    if libs:
+        return _split_dirs(libs)
+    return _split_dirs(_raw_get(cfg, "r_lib_path"))
+
+
+def compiler_python_libs(cfg: Dict[str, Any]) -> List[str]:
+    compilers = compilers_of(cfg)
+    libs = compilers.get("python_libs")
+    if libs:
+        return _split_dirs(libs)
+    return _split_dirs(_raw_get(cfg, "path") or _raw_get(cfg, "extra_path"))
+
+
+def compiler_bash(cfg: Dict[str, Any]) -> str:
+    compilers = compilers_of(cfg)
+    return str(compilers.get("bash") or "").strip()
+
+
+def compiler_cpp(cfg: Dict[str, Any]) -> str:
+    compilers = compilers_of(cfg)
+    return str(compilers.get("cpp") or "").strip()
+
+
+def ncbi_email_from_cfg(cfg: Dict[str, Any]) -> str:
+    api = api_of(cfg)
+    return str(api.get("ncbi_email") or _raw_get(cfg, "ncbi_email") or "").strip()
+
+
+def test_genome_dirs_from_cfg(cfg: Dict[str, Any]) -> List[str]:
+    block = genomes_block(cfg)
+    if block:
+        return _split_dirs(block.get("test"))
+    return _split_dirs(_raw_get(cfg, "test_genomes"))
+
+
+def is_home_path(path: str, home: Optional[Path] = None) -> bool:
+    """True if ``path`` is under ``$HOME`` before or after resolving symlinks.
+
+    HPC home quotas cannot hold NCBI caches. A symlink from ``~/.cache`` onto
+    scratch still must not be stored as a ``$HOME`` path.
+    """
+    text = str(path or "").strip()
+    if not text:
+        return False
+    home_lex = (home or Path.home()).expanduser()
+    candidate = Path(text).expanduser()
+    home_s = str(home_lex)
+    cand_s = str(candidate)
+    if cand_s == home_s or cand_s.startswith(home_s + os.sep):
+        return True
+    try:
+        return candidate.resolve().is_relative_to(home_lex.resolve())
+    except (OSError, ValueError):
+        return False
+
+
+def drop_home_paths(mapping: Dict[str, str], home: Optional[Path] = None) -> Dict[str, str]:
+    cleaned = {
+        fid: path for fid, path in mapping.items() if path and not is_home_path(path, home)
+    }
+    return unique_folder_map(cleaned)
+
+
+def unique_folder_map(mapping: Dict[str, str]) -> Dict[str, str]:
+    """Keep one id per resolved directory; prefer ``default``."""
+    ordered: List[Tuple[str, str]] = []
+    if "default" in mapping:
+        ordered.append(("default", mapping["default"]))
+    for fid, path in mapping.items():
+        if fid != "default":
+            ordered.append((fid, path))
+    seen: set = set()
+    out: Dict[str, str] = {}
+    for fid, path in ordered:
+        try:
+            key = str(Path(path).expanduser().resolve())
+        except OSError:
+            key = path
+        if key in seen:
+            continue
+        seen.add(key)
+        out[fid] = path
+    return out
+
+
+def folder_map(value: Any) -> Dict[str, str]:
+    """``raw`` / ``processed``: ``{folder_id: path}``."""
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        # {"folder": "folder_id", "path": "..."} single record
+        if "folder" in value and ("path" in value or "dir" in value):
+            fid = str(value.get("folder") or "default").strip() or "default"
+            path = str(value.get("path") or value.get("dir") or "").strip()
+            return {fid: path} if path else {}
+        out: Dict[str, str] = {}
+        for key, val in value.items():
+            if str(key).startswith("_"):
+                continue
+            if isinstance(val, dict):
+                path = str(val.get("path") or val.get("dir") or val.get("folder") or "").strip()
+            else:
+                path = str(val or "").strip()
+            if path:
+                out[str(key)] = path
+        return out
+    if isinstance(value, str) and value.strip():
+        return {"default": value.strip()}
+    if isinstance(value, (list, tuple)):
+        out = {}
+        for i, item in enumerate(value):
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                out[str(item[0])] = str(item[1])
+            elif str(item).strip():
+                out[str(i) if i else "default"] = str(item).strip()
+        return out
+    return {}
+
+
+def raw_genome_dirs(cfg: Dict[str, Any]) -> List[str]:
+    block = genomes_block(cfg)
+    if block:
+        mapped = drop_home_paths(folder_map(block.get("raw")))
+        dirs = list(mapped.values())
+        if dirs:
+            return dirs
+    raw = _raw_get(cfg, "genomes")
+    if isinstance(raw, str) and raw.strip() and not is_home_path(raw):
+        return [raw.strip()]
+    return []
+
+
+def processed_genome_dirs(cfg: Dict[str, Any]) -> List[str]:
+    block = genomes_block(cfg)
+    if block:
+        mapped = drop_home_paths(folder_map(block.get("processed")))
+        dirs = list(mapped.values())
+        if dirs:
+            return dirs
+    proc = _raw_get(cfg, "processed_genomes")
+    if isinstance(proc, str) and proc.strip() and not is_home_path(proc):
+        return [proc.strip()]
+    return raw_genome_dirs(cfg)
+
+
+def extra_genome_dirs(cfg: Dict[str, Any]) -> List[str]:
+    """All library folders: raw map values plus legacy genome_dirs."""
+    dirs: List[str] = []
+    seen = set()
+
+    def add(raw: str) -> None:
+        text = str(raw or "").strip()
+        if not text or text in seen or is_home_path(text):
+            return
+        seen.add(text)
+        dirs.append(text)
+
+    block = genomes_block(cfg)
+    if block:
+        for path in folder_map(block.get("raw")).values():
+            add(path)
+        for path in folder_map(block.get("processed")).values():
+            add(path)
+        data = block.get("data") if isinstance(block.get("data"), dict) else {}
+        folders = folder_map(block.get("raw"))
+        folders.update(folder_map(block.get("processed")))
+        for _tax, rec in data.items():
+            if isinstance(rec, (list, tuple)) and len(rec) >= 2:
+                fid = str(rec[1])
+                if fid in folders:
+                    add(folders[fid])
+    for item in _split_dirs(_raw_get(cfg, "genome_dirs")):
+        add(item)
+    return dirs
+
+
+def first_dir(values: Sequence[str]) -> str:
+    for item in values:
+        if str(item).strip():
+            return str(item).strip()
+    return ""
+
+
+def databases_of(cfg: Dict[str, Any]) -> Dict[str, List[List[str]]]:
+    raw = _raw_get(cfg, "databases")
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, List[List[str]]] = {}
+    for tool, value in raw.items():
+        if str(tool).startswith("_"):
+            continue
+        rows: List[List[str]] = []
+        if isinstance(value, dict):
+            rows.append(
+                [
+                    str(value.get("name") or value.get("database_name") or "").strip(),
+                    str(value.get("path") or value.get("database_path") or "").strip(),
+                    str(value.get("flags") or value.get("database_flags") or "").strip(),
+                ]
+            )
+        elif isinstance(value, (list, tuple)):
+            if value and isinstance(value[0], (list, tuple)):
+                for row in value:
+                    parts = [str(x).strip() if x is not None else "" for x in row]
+                    while len(parts) < 3:
+                        parts.append("")
+                    rows.append(parts[:3])
+            else:
+                parts = [str(x).strip() if x is not None else "" for x in value]
+                while len(parts) < 3:
+                    parts.append("")
+                rows.append(parts[:3])
+        elif value:
+            rows.append([str(value).strip(), "", ""])
+        out[str(tool)] = rows
+    return out
+
+
+def scan_test_genome_index(test_root: Path) -> Dict[str, List[str]]:
+    """``taxID -> [accession, folder_id, file_name]`` for bundled stubs."""
+    data: Dict[str, List[str]] = {}
+    if not test_root.is_dir():
+        return data
+    for path in sorted(test_root.rglob("*")):
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.startswith(".") or name == "test.fa":
+            continue
+        stem = name.split(".")[0]
+        taxid = stem.split("-")[0]
+        if not taxid.isdigit():
+            continue
+        try:
+            rel_parent = path.parent.relative_to(test_root).as_posix()
+        except ValueError:
+            rel_parent = path.parent.name
+        folder_id = "test"
+        data[taxid] = ["", folder_id, name if rel_parent in {".", ""} else f"{rel_parent}/{name}"]
+    return data
+
+
+def empty_canonical(*, version: str = "", root: str = "") -> Dict[str, Any]:
+    return {
+        "version": version,
+        "root": root,
+        "compilers": {
+            "bash": "",
+            "python": "",
+            "python_libs": [],
+            "R": "",
+            "R_libs": [],
+            "cpp": "",
+            "cpp_libs": [],
+        },
+        "API": {"ncbi_email": ""},
+        "genomes": {
+            "test": [],
+            "raw": {},
+            "processed": {},
+            "data": {},
+        },
+        "databases": {},
+        "workflows": {k: list(v) for k, v in DEFAULT_WORKFLOWS.items()},
+        "tools": {},
+    }
+
+
+def _merge_folder_map(existing: Any, extra: Dict[str, str]) -> Dict[str, str]:
+    mapped = folder_map(existing)
+    mapped.update({k: v for k, v in extra.items() if v})
+    return mapped
+
+
+def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Write either canonical or legacy keys into ``cfg`` (mutates, returns cfg)."""
+    for key, value in updates.items():
+        if key in CANONICAL_TOP and key not in {"tools", "genomes"}:
+            cfg[key] = value
+            continue
+        if key == "compilers" and isinstance(value, dict):
+            block = compilers_of(cfg)
+            block.update(value)
+            cfg["compilers"] = block
+            continue
+        if key == "API" and isinstance(value, dict):
+            block = api_of(cfg)
+            block.update(value)
+            cfg["API"] = block
+            continue
+        if key == "genomes":
+            if isinstance(value, dict) and any(k in value for k in ("test", "raw", "processed", "data")):
+                block = genomes_block(cfg) or empty_canonical()["genomes"]
+                for sub, val in value.items():
+                    block[sub] = val
+                cfg["genomes"] = block
+            elif isinstance(value, str):
+                block = genomes_block(cfg) or empty_canonical()["genomes"]
+                raw = folder_map(block.get("raw"))
+                if value.strip():
+                    raw["default"] = value.strip()
+                elif "default" in raw:
+                    raw.pop("default", None)
+                block["raw"] = raw
+                cfg["genomes"] = block
+            continue
+        if key == "processed_genomes":
+            block = genomes_block(cfg) or empty_canonical()["genomes"]
+            proc = folder_map(block.get("processed"))
+            text = str(value or "").strip()
+            if text:
+                proc["default"] = text
+            else:
+                proc.pop("default", None)
+            block["processed"] = proc
+            cfg["genomes"] = block
+            continue
+        if key == "genome_dirs":
+            block = genomes_block(cfg) or empty_canonical()["genomes"]
+            raw = folder_map(block.get("raw"))
+            # Replace extra library folders; keep default/scratch if present
+            reserved = {k: v for k, v in raw.items() if k in {"default", "scratch", "run"}}
+            raw = dict(reserved)
+            for i, item in enumerate(_split_dirs(value)):
+                fid = Path(item).name or f"lib{i}"
+                n = fid
+                k = 2
+                while n in raw and raw[n] != item:
+                    n = f"{fid}_{k}"
+                    k += 1
+                raw[n] = item
+            block["raw"] = raw
+            cfg["genomes"] = block
+            continue
+        if key == "test_genomes":
+            block = genomes_block(cfg) or empty_canonical()["genomes"]
+            block["test"] = _split_dirs(value)
+            cfg["genomes"] = block
+            continue
+        if key == "ncbi_email":
+            api = api_of(cfg)
+            api["ncbi_email"] = str(value or "")
+            cfg["API"] = api
+            continue
+        if key == "annotation_regenerate_r":
+            set_tool(
+                cfg,
+                "annotation_regenerate.R",
+                path=str(value or ""),
+                env="",
+                workflow="R",
+                group="table_reads_generator",
+            )
+            continue
+        if key in LEGACY_TOOL_KEYS:
+            set_tool(cfg, LEGACY_TOOL_KEYS[key], path=str(value or ""))
+            if key == "python_path":
+                compilers = compilers_of(cfg)
+                compilers["python"] = str(value or "")
+                cfg["compilers"] = compilers
+            if key == "r_path":
+                compilers = compilers_of(cfg)
+                compilers["R"] = str(value or "")
+                cfg["compilers"] = compilers
+            continue
+        if key == "r_lib_path":
+            compilers = compilers_of(cfg)
+            compilers["R_libs"] = _split_dirs(value)
+            cfg["compilers"] = compilers
+            continue
+        if key in {"path", "extra_path"}:
+            compilers = compilers_of(cfg)
+            compilers["python_libs"] = _split_dirs(value)
+            cfg["compilers"] = compilers
+            continue
+        if key == "tools":
+            if isinstance(value, dict):
+                for name, entry in value.items():
+                    if str(name).startswith("_"):
+                        continue
+                    spec = parse_tool_entry(entry, str(name))
+                    set_tool(
+                        cfg,
+                        str(name),
+                        env=spec[0],
+                        workflow=spec[1],
+                        path=spec[2],
+                        group=spec[3],
+                    )
+            continue
+        if key == "tool_envs":
+            if isinstance(value, dict):
+                for name, prefix in value.items():
+                    if str(name).startswith("_") or not prefix:
+                        continue
+                    existing = parse_tool_entry((cfg.get("tools") or {}).get(name), str(name))
+                    path = existing[2] or str(prefix)
+                    set_tool(
+                        cfg,
+                        str(name),
+                        env="conda",
+                        workflow=str(name),
+                        path=path if Path(str(existing[2] or "")).is_file() else str(prefix),
+                        group=existing[3],
+                    )
+            continue
+        if key == "databases" and isinstance(value, dict):
+            cfg["databases"] = value
+            continue
+        if key == "workflows" and isinstance(value, dict):
+            cfg["workflows"] = value
+            continue
+        cfg[key] = value
+    return cfg
+
+
+def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Lift a flat 0.10.x config (or mixed) into the nested schema."""
+    cfg = empty_canonical(
+        version=str(raw.get("version") or ""),
+        root=str(raw.get("root") or ""),
+    )
+    # Start from nested pieces already present
+    if isinstance(raw.get("compilers"), dict):
+        cfg["compilers"].update({k: v for k, v in raw["compilers"].items() if not str(k).startswith("_")})
+    if isinstance(raw.get("API"), dict):
+        cfg["API"].update(raw["API"])
+    elif isinstance(raw.get("api"), dict):
+        cfg["API"].update(raw["api"])
+    if isinstance(raw.get("genomes"), dict) and any(
+        k in raw["genomes"] for k in ("test", "raw", "processed", "data")
+    ):
+        for key in ("test", "raw", "processed", "data"):
+            if key in raw["genomes"]:
+                cfg["genomes"][key] = raw["genomes"][key]
+    if isinstance(raw.get("databases"), dict):
+        cfg["databases"] = dict(raw["databases"])
+    if isinstance(raw.get("workflows"), dict):
+        wf = dict(DEFAULT_WORKFLOWS)
+        wf.update(raw["workflows"])
+        cfg["workflows"] = wf
+    if isinstance(raw.get("tools"), dict):
+        for name, entry in raw["tools"].items():
+            if str(name).startswith("_"):
+                continue
+            spec = parse_tool_entry(entry, str(name))
+            cfg["tools"][str(name)] = spec
+
+    # Overlay leftover flat keys
+    leftovers = {k: v for k, v in raw.items() if k not in CANONICAL_TOP}
+    apply_legacy_updates(cfg, leftovers)
+
+    # Flat genomes string when genomes was not a nested dict
+    if isinstance(raw.get("genomes"), str) and raw["genomes"].strip():
+        apply_legacy_updates(cfg, {"genomes": raw["genomes"]})
+    return cfg
+
+
+def to_canonical(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    raw = dict(data or {})
+    nested = migrate_legacy(raw)
+    # Drop empties that are just noise? Keep structure stable for wiki/example.
+    return nested
+
+
+def legacy_view(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """In-memory aliases so ``cfg.get('python_path')`` still works."""
+    tools = iter_tools(cfg)
+    view: Dict[str, Any] = {}
+    view["python_path"] = compiler_python(cfg)
+    view["r_path"] = compiler_r(cfg)
+    view["r_lib_path"] = ":".join(compiler_r_libs(cfg))
+    view["iss_path"] = tool_path(tools.get("iss"), "iss")
+    view["opal_path"] = tool_path(tools.get("opal.py") or tools.get("opal"), "opal.py")
+    view["multiqc_path"] = tool_path(tools.get("multiqc"), "multiqc")
+    view["camisim_path"] = tool_path(tools.get("camisim"), "camisim")
+    view["nextflow_path"] = tool_path(tools.get("nextflow"), "nextflow")
+    view["nanosim_path"] = tool_path(
+        tools.get("nanosim") or tools.get("simulator.py") or tools.get("nanosim3"),
+        "nanosim",
+    )
+    view["art_path"] = tool_path(tools.get("art_illumina") or tools.get("art"), "art_illumina")
+    view["wgsim_path"] = tool_path(tools.get("wgsim"), "wgsim")
+    view["ncbi_email"] = ncbi_email_from_cfg(cfg)
+    tests = test_genome_dirs_from_cfg(cfg)
+    view["test_genomes"] = tests[0] if tests else ""
+    view["genomes"] = first_dir(raw_genome_dirs(cfg))
+    view["processed_genomes"] = first_dir(processed_genome_dirs(cfg))
+    view["genome_dirs"] = extra_genome_dirs(cfg)
+    view["path"] = compiler_python_libs(cfg)
+    regen = tools.get("annotation_regenerate.R")
+    view["annotation_regenerate_r"] = tool_path(regen, "annotation_regenerate.R") if regen else ""
+    view["tools"] = {name: spec[2] for name, spec in tools.items() if spec[2]}
+    envs: Dict[str, str] = {}
+    for name, spec in tools.items():
+        prefix = tool_env_prefix(spec, name)
+        if prefix:
+            envs[name] = prefix
+    view["tool_envs"] = envs
+    return view
+
+
+class InstallConfig(dict):
+    """Dict that stores the nested schema and answers legacy ``.get()`` keys."""
+
+    def get(self, key, default=None):  # type: ignore[override]
+        if dict.__contains__(self, key):
+            return dict.get(self, key, default)
+        view = legacy_view(self)
+        if key in view:
+            return view[key]
+        return default
+
+    def __getitem__(self, key):  # type: ignore[override]
+        try:
+            return dict.__getitem__(self, key)
+        except KeyError:
+            view = legacy_view(self)
+            if key in view:
+                return view[key]
+            raise
+
+    def __setitem__(self, key, value):  # type: ignore[override]
+        if key == "tools":
+            apply_legacy_updates(self, {"tools": value})
+            return
+        if key == "genomes" and not (
+            isinstance(value, dict) and any(k in value for k in ("test", "raw", "processed", "data"))
+        ):
+            apply_legacy_updates(self, {"genomes": value})
+            return
+        if key in CANONICAL_TOP:
+            dict.__setitem__(self, key, value)
+            return
+        apply_legacy_updates(self, {key: value})
+
+    def __contains__(self, key):  # type: ignore[override]
+        if dict.__contains__(self, key):
+            return True
+        return key in legacy_view(self)
+
+
+def as_install_config(data: Optional[Dict[str, Any]]) -> InstallConfig:
+    canonical = to_canonical(data)
+    return InstallConfig(canonical)
+
+
+def infer_tool_env(path: str, conda_prefix: str = "") -> Tuple[str, str]:
+    """Return ``(env, workflow_name)`` for a discovered binary or prefix."""
+    if not path:
+        return "", "bash"
+    candidate = Path(path).expanduser()
+    try:
+        is_dir = candidate.is_dir()
+        is_file = candidate.is_file()
+    except OSError:
+        is_dir = False
+        is_file = False
+    prefix = ""
+    if is_file and candidate.parent.name == "bin":
+        prefix = str(candidate.parent.parent)
+    elif is_dir:
+        prefix = str(candidate)
+        if candidate.name == "bin":
+            prefix = str(candidate.parent)
+    if prefix and conda_prefix and os.path.normpath(prefix) == os.path.normpath(conda_prefix):
+        return "", "bash"
+    if prefix and (Path(prefix) / "conda-meta").is_dir():
+        return "conda", Path(prefix).name
+    if is_dir and not is_file:
+        return "conda", candidate.name
+    return "", "bash"
+
+
+def build_install_config(
+    *,
+    root: str,
+    python_path: str,
+    version: str,
+    existing: Optional[Dict[str, Any]] = None,
+    discovered_tools: Optional[Dict[str, str]] = None,
+    ncbi_email: str = "",
+    genomes_default: str = "",
+    processed_default: str = "",
+    extra_genome_dirs: Optional[Sequence[str]] = None,
+    extra_path: Optional[Sequence[str]] = None,
+    bash: str = "",
+    cxx: str = "",
+    r_path: str = "",
+    r_libs: Optional[Sequence[str]] = None,
+    conda_prefix: str = "",
+    conda_sidecars: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Assemble the nested install config from discovery + previous file."""
+    cfg = as_install_config(existing)
+    cfg["version"] = version
+    cfg["root"] = root
+    compilers = compilers_of(cfg)
+    compilers["python"] = python_path or compilers.get("python") or ""
+    compilers["bash"] = bash or compilers.get("bash") or shutil.which("bash") or ""
+    compilers["cpp"] = cxx or compilers.get("cpp") or shutil.which("g++") or shutil.which("c++") or shutil.which("clang++") or ""
+    compilers["R"] = r_path or compilers.get("R") or shutil.which("R") or ""
+    if r_libs is not None:
+        compilers["R_libs"] = list(r_libs)
+    elif not compilers.get("R_libs"):
+        compilers["R_libs"] = []
+    if extra_path is not None:
+        compilers["python_libs"] = [str(x) for x in extra_path if str(x).strip()]
+    elif not compilers.get("python_libs"):
+        compilers["python_libs"] = []
+    if not compilers.get("cpp_libs"):
+        compilers["cpp_libs"] = []
+    cfg["compilers"] = compilers
+
+    api = api_of(cfg)
+    if ncbi_email:
+        api["ncbi_email"] = ncbi_email
+    elif not api.get("ncbi_email"):
+        api["ncbi_email"] = ""
+    cfg["API"] = api
+
+    genomes = genomes_block(cfg) or empty_canonical()["genomes"]
+    test_root = str(Path(root) / "data" / "test_genomes")
+    genomes["test"] = [test_root]
+    raw = drop_home_paths(folder_map(genomes.get("raw")))
+    if genomes_default and not is_home_path(genomes_default):
+        raw["default"] = genomes_default
+    for i, item in enumerate(extra_genome_dirs or []):
+        text = str(item).strip()
+        if not text or is_home_path(text):
+            continue
+        fid = Path(text).name or f"lib{i}"
+        n = fid
+        k = 2
+        while n in raw and raw[n] != text:
+            n = f"{fid}_{k}"
+            k += 1
+        raw[n] = text
+    genomes["raw"] = raw
+    proc = drop_home_paths(folder_map(genomes.get("processed")))
+    if processed_default and not is_home_path(processed_default):
+        proc["default"] = processed_default
+    genomes["processed"] = proc
+    if not genomes.get("data"):
+        genomes["data"] = scan_test_genome_index(Path(test_root))
+    cfg["genomes"] = genomes
+
+    if not isinstance(cfg.get("databases"), dict):
+        cfg["databases"] = {}
+
+    wf = dict(DEFAULT_WORKFLOWS)
+    if isinstance(cfg.get("workflows"), dict):
+        wf.update(cfg["workflows"])
+    sidecars = list(conda_sidecars or [])
+    if sidecars:
+        conda_wf = list(wf.get("conda") or [])
+        for name in sidecars:
+            if name not in conda_wf:
+                conda_wf.append(name)
+        wf["conda"] = conda_wf
+    cfg["workflows"] = wf
+
+    discovered = dict(discovered_tools or {})
+    # Keep previously configured tools, overlay discovery when missing path
+    for name, path in discovered.items():
+        existing_spec = parse_tool_entry((cfg.get("tools") or {}).get(name), name)
+        if existing_spec[2]:
+            continue
+        env, workflow = infer_tool_env(path, conda_prefix=conda_prefix)
+        set_tool(cfg, name, path=path, env=env, workflow=workflow, group=tool_group_for(name))
+
+    # Compilers also as tools
+    if compilers.get("python"):
+        set_tool(cfg, "python", path=str(compilers["python"]), group="runtime")
+        py3 = str(Path(compilers["python"]).parent / "python3")
+        if Path(py3).is_file():
+            set_tool(cfg, "python3", path=py3, group="runtime")
+    if compilers.get("R"):
+        set_tool(cfg, "R", path=str(compilers["R"]), workflow="R", group="runtime")
+        rscript = shutil.which("Rscript") or str(Path(compilers["R"]).parent / "Rscript")
+        if Path(rscript).is_file() or shutil.which("Rscript"):
+            set_tool(
+                cfg,
+                "Rscript",
+                path=str(Path(rscript).resolve()) if Path(rscript).is_file() else (shutil.which("Rscript") or rscript),
+                workflow="R",
+                group="runtime",
+            )
+    if compilers.get("bash"):
+        set_tool(cfg, "bash", path=str(compilers["bash"]), workflow="bash", group="runtime")
+    if compilers.get("cpp"):
+        set_tool(cfg, "g++", path=str(compilers["cpp"]), workflow="bash", group="compiler")
+
+    return dict(cfg)
+
+
+def disk_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Nested keys only — what is written to config.json."""
+    canonical = to_canonical(cfg)
+    payload = {key: canonical.get(key) for key in CANONICAL_TOP}
+    genomes = payload.get("genomes") if isinstance(payload.get("genomes"), dict) else {}
+    if genomes:
+        genomes["raw"] = drop_home_paths(folder_map(genomes.get("raw")))
+        genomes["processed"] = drop_home_paths(folder_map(genomes.get("processed")))
+        payload["genomes"] = genomes
+    return payload

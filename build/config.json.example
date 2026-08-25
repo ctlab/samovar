@@ -1,39 +1,47 @@
 {
-    "version": "0.10.18",
-    "root": "/path/to/samovar",
-    "python_path": "/usr/bin/python3",
-    "r_path": "/usr/bin/R",
-    "r_lib_path": "",
-    "iss_path": "/usr/bin/iss",
-    "opal_path": "/usr/bin/opal.py",
-    "multiqc_path": "/usr/bin/multiqc",
-    "camisim_path": "/home/user/.cache/samovar/CAMISIM",
-    "nextflow_path": "/usr/bin/nextflow",
-    "nanosim_path": "/home/user/.cache/samovar/envs/nanosim/bin/simulator.py",
-    "art_path": "/home/user/.cache/samovar/envs/art/bin/art_illumina",
-    "wgsim_path": "/usr/bin/wgsim",
-    "ncbi_email": "test@samovar.com",
-    "test_genomes": "/path/to/samovar/data/test_genomes",
-    "_comment_test_genomes": "Truncated ISS/CI stubs only. Never used as NCBI substitutes.",
-    "genomes": "/home/user/.cache/samovar/genomes",
-    "processed_genomes": "/home/user/.cache/samovar/genomes",
-    "genome_dirs": [
-        "/path/to/previously/downloaded/ncbi_genomes"
-    ],
-    "_comment_path": "Extra bin dirs or conda prefixes prepended so bash .log/samovar.sh finds tools without module load / conda activate",
-    "path": [
-        "/opt/other-env/bin"
-    ],
-    "tools": {
-        "kraken2": "/usr/bin/kraken2",
-        "kaiju": "/opt/conda/envs/kaiju/bin/kaiju",
-        "simulator.py": "/home/user/.cache/samovar/envs/nanosim/bin/simulator.py",
-        "art_illumina": "/home/user/.cache/samovar/envs/art/bin/art_illumina"
-    },
-    "_comment_tool_envs": "Map tool name -> conda/module prefix; <prefix>/bin is prepended and used to resolve that tool. Fragile simulators (NanoSim, ART) should live here, not in the SamovaR env.",
-    "tool_envs": {
-        "kaiju": "/opt/conda/envs/kaiju",
-        "nanosim": "/home/user/.cache/samovar/envs/nanosim",
-        "art": "/home/user/.cache/samovar/envs/art"
+  "version": "0.10.19",
+  "root": "/path/to/samovar",
+  "compilers": {
+    "bash": "/bin/bash",
+    "python": "/usr/bin/python3",
+    "python_libs": [],
+    "R": "/usr/bin/R",
+    "R_libs": [],
+    "cpp": "/usr/bin/g++",
+    "cpp_libs": []
+  },
+  "API": {
+    "ncbi_email": "test@samovar.com"
+  },
+  "genomes": {
+    "test": ["/path/to/samovar/data/test_genomes"],
+    "raw": {},
+    "processed": {},
+    "data": {
+      "562": ["", "test", "meta/562.fna"],
+      "4932": ["", "test", "meta/4932.fna"],
+      "2886930": ["", "test", "meta/2886930.fna"],
+      "9606": ["", "test", "host/9606.fna"]
     }
+  },
+  "databases": {},
+  "workflows": {
+    "snakemake": [
+      "annotators",
+      "annotation2iss",
+      "read_processing",
+      "database_prep",
+      "iss_test"
+    ],
+    "nextflow": ["camisim"],
+    "conda": []
+  },
+  "tools": {
+    "python": ["", "bash", "/usr/bin/python3", "runtime"],
+    "iss": ["", "bash", "/usr/bin/iss", "reads_generator"],
+    "snakemake": ["", "bash", "/usr/bin/snakemake", "workflow"],
+    "kraken2": ["", "bash", "/usr/bin/kraken2", "annotator"],
+    "kaiju": ["conda", "kaiju", "/opt/conda/envs/kaiju", "annotator"],
+    "nanosim": ["conda", "nanosim", "/path/to/samovar/.cache/samovar/envs/nanosim", "metagenome_generator"]
+  }
 }

@@ -598,6 +598,7 @@ export PYTHON_PATH
 "$PYTHON_PATH" - <<'PY'
 import os, shutil
 from pathlib import Path
+from samovar.main_config import build_install_config
 from samovar.paths import (
     PACKAGE_VERSION,
     collect_runtime_path_dirs,
@@ -613,25 +614,29 @@ except Exception:
     def discover_camisim():
         return None
 try:
-    from samovar.paths import discover_art, discover_nanosim
+    from samovar.paths import discover_art, discover_nanosim, cxx_compiler
 except Exception:
     def discover_art():
         return None
     def discover_nanosim():
+        return None
+    def cxx_compiler():
         return None
 
 root = os.environ["SAMOVAR_ROOT"]
 python_path = os.environ["PYTHON_PATH"]
 existing = load_config()
 tools = dict(discover_tools())
+# Preserve previously configured tool paths (any schema).
+from samovar.main_config import iter_tools, tool_path as _tool_path
+for name, spec in iter_tools(existing).items():
+    path = _tool_path(spec, name)
+    if path:
+        tools.setdefault(name, path)
 for name, path in (existing.get("tools") or {}).items():
-    if str(path or "").strip():
-        tools[name] = path
-path_extra = existing.get("path") or existing.get("extra_path") or []
-tool_envs = existing.get("tool_envs") or {}
-# Large NCBI caches belong under each pipeline outdir ($SAMOVAR_RUN_DIR/.cache),
-# not under $HOME. Install may optionally register a shared scratch library via
-# SAMOVAR_GENOMES or XDG_CACHE_HOME — never default to ~/.cache.
+    if isinstance(path, str) and path.strip():
+        tools.setdefault(name, path)
+
 _home = Path.home().resolve()
 
 def _not_under_home(path: Path) -> bool:
@@ -659,14 +664,16 @@ def _usable_dir(raw, *, allow_home: bool = False):
         return ""
     return str(path)
 
-genomes = _usable_dir(existing.get("genomes")) or _usable_dir(default_genomes) or ""
+from samovar.main_config import first_dir, processed_genome_dirs, raw_genome_dirs
+genomes = _usable_dir(first_dir(raw_genome_dirs(existing))) or _usable_dir(default_genomes) or ""
 processed = (
-    _usable_dir(existing.get("processed_genomes"))
-    or _usable_dir(existing.get("genomes"))
+    _usable_dir(first_dir(processed_genome_dirs(existing)))
+    or _usable_dir(first_dir(raw_genome_dirs(existing)))
     or genomes
 )
 kept_libs = []
-for item in existing.get("genome_dirs") or []:
+from samovar.main_config import extra_genome_dirs as _extra_dirs
+for item in _extra_dirs(existing) or existing.get("genome_dirs") or []:
     text = str(item or "").strip()
     if not text:
         continue
@@ -675,53 +682,57 @@ for item in existing.get("genome_dirs") or []:
         ok = path.is_dir()
     except OSError:
         ok = False
-    if ok:
+    if ok and _not_under_home(path):
         kept_libs.append(str(path))
-payload = {
-    "version": PACKAGE_VERSION,
-    "root": root,
-    "python_path": python_path,
-    "r_path": shutil.which("R") or "",
-    "r_lib_path": existing.get("r_lib_path", ""),
-    "iss_path": shutil.which("iss") or tools.get("iss", ""),
-    "opal_path": existing.get("opal_path") or discover_opal() or shutil.which("opal.py") or shutil.which("opal") or "",
-    "multiqc_path": existing.get("multiqc_path") or discover_multiqc() or shutil.which("multiqc") or "",
-    "camisim_path": existing.get("camisim_path") or discover_camisim() or "",
-    "nextflow_path": existing.get("nextflow_path") or shutil.which("nextflow") or "",
-    "nanosim_path": existing.get("nanosim_path") or discover_nanosim() or "",
-    "art_path": existing.get("art_path") or discover_art() or "",
-    "ncbi_email": os.environ.get("NCBI_EMAIL", ""),
-    "test_genomes": os.path.join(root, "data", "test_genomes"),
-    "genomes": genomes,
-    "processed_genomes": processed,
-    "genome_dirs": kept_libs,
-    "tools": tools,
-}
-if path_extra:
-    payload["path"] = path_extra
-if tool_envs:
-    payload["tool_envs"] = tool_envs
-if existing.get("annotation_regenerate_r"):
-    payload["annotation_regenerate_r"] = existing["annotation_regenerate_r"]
-if payload.get("opal_path"):
-    tools.setdefault("opal.py", payload["opal_path"])
-    payload["tools"] = tools
-if payload.get("multiqc_path"):
-    tools.setdefault("multiqc", payload["multiqc_path"])
-    payload["tools"] = tools
-if payload.get("camisim_path"):
-    tools.setdefault("camisim", payload["camisim_path"])
-    payload["tools"] = tools
-if payload.get("nextflow_path"):
-    tools.setdefault("nextflow", payload["nextflow_path"])
-    payload["tools"] = tools
-if payload.get("nanosim_path"):
-    tools.setdefault("simulator.py", payload["nanosim_path"])
-    tools.setdefault("nanosim", payload["nanosim_path"])
-    payload["tools"] = tools
-if payload.get("art_path"):
-    tools.setdefault("art_illumina", payload["art_path"])
-    payload["tools"] = tools
+
+path_extra = existing.get("path") or existing.get("extra_path") or []
+from samovar.main_config import compiler_python_libs
+path_extra = path_extra or compiler_python_libs(existing)
+
+sidecars = []
+from samovar.main_config import tool_env_prefix as _tep
+for name in ("nanosim", "art"):
+    if _tep((iter_tools(existing) or {}).get(name), name):
+        sidecars.append(name)
+if discover_nanosim():
+    sidecars.append("nanosim")
+if discover_art():
+    sidecars.append("art")
+sidecars = list(dict.fromkeys(sidecars))
+
+discovered = dict(tools)
+if discover_opal():
+    discovered.setdefault("opal.py", discover_opal())
+if discover_multiqc():
+    discovered.setdefault("multiqc", discover_multiqc())
+cam = discover_camisim()
+if cam:
+    discovered.setdefault("camisim", cam)
+nano = discover_nanosim()
+if nano:
+    discovered.setdefault("nanosim", nano)
+    discovered.setdefault("simulator.py", nano)
+art = discover_art()
+if art:
+    discovered.setdefault("art_illumina", art)
+
+payload = build_install_config(
+    root=root,
+    python_path=python_path,
+    version=PACKAGE_VERSION,
+    existing=existing,
+    discovered_tools=discovered,
+    ncbi_email=os.environ.get("NCBI_EMAIL", ""),
+    genomes_default=genomes,
+    processed_default=processed,
+    extra_genome_dirs=kept_libs,
+    extra_path=path_extra if isinstance(path_extra, list) else [path_extra] if path_extra else [],
+    bash=shutil.which("bash") or "",
+    cxx=(cxx_compiler() or shutil.which("g++") or ""),
+    r_path=shutil.which("R") or "",
+    conda_prefix=os.environ.get("CONDA_PREFIX") or "",
+    conda_sidecars=sidecars,
+)
 write_config(payload)
 user_cfg = Path(os.environ["USER_CFG_DIR"])
 user_cfg.mkdir(parents=True, exist_ok=True)
@@ -744,44 +755,46 @@ env_path.write_text(
 )
 print("Wrote user + repo config")
 print(f"Wrote {env_path} PATH with {len(dirs)} tool bin dir(s)")
-genomes = payload.get("genomes") or ""
-processed = payload.get("processed_genomes") or genomes
-lib_dirs = payload.get("genome_dirs") or []
+from samovar.main_config import extra_genome_dirs as _libs, first_dir as _first, processed_genome_dirs as _pg, raw_genome_dirs as _rg, iter_tools as _it, tool_path as _tp
+genomes = _first(_rg(payload))
+processed = _first(_pg(payload)) or genomes
+lib_dirs = _libs(payload)
 print("")
 print("Genome cache (NCBI / user assemblies, reused by `samovar prepare`):")
 print(f"  Downloaded genomes:  {genomes or '(per-run: $out_dir/.cache/samovar/genomes)'}")
 print(f"  Processed genomes:   {processed or '(same as downloaded / per-run outdir)'}")
-print(f"  Extra libraries:     {', '.join(lib_dirs) if lib_dirs else '(none yet; add dirs to genome_dirs in config.json)'}")
+print(f"  Extra libraries:     {', '.join(lib_dirs) if lib_dirs else '(none yet; add folders under genomes.raw in config.json)'}")
 print("")
 print("IMPORTANT: bulky genome caches must NOT live under $HOME (quota).")
 print("  Each `samovar exec` pins XDG_CACHE_HOME/SAMOVAR_GENOMES to $out_dir/.cache.")
 print("  Optional shared scratch library: SAMOVAR_GENOMES=/scratch/... ./install.sh")
 print("IMPORTANT: data/test_genomes contains TRUNCATED assemblies for ISS and CI only.")
 print("They are never used as NCBI substitutes. Real metagenomes reuse only genomes")
-print("previously downloaded by SamovaR or listed in genome_dirs.")
+print("previously downloaded by SamovaR or listed in genomes.raw.")
 print("  samovar prepare --reuse-genomes      # default: symlink from cache if found")
 print("  samovar prepare --no-reuse-genomes   # download into the genomes cache")
 print("  samovar prepare --genome-dirs DIR[:DIR]")
 print("  samovar prepare --test-genomes       # allow truncated stubs (ISS/CI only)")
 print("Prefer symlinks into $out_dir/genomes; copy with a warning if linking fails.")
-if payload.get("opal_path"):
-    print(f"OPAL (cami-opal): {payload['opal_path']}")
+_tools = _it(payload)
+if _tp(_tools.get("opal.py") or _tools.get("opal"), "opal.py"):
+    print(f"OPAL (cami-opal): {_tp(_tools.get('opal.py') or _tools.get('opal'), 'opal.py')}")
 else:
-    print("OPAL: not found. ./install.sh OPAL to install CAMI OPAL and record opal_path.")
-if payload.get("multiqc_path"):
-    print(f"MultiQC: {payload['multiqc_path']}")
+    print("OPAL: not found. ./install.sh OPAL to install CAMI OPAL and record tools.opal.py.")
+if _tp(_tools.get("multiqc"), "multiqc"):
+    print(f"MultiQC: {_tp(_tools.get('multiqc'), 'multiqc')}")
 else:
-    print("MultiQC: not found. ./install.sh MultiQC to install MultiQC and record multiqc_path.")
-if payload.get("camisim_path"):
-    print(f"CAMISIM: {payload['camisim_path']}")
+    print("MultiQC: not found. ./install.sh MultiQC to install MultiQC and record tools.multiqc.")
+if _tp(_tools.get("camisim"), "camisim"):
+    print(f"CAMISIM: {_tp(_tools.get('camisim'), 'camisim')}")
 else:
     print("CAMISIM: not found. ./install.sh CAMISIM")
-if payload.get("nanosim_path"):
-    print(f"NanoSim: {payload['nanosim_path']}")
+if _tp(_tools.get("nanosim") or _tools.get("simulator.py"), "nanosim"):
+    print(f"NanoSim: {_tp(_tools.get('nanosim') or _tools.get('simulator.py'), 'nanosim')}")
 else:
     print("NanoSim: not found. ./install.sh NanoSim (separate conda env for CAMISIM ONT)")
-if payload.get("art_path"):
-    print(f"ART: {payload['art_path']}")
+if _tp(_tools.get("art_illumina") or _tools.get("art"), "art_illumina"):
+    print(f"ART: {_tp(_tools.get('art_illumina') or _tools.get('art'), 'art_illumina')}")
 else:
     print("ART: not found. ./install.sh ART (separate conda env) or let CAMISIM Nextflow create it")
 PY

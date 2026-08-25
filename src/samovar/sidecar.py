@@ -32,6 +32,7 @@ from samovar.paths import (
     sidecar_envs_dir,
     write_config,
 )
+from samovar.main_config import set_tool
 
 SIDECARS = {
     "nanosim": {
@@ -245,14 +246,25 @@ def record_sidecar(name: str, prefix: Path, binary_path: str) -> None:
     spec = SIDECARS[name]
     cfg = load_config()
     cfg[str(spec["config_path_key"])] = binary_path
-    tools = dict(cfg.get("tools") or {})
     for key in spec["tool_keys"]:
-        tools[str(key)] = binary_path
-    cfg["tools"] = tools
-    envs = dict(cfg.get("tool_envs") or {})
-    for key in spec["tool_keys"]:
-        envs[str(key)] = str(prefix)
-    cfg["tool_envs"] = envs
+        set_tool(
+            cfg,
+            str(key),
+            env="conda",
+            workflow=str(name),
+            path=str(prefix),
+            group="metagenome_generator" if name == "nanosim" else "reads_generator",
+        )
+        # Keep the runnable binary on the primary name
+        if str(key) in {spec["binary"], name}:
+            set_tool(
+                cfg,
+                str(key),
+                env="conda",
+                workflow=str(name),
+                path=binary_path,
+                group="metagenome_generator" if name == "nanosim" else "reads_generator",
+            )
     write_config(cfg)
 
 

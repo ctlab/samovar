@@ -5,7 +5,7 @@ Automated benchmarcing with SamovaR
 try:
     from ._version import version as __version__
 except ImportError:
-    __version__ = "0.10.18"
+    __version__ = "0.10.19"
 
 from .fasta_processor import * 
 from .build_database import *

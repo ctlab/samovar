@@ -34,6 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 import yaml
 
+from samovar.main_config import iter_tools, tool_path as tool_entry_path
 from samovar.paths import (
     absolute_path,
     conda_prefix_for_executable,
@@ -152,8 +153,7 @@ def discover_camisim() -> Optional[str]:
 
     add(os.environ.get("SAMOVAR_CAMISIM") or os.environ.get("SAMOVAR_CAMISIM_ROOT"))
     add(str(cfg.get("camisim_path") or cfg.get("camisim_root") or ""))
-    tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
-    add(str(tools.get("camisim") or ""))
+    add(tool_entry_path(iter_tools(cfg).get("camisim"), "camisim"))
     add(str(user_cache_dir() / "CAMISIM"))
     add(str(Path.home() / ".config" / "samovar" / "CAMISIM"))
     try:
@@ -183,10 +183,11 @@ def discover_camisim() -> Optional[str]:
 
 def discover_nextflow() -> Optional[str]:
     cfg = load_config()
+    nxt = tool_entry_path(iter_tools(cfg).get("nextflow"), "nextflow")
     for raw in (
         os.environ.get("SAMOVAR_NEXTFLOW"),
         cfg.get("nextflow_path"),
-        (cfg.get("tools") or {}).get("nextflow") if isinstance(cfg.get("tools"), dict) else None,
+        nxt,
         shutil.which("nextflow"),
     ):
         text = str(raw or "").strip()

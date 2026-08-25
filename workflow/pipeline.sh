@@ -12,9 +12,17 @@ if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
 fi
 
 if [ -f "$XDG_CONFIG_HOME/samovar/config.json" ]; then
-    PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' "$XDG_CONFIG_HOME/samovar/config.json" | sed 's/"python_path": *"\(.*\)"/\1/' || true)
+    PYTHON_PATH=$(python3 -c "
+import json,sys
+p=json.load(open(sys.argv[1]))
+print((p.get('compilers') or {}).get('python') or p.get('python_path') or '')
+" "$XDG_CONFIG_HOME/samovar/config.json" 2>/dev/null || true)
 elif [ -f "$ROOT/build/config.json" ]; then
-    PYTHON_PATH=$(grep -o '"python_path": *"[^"]*"' "$ROOT/build/config.json" | sed 's/"python_path": *"\(.*\)"/\1/' || true)
+    PYTHON_PATH=$(python3 -c "
+import json,sys
+p=json.load(open(sys.argv[1]))
+print((p.get('compilers') or {}).get('python') or p.get('python_path') or '')
+" "$ROOT/build/config.json" 2>/dev/null || true)
 fi
 PYTHON_PATH=${PYTHON_PATH:-python3}
 

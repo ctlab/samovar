@@ -30,6 +30,8 @@ from samovar.paths import (
     test_genomes_dir,
     update_config,
 )
+from samovar.main_config import extra_genome_dirs as config_genome_dirs
+from samovar.main_config import first_dir, processed_genome_dirs, raw_genome_dirs
 from samovar.seqio import (
     genome_lookup_extensions,
     is_fasta_name,
@@ -241,7 +243,7 @@ def genome_library_dirs(
         add(processed_genomes_dir())
         add(genome_download_dir())
     cfg = load_config()
-    for item in _split_dir_value(cfg.get("genome_dirs")):
+    for item in _split_dir_value(config_genome_dirs(cfg) or cfg.get("genome_dirs")):
         add(item)
     return ordered
 
@@ -286,7 +288,7 @@ def register_genome_dir(path: PathLike, *, force: bool = False) -> Optional[Path
     cfg = load_config()
     dirs = []
     seen = set()
-    for item in _split_dir_value(cfg.get("genome_dirs")):
+    for item in _split_dir_value(config_genome_dirs(cfg) or cfg.get("genome_dirs")):
         try:
             key = str(Path(item).expanduser().resolve())
         except OSError:
@@ -323,8 +325,11 @@ def ensure_genome_config() -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
 
     # Drop stale home-quota landmines from older installs.
-    for key in ("genomes", "processed_genomes"):
-        cur = str(cfg.get(key) or "").strip()
+    for key, current in (
+        ("genomes", first_dir(raw_genome_dirs(cfg))),
+        ("processed_genomes", first_dir(processed_genome_dirs(cfg))),
+    ):
+        cur = str(current or "").strip()
         if cur:
             try:
                 if Path(cur).expanduser().resolve().is_relative_to(home):
@@ -332,14 +337,16 @@ def ensure_genome_config() -> Dict[str, Any]:
             except (OSError, ValueError):
                 pass
 
-    if _usable(genomes) and not str(updates.get("genomes", cfg.get("genomes") or "")).strip():
+    stored_raw = first_dir(raw_genome_dirs(cfg))
+    stored_proc = first_dir(processed_genome_dirs(cfg))
+    if _usable(genomes) and not str(updates.get("genomes", stored_raw) or "").strip():
         updates["genomes"] = str(genomes)
     if _usable(processed) and not str(
-        updates.get("processed_genomes", cfg.get("processed_genomes") or "")
+        updates.get("processed_genomes", stored_proc) or ""
     ).strip():
         updates["processed_genomes"] = str(processed)
-    if "genome_dirs" not in cfg:
-        updates["genome_dirs"] = list(_split_dir_value(cfg.get("genome_dirs")))
+    if not config_genome_dirs(cfg) and "genome_dirs" not in updates:
+        updates["genome_dirs"] = []
     if updates:
         cfg = update_config(updates, also_repo_build=False)
     return cfg
