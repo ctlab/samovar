@@ -10,6 +10,8 @@ show_usage() {
     echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique)"
     echo "  --config_path PATH Path to config YAML file"
     echo "  --db_path PATH    Path to store the database"
+    echo "  --index NAME      Record this database in the install config"
+    echo "  --flags FLAGS     Extra CLI flags stored with --index"
     echo "  --example-omit    TEST/TOY ONLY: drop Escherichia from Kraken2 and Phage Phi X from Kaiju"
     echo "  --no-example-omit Keep every taxon even when building from data/test_genomes"
     echo ""
@@ -22,6 +24,8 @@ type=""
 config_path=""
 db_path=""
 omit_args=()
+index_name=""
+db_flags=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -40,6 +44,14 @@ while [[ $# -gt 0 ]]; do
         --example-omit|--no-example-omit)
             omit_args+=("$1")
             shift
+            ;;
+        --index)
+            index_name="$2"
+            shift 2
+            ;;
+        --flags)
+            db_flags="$2"
+            shift 2
             ;;
         *)
             echo "Error: Unknown option '$1'"
@@ -69,4 +81,11 @@ snakemake -s $(dirname "$0")/Snakefile \
     --cores 1
 
 # Run the database build script
-python "$(dirname "$0")/samovar_build_database.py" --type "$type" --config_path "$config_path" --db_path "$db_path" "${omit_args[@]}" 
+extra=()
+if [ -n "$index_name" ]; then
+    extra+=(--index "$index_name")
+fi
+if [ -n "$db_flags" ]; then
+    extra+=(--flags "$db_flags")
+fi
+python "$(dirname "$0")/samovar_build_database.py" --type "$type" --config_path "$config_path" --db_path "$db_path" "${omit_args[@]}" "${extra[@]}" 

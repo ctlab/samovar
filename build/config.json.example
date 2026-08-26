@@ -14,6 +14,7 @@
     "ncbi_email": "test@samovar.com"
   },
   "genomes": {
+    "samovar_database": "/path/to/samovar/genomes",
     "test": ["/path/to/samovar/data/test_genomes"],
     "raw": {},
     "processed": {},

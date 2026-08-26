@@ -25,6 +25,8 @@ def main():
         action='store_false',
         help='Do not apply toy taxon gaps even if input_dir is data/test_genomes',
     )
+    parser.add_argument('--index', default=None, help='Name to record in the install config databases block')
+    parser.add_argument('--flags', default="", help='Extra CLI flags stored with --index')
 
     args = parser.parse_args()
     # If type is 'kraken', use krakenunique processing
@@ -35,6 +37,12 @@ def main():
         db_path=args.db_path,
         example_omit=args.example_omit,
     )
+    if args.index:
+        from samovar.genome_index import register_database
+        from samovar.paths import absolute_path
+
+        register_database(db_type, args.index, absolute_path(args.db_path), args.flags or "")
+        print(f"Indexed database {db_type}/{args.index} -> {args.db_path}")
 
 if __name__ == '__main__':
     main() 

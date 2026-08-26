@@ -76,6 +76,13 @@ def main():
         help='Colon-separated extra directories of previously downloaded NCBI genomes',
     )
     parser.add_argument(
+        '--index',
+        dest='index_dirs',
+        nargs='+',
+        default=None,
+        help='Index processed genomes from these folders (genomes/processed) into the main config',
+    )
+    parser.add_argument(
         '--test-genomes',
         dest='use_test_genomes',
         action='store_true',
@@ -114,7 +121,7 @@ def main():
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "cores", "max_genomes",
-        "N_reads", "n_reads", "genome-dirs", "genome_dirs",
+        "N_reads", "n_reads", "genome-dirs", "genome_dirs", "index",
     }
     cmd_args = {}
     i = 0
@@ -138,7 +145,22 @@ def main():
     # Add command arguments to args namespace
     for cmd_name, cmd_value in cmd_args.items():
         setattr(args, f'cmd_{cmd_name}', [[cmd_value]])
-    
+
+    index_dirs = getattr(args, "index_dirs", None)
+    if index_dirs:
+        from samovar.genome_index import index_processed_file, iter_processed_fastas
+
+        counted = 0
+        for folder in index_dirs:
+            files = iter_processed_fastas(folder)
+            if not files:
+                print(f"Warning: no processed genomes under {folder}")
+                continue
+            for path in files:
+                index_processed_file(path, move_to=path.parent)
+                counted += 1
+        print(f"Indexed {counted} processed genome(s) from --index")
+
     result = setup_pipeline(args)
     print(f"Generated configs: {result['configs']}")
     print(f"Generated pipeline: {result['pipeline']}")

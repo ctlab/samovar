@@ -22,9 +22,9 @@ class ISSTestConfig:
         from samovar.paths import absolute_path
 
         return cls(
-            genome_dir=absolute_path(args.genome_dir),
+            genome_dir=absolute_path(args.genome_dir) if args.genome_dir else "",
             output_dir=absolute_path(args.output_dir),
-            host_genome=absolute_path(args.host_genome),
+            host_genome=absolute_path(args.host_genome) if args.host_genome else "",
             n_samples=args.n_samples if args.n_samples is not None else 10,
             total_reads=args.total_reads if args.total_reads is not None else 2000,
             host_fraction=args.host_fraction if args.host_fraction is not None else "RANDOM",
@@ -108,16 +108,37 @@ snakemake -s {snakefile} \\
         
         return str(pipeline_path)
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='SamovaR ISS Test Configuration')
     
     # Required arguments
-    parser.add_argument('--genome_dir', required=True,
+    parser.add_argument('--genome_dir', required=False, default=None,
                        help='Directory containing reference genomes')
     parser.add_argument('--output_dir', required=True,
                        help='Output directory for generated files')
-    parser.add_argument('--host_genome', required=True,
+    parser.add_argument('--host_genome', required=False, default="",
                        help='Path to host genome file')
+    parser.add_argument(
+        '--accessions',
+        nargs='+',
+        default=None,
+        help='NCBI assembly accessions (GCF_*/GCA_*) to download for this generate',
+    )
+    parser.add_argument(
+        '--reindex',
+        type=int,
+        default=0,
+        choices=(0, 1, 2),
+        help='0: download to $out/.genomes (no index); 1: samovar_database + index; '
+             '2: $out/.genomes + index',
+    )
+    parser.add_argument(
+        '--raw-genomes',
+        type=int,
+        default=0,
+        choices=(0, 1),
+        help='Keep raw NCBI FASTA after parsing (default 0: delete raw)',
+    )
     
     # Optional arguments with defaults
     parser.add_argument('--n_samples', type=int, default=10,
@@ -158,7 +179,7 @@ def parse_args() -> argparse.Namespace:
         help='CAMISIM sample size in Gbp (default: derived from --total_reads)',
     )
     
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     """Main function to set up the ISS or CAMISIM generate configuration"""
@@ -173,7 +194,27 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         from samovar.camisim import setup_camisim_generate
 
         return setup_camisim_generate(args)
-    
+
+    accessions = list(getattr(args, "accessions", None) or [])
+    reindex_mode = int(getattr(args, "reindex", 0) or 0)
+    keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
+    if accessions:
+        from samovar.genome_fetcher import default_entrez_email, materialize_accessions
+        from samovar.genome_index import run_processed_dir
+
+        paths = materialize_accessions(
+            accessions,
+            output_dir=args.output_dir,
+            email=default_entrez_email(),
+            reindex_mode=reindex_mode,
+            keep_raw=keep_raw,
+        )
+        if not paths:
+            raise SystemExit("generate: no genomes materialized from --accessions")
+        args.genome_dir = str(run_processed_dir(args.output_dir))
+    elif not getattr(args, "genome_dir", None):
+        raise SystemExit("generate: --genome_dir or --accessions is required")
+
     config = ISSTestConfig.from_args(args)
     config_path = config.generate_config(config.output_dir)
     pipeline_path = config.generate_pipeline(config.output_dir)

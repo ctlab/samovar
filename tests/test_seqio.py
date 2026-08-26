@@ -22,10 +22,12 @@ from samovar.seqio import (
 def test_stems_and_taxids():
     assert sequence_stem("562.fna.gz") == "562"
     assert sequence_stem("562-processed.fasta.gz") == "562-processed"
+    assert sequence_stem("GCF_000819615.1.fa.gz") == "GCF_000819615.1"
     assert taxid_from_fasta_name("562.fa") == "562"
     assert taxid_from_fasta_name("562.fa.gz") == "562"
     assert taxid_from_fasta_name("562-processed.fasta.gz") == "562"
-    assert taxid_from_fasta_name("abc.fa") is None
+    assert taxid_from_fasta_name("GCF_000819615.1.fa.gz") == "GCF_000819615.1"
+    assert taxid_from_fasta_name("abc.fa") == "abc"
 
 
 def test_name_detectors():
@@ -47,6 +49,15 @@ def test_open_text_roundtrip(tmp_path):
         assert "ACGT" in handle.read()
     restored = gunzip_file(gz, remove_source=True)
     assert restored.read_text().startswith(">h")
+
+
+def test_find_genome_prefers_accession_fa_gz(tmp_path):
+    (tmp_path / "GCF_000819615.1.fa").write_text(">raw\nA\n")
+    gz = tmp_path / "GCF_000819615.1.fa.gz"
+    with gzip.open(gz, "wt") as handle:
+        handle.write(">p\nACGT\n")
+    found = find_genome_file(tmp_path, "GCF_000819615.1")
+    assert found.endswith("GCF_000819615.1.fa.gz")
 
 
 def test_find_genome_prefers_processed_gzip(tmp_path):
@@ -115,8 +126,9 @@ def test_fastq_pair_paths():
 
 
 def test_processed_genome_path():
-    assert processed_genome_path("/g", "562").name == "562-processed.fasta.gz"
-    assert processed_genome_path("/g", "562", gzip_genomes=False).name == "562-processed.fasta"
+    assert processed_genome_path("/g", "562").name == "562.fa.gz"
+    assert processed_genome_path("/g", "GCF_000819615.1").name == "GCF_000819615.1.fa.gz"
+    assert processed_genome_path("/g", "562", gzip_genomes=False).name == "562.fa"
 
 
 def test_list_fasta_includes_gzip(tmp_path):

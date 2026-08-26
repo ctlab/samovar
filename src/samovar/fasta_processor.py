@@ -95,22 +95,38 @@ def process_fasta_directories(directories: List[str]) -> dict:
     """
     Process FASTA files from input directories and extract taxids from filenames.
     Handles various FASTA extensions and gzipped files without decompressing them.
+    Also scans ``processed/`` subdirectories (samovar genomes layout).
     """
     result = {}
+
+    def add_file(fasta_file: Path) -> None:
+        if not fasta_file.is_file():
+            return
+        if not is_fasta_name(fasta_file.name, protein=True, nucleotide=True):
+            return
+        taxid = taxid_from_fasta_name(fasta_file)
+        if not taxid:
+            return
+        from samovar.genome_index import numeric_taxid_for
+
+        resolved = numeric_taxid_for(taxid)
+        result[str(fasta_file)] = resolved if resolved else taxid
 
     for directory in directories:
         dir_path = Path(directory)
         if not dir_path.exists():
             continue
-
-        for fasta_file in dir_path.iterdir():
-            if not fasta_file.is_file():
+        search = [dir_path]
+        nested = dir_path / "processed"
+        if nested.is_dir():
+            search.append(nested)
+        for folder in search:
+            try:
+                children = list(folder.iterdir())
+            except OSError:
                 continue
-            if not is_fasta_name(fasta_file.name, protein=True, nucleotide=True):
-                continue
-            taxid = taxid_from_fasta_name(fasta_file)
-            if taxid:
-                result[str(fasta_file)] = taxid
+            for fasta_file in children:
+                add_file(fasta_file)
 
     return result
 

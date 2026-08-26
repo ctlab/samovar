@@ -31,7 +31,7 @@
 #   SAMOVAR_CONFIG=/path/to/config.json
 #                              write main config to this file (dir holds env/)
 #   SAMOVAR_CONFIG_DIR=/dir    write $dir/config.json instead of ~/.config/samovar
-#   After install, the absolute config path is stored in build/config_path
+#   SAMOVAR_DATABASE=/path     processed genome library (default: $ROOT/genomes)
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
 #   CI=true                    non-interactive; NCBI_EMAIL defaults to test@samovar.com
 #                              and shell/PATH edits are skipped
@@ -692,6 +692,11 @@ def _usable_dir(raw, *, allow_home: bool = False):
         return ""
     return str(path)
 
+samovar_database = _usable_dir(
+    os.environ.get("SAMOVAR_DATABASE", "").strip() or str(Path(root) / "genomes")
+) or str(Path(root) / "genomes")
+_store_processed = _usable_dir(str(Path(samovar_database) / "processed")) or str(Path(samovar_database) / "processed")
+
 from samovar.main_config import first_dir, processed_genome_dirs, raw_genome_dirs
 genomes = _usable_dir(first_dir(raw_genome_dirs(existing))) or _usable_dir(default_genomes) or ""
 processed = (
@@ -752,9 +757,10 @@ payload = build_install_config(
     discovered_tools=discovered,
     ncbi_email=os.environ.get("NCBI_EMAIL", ""),
     genomes_default=genomes,
-    processed_default=processed,
+    processed_default=_store_processed or processed or samovar_database,
     extra_genome_dirs=kept_libs,
     extra_path=path_extra if isinstance(path_extra, list) else [path_extra] if path_extra else [],
+    samovar_database=samovar_database,
     bash=shutil.which("bash") or "",
     cxx=(cxx_compiler() or shutil.which("g++") or ""),
     r_path=shutil.which("R") or "",
@@ -789,14 +795,16 @@ print(f"Wrote config: {cfg_path}")
 if pointer:
     print(f"Wrote pointer: {pointer}")
 print(f"Wrote {env_path} PATH with {len(dirs)} tool bin dir(s)")
-from samovar.main_config import extra_genome_dirs as _libs, first_dir as _first, processed_genome_dirs as _pg, raw_genome_dirs as _rg, iter_tools as _it, tool_path as _tp
+from samovar.main_config import extra_genome_dirs as _libs, first_dir as _first, processed_genome_dirs as _pg, raw_genome_dirs as _rg, iter_tools as _it, tool_path as _tp, genomes_block as _gb
 genomes = _first(_rg(payload))
 processed = _first(_pg(payload)) or genomes
 lib_dirs = _libs(payload)
+store = (_gb(payload) or {}).get("samovar_database") or ""
 print("")
-print("Genome cache (NCBI / user assemblies, reused by `samovar prepare`):")
-print(f"  Downloaded genomes:  {genomes or '(per-run: $out_dir/.cache/samovar/genomes)'}")
-print(f"  Processed genomes:   {processed or '(same as downloaded / per-run outdir)'}")
+print("Genome store (samovar_database / processed, reused by generate --reindex and reindex):")
+print(f"  samovar_database:    {store or '(unset)'}")
+print(f"  Downloaded genomes:  {genomes or '(per-run: $out/.genomes)'}")
+print(f"  Processed genomes:   {processed or store or '(samovar_database/processed)'}")
 print(f"  Extra libraries:     {', '.join(lib_dirs) if lib_dirs else '(none yet; add folders under genomes.raw in config.json)'}")
 print("")
 print("IMPORTANT: bulky genome caches must NOT live under $HOME (quota).")

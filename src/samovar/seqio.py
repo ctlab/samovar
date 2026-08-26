@@ -48,6 +48,8 @@ FASTQ_R2_SUFFIXES = (
 )
 
 PROCESSED_FASTA_EXTS = (
+    ".fa.gz",
+    ".fa",
     "-processed.fasta.gz",
     "-processed.fna.gz",
     "-processed.fa.gz",
@@ -88,15 +90,15 @@ def sequence_stem(path: PathLike) -> str:
 
 
 def taxid_from_fasta_name(path: PathLike) -> Optional[str]:
-    """Numeric taxid from ``{taxid}.fa``, ``{taxid}-processed.fasta.gz``, etc."""
+    """Numeric taxid or assembly accession from a processed/raw FASTA name."""
     name = strip_compression_suffix(as_path(path).name)
     lower = name.lower()
     for marker in ("-processed.fasta", "-processed.fna", "-processed.fa"):
         if lower.endswith(marker):
             stem = name[: -len(marker)]
-            return stem if stem.isdigit() else None
+            return stem or None
     stem = sequence_stem(path)
-    return stem if stem.isdigit() else None
+    return stem or None
 
 
 def is_fasta_name(name: str, *, protein: bool = True, nucleotide: bool = True) -> bool:
@@ -187,18 +189,34 @@ def maybe_gzip(path: PathLike, enabled: bool = True) -> Path:
 
 
 def processed_genome_path(genome_dir: PathLike, taxid: str, gzip_genomes: bool = True) -> Path:
-    taxid = str(taxid).split(".")[0]
-    suffix = "-processed.fasta.gz" if gzip_genomes else "-processed.fasta"
-    return as_path(genome_dir) / f"{taxid}{suffix}"
+    ident = str(taxid).strip()
+    suffix = ".fa.gz" if gzip_genomes else ".fa"
+    return as_path(genome_dir) / f"{ident}{suffix}"
 
 
 def find_existing_processed_genome(genome_dir: PathLike, taxid: str) -> Optional[Path]:
-    taxid = str(taxid).split(".")[0]
+    ident = str(taxid).strip()
     directory = as_path(genome_dir)
-    for ext in PROCESSED_FASTA_EXTS:
-        candidate = directory / f"{taxid}{ext}"
-        if candidate.exists():
-            return candidate
+    names = [ident]
+    search_dirs = [directory, directory / "processed", directory / ".genomes" / "processed"]
+    preferred = (
+        ".fa.gz",
+        "-processed.fasta.gz",
+        "-processed.fna.gz",
+        "-processed.fa.gz",
+        "-processed.fasta",
+        "-processed.fna",
+        "-processed.fa",
+        ".fa",
+    )
+    for folder in search_dirs:
+        if not folder.is_dir() and folder != directory:
+            continue
+        for name in names:
+            for ext in preferred:
+                candidate = folder / f"{name}{ext}"
+                if candidate.exists():
+                    return candidate
     return None
 
 
@@ -217,10 +235,13 @@ def genome_lookup_extensions() -> Tuple[str, ...]:
 
 
 def find_genome_file(genome_dir: PathLike, taxid: str) -> Optional[str]:
-    taxid = str(taxid).split(".")[0]
+    ident = str(taxid).strip()
+    found = find_existing_processed_genome(genome_dir, ident)
+    if found is not None:
+        return str(found)
     directory = as_path(genome_dir)
     for ext in genome_lookup_extensions():
-        candidate = directory / f"{taxid}{ext}"
+        candidate = directory / f"{ident}{ext}"
         if candidate.exists():
             return str(candidate)
     return None

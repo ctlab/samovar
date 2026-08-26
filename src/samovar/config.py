@@ -80,6 +80,26 @@ def _portable_annotator_cmd(cmd: str) -> str:
     return text
 
 
+def _expand_indexed_database(cmd: str, db_path: str, extra: Optional[str]) -> tuple:
+    """If ``db_path`` is a registered database name, substitute path and stored flags."""
+    from samovar.genome_index import lookup_database
+
+    token = (db_path or "").strip()
+    if not token or token == ".":
+        return db_path, extra
+    as_path = Path(token).expanduser()
+    if as_path.exists():
+        return db_path, extra
+    tool = Path(cmd).name.split(".")[0]
+    rec = lookup_database(tool, token)
+    if rec is None:
+        return db_path, extra
+    resolved = rec[1]
+    stored_flags = (rec[2] if len(rec) > 2 else "") or ""
+    merged = " ".join(p for p in (stored_flags, extra or "") if p).strip() or None
+    return resolved, merged
+
+
 def _absolute_db_path(db_path: str) -> str:
     if not db_path or db_path == ".":
         return db_path or "."
@@ -197,10 +217,10 @@ class PipelineConfig:
                     
                     # First part is the command path
                     cmd = parts[0]
-                    # Second part is the database path (optional)
+                    # Second part is the database path or indexed name
                     db_path = parts[1] if len(parts) > 1 else "."
-                    # Any remaining parts are extra arguments
                     extra = ' '.join(parts[2:]) if len(parts) > 2 else None
+                    db_path, extra = _expand_indexed_database(cmd, db_path, extra)
                     
                     # Extract type from command basename
                     cmd_basename = os.path.basename(cmd)
@@ -234,10 +254,10 @@ class PipelineConfig:
                     
                     # First part is the command path
                     cmd = parts[0]
-                    # Second part is the database path (optional)
+                    # Second part is the database path or indexed name
                     db_path = parts[1] if len(parts) > 1 else "."
-                    # Any remaining parts are extra arguments
                     extra = ' '.join(parts[2:]) if len(parts) > 2 else None
+                    db_path, extra = _expand_indexed_database(cmd, db_path, extra)
                     
                     # Extract type from command basename
                     cmd_basename = os.path.basename(cmd)

@@ -162,4 +162,25 @@ def test_setup_iss_test():
         assert "PYTHON_PATH=" in pipeline_content
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "snakemake -s " in pipeline_content
-        assert "workflow/iss_test/Snakefile" in pipeline_content 
+        assert "workflow/iss_test/Snakefile" in pipeline_content
+
+
+def test_parse_args_reindex_and_raw_genomes():
+    from samovar.iss_config import parse_args
+
+    args = parse_args(
+        [
+            "--output_dir",
+            "out",
+            "--accessions",
+            "GCF_000819615.1",
+            "GCF_000840245.1",
+            "--reindex",
+            "1",
+            "--raw-genomes",
+            "0",
+        ]
+    )
+    assert args.accessions == ["GCF_000819615.1", "GCF_000840245.1"]
+    assert args.reindex == 1
+    assert args.raw_genomes == 0 

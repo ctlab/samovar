@@ -6,7 +6,7 @@ import os
 import logging
 import shutil
 import socket
-from typing import Optional
+from typing import List, Optional, Sequence
 import urllib.request
 from Bio import Entrez
 from pathlib import Path
@@ -30,6 +30,19 @@ from samovar.seqio import (
     gzip_file,
     is_gzip_path,
     processed_genome_path,
+)
+from samovar.genome_index import (
+    is_assembly_accession,
+    normalize_accession,
+    processed_filename,
+    processed_storage_dir,
+    raw_filename,
+    raw_storage_dir,
+    resolve_indexed_path,
+    run_processed_dir,
+    run_raw_dir,
+    index_processed_file,
+    stage_into_dir,
 )
 
 # Set up logging
@@ -160,6 +173,179 @@ def _assembly_ftp_path(taxid: str | int, email: str, silent: bool = False) -> Op
     if not ftp_path and not silent:
         logger.warning(f"No FTP path found for taxid {taxid}")
     return ftp_path or None
+
+
+def _assembly_record(accession: str, email: str, silent: bool = False) -> Optional[dict]:
+    accession = normalize_accession(accession) or accession
+    Entrez.email = email
+    handle = Entrez.esearch(db="assembly", term=f"{accession}[Assembly Accession]", retmax=1)
+    record = Entrez.read(handle)
+    handle.close()
+    if not record.get("IdList"):
+        if not silent:
+            logger.warning("No NCBI assembly for %s", accession)
+        return None
+    handle = Entrez.esummary(db="assembly", id=record["IdList"][0])
+    summary = Entrez.read(handle)
+    handle.close()
+    docs = summary["DocumentSummarySet"]["DocumentSummary"]
+    return docs[0] if docs else None
+
+
+def _assembly_ftp_for_accession(accession: str, email: str, silent: bool = False) -> Optional[str]:
+    doc = _assembly_record(accession, email, silent=silent)
+    if not doc:
+        return None
+    return doc.get("FtpPath_RefSeq") or doc.get("FtpPath_GenBank") or None
+
+
+def fetch_assembly_processed(
+    accession: str,
+    dest_dir: str,
+    email: str,
+    *,
+    silent: bool = False,
+    keep_raw: bool = False,
+    raw_dir: Optional[str] = None,
+    index: bool = True,
+) -> Optional[str]:
+    """Download NCBI assembly ``accession`` and write ``{accession}.fa.gz``."""
+    accession = normalize_accession(accession) or accession
+    indexed = resolve_indexed_path(accession)
+    if indexed is not None:
+        if not silent:
+            logger.info("Using indexed genome %s: %s", accession, indexed)
+        return str(indexed)
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    existing = dest / processed_filename(accession)
+    taxid = assembly_taxid(accession, email, silent=True)
+    if existing.is_file():
+        if index:
+            index_processed_file(
+                existing, accession=accession, move_to=dest, taxid=taxid
+            )
+        return str(existing)
+    ftp_path = _assembly_ftp_for_accession(accession, email, silent=silent)
+    if not ftp_path:
+        return None
+    asm_name = os.path.basename(ftp_path)
+    url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
+    raw_parent = Path(raw_dir) if raw_dir else dest
+    raw_parent.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_parent / raw_filename(accession)
+    try:
+        if not silent:
+            logger.info("Downloading genome from %s", url)
+        _download_url(url, raw_path)
+    except Exception as exc:
+        if not silent:
+            logger.error("Failed to download %s: %s", accession, exc)
+        return None
+    processed = dest / processed_filename(accession)
+    try:
+        preprocess_fasta(
+            input_file=str(raw_path),
+            output_file=str(processed),
+            mutation_rate=0.0,
+            include_percent=100.0,
+        )
+    except Exception as exc:
+        logger.error("Failed to process %s: %s", accession, exc)
+        return None
+    if not keep_raw:
+        try:
+            raw_path.unlink()
+        except OSError:
+            pass
+    if index:
+        processed = index_processed_file(
+            processed, accession=accession, move_to=dest, taxid=taxid
+        )
+    return str(processed)
+
+
+def assembly_taxid(accession: str, email: str = "", silent: bool = True) -> str:
+    """NCBI Taxid for an assembly accession (empty if lookup fails)."""
+    try:
+        doc = _assembly_record(
+            accession, email or default_entrez_email(), silent=silent
+        )
+    except Exception:
+        return ""
+    if not doc:
+        return ""
+    value = doc.get("Taxid") or doc.get("SpeciesTaxid") or ""
+    return str(value).strip()
+
+
+def materialize_accessions(
+    accessions: Sequence[str],
+    *,
+    output_dir: str,
+    email: str,
+    reindex_mode: int = 1,
+    keep_raw: bool = False,
+    silent: bool = False,
+) -> List[str]:
+    """Download/process accessions according to ``samovar generate --reindex``.
+
+    0: ``$out/.genomes/processed``, do not index
+    1: ``samovar_database/processed`` and index
+    2: ``$out/.genomes/processed`` and index in place
+    """
+    mode = int(reindex_mode)
+    out = Path(output_dir)
+    run_dest = run_processed_dir(out)
+    if mode == 1:
+        dest = processed_storage_dir()
+        raw_dest = raw_storage_dir() if keep_raw else dest
+        do_index = True
+    else:
+        dest = run_dest
+        raw_dest = run_raw_dir(out) if keep_raw else dest
+        do_index = mode == 2
+    dest.mkdir(parents=True, exist_ok=True)
+    run_dest.mkdir(parents=True, exist_ok=True)
+    paths: List[str] = []
+    for acc in accessions:
+        acc = normalize_accession(acc) or str(acc).strip()
+        if not acc:
+            continue
+        indexed = resolve_indexed_path(acc)
+        if indexed is not None:
+            if not silent:
+                logger.info("Skip download, indexed: %s", indexed)
+            paths.append(str(stage_into_dir(indexed, run_dest)))
+            continue
+        local = run_dest / processed_filename(acc)
+        already = dest / processed_filename(acc)
+        source = None
+        if already.is_file():
+            source = already
+        elif local.is_file():
+            source = local
+        if source is not None:
+            if not silent:
+                logger.info("Reuse existing processed genome %s: %s", acc, source)
+            if do_index:
+                source = index_processed_file(source, accession=acc, move_to=dest)
+            paths.append(str(stage_into_dir(source, run_dest)))
+            continue
+        fetched = fetch_assembly_processed(
+            acc,
+            str(dest),
+            email,
+            silent=silent,
+            keep_raw=keep_raw,
+            raw_dir=str(raw_dest) if keep_raw else None,
+            index=do_index,
+        )
+        if fetched:
+            paths.append(str(stage_into_dir(fetched, run_dest)))
+        else:
+            logger.warning("Could not materialize %s", acc)
+    return paths
 
 
 def _download_assembly_file(
@@ -331,8 +517,18 @@ def fetch_genome(
     gzip_genomes: bool = True,
     reuse: Optional[bool] = None,
     ) -> Optional[str]:
-    
-    if isinstance(taxid, str):
+
+    if is_assembly_accession(str(taxid)):
+        return fetch_assembly_processed(
+            str(taxid),
+            output_folder,
+            email,
+            silent=silent,
+            keep_raw=False,
+            index=False,
+        )
+
+    if isinstance(taxid, str) and taxid.split(".")[0].isdigit():
         taxid = taxid.split(".")[0]
 
     existing = find_existing_processed_genome(output_folder, taxid)
@@ -344,6 +540,12 @@ def fetch_genome(
         if not silent:
             logger.info(f"Processed genome for taxid {taxid} already exists at {existing}")
         return str(existing)
+
+    indexed = resolve_indexed_path(str(taxid))
+    if indexed is not None:
+        if not silent:
+            logger.info("Using indexed genome for %s: %s", taxid, indexed)
+        return str(indexed)
 
     do_reuse = reuse_enabled(reuse)
     if do_reuse:
@@ -532,6 +734,19 @@ def main():
                       help='Email for NCBI Entrez (default: NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL, else anonymous@example.com)')
     parser.add_argument('--output-dir', type=str, default='genomes',
                       help='Output directory for genomes (default: genomes)')
+    parser.add_argument(
+        '--accessions',
+        nargs='+',
+        default=None,
+        help='Download these NCBI assembly accessions as {accession}.fa.gz',
+    )
+    parser.add_argument(
+        '--reindex',
+        type=int,
+        default=0,
+        choices=(0, 1, 2),
+        help='With --accessions: 0 run .genomes only; 1 samovar_database+index; 2 run+index',
+    )
     parser.add_argument('--silent', action='store_true',
                       help='Suppress logging output and show progress bars instead')
     parser.add_argument('--max-genome-mb', type=float, default=100.0,
@@ -552,13 +767,21 @@ def main():
     
     args = parser.parse_args()
     args.email = args.email or default_entrez_email()
-    
-    # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Set up Entrez email
     Entrez.email = args.email
+
+    if args.accessions:
+        materialize_accessions(
+            args.accessions,
+            output_dir=str(output_dir),
+            email=args.email,
+            reindex_mode=int(args.reindex),
+            keep_raw=False,
+            silent=args.silent,
+        )
+        return
+
     max_mb = None if args.max_genome_mb <= 0 else args.max_genome_mb
     
     # Step 1: Generate candidate taxids (oversample so failed downloads can be replaced)
@@ -604,7 +827,13 @@ def main():
         logger.info("Cleaning up intermediate files...")
     for file in output_dir.glob("*"):
         name = file.name
-        keep = "-processed.fasta" in name or "-processed.fna" in name or "-processed.fa" in name
+        keep = (
+            name.endswith(".fa.gz")
+            or name.endswith(".fa")
+            or "-processed.fasta" in name
+            or "-processed.fna" in name
+            or "-processed.fa" in name
+        )
         if keep:
             continue
         try:

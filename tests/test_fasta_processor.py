@@ -112,6 +112,7 @@ def test_process_fasta_directories(test_dir):
         str(test_dir / "456.fna"): "456",
         str(test_dir / "789.fasta"): "789",
         str(test_dir / "321.fa.gz"): "321",
+        str(test_dir / "abc.fa"): "abc",
     }
     print (expected_files)
     assert result == expected_files
@@ -137,6 +138,20 @@ def test_preprocess_fasta_writes_gzip(tmp_path):
         text = handle.read()
     assert "taxid:562" in text
     assert "ATCGATCG" in text
+
+
+def test_process_fasta_directories_processed_and_accession(tmp_path):
+    folder = tmp_path / "lib" / "processed"
+    folder.mkdir(parents=True)
+    fa = folder / "GCF_000819615.1.fa.gz"
+    with gzip.open(fa, "wt") as handle:
+        handle.write(">g\nACGT\n")
+    (tmp_path / "lib" / "notes.txt").write_text("nope")
+    result = process_fasta_directories([str(tmp_path / "lib")])
+    assert any(Path(p).name == "GCF_000819615.1.fa.gz" for p in result)
+    assert "GCF_000819615.1" in result.values() or any(
+        str(v).isdigit() for v in result.values()
+    )
 
 
 def test_process_fasta_directories_nonexistent():

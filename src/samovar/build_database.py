@@ -705,6 +705,20 @@ def build_database_from_config(
     if isinstance(input_dirs, str):
         input_dirs = [input_dirs]
     file_taxid_map = process_fasta_directories(input_dirs)
+    from samovar.genome_index import is_assembly_accession, numeric_taxid_for
+    from samovar.genome_fetcher import assembly_taxid, default_entrez_email
+
+    resolved_map = {}
+    email = default_entrez_email()
+    for path, taxid in file_taxid_map.items():
+        ident = str(taxid)
+        resolved = numeric_taxid_for(ident)
+        if is_assembly_accession(ident) and not str(resolved).split(".")[0].isdigit():
+            looked = assembly_taxid(ident, email)
+            if looked:
+                resolved = looked
+        resolved_map[path] = resolved
+    file_taxid_map = resolved_map
     preferred = {}
     for path, taxid in file_taxid_map.items():
         prev = preferred.get(taxid)

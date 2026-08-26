@@ -575,6 +575,7 @@ def empty_canonical(*, version: str = "", root: str = "") -> Dict[str, Any]:
         },
         "API": {"ncbi_email": ""},
         "genomes": {
+            "samovar_database": str(Path(root) / "genomes") if root else "",
             "test": [],
             "raw": {},
             "processed": {},
@@ -608,8 +609,20 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
             block.update(value)
             cfg["API"] = block
             continue
+        if key == "samovar_database":
+            block = genomes_block(cfg) or empty_canonical()["genomes"]
+            block["samovar_database"] = str(value or "").strip()
+            proc = folder_map(block.get("processed"))
+            if block["samovar_database"]:
+                proc["samovar_database"] = str(Path(block["samovar_database"]).expanduser() / "processed")
+                proc.setdefault("default", proc["samovar_database"])
+            block["processed"] = proc
+            cfg["genomes"] = block
+            continue
         if key == "genomes":
-            if isinstance(value, dict) and any(k in value for k in ("test", "raw", "processed", "data")):
+            if isinstance(value, dict) and any(
+                k in value for k in ("test", "raw", "processed", "data", "samovar_database")
+            ):
                 block = genomes_block(cfg) or empty_canonical()["genomes"]
                 for sub, val in value.items():
                     block[sub] = val
@@ -748,9 +761,9 @@ def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
     elif isinstance(raw.get("api"), dict):
         cfg["API"].update(raw["api"])
     if isinstance(raw.get("genomes"), dict) and any(
-        k in raw["genomes"] for k in ("test", "raw", "processed", "data")
+        k in raw["genomes"] for k in ("test", "raw", "processed", "data", "samovar_database")
     ):
-        for key in ("test", "raw", "processed", "data"):
+        for key in ("test", "raw", "processed", "data", "samovar_database"):
             if key in raw["genomes"]:
                 cfg["genomes"][key] = raw["genomes"][key]
     if isinstance(raw.get("databases"), dict):
@@ -806,6 +819,11 @@ def legacy_view(cfg: Dict[str, Any]) -> Dict[str, Any]:
     view["test_genomes"] = tests[0] if tests else ""
     view["genomes"] = first_dir(raw_genome_dirs(cfg))
     view["processed_genomes"] = first_dir(processed_genome_dirs(cfg))
+    view["samovar_database"] = str(
+        (genomes_block(cfg) or {}).get("samovar_database") or ""
+    )
+    if not view["samovar_database"] and view["processed_genomes"]:
+        view["samovar_database"] = view["processed_genomes"]
     view["genome_dirs"] = extra_genome_dirs(cfg)
     view["path"] = compiler_python_libs(cfg)
     regen = tools.get("annotation_regenerate.R")
@@ -845,7 +863,8 @@ class InstallConfig(dict):
             apply_legacy_updates(self, {"tools": value})
             return
         if key == "genomes" and not (
-            isinstance(value, dict) and any(k in value for k in ("test", "raw", "processed", "data"))
+            isinstance(value, dict)
+            and any(k in value for k in ("test", "raw", "processed", "data", "samovar_database"))
         ):
             apply_legacy_updates(self, {"genomes": value})
             return
@@ -904,6 +923,7 @@ def build_install_config(
     processed_default: str = "",
     extra_genome_dirs: Optional[Sequence[str]] = None,
     extra_path: Optional[Sequence[str]] = None,
+    samovar_database: str = "",
     bash: str = "",
     cxx: str = "",
     r_path: str = "",
@@ -942,6 +962,15 @@ def build_install_config(
     genomes = genomes_block(cfg) or empty_canonical()["genomes"]
     test_root = str(Path(root) / "data" / "test_genomes")
     genomes["test"] = [test_root]
+    db = str(samovar_database or genomes.get("samovar_database") or "").strip()
+    if not db:
+        db = str(Path(root) / "genomes")
+    if db and not is_home_path(db):
+        genomes["samovar_database"] = db
+        proc_store = str(Path(db).expanduser() / "processed")
+    else:
+        genomes["samovar_database"] = str(Path(root) / "genomes")
+        proc_store = str(Path(root) / "genomes" / "processed")
     raw = drop_home_paths(folder_map(genomes.get("raw")))
     if genomes_default and not is_home_path(genomes_default):
         raw["default"] = genomes_default
@@ -958,8 +987,11 @@ def build_install_config(
         raw[n] = text
     genomes["raw"] = raw
     proc = drop_home_paths(folder_map(genomes.get("processed")))
+    proc["samovar_database"] = proc_store
     if processed_default and not is_home_path(processed_default):
         proc["default"] = processed_default
+    else:
+        proc.setdefault("default", proc_store)
     genomes["processed"] = proc
     if not genomes.get("data"):
         genomes["data"] = scan_test_genome_index(Path(test_root))
