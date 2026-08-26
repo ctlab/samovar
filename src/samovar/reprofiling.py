@@ -172,9 +172,10 @@ def train_models(df, test_size=0.2, random_state=42):
     X = df_processed[feature_cols]
     y = df_processed['true']
     
-    # Split data
+    # Split data. Stratify only when every class has ≥2 members (sklearn).
     split_kwargs = {"test_size": test_size, "random_state": random_state}
-    if len(y.unique()) > 1:
+    class_counts = y.value_counts()
+    if len(class_counts) > 1 and int(class_counts.min()) >= 2:
         split_kwargs["stratify"] = y
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, **split_kwargs
@@ -336,3 +337,35 @@ def save_model(model, path):
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     joblib.dump(model, path)
+
+
+def passthrough_reprofile_tables(
+    reprofiling_dir: str,
+    output_dir: str,
+    features_df=None,
+) -> int:
+    """Write ``*_reprofiled.csv`` without a model so viz_reprofiled can run.
+
+    ``taxid_SAMOVAR`` copies ``true`` when present, otherwise 0.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    written = 0
+    for filename in sorted(os.listdir(reprofiling_dir)):
+        if not filename.endswith(".csv"):
+            continue
+        if filename.startswith("combined_annotation_table"):
+            continue
+        sample_file = os.path.join(reprofiling_dir, filename)
+        df = pd.read_csv(sample_file)
+        df = merge_read_features(df, features_df)
+        if "taxid_SAMOVAR" not in df.columns:
+            if "true" in df.columns:
+                df["taxid_SAMOVAR"] = df["true"]
+            else:
+                df["taxid_SAMOVAR"] = 0
+            df["taxid_SAMOVAR_confidence"] = 0
+        stem = os.path.basename(sample_file).split(".")[0]
+        output_file = os.path.join(output_dir, f"{stem}_reprofiled.csv")
+        df.to_csv(output_file, index=False)
+        written += 1
+    return written

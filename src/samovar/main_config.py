@@ -540,7 +540,9 @@ def databases_of(cfg: Dict[str, Any]) -> Dict[str, List[List[str]]]:
 
 
 def scan_test_genome_index(test_root: Path) -> Dict[str, List[str]]:
-    """``taxID -> [species_taxID, genome_ID, database, file_name]`` for bundled stubs."""
+    """``{taxid}_test`` → 4-field records for bundled ISS stubs (never NCBI taxids)."""
+    from samovar.genome_index import as_test_taxid, TEST_FOLDER_ID
+
     data: Dict[str, List[str]] = {}
     if not test_root.is_dir():
         return data
@@ -550,17 +552,29 @@ def scan_test_genome_index(test_root: Path) -> Dict[str, List[str]]:
         name = path.name
         if name.startswith(".") or name == "test.fa":
             continue
+        lower = name.lower()
+        if lower.endswith(".faa") or lower.endswith(".faa.gz"):
+            continue
+        if not any(
+            lower.endswith(ext)
+            for ext in (".fna", ".fa", ".fasta", ".fna.gz", ".fa.gz", ".fasta.gz")
+        ):
+            continue
         stem = name.split(".")[0]
         taxid = stem.split("-")[0]
+        if taxid.endswith("_test"):
+            taxid = taxid[: -len("_test")]
         if not taxid.isdigit():
             continue
         try:
             rel_parent = path.parent.relative_to(test_root).as_posix()
         except ValueError:
             rel_parent = path.parent.name
-        folder_id = "test"
         rel = name if rel_parent in {".", ""} else f"{rel_parent}/{name}"
-        data[taxid] = [taxid, taxid, folder_id, rel]
+        key = as_test_taxid(taxid)
+        if key in data and name.endswith(".gz"):
+            continue
+        data[key] = [key, key, TEST_FOLDER_ID, rel]
     return data
 
 

@@ -24,6 +24,7 @@ from samovar.parse_annotators import (
     ensure_taxid_name_map,
     read_taxid_rank_table,
     rank_map_column,
+    resolve_taxid_at_rank,
 )
 
 
@@ -228,6 +229,43 @@ def test_ensure_taxid_rank_map_reuses_cache(tmp_path, monkeypatch):
     assert mapping["999999"] == "42"
     assert rank_map_column("genus") == "genera_taxid"
     assert rank_map_column("species") == "species_taxid"
+
+
+def test_ensure_taxid_rank_map_rejects_na_cache_and_keeps_phage(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    cache = tmp_path / "map.tsv"
+    cache.write_text("taxid|genera_taxid\n2886930|NA\n10847|0\n")
+    mapping = ensure_taxid_rank_map(["2886930", "10847", "9606"], rank="genus", cache_path=str(cache))
+    assert canonical_taxid(mapping["2886930"]) != "0"
+    assert canonical_taxid(mapping["10847"]) != "0"
+    assert mapping["9606"] == "9605"
+    text = cache.read_text()
+    assert "2886930|0" not in text
+    assert "10847|0" not in text
+
+
+def test_resolve_taxid_at_rank_falls_back_when_genus_missing(monkeypatch):
+    from samovar import parse_annotators as pa
+
+    monkeypatch.setattr(pa, "_resolve_taxid_by_rank_exact", lambda taxid, rank_name: None)
+    assert pa.resolve_taxid_at_rank("10847", "genus") == "10847"
+
+    def species_only(taxid, rank_name):
+        return "10847" if rank_name == "species" else None
+
+    monkeypatch.setattr(pa, "_resolve_taxid_by_rank_exact", species_only)
+    assert pa.resolve_taxid_at_rank("999", "genus") == "10847"
+
+
+def test_remap_keeps_phage_when_genus_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    df = pd.DataFrame({
+        "taxID_kaiju": ["2886930", "9606"],
+        "true": ["2886930", "9606"],
+    })
+    out = remap_taxid_dataframe(df, rank="genus", cache_path=str(tmp_path / "g.tsv"))
+    assert str(canonical_taxid(out.loc[0, "true"])) != "0"
+    assert str(canonical_taxid(out.loc[1, "true"])) == "9605"
 
 
 def test_ensure_taxid_name_map_writes_pipe_table(tmp_path, monkeypatch):

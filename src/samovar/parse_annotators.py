@@ -102,6 +102,20 @@ _RANK_ALIASES = {
     "superkingdom": "superkingdom",
 }
 
+# NCBI ranks from coarse to fine. If the requested rank is missing (common for
+# phages: no genus), keep the next finer rank or the original taxID.
+NCBI_RANK_ORDER = (
+    "superkingdom",
+    "kingdom",
+    "phylum",
+    "class",
+    "order",
+    "family",
+    "genus",
+    "species",
+    "strain",
+)
+
 # Minimal built-in fallback for common test taxids if no taxonomy DB is available.
 _FALLBACK_LINEAGE = {
     9606: {"species": 9606, "genus": 9605},
@@ -111,6 +125,8 @@ _FALLBACK_LINEAGE = {
     561: {"genus": 561},
     4932: {"species": 4932, "genus": 4930},
     4930: {"genus": 4930},
+    2886930: {"species": 2886930},
+    10847: {"species": 10847},
 }
 
 
@@ -122,6 +138,26 @@ def normalize_tax_rank(rank: Optional[str]) -> Optional[str]:
     if key in {"", "none", "exact", "taxid", "raw", "false", "off"}:
         return None
     return _RANK_ALIASES.get(key, key)
+
+
+def ranks_at_or_below(rank_name: str) -> tuple:
+    """Requested rank plus finer ranks (genus → species → strain)."""
+    name = normalize_tax_rank(rank_name) or str(rank_name or "").strip().lower()
+    if not name or name not in NCBI_RANK_ORDER:
+        return (name,) if name else tuple()
+    start = NCBI_RANK_ORDER.index(name)
+    return NCBI_RANK_ORDER[start:]
+
+
+def _rank_map_dest_usable(src: str, dst: str) -> bool:
+    """False when a cache row collapsed a real taxid to unclassified/NA."""
+    source = canonical_taxid(src)
+    dest = canonical_taxid(dst)
+    if source == "0":
+        return True
+    if dest in {"0", ""}:
+        return False
+    return True
 
 
 def canonical_taxid(value) -> str:
@@ -166,9 +202,9 @@ def build_taxid_rank_map(taxids, rank: str) -> Dict[str, str]:
             mapping[raw] = "0"
             mapping[key] = "0"
             continue
-        ranked = _resolve_taxid_by_rank(key, rank_name)
-        mapping[raw] = ranked if ranked is not None else key
-        mapping[key] = mapping[raw]
+        ranked = resolve_taxid_at_rank(key, rank_name)
+        mapping[raw] = ranked
+        mapping[key] = ranked
     return mapping
 
 
@@ -222,7 +258,10 @@ def write_taxid_rank_table(path, mapping: Dict[str, str], rank: str) -> None:
         src = canonical_taxid(key)
         if src == "0":
             continue
-        rows[src] = canonical_taxid(value)
+        dest = canonical_taxid(value)
+        if dest == "0":
+            continue
+        rows[src] = dest
     tmp = table.with_suffix(table.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as handle:
         handle.write(f"taxid|{col}\n")
@@ -256,12 +295,13 @@ def ensure_taxid_rank_map(taxids, rank: str, cache_path=None) -> Dict[str, str]:
             mapping[key] = "0"
             mapping[raw] = "0"
             continue
-        if key in mapping:
-            mapping[raw] = mapping[key]
+        cached = mapping.get(key)
+        if cached is not None and _rank_map_dest_usable(key, cached):
+            mapping[raw] = cached
             continue
-        ranked = _resolve_taxid_by_rank(key, rank_name)
-        mapping[key] = ranked if ranked is not None else key
-        mapping[raw] = mapping[key]
+        ranked = resolve_taxid_at_rank(key, rank_name)
+        mapping[key] = ranked
+        mapping[raw] = ranked
         added = True
 
     requested = {canonical_taxid(t) for t in taxids}
@@ -553,8 +593,8 @@ def _get_taxid_by_rank_from_nodes(taxid: int, rank_name: str) -> Optional[str]:
     return None
 
 
-def _resolve_taxid_by_rank(taxid: str, rank_name: str) -> Optional[str]:
-    """Resolve target rank with fast and robust fallback strategy."""
+def _resolve_taxid_by_rank_exact(taxid: str, rank_name: str) -> Optional[str]:
+    """Resolve exactly ``rank_name`` (no fallback). None if that rank is absent."""
     rank_name = normalize_tax_rank(rank_name) or rank_name
     taxid = canonical_taxid(taxid)
     if taxid == "0":
@@ -565,7 +605,6 @@ def _resolve_taxid_by_rank(taxid: str, rank_name: str) -> Optional[str]:
     except (TypeError, ValueError):
         return None
 
-    # 1) Try ete3-backed resolver.
     try:
         lineage = _get_ncbi().get_lineage(taxid_int)
         ranks = _get_ncbi().get_rank(lineage)
@@ -575,17 +614,73 @@ def _resolve_taxid_by_rank(taxid: str, rank_name: str) -> Optional[str]:
     except Exception:
         pass
 
-    # 2) Try local nodes.dmp cache.
     local_hit = _get_taxid_by_rank_from_nodes(taxid_int, rank_name)
     if local_hit is not None:
         return local_hit
 
-    # 3) Built-in tiny fallback for deterministic unit tests/common IDs.
     fallback = _FALLBACK_LINEAGE.get(taxid_int, {}).get(rank_name)
     if fallback is not None:
         return str(fallback)
-
     return None
+
+
+def resolve_taxid_at_rank(taxid: str, rank_name: str) -> str:
+    """Map ``taxid`` to ``rank_name``, else species/strain, else the taxid itself.
+
+    Phages often have no NCBI genus; collapsing that to unclassified (0) would
+    drop them from F1/OPAL and leave only taxa like Homo that do have a genus.
+    """
+    key = canonical_taxid(taxid)
+    if key == "0":
+        return "0"
+    requested = normalize_tax_rank(rank_name) or str(rank_name or "").strip().lower()
+    for candidate in ranks_at_or_below(requested) or (requested,):
+        if not candidate:
+            continue
+        hit = _resolve_taxid_by_rank_exact(key, candidate)
+        if hit and hit != "0":
+            return hit
+    return key
+
+
+def taxid_ncbi_rank(taxid: str) -> Optional[str]:
+    """NCBI rank string for ``taxid`` (genus, species, …) if known."""
+    key = canonical_taxid(taxid)
+    if key == "0":
+        return None
+    try:
+        taxid_int = int(key)
+    except (TypeError, ValueError):
+        return None
+    try:
+        ranks = _get_ncbi().get_rank([taxid_int])
+        name = ranks.get(taxid_int)
+        if name and name != "no rank":
+            return str(name)
+    except Exception:
+        pass
+    global _taxonomy_parent_rank
+    try:
+        if _taxonomy_parent_rank is None:
+            nodes_path = _discover_nodes_path()
+            if nodes_path:
+                _taxonomy_parent_rank = _load_nodes_cache(nodes_path)
+        tree = _taxonomy_parent_rank or {}
+        if taxid_int in tree:
+            _parent, rank = tree[taxid_int]
+            if rank and rank != "no rank":
+                return str(rank)
+    except Exception:
+        pass
+    for rank, mapped in (_FALLBACK_LINEAGE.get(taxid_int) or {}).items():
+        if str(mapped) == key:
+            return rank
+    return None
+
+
+def _resolve_taxid_by_rank(taxid: str, rank_name: str) -> Optional[str]:
+    """Backward-compatible wrapper: exact rank, else None (callers may keep self)."""
+    return _resolve_taxid_by_rank_exact(taxid, rank_name)
 
 
 def resolve_metaphlan_db_file(
@@ -984,9 +1079,10 @@ class Annotation:
         if j == "0":
             return "0"
         try:
-            return _resolve_taxid_by_rank(j, i)
+            return resolve_taxid_at_rank(j, i)
         except Exception:
-            return None
+            key = canonical_taxid(j)
+            return key if key != "0" else None
 
     def export(self, file: Optional[str] = None) -> pd.DataFrame:
         """Export annotations to CSV file.

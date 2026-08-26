@@ -11,6 +11,7 @@ from samovar.reprofiling import (
     preprocess_data,
     merge_read_features,
     load_read_features,
+    passthrough_reprofile_tables,
 )
 
 def process_sample(sample_file, output_dir, model=None, label_encoder=None, classify_unclassified=False, features_df=None):
@@ -98,6 +99,10 @@ validation_df[fill_cols] = validation_df[fill_cols].fillna(0)
 print("\nTraining model on validation data...")
 if len(validation_df) == 0:
     print("No validation rows available; skipping ML reprofiling.")
+    n = passthrough_reprofile_tables(
+        args.reprofiling_dir, args.output_dir, features_df=features_df
+    )
+    print(f"Wrote {n} passthrough reprofile table(s) (no model).")
     raise SystemExit(0)
 
 try:
@@ -106,6 +111,10 @@ try:
     )
 except ValueError as exc:
     print(f"Skipping ML reprofiling: {exc}")
+    n = passthrough_reprofile_tables(
+        args.reprofiling_dir, args.output_dir, features_df=features_df
+    )
+    print(f"Wrote {n} passthrough reprofile table(s) (taxid_SAMOVAR copies true).")
     raise SystemExit(0)
 
 # Print model performance

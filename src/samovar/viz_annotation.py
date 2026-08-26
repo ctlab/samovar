@@ -588,8 +588,8 @@ def viz_annotation(
     taxid_xlab = "True taxon" if use_names else "True taxID"
     taxid_ylab = "Predicted taxon" if use_names else "Predicted taxID"
     if rank_used:
-        taxid_xlab = f"{taxid_xlab} ({rank_used})"
-        taxid_ylab = f"{taxid_ylab} ({rank_used})"
+        taxid_xlab = f"{taxid_xlab} ({rank_used} or nearest rank)"
+        taxid_ylab = f"{taxid_ylab} ({rank_used} or nearest rank)"
     italic = bool(use_names) and (rank_key in {"genus", "genera", "g", "species", "sp"} or skip_rank)
 
     name_map: Dict[str, str] = {}

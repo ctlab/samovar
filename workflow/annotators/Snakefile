@@ -3,17 +3,24 @@ import os
 from samovar.annotators_wrapper import get_annotator_instance
 from samovar.seqio import find_fastq_mate, list_fastq_samples
 
+try:
+    workflow.rerun_triggers = ["mtime"]
+except Exception:
+    pass
+
 # Get all samples from input directories (plain or gzipped FASTQ / FQ)
 def get_samples():
     return list_fastq_samples(config["r1_dir"])
 
 def r1_input(wildcards):
     found = find_fastq_mate(config["r1_dir"], wildcards.sample, "R1")
-    return str(found) if found else os.path.join(config["r1_dir"], f"{wildcards.sample}_R1.fastq")
+    path = str(found) if found else os.path.join(config["r1_dir"], f"{wildcards.sample}_R1.fastq")
+    return ancient(path)
 
 def r2_input(wildcards):
     found = find_fastq_mate(config["r2_dir"], wildcards.sample, "R2")
-    return str(found) if found else os.path.join(config["r2_dir"], f"{wildcards.sample}_R2.fastq")
+    path = str(found) if found else os.path.join(config["r2_dir"], f"{wildcards.sample}_R2.fastq")
+    return ancient(path)
 
 SAMPLES = get_samples()
 

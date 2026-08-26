@@ -237,9 +237,66 @@ def test_normalize_genome_data_legacy_and_current():
         "GCF_000819615.1.fa.gz",
     ]
     stub = normalize_genome_data({"562": ["", "test", "meta/562.fna"]})
-    assert stub["562"] == ["562", "562", "test", "meta/562.fna"]
+    assert stub["562_test"] == ["562_test", "562_test", "test", "meta/562.fna"]
+    assert "562" not in stub
     current = normalize_genome_data(
         {"10847": ["10847", "GCF_000819615.1", "samovar_database", "GCF_000819615.1.fa.gz"]}
     )
     assert current["10847"][1] == "GCF_000819615.1"
     assert current["10847"][3] == "GCF_000819615.1.fa.gz"
+
+
+def test_scan_test_genome_index_uses_test_suffix(tmp_path):
+    from samovar.main_config import scan_test_genome_index
+
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    (meta / "562.fna").write_text(">e\nATGC\n")
+    (meta / "2886930.fna").write_text(">p\nATGC\n")
+    (meta / "2886930.fna.gz").write_bytes(b"not-a-real-gz")
+    data = scan_test_genome_index(tmp_path)
+    assert set(data) == {"562_test", "2886930_test"}
+    assert data["2886930_test"][3] == "meta/2886930.fna"
+
+
+def test_ensure_gzip_leaves_bundled_test_genomes_in_place():
+    from samovar.genome_index import ensure_gzip_fasta
+
+    src = Path(__file__).resolve().parent.parent / "data" / "test_genomes" / "meta" / "2886930.fna"
+    assert src.is_file()
+    out = ensure_gzip_fasta(src)
+    assert out.resolve() == src.resolve()
+    assert src.is_file()
+
+
+def test_ncbi_taxid_does_not_resolve_test_stub(tmp_path, monkeypatch):
+    cfg, _store = _isolate(tmp_path, monkeypatch)
+    payload = json.loads(cfg.read_text())
+    payload["genomes"]["data"] = {
+        "2886930": ["2886930", "2886930", "test", "meta/2886930.fna"]
+    }
+    cfg.write_text(json.dumps(payload) + "\n")
+    from samovar.genome_index import genome_data_map, indexed_record
+
+    data = genome_data_map()
+    assert "2886930_test" in data
+    assert "2886930" not in data
+    assert indexed_record("2886930") is None
+    assert indexed_record("2886930_test") is not None
+
+
+def test_index_processed_file_does_not_move_bundled_test_genome(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    from samovar.genome_index import genome_data_map, index_processed_file, reindex
+
+    src = Path(__file__).resolve().parent.parent / "data" / "test_genomes" / "meta" / "2886930.fna"
+    assert src.is_file()
+    placed = index_processed_file(src)
+    assert placed.resolve() == src.resolve()
+    assert src.is_file()
+    data = genome_data_map()
+    assert "2886930_test" in data
+    assert "2886930" not in data
+    store = Path(os.environ["SAMOVAR_DATABASE"]) / "processed"
+    with pytest.raises(RuntimeError, match="nothing in processed"):
+        reindex(dest=store)

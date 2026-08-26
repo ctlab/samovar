@@ -27,6 +27,8 @@ PathLike = Union[str, os.PathLike]
 
 ACCESSION_RE = re.compile(r"^(GC[AF]_\d+(?:\.\d+)?)$", re.IGNORECASE)
 FOLDER_ID = "samovar_database"
+TEST_FOLDER_ID = "test"
+TEST_TAXID_SUFFIX = "_test"
 RECORD_LEN = 4  # species_taxid, genome_id, database, file_name
 
 
@@ -34,9 +36,44 @@ def _as_path(path: PathLike) -> Path:
     return Path(path).expanduser()
 
 
+def is_test_taxid(value: str) -> bool:
+    """True for catalog keys like ``562_test`` (bundled ISS stubs, not NCBI)."""
+    text = str(value or "").strip()
+    if not text.endswith(TEST_TAXID_SUFFIX):
+        return False
+    return text[: -len(TEST_TAXID_SUFFIX)].split(".")[0].isdigit()
+
+
+def numeric_taxid_stem(value: str) -> str:
+    text = str(value or "").strip()
+    if is_test_taxid(text):
+        text = text[: -len(TEST_TAXID_SUFFIX)]
+    return text.split(".")[0]
+
+
+def as_test_taxid(value: str) -> str:
+    stem = numeric_taxid_stem(value)
+    if stem.isdigit():
+        return f"{stem}{TEST_TAXID_SUFFIX}"
+    text = str(value or "").strip()
+    if text and not text.endswith(TEST_TAXID_SUFFIX):
+        return f"{text}{TEST_TAXID_SUFFIX}"
+    return text
+
+
 def _is_taxid(value: str) -> bool:
     text = str(value or "").strip()
     if not text or is_assembly_accession(text):
+        return False
+    if is_test_taxid(text):
+        return True
+    return text.split(".")[0].isdigit()
+
+
+def _is_ncbi_taxid(value: str) -> bool:
+    """Numeric NCBI taxid (not ``562_test``)."""
+    text = str(value or "").strip()
+    if not text or is_test_taxid(text) or is_assembly_accession(text):
         return False
     return text.split(".")[0].isdigit()
 
@@ -113,8 +150,20 @@ def coerce_genome_record(key: str, rec: Sequence[Any]) -> Tuple[str, List[str]]:
     return taxid, [species, genome_id, database, file_name]
 
 
+def _record_is_test_stub(key: str, row: Sequence[str]) -> bool:
+    species, genome_id, database, file_name = (list(row) + [""] * 4)[:4]
+    if database == TEST_FOLDER_ID or is_test_taxid(key):
+        return True
+    blob = f"{file_name} {genome_id} {species}"
+    return "test_genomes" in blob.replace("\\", "/")
+
+
 def normalize_genome_data(raw: Any) -> Dict[str, List[str]]:
-    """Rewrite ``genomes.data`` to taxID → 4-field records."""
+    """Rewrite ``genomes.data`` to taxID → 4-field records.
+
+    Bundled ``data/test_genomes`` stubs are stored as ``{taxid}_test`` so they
+    never collide with a real NCBI taxid (and are not used as a library hit).
+    """
     if not isinstance(raw, dict):
         return {}
     out: Dict[str, List[str]] = {}
@@ -129,6 +178,15 @@ def normalize_genome_data(raw: Any) -> Dict[str, List[str]]:
             continue
         if not taxid:
             continue
+        if _record_is_test_stub(taxid, row) or _record_is_test_stub(str(key), row):
+            marked = as_test_taxid(taxid if _is_ncbi_taxid(taxid) or is_test_taxid(taxid) else str(key))
+            species, genome_id, database, file_name = (row + [""] * 4)[:4]
+            if _is_ncbi_taxid(species) or not species:
+                species = marked
+            if _is_ncbi_taxid(genome_id) or not genome_id:
+                genome_id = marked
+            row = [species, genome_id, TEST_FOLDER_ID, file_name]
+            taxid = marked
         out[taxid] = row
     return out
 
@@ -248,7 +306,11 @@ def indexed_record(ident: str, cfg: Optional[Dict[str, Any]] = None) -> Optional
     stem = sequence_stem(ident)
     if stem in data:
         return stem, data[stem]
+    want_test = is_test_taxid(ident)
     for key, rec in data.items():
+        if is_test_taxid(key) and not want_test:
+            # Stubs must not satisfy a real NCBI taxid / accession lookup.
+            continue
         species, genome_id, _database, file_name = (rec + [""] * 4)[:4]
         if genome_id and genome_id in {ident, acc, stem}:
             return key, rec
@@ -283,10 +345,17 @@ def resolve_indexed_path(ident: str, cfg: Optional[Dict[str, Any]] = None) -> Op
 
 
 def ensure_gzip_fasta(path: Path) -> Path:
-    """Return a ``.gz`` FASTA; gzip in place if the file is still plain."""
+    """Return a ``.gz`` FASTA; gzip in place if the file is still plain.
+
+    Bundled ``data/test_genomes`` files are never rewritten (no gzip, no move).
+    """
     src = _as_path(path)
     if not src.is_file():
         raise FileNotFoundError(src)
+    from samovar.genome_cache import is_bundled_test_genomes_path
+
+    if is_bundled_test_genomes_path(src):
+        return src
     if is_gzip_path(src):
         return src
     dest = src.with_name(src.name + ".gz")
@@ -395,15 +464,21 @@ def numeric_taxid_for(ident: str, cfg: Optional[Dict[str, Any]] = None) -> str:
     ident = str(ident or "").strip()
     if not ident:
         return ""
-    if _is_taxid(ident):
+    if is_test_taxid(ident):
+        return ident
+    if _is_ncbi_taxid(ident):
         return ident.split(".")[0]
     hit = indexed_record(ident, cfg)
     if hit is not None:
         key, rec = hit
-        if _is_taxid(key):
+        if is_test_taxid(key):
+            return key
+        if _is_ncbi_taxid(key):
             return key.split(".")[0]
         species = rec[0] if rec else ""
-        if _is_taxid(species):
+        if is_test_taxid(species):
+            return species
+        if _is_ncbi_taxid(species):
             return species.split(".")[0]
     return ident
 
@@ -421,7 +496,42 @@ def index_processed_file(
     from samovar.main_config import folder_map, genomes_block
     from samovar.paths import load_config, update_config
 
-    src = ensure_gzip_fasta(_as_path(path))
+    src = _as_path(path)
+    from samovar.genome_cache import is_bundled_test_genomes_path
+
+    if is_bundled_test_genomes_path(src):
+        try:
+            resolved = src.resolve()
+        except OSError:
+            resolved = src
+        rel = src.name
+        parts = resolved.parts
+        if "test_genomes" in parts:
+            idx = parts.index("test_genomes")
+            rel = "/".join(parts[idx + 1 :]) or src.name
+        else:
+            try:
+                from samovar.paths import test_genomes_dir as _tgd
+
+                rel = resolved.relative_to(_tgd().resolve()).as_posix()
+            except (OSError, ValueError):
+                rel = src.name
+        taxid_key = as_test_taxid(
+            str(taxid or species_taxid or accession or accession_from_fasta(src) or src.stem)
+        )
+        cfg = load_config()
+        block = genomes_block(cfg) or {}
+        data = genome_data_map(cfg)
+        for stale in [k for k in list(data) if k in {taxid_key, numeric_taxid_stem(taxid_key)}]:
+            if _record_is_test_stub(stale, data.get(stale) or []):
+                data.pop(stale, None)
+        data[taxid_key] = [taxid_key, taxid_key, TEST_FOLDER_ID, rel]
+        block["data"] = data
+        update_config({"genomes": block})
+        logger.info("Recorded test genome %s -> %s (not copied into the library)", taxid_key, src)
+        return src
+
+    src = ensure_gzip_fasta(src)
     acc = accession or accession_from_fasta(src)
     dest_dir = _as_path(move_to) if move_to is not None else src.parent
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -524,10 +634,13 @@ def reindex(
     dest_dir = _as_path(dest) if dest else processed_storage_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
     moved: List[str] = []
+    from samovar.genome_cache import is_bundled_test_genomes_path
+
     if sources:
         files: List[Path] = []
         for src in sources:
             files.extend(iter_processed_fastas(src))
+        files = [path for path in files if not is_bundled_test_genomes_path(path)]
         if not files:
             raise RuntimeError(
                 "reindex: nothing in processed under "
@@ -555,8 +668,10 @@ def reindex(
     data = genome_data_map()
     files = []
     for key, rec in data.items():
+        if is_test_taxid(key) or _record_is_test_stub(key, rec):
+            continue
         path = resolve_indexed_path(key)
-        if path is None:
+        if path is None or is_bundled_test_genomes_path(path):
             continue
         try:
             if path.resolve().parent == dest_dir.resolve() and is_gzip_path(path):

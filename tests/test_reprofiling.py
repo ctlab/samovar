@@ -157,5 +157,31 @@ class TestReprofiling(unittest.TestCase):
         plot_roc_curves(models, X_test, y_test)
         self.assertTrue(os.path.exists('tests_outs/roc_comparison.png'))
 
+    def test_train_models_with_singleton_class(self):
+        df = self.test_data.copy()
+        df.loc[0, "true"] = 99
+        processed = preprocess_data(df)
+        best, models, metrics, cols = train_models(processed, test_size=0.25)
+        self.assertIsNotNone(best)
+        self.assertTrue(metrics)
+
+    def test_passthrough_reprofile_tables(self):
+        from samovar.reprofiling import passthrough_reprofile_tables
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as raw:
+            src = Path(raw) / "in"
+            dst = Path(raw) / "out"
+            src.mkdir()
+            pd.DataFrame({"taxid_a": [1, 2], "true": [562, 562]}).to_csv(
+                src / "sample.annotation.csv", index=False
+            )
+            n = passthrough_reprofile_tables(str(src), str(dst))
+            self.assertEqual(n, 1)
+            out = pd.read_csv(dst / "sample_reprofiled.csv")
+            self.assertEqual(list(out["taxid_SAMOVAR"]), [562, 562])
+
+
 if __name__ == '__main__':
     unittest.main() 

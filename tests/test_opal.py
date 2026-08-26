@@ -9,6 +9,7 @@ from samovar.opal import (
     confusion_rates,
     opal_command,
     opal_executable,
+    opal_rank_range,
     opal_style_metrics,
     series_to_counts,
     write_cami_profile,
@@ -50,6 +51,19 @@ def test_write_cami_profile(tmp_path):
     assert "562" in text and "9606" in text
     assert "\t0\t" not in text
     assert "PERCENTAGE" in text
+
+
+def test_write_cami_profile_keeps_phage_without_genus(tmp_path):
+    path = write_cami_profile({"2886930": 5, "9606": 1, "0": 2}, tmp_path / "gold.profile", "s1", "genus")
+    text = path.read_text()
+    assert "2886930" in text
+    assert "9606" in text
+    assert "\t0\t" not in text
+
+
+def test_opal_rank_range_includes_species():
+    assert opal_rank_range("genus") == "genus,species"
+    assert opal_rank_range("species") == "species,species"
 
 
 def test_series_to_counts_skips_unclassified():

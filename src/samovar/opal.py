@@ -57,6 +57,18 @@ def cami_rank(rank: Optional[str]) -> str:
     return mapped if mapped in OPAL_RANKS else "genus"
 
 
+def opal_rank_range(rank: Optional[str]) -> str:
+    """OPAL ``-r lo,hi``: include finer ranks so phages without a genus still score."""
+    requested = cami_rank(rank)
+    order = list(OPAL_RANKS)
+    if requested not in order:
+        return f"{requested},{requested}"
+    start = order.index(requested)
+    end = order.index("species") if "species" in order else start
+    lo, hi = (start, end) if start <= end else (end, start)
+    return f"{order[lo]},{order[hi]}"
+
+
 def opal_enabled() -> bool:
     flag = os.environ.get("SAMOVAR_OPAL", "").strip().lower()
     if flag in {"0", "false", "no", "off"}:
@@ -103,25 +115,40 @@ def write_cami_profile(
 ) -> Path:
     """Write a single-sample CAMI bioboxes taxonomic profile."""
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    rank = cami_rank(rank)
+    from samovar.parse_annotators import taxid_ncbi_rank
+
+    requested = cami_rank(rank)
     classified = float(sum(max(float(v), 0.0) for v in counts.values()))
     denom = float(total) if total is not None and float(total) > 0 else classified
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     sid = "".join(ch if ch.isalnum() or ch in "._" else "_" for ch in str(sample_id)) or "1"
-    lines = [
-        f"@SampleID:{sid}",
-        "@Version:0.9.1",
-        f"@Ranks:{rank}",
-        "@TaxonomyID:ncbi",
-        "@@TAXID\tRANK\tTAXPATH\tPERCENTAGE",
-    ]
+    rows = []
+    ranks_used = []
     for taxid, n in sorted(counts.items(), key=lambda kv: (-float(kv[1]), str(kv[0]))):
         token = normalize_taxon_token(taxid)
         if is_special_taxon(token) or float(n) <= 0:
             continue
+        actual = taxid_ncbi_rank(token)
+        row_rank = actual if actual in OPAL_RANKS else requested
+        ranks_used.append(row_rank)
         pct = 0.0 if denom <= 0 else 100.0 * float(n) / denom
-        lines.append(f"{token}\t{rank}\t{token}\t{pct:.6f}")
+        rows.append(f"{token}\t{row_rank}\t{token}\t{pct:.6f}")
+    unique_ranks = []
+    for item in ranks_used:
+        if item not in unique_ranks:
+            unique_ranks.append(item)
+    if requested not in unique_ranks:
+        unique_ranks.insert(0, requested)
+    rank_header = "|".join(unique_ranks) if unique_ranks else requested
+    lines = [
+        f"@SampleID:{sid}",
+        "@Version:0.9.1",
+        f"@Ranks:{rank_header}",
+        "@TaxonomyID:ncbi",
+        "@@TAXID\tRANK\tTAXPATH\tPERCENTAGE",
+        *rows,
+    ]
     dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return dest
 
@@ -316,7 +343,6 @@ def run_opal(
     out.mkdir(parents=True, exist_ok=True)
     labels = ",".join(name for name, _ in profiles)
     files = [str(path) for _, path in profiles]
-    rank_name = cami_rank(rank)
     cmd = [
         *exe,
         "-g",
@@ -326,7 +352,7 @@ def run_opal(
         "-l",
         labels,
         "-r",
-        f"{rank_name},{rank_name}",
+        opal_rank_range(rank),
         "--silent",
         *files,
     ]
