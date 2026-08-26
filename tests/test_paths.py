@@ -18,10 +18,13 @@ from samovar.paths import (
     write_config,
     write_install_config_pointer,
 )
+from samovar.version import get_version, pyproject_path
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.20"
+    assert PACKAGE_VERSION == get_version()
+    text = pyproject_path().read_text(encoding="utf-8")
+    assert f'version = "{PACKAGE_VERSION}"' in text or f"version = '{PACKAGE_VERSION}'" in text
 
 
 def test_build_config_path_pointer(tmp_path, monkeypatch):
@@ -30,9 +33,9 @@ def test_build_config_path_pointer(tmp_path, monkeypatch):
     cfg = tmp_path / "custom" / "config.json"
     cfg.parent.mkdir(parents=True)
     cfg.write_text(
-        '{"version": "0.10.20", "root": "%s", "compilers": {"python": "/bin/python3"}, '
+        '{"version": "%s", "root": "%s", "compilers": {"python": "/bin/python3"}, '
         '"API": {}, "genomes": {"test": [], "raw": {}, "processed": {}, "data": {}}, '
-        '"databases": {}, "workflows": {}, "tools": {}}\n' % tmp_path
+        '"databases": {}, "workflows": {}, "tools": {}}\n' % (get_version(), tmp_path)
     )
     pointer = write_install_config_pointer(cfg, root=tmp_path)
     assert pointer is not None
@@ -62,7 +65,7 @@ def test_write_config_records_pointer(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_CONFIG", str(dest))
     write_config(
         {
-            "version": "0.10.20",
+            "version": get_version(),
             "root": str(tmp_path),
             "compilers": {"python": "/usr/bin/python3"},
         }

@@ -2,10 +2,9 @@
 Automated benchmarcing with SamovaR
 """
 
-try:
-    from ._version import version as __version__
-except ImportError:
-    __version__ = "0.10.20"
+from .version import get_version
+
+__version__ = get_version()
 
 from .fasta_processor import * 
 from .build_database import *

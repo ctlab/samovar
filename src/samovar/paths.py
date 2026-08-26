@@ -36,8 +36,9 @@ from samovar.main_config import (
     tool_env_prefix as tool_entry_env_prefix,
     tool_path as tool_entry_path,
 )
+from samovar.version import get_version
 
-PACKAGE_VERSION = "0.10.20"
+PACKAGE_VERSION = get_version()
 
 KNOWN_TOOLS = (
     "kraken2",
