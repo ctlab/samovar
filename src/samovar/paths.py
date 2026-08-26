@@ -3,10 +3,12 @@
 Config is read from:
 
 1. ``$SAMOVAR_CONFIG`` — exclusive override (even an empty ``{}``). Used by
-   tests and custom installs so HPC ``~/.config`` / ``build/config.json``
-   paths are not inherited.
-2. Otherwise merge ``$XDG_CONFIG_HOME/samovar/config.json`` (default
-   ``~/.config/samovar/config.json``) over ``<repo>/build/config.json``.
+   tests and one-shot custom paths.
+2. Else the absolute path recorded in ``<repo>/build/config_path`` (written by
+   ``./install.sh`` / ``write_config``).
+3. Else ``$XDG_CONFIG_HOME/samovar/config.json`` (default
+   ``~/.config/samovar/config.json``), with an optional mirror under
+   ``<repo>/build/config.json``.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from samovar.main_config import (
     tool_path as tool_entry_path,
 )
 
-PACKAGE_VERSION = "0.10.19"
+PACKAGE_VERSION = "0.10.20"
 
 KNOWN_TOOLS = (
     "kraken2",
@@ -65,18 +67,103 @@ KNOWN_TOOLS = (
 )
 
 
-def user_config_dir() -> Path:
+def _code_repo_root() -> Path:
+    """Package checkout root from this file (no config I/O)."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _install_root_candidates() -> List[Path]:
+    """Roots that may contain ``build/config_path`` (avoid config recursion)."""
+    roots: List[Path] = []
+    seen = set()
+
+    def add(raw: Optional[str]) -> None:
+        text = str(raw or "").strip()
+        if not text:
+            return
+        try:
+            path = Path(text).expanduser().resolve()
+        except OSError:
+            path = Path(text).expanduser()
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(path)
+
+    add(os.environ.get("SAMOVAR_ROOT", ""))
+    add(str(_code_repo_root()))
+    return roots
+
+
+def default_user_config_dir() -> Path:
+    """Default XDG install dir when no custom config path is recorded."""
     xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
     if xdg:
         return Path(xdg) / "samovar"
     return Path.home() / ".config" / "samovar"
 
 
+def install_config_pointer_file(root: Optional[Path] = None) -> Path:
+    """``<repo>/build/config_path`` — one-line absolute path to ``config.json``."""
+    base = root if root is not None else Path(
+        os.environ.get("SAMOVAR_ROOT", "").strip() or _code_repo_root()
+    )
+    return Path(base).expanduser() / "build" / "config_path"
+
+
+def recorded_config_path() -> Optional[Path]:
+    """Absolute config.json path from ``build/config_path``, if present.
+
+    When ``SAMOVAR_ROOT`` is set, only that install's pointer is consulted
+    (so tests / alternate checkouts do not inherit another tree's path).
+    """
+    env_root = os.environ.get("SAMOVAR_ROOT", "").strip()
+    roots = [Path(env_root).expanduser()] if env_root else _install_root_candidates()
+    for root in roots:
+        pointer = install_config_pointer_file(root)
+        try:
+            text = pointer.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        return Path(text.splitlines()[0].strip()).expanduser()
+    return None
+
+
+def write_install_config_pointer(config_file: Path, root: Optional[Path] = None) -> Optional[Path]:
+    """Record ``config_file`` in ``build/config_path`` next to the install."""
+    try:
+        dest = Path(config_file).expanduser().resolve()
+    except OSError:
+        dest = Path(config_file).expanduser()
+    pointer = install_config_pointer_file(root)
+    try:
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text(str(dest) + "\n", encoding="utf-8")
+        return pointer
+    except OSError:
+        return None
+
+
 def user_config_path() -> Path:
+    """Active main install config JSON.
+
+    Order: ``$SAMOVAR_CONFIG`` → ``build/config_path`` → default XDG file.
+    """
     override = os.environ.get("SAMOVAR_CONFIG", "").strip()
     if override:
-        return Path(override)
-    return user_config_dir() / "config.json"
+        return Path(override).expanduser()
+    recorded = recorded_config_path()
+    if recorded is not None:
+        return recorded
+    return default_user_config_dir() / "config.json"
+
+
+def user_config_dir() -> Path:
+    """Directory holding ``config.json``, ``env``, and optional R sidecar scripts."""
+    return user_config_path().parent
 
 
 def repo_root() -> Path:
@@ -96,8 +183,7 @@ def repo_root() -> Path:
                 return root_path.resolve()
             except OSError:
                 return root_path
-    # src/samovar/paths.py → repo
-    return Path(__file__).resolve().parent.parent.parent
+    return _code_repo_root()
 
 
 def workflow_dir() -> Path:
@@ -227,18 +313,29 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
 def load_config() -> Dict[str, Any]:
     override = os.environ.get("SAMOVAR_CONFIG", "").strip()
     if override:
-        # Exclusive: tests and custom installs must not inherit ~/.config or
-        # build/config.json (those can point at unreadable HPC paths).
+        # Exclusive: tests and one-shot overrides must not inherit another
+        # install's ~/.config or build/config.json.
         data = _read_json(Path(override).expanduser())
         return as_install_config(data if isinstance(data, dict) else {})
 
-    candidates = [
-        user_config_dir() / "config.json",
-        repo_root() / "build" / "config.json",
-    ]
+    candidates: List[Path] = []
+    seen = set()
+
+    def add(path: Path) -> None:
+        try:
+            key = str(path.expanduser().resolve())
+        except OSError:
+            key = str(path.expanduser())
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    add(user_config_path())
+    add(repo_root() / "build" / "config.json")
     merged: Dict[str, Any] = {}
-    # Later files overlay earlier so repo build/ can fill gaps, user config wins.
-    for path in reversed(list(dict.fromkeys(candidates))):
+    # Later files overlay earlier so the mirror can fill gaps; primary wins last.
+    for path in reversed(candidates):
         data = _read_json(path)
         if data is not None:
             merged.update(data)
@@ -447,24 +544,53 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
 
 
 def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
-    """Write user config (and a copy under ``<repo>/build/config.json``)."""
+    """Write main config, record ``build/config_path``, and optionally mirror JSON."""
     payload = disk_payload(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
     dest = user_config_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(payload, indent=2) + "\n"
+    dest.write_text(text, encoding="utf-8")
     if also_repo_build:
+        write_install_config_pointer(dest, root=repo_root())
         try:
             build = repo_root() / "build"
             build.mkdir(parents=True, exist_ok=True)
-            (build / "config.json").write_text(
-                dest.read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            mirror = build / "config.json"
+            # Avoid rewriting the primary file if it *is* the mirror.
+            try:
+                same = mirror.resolve() == dest.expanduser().resolve()
+            except OSError:
+                same = False
+            if not same:
+                mirror.write_text(text, encoding="utf-8")
         except OSError:
-            # Read-only shared checkout: user config is enough.
+            # Read-only shared checkout: recorded path + primary file are enough.
             pass
     return dest
+
+
+def shell_source_install_env_snippet(*, root_expr: str = '"$SAMOVAR_ROOT"') -> str:
+    """Bash fragment: source ``env`` next to the recorded main config."""
+    return f"""# Load install env from the main config location (build/config_path).
+XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
+_SAMOVAR_CFG=""
+if [ -f {root_expr}/build/config_path ]; then
+  _SAMOVAR_CFG="$(tr -d '[:space:]' < {root_expr}/build/config_path)"
+fi
+if [ -n "$_SAMOVAR_CFG" ]; then
+  export SAMOVAR_CONFIG="$_SAMOVAR_CFG"
+  if [ -f "$(dirname "$_SAMOVAR_CFG")/env" ]; then
+    # shellcheck disable=SC1090
+    . "$(dirname "$_SAMOVAR_CFG")/env"
+  fi
+elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
+  # shellcheck disable=SC1090
+  . "$XDG_CONFIG_HOME/samovar/env"
+fi
+unset _SAMOVAR_CFG
+"""
 
 
 def discover_tools() -> Dict[str, str]:

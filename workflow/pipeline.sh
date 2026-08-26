@@ -5,24 +5,41 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export SAMOVAR_ROOT="$ROOT"
 export PATH="$ROOT/bin:$PATH"
 
+# Load install env from build/config_path (custom config) or default XDG.
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
+_SAMOVAR_CFG=""
+if [ -f "$ROOT/build/config_path" ]; then
+    _SAMOVAR_CFG="$(tr -d '[:space:]' < "$ROOT/build/config_path")"
+fi
+if [ -n "$_SAMOVAR_CFG" ]; then
+    export SAMOVAR_CONFIG="$_SAMOVAR_CFG"
+    if [ -f "$(dirname "$_SAMOVAR_CFG")/env" ]; then
+        # shellcheck disable=SC1090
+        . "$(dirname "$_SAMOVAR_CFG")/env"
+    fi
+elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
     # shellcheck disable=SC1090
     . "$XDG_CONFIG_HOME/samovar/env"
 fi
 
-if [ -f "$XDG_CONFIG_HOME/samovar/config.json" ]; then
+CFG_JSON="${SAMOVAR_CONFIG:-}"
+if [ -z "$CFG_JSON" ] || [ ! -f "$CFG_JSON" ]; then
+    if [ -n "$_SAMOVAR_CFG" ] && [ -f "$_SAMOVAR_CFG" ]; then
+        CFG_JSON="$_SAMOVAR_CFG"
+    elif [ -f "$XDG_CONFIG_HOME/samovar/config.json" ]; then
+        CFG_JSON="$XDG_CONFIG_HOME/samovar/config.json"
+    elif [ -f "$ROOT/build/config.json" ]; then
+        CFG_JSON="$ROOT/build/config.json"
+    fi
+fi
+unset _SAMOVAR_CFG
+
+if [ -n "${CFG_JSON:-}" ] && [ -f "$CFG_JSON" ]; then
     PYTHON_PATH=$(python3 -c "
 import json,sys
 p=json.load(open(sys.argv[1]))
 print((p.get('compilers') or {}).get('python') or p.get('python_path') or '')
-" "$XDG_CONFIG_HOME/samovar/config.json" 2>/dev/null || true)
-elif [ -f "$ROOT/build/config.json" ]; then
-    PYTHON_PATH=$(python3 -c "
-import json,sys
-p=json.load(open(sys.argv[1]))
-print((p.get('compilers') or {}).get('python') or p.get('python_path') or '')
-" "$ROOT/build/config.json" 2>/dev/null || true)
+" "$CFG_JSON" 2>/dev/null || true)
 fi
 PYTHON_PATH=${PYTHON_PATH:-python3}
 

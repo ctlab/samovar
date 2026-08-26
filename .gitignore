@@ -27,6 +27,7 @@ src/samovar.egg-info/
 *.egg-info/
 hs_err_pid*.log
 build/config.json
+build/config_path
 build/lib/
 build/bdist.*/
 build/temp.*/

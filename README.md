@@ -26,7 +26,7 @@ chmod +x install.sh
 ```
 
 `install.sh` may ask you some questions, like e-mail for the NCBI API.
-Some tools are optional but may be usefull (samovar R package, CAMISIM, MultiQC and other). More details on the installation github wiki page. The install JSON layout is described in [wiki/main-config.md](wiki/main-config.md) (`~/.config/samovar/config.json`).
+Some tools are optional but may be usefull (samovar R package, CAMISIM, MultiQC and other). More details on the installation github wiki page. The install JSON layout is described in [wiki/main-config.md](wiki/main-config.md) (`build/config_path` → main `config.json`; customizable via `SAMOVAR_CONFIG`).
 
 ## Ensemble annotation
 

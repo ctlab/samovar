@@ -7,16 +7,69 @@ from samovar.paths import (
     discover_multiqc,
     discover_opal,
     iss_executable,
+    load_config,
     ncbi_email,
+    recorded_config_path,
     repo_root,
     resolve_executable,
     user_config_dir,
+    user_config_path,
     workflow_dir,
+    write_config,
+    write_install_config_pointer,
 )
 
 
 def test_package_version():
-    assert PACKAGE_VERSION == "0.10.19"
+    assert PACKAGE_VERSION == "0.10.20"
+
+
+def test_build_config_path_pointer(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_CONFIG", raising=False)
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    cfg = tmp_path / "custom" / "config.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        '{"version": "0.10.20", "root": "%s", "compilers": {"python": "/bin/python3"}, '
+        '"API": {}, "genomes": {"test": [], "raw": {}, "processed": {}, "data": {}}, '
+        '"databases": {}, "workflows": {}, "tools": {}}\n' % tmp_path
+    )
+    pointer = write_install_config_pointer(cfg, root=tmp_path)
+    assert pointer is not None
+    assert pointer.read_text().strip() == str(cfg.resolve())
+    assert recorded_config_path() == cfg.resolve()
+    assert user_config_path() == cfg.resolve()
+    assert user_config_dir() == cfg.parent
+    loaded = load_config()
+    assert loaded.get("python_path") == "/bin/python3"
+
+
+def test_samovar_config_env_overrides_pointer(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    pointed = tmp_path / "pointed.json"
+    pointed.write_text('{"compilers": {"python": "/from/pointer"}}\n')
+    write_install_config_pointer(pointed, root=tmp_path)
+    override = tmp_path / "override.json"
+    override.write_text('{"compilers": {"python": "/from/env"}}\n')
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(override))
+    assert user_config_path() == override
+    assert load_config().get("python_path") == "/from/env"
+
+
+def test_write_config_records_pointer(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    dest = tmp_path / "etc" / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(dest))
+    write_config(
+        {
+            "version": "0.10.20",
+            "root": str(tmp_path),
+            "compilers": {"python": "/usr/bin/python3"},
+        }
+    )
+    assert dest.is_file()
+    assert (tmp_path / "build" / "config_path").read_text().strip() == str(dest.resolve())
+    assert (tmp_path / "build" / "config.json").is_file()
 
 
 def test_discover_opal_from_config(tmp_path, monkeypatch):
@@ -97,8 +150,11 @@ def test_repo_root_contains_workflow():
 
 
 def test_user_config_dir_respects_xdg(monkeypatch, tmp_path):
+    monkeypatch.delenv("SAMOVAR_CONFIG", raising=False)
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     assert user_config_dir() == tmp_path / "xdg" / "samovar"
+    assert user_config_path() == tmp_path / "xdg" / "samovar" / "config.json"
 
 
 def test_ncbi_email_from_env(monkeypatch):

@@ -69,7 +69,7 @@ def test_build_install_config_nested(tmp_path):
     cfg = build_install_config(
         root=str(tmp_path),
         python_path=str(py),
-        version="0.10.19",
+        version="0.10.20",
         discovered_tools={"iss": str(tmp_path / "iss")},
         ncbi_email="n@e.c",
     )
@@ -100,7 +100,7 @@ def test_home_genome_dirs_are_dropped(tmp_path, monkeypatch):
     cfg = build_install_config(
         root=str(tmp_path),
         python_path=str(tmp_path / "python"),
-        version="0.10.19",
+        version="0.10.20",
         extra_genome_dirs=[str(home_cache), str(scratch)],
         genomes_default=str(home_cache),
     )
@@ -124,7 +124,7 @@ def test_home_symlink_to_scratch_is_not_stored(tmp_path, monkeypatch):
     cfg = build_install_config(
         root=str(tmp_path),
         python_path=str(tmp_path / "python"),
-        version="0.10.19",
+        version="0.10.20",
         extra_genome_dirs=[str(linked), str(scratch)],
         genomes_default=str(scratch),
     )

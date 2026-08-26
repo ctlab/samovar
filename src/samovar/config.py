@@ -384,12 +384,14 @@ class PipelineConfig:
         extra_genome_dirs = ":".join(self.genome_dirs or [])
         reuse_flag = "1" if self.reuse_genomes else "0"
         test_flag = "1" if self.use_test_genomes else "0"
-        from samovar.paths import discover_multiqc
+        from samovar.paths import discover_multiqc, shell_source_install_env_snippet
 
         if self.run_multiqc is None:
             multiqc_flag = "1" if discover_multiqc() else "0"
         else:
             multiqc_flag = "1" if self.run_multiqc else "0"
+
+        env_snippet = shell_source_install_env_snippet()
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
@@ -399,12 +401,7 @@ set -e
 export SAMOVAR_ROOT="{root}"
 export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"
 # Prefer the current install env (other-HPC reinstall) when present.
-XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
-if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
-  # shellcheck disable=SC1090
-  . "$XDG_CONFIG_HOME/samovar/env"
-fi
-# Baked tool bins from config.json: path[], tools.*, tool_envs.*, python/iss.
+{env_snippet}# Baked tool bins from config.json: path[], tools.*, tool_envs.*, python/iss.
 # Override further with SAMOVAR_PATH=dir1:dir2 (prepended).
 export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
 export PYTHONPATH="{src}${{PYTHONPATH:+:$PYTHONPATH}}"

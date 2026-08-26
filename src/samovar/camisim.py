@@ -1045,17 +1045,15 @@ def write_generate_pipeline(output_dir: str, cfg: Dict[str, Any]) -> str:
     root = repo_root()
     py = py_path()
     tool_path = runtime_path_prefix()
+    from samovar.paths import shell_source_install_env_snippet
+
+    env_snippet = shell_source_install_env_snippet()
     pipeline = generate / "generate.sh"
     pipeline.write_text(
         f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
-XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
-if [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
-  # shellcheck disable=SC1090
-  . "$XDG_CONFIG_HOME/samovar/env"
-fi
-export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
+{env_snippet}export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
 export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
 PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
 if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then

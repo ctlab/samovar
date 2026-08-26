@@ -28,6 +28,10 @@
 #   SAMOVAR_R_BRANCH           default r-package
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
 #   SAMOVAR_UPDATE_SHELL=0     shared/read-only: skip PATH and ~/.bashrc edits
+#   SAMOVAR_CONFIG=/path/to/config.json
+#                              write main config to this file (dir holds env/)
+#   SAMOVAR_CONFIG_DIR=/dir    write $dir/config.json instead of ~/.config/samovar
+#   After install, the absolute config path is stored in build/config_path
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
 #   CI=true                    non-interactive; NCBI_EMAIL defaults to test@samovar.com
 #                              and shell/PATH edits are skipped
@@ -39,10 +43,32 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 mkdir -p bin
 if ! mkdir -p build 2>/dev/null; then
-    echo "Warning: cannot write $ROOT/build (read-only checkout); config will live under XDG only"
+    echo "Warning: cannot write $ROOT/build (read-only checkout); config pointer may be skipped"
 fi
+
+# Main config location (default: $XDG_CONFIG_HOME/samovar/config.json).
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-USER_CFG_DIR="${XDG_CONFIG_HOME}/samovar"
+if [ -n "${SAMOVAR_CONFIG:-}" ]; then
+    # Absolute file path for config.json
+    case "${SAMOVAR_CONFIG}" in
+        /*) ;;
+        ~*) SAMOVAR_CONFIG="${SAMOVAR_CONFIG/#\~/$HOME}" ;;
+        *) SAMOVAR_CONFIG="$(pwd)/${SAMOVAR_CONFIG}" ;;
+    esac
+    USER_CFG_DIR="$(dirname "$SAMOVAR_CONFIG")"
+elif [ -n "${SAMOVAR_CONFIG_DIR:-}" ]; then
+    case "${SAMOVAR_CONFIG_DIR}" in
+        /*) USER_CFG_DIR="${SAMOVAR_CONFIG_DIR}" ;;
+        ~*) USER_CFG_DIR="${SAMOVAR_CONFIG_DIR/#\~/$HOME}" ;;
+        *) USER_CFG_DIR="$(pwd)/${SAMOVAR_CONFIG_DIR}" ;;
+    esac
+    SAMOVAR_CONFIG="${USER_CFG_DIR}/config.json"
+else
+    USER_CFG_DIR="${XDG_CONFIG_HOME}/samovar"
+    SAMOVAR_CONFIG="${USER_CFG_DIR}/config.json"
+fi
+export SAMOVAR_CONFIG
+export USER_CFG_DIR
 mkdir -p "$USER_CFG_DIR"
 
 if [ -n "${CONDA_PREFIX:-}" ] && [ -x "${CONDA_PREFIX}/bin/python" ]; then
@@ -591,8 +617,10 @@ else
     echo "Skipping seqtk (not required). Use ./install.sh seqtk for FASTQ subsample / rarefaction."
 fi
 
-# Write ~/.config/samovar/config.json (and build/config.json copy)
+# Write main config.json (location: $SAMOVAR_CONFIG) and build/config_path
 export USER_CFG_DIR
+export SAMOVAR_CONFIG
+export SAMOVAR_ROOT="$ROOT"
 export SAMOVAR_ROOT="$ROOT"
 export PYTHON_PATH
 "$PYTHON_PATH" - <<'PY'
@@ -734,6 +762,9 @@ payload = build_install_config(
     conda_sidecars=sidecars,
 )
 write_config(payload)
+from samovar.paths import user_config_path, write_install_config_pointer
+cfg_path = user_config_path()
+pointer = write_install_config_pointer(cfg_path, root=Path(root))
 user_cfg = Path(os.environ["USER_CFG_DIR"])
 user_cfg.mkdir(parents=True, exist_ok=True)
 email = os.environ.get("NCBI_EMAIL", "")
@@ -748,12 +779,15 @@ env_path = user_cfg / "env"
 env_path.write_text(
     f'export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"\n'
     f'export SAMOVAR_ROOT="{root}"\n'
+    f'export SAMOVAR_CONFIG="{cfg_path}"\n'
     f'export PYTHON_PATH="{python_path}"\n'
     f'export PATH="{path_export}"\n'
     f"{conda_lib}",
     encoding="utf-8",
 )
-print("Wrote user + repo config")
+print(f"Wrote config: {cfg_path}")
+if pointer:
+    print(f"Wrote pointer: {pointer}")
 print(f"Wrote {env_path} PATH with {len(dirs)} tool bin dir(s)")
 from samovar.main_config import extra_genome_dirs as _libs, first_dir as _first, processed_genome_dirs as _pg, raw_genome_dirs as _rg, iter_tools as _it, tool_path as _tp
 genomes = _first(_rg(payload))
@@ -882,9 +916,13 @@ fi
 print_install_status
 
 echo "Installation completed successfully!"
-echo "Config: $USER_CFG_DIR/config.json"
-if [ -f "$ROOT/build/config.json" ]; then
-    echo "Also:   $ROOT/build/config.json"
+echo "Config: $SAMOVAR_CONFIG"
+if [ -f "$ROOT/build/config_path" ]; then
+    echo "Pointer: $ROOT/build/config_path -> $(tr -d '[:space:]' < "$ROOT/build/config_path")"
+fi
+if [ -f "$ROOT/build/config.json" ] && [ "$(realpath -m "$ROOT/build/config.json" 2>/dev/null || echo "$ROOT/build/config.json")" != "$(realpath -m "$SAMOVAR_CONFIG" 2>/dev/null || echo "$SAMOVAR_CONFIG")" ]; then
+    echo "Mirror:  $ROOT/build/config.json"
 fi
 echo "Use NCBI_EMAIL=$NCBI_EMAIL (export it in new shells, or: source $USER_CFG_DIR/env)"
+echo "Custom config location: SAMOVAR_CONFIG=/path/config.json ./install.sh"
 echo "Shared/HPC install without PATH edits: SAMOVAR_UPDATE_SHELL=0 ./install.sh"
