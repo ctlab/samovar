@@ -72,8 +72,9 @@ def test_reindex_moves_processed_and_updates_config(tmp_path, monkeypatch):
     assert resolve_indexed_path("GCF_000819615.1") == dest
     loaded = load_config()
     rec = loaded["genomes"]["data"]["GCF_000819615.1"]
-    assert rec[0] == "GCF_000819615.1"
-    assert rec[2] == "GCF_000819615.1.fa.gz"
+    assert rec[1] == "GCF_000819615.1"
+    assert rec[2] == "samovar_database"
+    assert rec[3] == "GCF_000819615.1.fa.gz"
 
 
 def test_reindex_errors_when_processed_empty(tmp_path, monkeypatch):
@@ -205,3 +206,40 @@ def test_expand_named_database(tmp_path, monkeypatch):
     path2, extra2 = _expand_indexed_database("kaiju", str(db), "x")
     assert path2 == str(db)
     assert extra2 == "x"
+
+
+def test_normalize_genome_data_legacy_and_current():
+    from samovar.genome_index import normalize_genome_data
+
+    legacy_acc = normalize_genome_data(
+        {"GCF_000819615.1": ["GCF_000819615.1", "samovar_database", "GCF_000819615.1.fa.gz"]}
+    )
+    assert legacy_acc["GCF_000819615.1"] == [
+        "",
+        "GCF_000819615.1",
+        "samovar_database",
+        "GCF_000819615.1.fa.gz",
+    ]
+    with_tax = normalize_genome_data(
+        {
+            "GCF_000819615.1": [
+                "GCF_000819615.1",
+                "samovar_database",
+                "GCF_000819615.1.fa.gz",
+                "10847",
+            ]
+        }
+    )
+    assert with_tax["10847"] == [
+        "10847",
+        "GCF_000819615.1",
+        "samovar_database",
+        "GCF_000819615.1.fa.gz",
+    ]
+    stub = normalize_genome_data({"562": ["", "test", "meta/562.fna"]})
+    assert stub["562"] == ["562", "562", "test", "meta/562.fna"]
+    current = normalize_genome_data(
+        {"10847": ["10847", "GCF_000819615.1", "samovar_database", "GCF_000819615.1.fa.gz"]}
+    )
+    assert current["10847"][1] == "GCF_000819615.1"
+    assert current["10847"][3] == "GCF_000819615.1.fa.gz"

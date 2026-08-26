@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -485,10 +486,12 @@ def extra_genome_dirs(cfg: Dict[str, Any]) -> List[str]:
         folders = folder_map(block.get("raw"))
         folders.update(folder_map(block.get("processed")))
         for _tax, rec in data.items():
-            if isinstance(rec, (list, tuple)) and len(rec) >= 2:
-                fid = str(rec[1])
-                if fid in folders:
-                    add(folders[fid])
+            if not isinstance(rec, (list, tuple)) or len(rec) < 2:
+                continue
+            # New schema: [species, genome_id, database, file]; legacy: [acc, folder, file]
+            fid = str(rec[2] if len(rec) >= 4 else rec[1])
+            if fid in folders:
+                add(folders[fid])
     for item in _split_dirs(_raw_get(cfg, "genome_dirs")):
         add(item)
     return dirs
@@ -537,7 +540,7 @@ def databases_of(cfg: Dict[str, Any]) -> Dict[str, List[List[str]]]:
 
 
 def scan_test_genome_index(test_root: Path) -> Dict[str, List[str]]:
-    """``taxID -> [accession, folder_id, file_name]`` for bundled stubs."""
+    """``taxID -> [species_taxID, genome_ID, database, file_name]`` for bundled stubs."""
     data: Dict[str, List[str]] = {}
     if not test_root.is_dir():
         return data
@@ -556,7 +559,8 @@ def scan_test_genome_index(test_root: Path) -> Dict[str, List[str]]:
         except ValueError:
             rel_parent = path.parent.name
         folder_id = "test"
-        data[taxid] = ["", folder_id, name if rel_parent in {".", ""} else f"{rel_parent}/{name}"]
+        rel = name if rel_parent in {".", ""} else f"{rel_parent}/{name}"
+        data[taxid] = [taxid, taxid, folder_id, rel]
     return data
 
 
@@ -789,10 +793,53 @@ def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+def sync_by_keys(existing: Any, template: Any) -> Any:
+    """Merge ``existing`` onto ``template`` by key (install-time config sync).
+
+    Nested dicts recurse. Values already set in ``existing`` win, including
+    extra keys that the template does not know about. Empty existing scalars
+    and empty collections fall back to the template.
+    """
+    if isinstance(template, dict):
+        src = existing if isinstance(existing, dict) else {}
+        out: Dict[str, Any] = {}
+        for key, tval in template.items():
+            if str(key).startswith("_"):
+                continue
+            if key in src:
+                out[key] = sync_by_keys(src[key], tval)
+            else:
+                out[key] = deepcopy(tval)
+        for key, eval_ in src.items():
+            if str(key).startswith("_"):
+                continue
+            if key not in out:
+                out[key] = deepcopy(eval_)
+        return out
+    if existing is None:
+        return deepcopy(template)
+    if existing == "" and template not in (None, ""):
+        return deepcopy(template)
+    if existing in ([], {}) and template not in (None, "", [], {}):
+        return deepcopy(template)
+    return existing
+
+
 def to_canonical(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = dict(data or {})
     nested = migrate_legacy(raw)
-    # Drop empties that are just noise? Keep structure stable for wiki/example.
+    nested = sync_by_keys(
+        nested,
+        empty_canonical(
+            version=str(nested.get("version") or ""),
+            root=str(nested.get("root") or ""),
+        ),
+    )
+    genomes = nested.get("genomes") if isinstance(nested.get("genomes"), dict) else {}
+    from samovar.genome_index import normalize_genome_data
+
+    genomes["data"] = normalize_genome_data(genomes.get("data"))
+    nested["genomes"] = genomes
     return nested
 
 
@@ -993,8 +1040,12 @@ def build_install_config(
     else:
         proc.setdefault("default", proc_store)
     genomes["processed"] = proc
-    if not genomes.get("data"):
-        genomes["data"] = scan_test_genome_index(Path(test_root))
+    from samovar.genome_index import normalize_genome_data
+
+    migrated = normalize_genome_data(genomes.get("data"))
+    for taxid, rec in scan_test_genome_index(Path(test_root)).items():
+        migrated.setdefault(taxid, rec)
+    genomes["data"] = migrated
     cfg["genomes"] = genomes
 
     if not isinstance(cfg.get("databases"), dict):

@@ -6,7 +6,7 @@ import os
 import logging
 import shutil
 import socket
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 import urllib.request
 from Bio import Entrez
 from pathlib import Path
@@ -219,11 +219,15 @@ def fetch_assembly_processed(
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     existing = dest / processed_filename(accession)
-    taxid = assembly_taxid(accession, email, silent=True)
+    taxid, species = assembly_taxonomy(accession, email, silent=True)
     if existing.is_file():
         if index:
             index_processed_file(
-                existing, accession=accession, move_to=dest, taxid=taxid
+                existing,
+                accession=accession,
+                move_to=dest,
+                taxid=taxid,
+                species_taxid=species,
             )
         return str(existing)
     ftp_path = _assembly_ftp_for_accession(accession, email, silent=silent)
@@ -260,23 +264,34 @@ def fetch_assembly_processed(
             pass
     if index:
         processed = index_processed_file(
-            processed, accession=accession, move_to=dest, taxid=taxid
+            processed,
+            accession=accession,
+            move_to=dest,
+            taxid=taxid,
+            species_taxid=species,
         )
     return str(processed)
 
 
-def assembly_taxid(accession: str, email: str = "", silent: bool = True) -> str:
-    """NCBI Taxid for an assembly accession (empty if lookup fails)."""
+def assembly_taxonomy(accession: str, email: str = "", silent: bool = True) -> Tuple[str, str]:
+    """Return ``(taxid, species_taxid)`` for an assembly accession."""
     try:
         doc = _assembly_record(
             accession, email or default_entrez_email(), silent=silent
         )
     except Exception:
-        return ""
+        return "", ""
     if not doc:
-        return ""
-    value = doc.get("Taxid") or doc.get("SpeciesTaxid") or ""
-    return str(value).strip()
+        return "", ""
+    taxid = str(doc.get("Taxid") or "").strip()
+    species = str(doc.get("SpeciesTaxid") or taxid).strip()
+    return taxid, species
+
+
+def assembly_taxid(accession: str, email: str = "", silent: bool = True) -> str:
+    """NCBI Taxid for an assembly accession (empty if lookup fails)."""
+    taxid, _species = assembly_taxonomy(accession, email, silent=silent)
+    return taxid
 
 
 def materialize_accessions(

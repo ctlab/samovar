@@ -17,12 +17,16 @@
     "samovar_database": "/path/to/samovar/genomes",
     "test": ["/path/to/samovar/data/test_genomes"],
     "raw": {},
-    "processed": {},
+    "processed": {
+      "samovar_database": "/path/to/samovar/genomes/processed",
+      "test": "/path/to/samovar/data/test_genomes"
+    },
     "data": {
-      "562": ["", "test", "meta/562.fna"],
-      "4932": ["", "test", "meta/4932.fna"],
-      "2886930": ["", "test", "meta/2886930.fna"],
-      "9606": ["", "test", "host/9606.fna"]
+      "562": ["562", "562", "test", "meta/562.fna"],
+      "4932": ["4932", "4932", "test", "meta/4932.fna"],
+      "2886930": ["2886930", "2886930", "test", "meta/2886930.fna"],
+      "9606": ["9606", "9606", "test", "host/9606.fna"],
+      "10847": ["10847", "GCF_000819615.1", "samovar_database", "GCF_000819615.1.fa.gz"]
     }
   },
   "databases": {},

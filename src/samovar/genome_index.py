@@ -1,10 +1,10 @@
 """Main-config genome index: ``{accession}.fa.gz`` in ``samovar_database``.
 
-``genomes.data`` maps accession (preferred) or taxid to
-``[accession, folder_id, file_name]``. Processed files live under
-``{samovar_database}/processed/``. ``samovar reindex`` moves ``processed/``
-trees into that store and rewrites the install config pointed at by
-``build/config_path``.
+``genomes.data`` maps **taxID** to
+``[species_level_taxID, genome_ID, database, file_name]``.
+Processed files live under ``{samovar_database}/processed/``.
+``samovar reindex`` moves ``processed/`` trees into that store and rewrites
+the install config pointed at by ``build/config_path``.
 """
 
 from __future__ import annotations
@@ -27,10 +27,110 @@ PathLike = Union[str, os.PathLike]
 
 ACCESSION_RE = re.compile(r"^(GC[AF]_\d+(?:\.\d+)?)$", re.IGNORECASE)
 FOLDER_ID = "samovar_database"
+RECORD_LEN = 4  # species_taxid, genome_id, database, file_name
 
 
 def _as_path(path: PathLike) -> Path:
     return Path(path).expanduser()
+
+
+def _is_taxid(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text or is_assembly_accession(text):
+        return False
+    return text.split(".")[0].isdigit()
+
+
+def _looks_like_fasta_name(name: str) -> bool:
+    lower = str(name or "").lower()
+    return any(
+        lower.endswith(ext)
+        for ext in (
+            ".fa",
+            ".fa.gz",
+            ".fna",
+            ".fna.gz",
+            ".fasta",
+            ".fasta.gz",
+            ".fsa",
+            ".fsa.gz",
+        )
+    )
+
+
+def coerce_genome_record(key: str, rec: Sequence[Any]) -> Tuple[str, List[str]]:
+    """Return ``(taxid_key, [species, genome_id, database, file_name])``.
+
+    Accepts the current 4-field schema and older catalogs:
+    ``[accession, folder_id, file_name]`` and
+    ``[accession, folder_id, file_name, taxid]``.
+    """
+    key = str(key or "").strip()
+    parts = [str(x).strip() if x is not None else "" for x in rec]
+    species = genome_id = database = file_name = taxid = ""
+
+    if len(parts) >= 4 and not _looks_like_fasta_name(parts[2]):
+        # Current: [species_taxid, genome_id, database, file_name]
+        species, genome_id, database, file_name = parts[0], parts[1], parts[2], parts[3]
+        taxid = key if _is_taxid(key) else (species if _is_taxid(species) else "")
+    elif len(parts) >= 4 and _is_taxid(parts[3]) and (
+        is_assembly_accession(parts[0]) or is_assembly_accession(key)
+    ):
+        # Intermediate: [accession, folder_id, file_name, taxid]
+        genome_id, database, file_name, taxid = parts[0], parts[1], parts[2], parts[3]
+        species = taxid
+    elif len(parts) >= 3:
+        # Legacy: [accession_or_empty, folder_id, file_name]
+        genome_id, database, file_name = parts[0], parts[1], parts[2]
+        if _is_taxid(key):
+            taxid = key
+            species = key
+            if not genome_id:
+                genome_id = key
+        elif is_assembly_accession(key) or is_assembly_accession(genome_id):
+            genome_id = genome_id or key
+        else:
+            taxid = key
+            species = key
+            if not genome_id:
+                genome_id = key
+    elif parts:
+        genome_id = parts[0]
+        database = FOLDER_ID
+        file_name = processed_filename(key or genome_id)
+
+    if not taxid:
+        if _is_taxid(key):
+            taxid = key
+        elif _is_taxid(species):
+            taxid = species
+        else:
+            taxid = genome_id or key
+    if not species:
+        species = taxid if _is_taxid(taxid) else ""
+    if not file_name:
+        file_name = processed_filename(genome_id or taxid or key)
+    return taxid, [species, genome_id, database, file_name]
+
+
+def normalize_genome_data(raw: Any) -> Dict[str, List[str]]:
+    """Rewrite ``genomes.data`` to taxID → 4-field records."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, List[str]] = {}
+    for key, rec in raw.items():
+        if str(key).startswith("_"):
+            continue
+        if isinstance(rec, (list, tuple)):
+            taxid, row = coerce_genome_record(str(key), rec)
+        elif rec:
+            taxid, row = coerce_genome_record(str(key), [rec, FOLDER_ID, processed_filename(str(key))])
+        else:
+            continue
+        if not taxid:
+            continue
+        out[taxid] = row
+    return out
 
 
 def normalize_accession(value: str) -> str:
@@ -132,19 +232,7 @@ def genome_data_map(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, List[str]
 
     data = cfg if cfg is not None else _cfg()
     block = genomes_block(data)
-    raw = block.get("data") if isinstance(block.get("data"), dict) else {}
-    out: Dict[str, List[str]] = {}
-    for key, rec in raw.items():
-        if str(key).startswith("_"):
-            continue
-        if isinstance(rec, (list, tuple)):
-            parts = [str(x).strip() if x is not None else "" for x in rec]
-            while len(parts) < 3:
-                parts.append("")
-            out[str(key)] = parts[:4] if len(parts) > 3 else parts[:3]
-        elif rec:
-            out[str(key)] = [str(rec).strip(), FOLDER_ID, processed_filename(str(key))]
-    return out
+    return normalize_genome_data(block.get("data") if isinstance(block.get("data"), dict) else {})
 
 
 def indexed_record(ident: str, cfg: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, List[str]]]:
@@ -153,17 +241,20 @@ def indexed_record(ident: str, cfg: Optional[Dict[str, Any]] = None) -> Optional
         return None
     data = genome_data_map(cfg)
     acc = normalize_accession(ident)
-    if acc and acc in data:
-        return acc, data[acc]
     if ident in data:
         return ident, data[ident]
+    if acc and acc in data:
+        return acc, data[acc]
     stem = sequence_stem(ident)
     if stem in data:
         return stem, data[stem]
     for key, rec in data.items():
-        if rec and rec[0] and rec[0] == acc:
+        species, genome_id, _database, file_name = (rec + [""] * 4)[:4]
+        if genome_id and genome_id in {ident, acc, stem}:
             return key, rec
-        if rec and rec[2] and sequence_stem(rec[2]) in {ident, acc, stem}:
+        if species and species == ident:
+            return key, rec
+        if file_name and sequence_stem(file_name) in {ident, acc, stem}:
             return key, rec
     return None
 
@@ -173,9 +264,9 @@ def resolve_indexed_path(ident: str, cfg: Optional[Dict[str, Any]] = None) -> Op
     if hit is None:
         return None
     _key, rec = hit
-    accession, folder_id, file_name = rec[0], rec[1], rec[2]
-    name = file_name or processed_filename(accession or ident)
-    base = folder_id_path(folder_id, cfg)
+    _species, genome_id, database, file_name = (rec + [""] * 4)[:4]
+    name = file_name or processed_filename(genome_id or ident)
+    base = folder_id_path(database, cfg)
     candidates: List[Path] = []
     if base is not None:
         candidates.append(base / name)
@@ -304,13 +395,16 @@ def numeric_taxid_for(ident: str, cfg: Optional[Dict[str, Any]] = None) -> str:
     ident = str(ident or "").strip()
     if not ident:
         return ""
-    if ident.split(".")[0].isdigit() and not is_assembly_accession(ident):
+    if _is_taxid(ident):
         return ident.split(".")[0]
     hit = indexed_record(ident, cfg)
     if hit is not None:
-        rec = hit[1]
-        if len(rec) > 3 and str(rec[3]).split(".")[0].isdigit():
-            return str(rec[3]).split(".")[0]
+        key, rec = hit
+        if _is_taxid(key):
+            return key.split(".")[0]
+        species = rec[0] if rec else ""
+        if _is_taxid(species):
+            return species.split(".")[0]
     return ident
 
 
@@ -321,6 +415,7 @@ def index_processed_file(
     folder_id: str = "",
     move_to: Optional[Path] = None,
     taxid: str = "",
+    species_taxid: str = "",
 ) -> Path:
     """Gzip if needed, optionally move into ``move_to``, and record in config."""
     from samovar.main_config import folder_map, genomes_block
@@ -358,15 +453,29 @@ def index_processed_file(
     block["processed"] = proc
     block["samovar_database"] = str(samovar_database_dir(cfg))
     data = genome_data_map(cfg)
-    row = [acc, fid, dest.name]
-    if taxid:
-        row.append(str(taxid).strip())
-    elif acc in data and len(data[acc]) > 3:
-        row.append(data[acc][3])
-    data[acc] = row
+    prev = indexed_record(acc) or indexed_record(taxid)
+    prev_row = prev[1] if prev else []
+    organism = str(taxid or "").strip()
+    species = str(species_taxid or "").strip()
+    if not organism and prev_row:
+        organism = prev[0] if prev and _is_taxid(prev[0]) else ""
+        if not organism and _is_taxid(prev_row[0]):
+            organism = prev_row[0]
+    if not species:
+        species = (prev_row[0] if prev_row and _is_taxid(prev_row[0]) else "") or organism
+    taxid_key = organism if _is_taxid(organism) else (acc or dest.stem)
+    stale = [
+        key
+        for key, row in data.items()
+        if key in {acc, taxid_key, organism}
+        or (row and row[1] == acc)
+    ]
+    for key in stale:
+        data.pop(key, None)
+    data[taxid_key] = [species or organism, acc, fid, dest.name]
     block["data"] = data
     update_config({"genomes": block})
-    logger.info("Indexed %s -> %s", acc, src)
+    logger.info("Indexed %s (%s) -> %s", taxid_key, acc, src)
     return src
 
 

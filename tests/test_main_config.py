@@ -8,6 +8,7 @@ from samovar.main_config import (
     iter_tools,
     migrate_legacy,
     parse_tool_entry,
+    sync_by_keys,
     tool_path,
 )
 from samovar.version import get_version
@@ -89,6 +90,66 @@ def test_build_install_config_nested(tmp_path):
     assert payload["compilers"]["python"] == str(py)
     assert "python_path" not in payload
     assert extra_genome_dirs(cfg) == extra_genome_dirs(payload)
+
+
+def test_sync_by_keys_fills_missing_and_keeps_existing():
+    template = {
+        "compilers": {"python": "", "cpp_libs": []},
+        "genomes": {"samovar_database": "/new", "data": {}},
+        "databases": {},
+    }
+    existing = {
+        "compilers": {"python": "/usr/bin/python3"},
+        "genomes": {
+            "samovar_database": "/old/store",
+            "data": {"562": ["", "test", "meta/562.fna"]},
+        },
+        "databases": {"kaiju": [["phage_test", "/db", ""]]},
+    }
+    merged = sync_by_keys(existing, template)
+    assert merged["compilers"]["python"] == "/usr/bin/python3"
+    assert merged["compilers"]["cpp_libs"] == []
+    assert merged["genomes"]["samovar_database"] == "/old/store"
+    assert merged["databases"]["kaiju"][0][0] == "phage_test"
+
+
+def test_install_migrates_legacy_genome_data_and_keeps_catalog(tmp_path):
+    py = tmp_path / "python"
+    py.write_text("#!/bin/sh\n")
+    py.chmod(0o755)
+    existing = {
+        "root": str(tmp_path),
+        "compilers": {"python": str(py)},
+        "genomes": {
+            "samovar_database": str(tmp_path / "store"),
+            "data": {
+                "GCF_000819615.1": [
+                    "GCF_000819615.1",
+                    "samovar_database",
+                    "GCF_000819615.1.fa.gz",
+                    "10847",
+                ]
+            },
+        },
+        "databases": {"kraken2": [["phage_test", "/k", ""]]},
+    }
+    cfg = build_install_config(
+        root=str(tmp_path),
+        python_path=str(py),
+        version=get_version(),
+        existing=existing,
+        samovar_database=str(tmp_path / "store"),
+    )
+    payload = disk_payload(cfg)
+    rec = payload["genomes"]["data"]["10847"]
+    assert rec == [
+        "10847",
+        "GCF_000819615.1",
+        "samovar_database",
+        "GCF_000819615.1.fa.gz",
+    ]
+    assert "GCF_000819615.1" not in payload["genomes"]["data"]
+    assert payload["databases"]["kraken2"][0][0] == "phage_test"
 
 
 def test_home_genome_dirs_are_dropped(tmp_path, monkeypatch):
