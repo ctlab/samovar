@@ -287,6 +287,31 @@ def test_format_install_status_lists_required():
     assert "seqtk" in names
 
 
+def test_format_install_status_without_nextflow(monkeypatch):
+    """CI images often have no nextflow and an empty nextflow_path in config."""
+    import shutil as _shutil
+
+    from samovar.paths import format_install_status, install_status_rows
+
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {"nextflow_path": "", "tools": {"nextflow": ""}},
+    )
+    real_which = _shutil.which
+
+    def fake_which(cmd, path=None):
+        if cmd == "nextflow":
+            return None
+        return real_which(cmd, path=path)
+
+    monkeypatch.setattr("samovar.paths.shutil.which", fake_which)
+    text = format_install_status()
+    assert "SamovaR tool status" in text
+    nxt = next(row for row in install_status_rows() if row["name"] == "Nextflow")
+    assert nxt["found"] is False
+    assert nxt["path"] == ""
+
+
 def test_iss_executable_uses_config(tmp_path, monkeypatch):
     exe = tmp_path / "iss"
     exe.write_text("#!/bin/sh\n")

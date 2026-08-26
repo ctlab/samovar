@@ -929,9 +929,15 @@ def conda_prefix_for_executable(exe: Optional[str]) -> Optional[str]:
     return None
 
 
+def _first_token(value: Any) -> str:
+    """First whitespace-separated token; empty if ``value`` is blank."""
+    parts = str(value or "").split()
+    return parts[0] if parts else ""
+
+
 def _existing_tool(name: str) -> Optional[str]:
     resolved = resolve_executable(name, tool_key=name)
-    token = str(resolved or "").split()[0]
+    token = _first_token(resolved)
     if not token:
         return None
     path = Path(token)
@@ -947,7 +953,8 @@ def install_status_rows() -> List[Dict[str, Any]]:
     """Required and optional tools: path, role, how to install, config key."""
     cfg = load_config()
     iss = iss_executable()
-    iss_ok = bool(iss and (Path(iss).is_file() or shutil.which(str(iss).split()[0])))
+    iss_tok = _first_token(iss)
+    iss_ok = bool(iss_tok and (Path(iss_tok).is_file() or shutil.which(iss_tok)))
     combiner = repo_root() / "bin" / "samovar_combine_annotations"
     viz = ""
     try:
@@ -1135,11 +1142,19 @@ def install_status_rows() -> List[Dict[str, Any]]:
             item["path"] = cam or ""
             item["found"] = bool(cam)
         if item["name"] == "Nextflow":
-            nxt = str(cfg.get("nextflow_path") or "").strip() or shutil.which("nextflow")
-            token = str(nxt or "").split()[0]
-            ok = bool(token and (Path(token).is_file() or shutil.which("nextflow")))
-            item["path"] = (str(Path(token).resolve()) if token and Path(token).is_file() else shutil.which("nextflow")) or ""
-            item["found"] = ok and bool(item["path"])
+            nxt = (
+                tool_entry_path(iter_tools(cfg).get("nextflow"), "nextflow")
+                or cfg.get("nextflow_path")
+                or shutil.which("nextflow")
+            )
+            token = _first_token(nxt)
+            found = ""
+            if token and Path(token).is_file():
+                found = str(Path(token).resolve())
+            else:
+                found = shutil.which("nextflow") or ""
+            item["path"] = found
+            item["found"] = bool(found)
     return rows
 
 
