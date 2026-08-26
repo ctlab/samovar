@@ -361,7 +361,15 @@ def camisim_sizes_by_type(
 
 
 def camisim_taxdump(root: Optional[str]) -> str:
-    """Bundled NCBI taxdump; empty string makes CAMISIM download one (slow)."""
+    """NCBI taxdump tarball: install ``genomes.taxdump``, else CAMISIM bundled dump."""
+    try:
+        from samovar.taxdump import taxdump_tarball
+
+        archive = taxdump_tarball()
+        if archive is not None:
+            return str(archive.resolve())
+    except Exception:
+        pass
     if not root:
         return ""
     tools = Path(root) / "tools"
@@ -386,11 +394,30 @@ _TAXDUMP_IDS_CACHE: Dict[str, Tuple[float, set]] = {}
 
 
 def load_taxdump_taxids(taxdump: Optional[str]) -> set:
-    """Taxids present in ``nodes.dmp`` inside an NCBI taxdump tarball."""
+    """Taxids present in ``nodes.dmp`` (tarball or extracted taxdump directory)."""
     if not taxdump:
         return set()
     path = Path(taxdump)
     try:
+        if path.is_dir():
+            nodes = path / "nodes.dmp"
+            if not nodes.is_file():
+                nodes = path / "taxonomy" / "nodes.dmp"
+            if not nodes.is_file():
+                return set()
+            mtime = nodes.stat().st_mtime
+            key = str(nodes)
+            cached = _TAXDUMP_IDS_CACHE.get(key)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            ids: set = set()
+            with nodes.open(encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    taxid = line.split("\t", 1)[0].strip()
+                    if taxid.isdigit():
+                        ids.add(taxid)
+            _TAXDUMP_IDS_CACHE[key] = (mtime, ids)
+            return ids
         if not path.is_file():
             return set()
         mtime = path.stat().st_mtime
@@ -400,7 +427,7 @@ def load_taxdump_taxids(taxdump: Optional[str]) -> set:
     cached = _TAXDUMP_IDS_CACHE.get(key)
     if cached and cached[0] == mtime:
         return cached[1]
-    ids: set = set()
+    ids = set()
     try:
         with tarfile.open(path) as tar:
             member = None

@@ -203,7 +203,20 @@ class KaijuAnnotator(BaseAnnotator):
             db_file_path = os.path.join(self.db_path, "*.fmi")
 
         default_nodes = os.path.join(os.path.dirname(db_file_path), "nodes.dmp")
-        db_nodes = self.run_config.get("db_nodes", default_nodes)
+        db_nodes = self.run_config.get("db_nodes") or default_nodes
+        try:
+            nodes_ok = Path(str(db_nodes)).is_file()
+        except OSError:
+            nodes_ok = False
+        if not nodes_ok:
+            try:
+                from samovar.taxdump import nodes_dmp
+
+                found = nodes_dmp()
+                if found is not None:
+                    db_nodes = str(found)
+            except Exception:
+                pass
 
         common = (
             f"{self.cmd} "

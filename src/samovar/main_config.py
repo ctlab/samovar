@@ -594,6 +594,7 @@ def empty_canonical(*, version: str = "", root: str = "") -> Dict[str, Any]:
         "API": {"ncbi_email": ""},
         "genomes": {
             "samovar_database": str(Path(root) / "genomes") if root else "",
+            "taxdump": "",
             "test": [],
             "raw": {},
             "processed": {},
@@ -639,7 +640,8 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
             continue
         if key == "genomes":
             if isinstance(value, dict) and any(
-                k in value for k in ("test", "raw", "processed", "data", "samovar_database")
+                k in value
+                for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump")
             ):
                 block = genomes_block(cfg) or empty_canonical()["genomes"]
                 for sub, val in value.items():
@@ -686,6 +688,11 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
         if key == "test_genomes":
             block = genomes_block(cfg) or empty_canonical()["genomes"]
             block["test"] = _split_dirs(value)
+            cfg["genomes"] = block
+            continue
+        if key in {"taxdump", "taxdump_path", "ncbi_taxdump"}:
+            block = genomes_block(cfg) or empty_canonical()["genomes"]
+            block["taxdump"] = str(value or "").strip()
             cfg["genomes"] = block
             continue
         if key == "ncbi_email":
@@ -779,9 +786,10 @@ def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
     elif isinstance(raw.get("api"), dict):
         cfg["API"].update(raw["api"])
     if isinstance(raw.get("genomes"), dict) and any(
-        k in raw["genomes"] for k in ("test", "raw", "processed", "data", "samovar_database")
+        k in raw["genomes"]
+        for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump")
     ):
-        for key in ("test", "raw", "processed", "data", "samovar_database"):
+        for key in ("test", "raw", "processed", "data", "samovar_database", "taxdump"):
             if key in raw["genomes"]:
                 cfg["genomes"][key] = raw["genomes"][key]
     if isinstance(raw.get("databases"), dict):
@@ -885,6 +893,7 @@ def legacy_view(cfg: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not view["samovar_database"] and view["processed_genomes"]:
         view["samovar_database"] = view["processed_genomes"]
+    view["taxdump"] = str((genomes_block(cfg) or {}).get("taxdump") or "")
     view["genome_dirs"] = extra_genome_dirs(cfg)
     view["path"] = compiler_python_libs(cfg)
     regen = tools.get("annotation_regenerate.R")
@@ -985,6 +994,7 @@ def build_install_config(
     extra_genome_dirs: Optional[Sequence[str]] = None,
     extra_path: Optional[Sequence[str]] = None,
     samovar_database: str = "",
+    taxdump: str = "",
     bash: str = "",
     cxx: str = "",
     r_path: str = "",
@@ -1032,6 +1042,13 @@ def build_install_config(
     else:
         genomes["samovar_database"] = str(Path(root) / "genomes")
         proc_store = str(Path(root) / "genomes" / "processed")
+    dump = str(taxdump or genomes.get("taxdump") or "").strip()
+    if not dump:
+        dump = str(Path(genomes["samovar_database"]).expanduser() / "taxdump")
+    if dump and not is_home_path(dump):
+        genomes["taxdump"] = dump
+    else:
+        genomes["taxdump"] = str(Path(genomes["samovar_database"]).expanduser() / "taxdump")
     raw = drop_home_paths(folder_map(genomes.get("raw")))
     if genomes_default and not is_home_path(genomes_default):
         raw["default"] = genomes_default
@@ -1168,6 +1185,7 @@ def install_option_rows(cfg: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
     add("API.ncbi_email", api.get("ncbi_email"))
     genomes = payload.get("genomes") if isinstance(payload.get("genomes"), dict) else {}
     add("genomes.samovar_database", genomes.get("samovar_database"))
+    add("genomes.taxdump", genomes.get("taxdump"))
     for name, path in folder_map(genomes.get("raw")).items():
         add(f"genomes.raw.{name}", path)
     for name, path in folder_map(genomes.get("processed")).items():

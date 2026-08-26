@@ -32,6 +32,7 @@
 #                              write main config to this file (dir holds env/)
 #   SAMOVAR_CONFIG_DIR=/dir    write $dir/config.json instead of ~/.config/samovar
 #   SAMOVAR_DATABASE=/path     processed genome library (default: $ROOT/genomes)
+#   SAMOVAR_TAXDUMP=/path      NCBI taxdump dir (default: $SAMOVAR_DATABASE/taxdump)
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
 #   CI=true                    non-interactive; NCBI_EMAIL defaults to test@samovar.com
 #                              and shell/PATH edits are skipped
@@ -717,6 +718,17 @@ samovar_database = _usable_dir(
 ) or str(Path(root) / "genomes")
 _store_processed = _usable_dir(str(Path(samovar_database) / "processed")) or str(Path(samovar_database) / "processed")
 
+from samovar.main_config import genomes_block as _gb_existing
+_existing_dump = str((_gb_existing(existing) or {}).get("taxdump") or "").strip()
+_env_dump = os.environ.get("SAMOVAR_TAXDUMP", "").strip()
+if _env_dump:
+    _dump_path = Path(_env_dump).expanduser()
+    taxdump = _usable_dir(_env_dump) or (str(_dump_path) if _dump_path.is_dir() else "")
+else:
+    taxdump = _existing_dump
+if not taxdump:
+    taxdump = _usable_dir(str(Path(samovar_database) / "taxdump")) or str(Path(samovar_database) / "taxdump")
+
 from samovar.main_config import first_dir, processed_genome_dirs, raw_genome_dirs
 genomes = _usable_dir(first_dir(raw_genome_dirs(existing))) or _usable_dir(default_genomes) or ""
 processed = (
@@ -781,6 +793,7 @@ payload = build_install_config(
     extra_genome_dirs=kept_libs,
     extra_path=path_extra if isinstance(path_extra, list) else [path_extra] if path_extra else [],
     samovar_database=samovar_database,
+    taxdump=taxdump,
     bash=shutil.which("bash") or "",
     cxx=(cxx_compiler() or shutil.which("g++") or ""),
     r_path=shutil.which("R") or "",
@@ -806,6 +819,7 @@ env_path.write_text(
     f'export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"\n'
     f'export SAMOVAR_ROOT="{root}"\n'
     f'export SAMOVAR_CONFIG="{cfg_path}"\n'
+    f'export SAMOVAR_TAXDUMP="{payload.get("genomes", {}).get("taxdump") or taxdump}"\n'
     f'export PYTHON_PATH="{python_path}"\n'
     f'export PATH="{path_export}"\n'
     f"{conda_lib}",

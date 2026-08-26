@@ -543,12 +543,7 @@ def _load_nodes_cache(nodes_path: str) -> Dict[int, tuple]:
 
 
 def _discover_nodes_path() -> Optional[str]:
-    """Find nodes.dmp from the environment, not from machine-specific paths.
-
-    Lookup order:
-      1. ``SAMOVAR_NODES_DMP`` — exact file
-      2. ``SAMOVAR_NODES_SEARCH`` — colon-separated files or directories to scan
-    """
+    """Find nodes.dmp: env, then install ``genomes.taxdump``."""
     env_path = os.environ.get("SAMOVAR_NODES_DMP")
     if env_path and os.path.exists(env_path):
         return env_path
@@ -567,6 +562,14 @@ def _discover_nodes_path() -> Optional[str]:
             ):
                 if os.path.exists(candidate):
                     return candidate
+    try:
+        from samovar.taxdump import nodes_dmp
+
+        found = nodes_dmp()
+        if found is not None:
+            return str(found)
+    except Exception:
+        pass
     return None
 
 

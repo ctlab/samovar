@@ -48,61 +48,25 @@ def get_taxonomy_db(
     db_path: str="kraken_db",
     taxonomy_path: str=None
 ) -> None:
-    """Download or copy the Kraken2 taxonomy database.
-    
-    This function either downloads the NCBI taxonomy database or copies it from a specified path.
-    The taxonomy database is required for Kraken2 to function properly.
-    
-    Args:
-        db_path (str, optional): Path where the database will be stored. Defaults to "kraken_db".
-        taxonomy_path (str, optional): Path to existing taxonomy database. If None, downloads from NCBI. Defaults to None.
-    
-    Note:
-        If taxonomy_path is None, the function will download the latest taxonomy database from NCBI.
-        The downloaded file will be automatically extracted to the specified db_path.
-        Override the URL with SAMOVAR_TAXDUMP_URL.
+    """Place NCBI ``nodes.dmp`` / ``names.dmp`` into ``db_path`` via symlinks.
+
+    Source is ``taxonomy_path`` or the install ``genomes.taxdump`` directory
+    (downloaded there once if missing). Does not copy or re-fetch into each DB.
     """
+    from samovar.taxdump import ensure_taxdump, link_taxdump_into
+
     os.makedirs(db_path, exist_ok=True)
-    existing_nodes = Path(db_path) / "nodes.dmp"
-    existing_nested = Path(db_path) / "taxonomy" / "nodes.dmp"
+    dest = Path(db_path)
+    existing_nodes = dest / "nodes.dmp"
+    existing_nested = dest / "taxonomy" / "nodes.dmp"
     if existing_nodes.exists() or existing_nested.exists():
         logger.info(f"Taxonomy already present under {db_path}; skipping download")
         return
 
-    if taxonomy_path is None:
-        taxdump_url = os.environ.get(
-            "SAMOVAR_TAXDUMP_URL",
-            "https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
-        )
-        download_cmd =[
-            "wget",
-            taxdump_url,
-            "-P",
-            db_path
-        ]
-        run_command(download_cmd)
-
-        extract_cmd = [
-            "tar",
-            "-xzf",
-            db_path + "/taxdump.tar.gz",
-            "-C",
-            db_path
-        ]
-        run_command(extract_cmd)
-
-        logger.info(f"Taxonomy database downloaded and extracted to {db_path}")
-    
-    else:
-        copy_cmd = [
-            "cp",
-            "-r",
-            taxonomy_path,
-            db_path
-        ]
-        run_command(copy_cmd)
-
-        logger.info(f"Taxonomy database copied to {db_path}/taxonomy")
+    source = taxonomy_path
+    if not source:
+        source = str(ensure_taxdump())
+    link_taxdump_into(dest, source)
 
 def process_fasta_kraken2(input_file: str, 
                   taxid: str) -> str:
