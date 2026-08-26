@@ -1107,3 +1107,124 @@ def disk_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         genomes["processed"] = drop_home_paths(folder_map(genomes.get("processed")))
         payload["genomes"] = genomes
     return payload
+
+
+def _fmt_install_value(value: Any) -> str:
+    if value is None or value is False:
+        return ""
+    if isinstance(value, dict):
+        parts: List[str] = []
+        for key in ("path", "index", "dir", "flags", "db", "name"):
+            item = value.get(key)
+            if item not in (None, "", [], {}):
+                parts.append(f"{key}={item}")
+        if parts:
+            return ", ".join(parts)
+        leftover = [
+            f"{key}={item}"
+            for key, item in value.items()
+            if not str(key).startswith("_") and item not in (None, "", [], {})
+        ]
+        return ", ".join(leftover[:6])
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value).strip()
+
+
+def install_option_rows(cfg: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    """User-facing install options (paths, databases, tools) — not the full JSON."""
+    if not cfg:
+        return []
+    payload = disk_payload(cfg)
+    rows: List[Tuple[str, str]] = []
+
+    def add(label: str, value: Any) -> None:
+        text = _fmt_install_value(value)
+        if text:
+            rows.append((label, text))
+
+    add("version", payload.get("version"))
+    add("root", payload.get("root"))
+    compilers = payload.get("compilers") if isinstance(payload.get("compilers"), dict) else {}
+    for key in ("python", "bash", "cpp", "R"):
+        add(f"compilers.{key}", compilers.get(key))
+    add("compilers.python_libs", compilers.get("python_libs"))
+    add("compilers.R_libs", compilers.get("R_libs"))
+    api = payload.get("API") if isinstance(payload.get("API"), dict) else {}
+    add("API.ncbi_email", api.get("ncbi_email"))
+    genomes = payload.get("genomes") if isinstance(payload.get("genomes"), dict) else {}
+    add("genomes.samovar_database", genomes.get("samovar_database"))
+    for name, path in folder_map(genomes.get("raw")).items():
+        add(f"genomes.raw.{name}", path)
+    for name, path in folder_map(genomes.get("processed")).items():
+        add(f"genomes.processed.{name}", path)
+    data = genomes.get("data")
+    if isinstance(data, dict) and data:
+        add("genomes.data", f"{len(data)} catalog entries")
+    databases = payload.get("databases") if isinstance(payload.get("databases"), dict) else {}
+    for name, spec in databases.items():
+        add(f"databases.{name}", spec if spec not in (None, "", {}, []) else "(named, empty)")
+    skip_tools = {"python", "python3", "g++", "c++", "clang++", "R", "Rscript", "bash"}
+    for name, spec in iter_tools(payload).items():
+        if name in skip_tools:
+            continue
+        path = tool_path(spec, name)
+        if path:
+            add(f"tools.{name}", path)
+    workflows = payload.get("workflows") if isinstance(payload.get("workflows"), dict) else {}
+    add("workflows.conda", workflows.get("conda"))
+    return rows
+
+
+def format_install_report(
+    *,
+    payload: Dict[str, Any],
+    previous: Optional[Dict[str, Any]] = None,
+    previous_path: str = "",
+) -> str:
+    """Human-readable previous-vs-new install options for ``install.sh``."""
+    had_previous = isinstance(previous, dict) and bool(previous)
+    new_rows = install_option_rows(payload)
+    old_map = dict(install_option_rows(previous if had_previous else None))
+    aligned: List[Tuple[str, str]] = []
+    installed: List[Tuple[str, str]] = []
+    for label, value in new_rows:
+        old = old_map.get(label)
+        if had_previous and old == value:
+            aligned.append((label, value))
+        else:
+            installed.append((label, value))
+
+    lines: List[str] = []
+    if had_previous:
+        where = previous_path.strip() or "config.json"
+        lines.append(f"Previous installation config: found ({where})")
+    else:
+        where = previous_path.strip()
+        if where:
+            lines.append(f"Previous installation config: not found (writing {where})")
+        else:
+            lines.append("Previous installation config: not found")
+
+    def _block(title: str, rows: List[Tuple[str, str]], empty: str) -> None:
+        lines.append("")
+        lines.append(title)
+        if not rows:
+            lines.append(f"  {empty}")
+            return
+        width = max(len(label) for label, _ in rows)
+        for label, value in rows:
+            lines.append(f"  {label:<{width}}  {value}")
+
+    if had_previous:
+        _block(
+            "Options aligned from the previous install:",
+            aligned,
+            "(none — previous values were empty or all refreshed this run)",
+        )
+    _block(
+        "New / updated options this install:",
+        installed,
+        "(none — this install only reused previous values)",
+    )
+    return "\n".join(lines)

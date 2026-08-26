@@ -37,10 +37,21 @@
 #                              and shell/PATH edits are skipped
 set -euo pipefail
 
-echo "Installing SamovaR (Python pipeline)..."
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+
+SAMOVAR_VERSION="$(
+    grep -E '^version[[:space:]]*=' "$ROOT/pyproject.toml" 2>/dev/null \
+        | head -n1 \
+        | sed -E 's/^version[[:space:]]*=[[:space:]]*["'\'']([^"'\'']+)["'\''].*/\1/'
+)"
+SAMOVAR_VERSION="${SAMOVAR_VERSION:-unknown}"
+
+echo ""
+echo "Hello from SAMOVAR ${SAMOVAR_VERSION}"
+echo "Warning: this tool may be unstable and is under active development."
+echo ""
+echo "Installing the Python pipeline..."
 mkdir -p bin
 if ! mkdir -p build 2>/dev/null; then
     echo "Warning: cannot write $ROOT/build (read-only checkout); config pointer may be skipped"
@@ -624,9 +635,9 @@ export SAMOVAR_ROOT="$ROOT"
 export SAMOVAR_ROOT="$ROOT"
 export PYTHON_PATH
 "$PYTHON_PATH" - <<'PY'
-import os, shutil
+import json, os, shutil
 from pathlib import Path
-from samovar.main_config import build_install_config
+from samovar.main_config import build_install_config, format_install_report
 from samovar.paths import (
     PACKAGE_VERSION,
     collect_runtime_path_dirs,
@@ -653,6 +664,15 @@ except Exception:
 
 root = os.environ["SAMOVAR_ROOT"]
 python_path = os.environ["PYTHON_PATH"]
+cfg_file = Path(os.environ.get("SAMOVAR_CONFIG") or "").expanduser()
+previous_raw = None
+if cfg_file.is_file():
+    try:
+        loaded = json.loads(cfg_file.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and loaded:
+            previous_raw = loaded
+    except (OSError, json.JSONDecodeError, TypeError, UnicodeError):
+        previous_raw = None
 existing = load_config()
 tools = dict(discover_tools())
 # Preserve previously configured tool paths (any schema).
@@ -791,54 +811,24 @@ env_path.write_text(
     f"{conda_lib}",
     encoding="utf-8",
 )
+print("")
 print(f"Wrote config: {cfg_path}")
 if pointer:
     print(f"Wrote pointer: {pointer}")
 print(f"Wrote {env_path} PATH with {len(dirs)} tool bin dir(s)")
-from samovar.main_config import extra_genome_dirs as _libs, first_dir as _first, processed_genome_dirs as _pg, raw_genome_dirs as _rg, iter_tools as _it, tool_path as _tp, genomes_block as _gb
-genomes = _first(_rg(payload))
-processed = _first(_pg(payload)) or genomes
-lib_dirs = _libs(payload)
-store = (_gb(payload) or {}).get("samovar_database") or ""
 print("")
-print("Genome store (samovar_database / processed, reused by generate --reindex and reindex):")
-print(f"  samovar_database:    {store or '(unset)'}")
-print(f"  Downloaded genomes:  {genomes or '(per-run: $out/.genomes)'}")
-print(f"  Processed genomes:   {processed or store or '(samovar_database/processed)'}")
-print(f"  Extra libraries:     {', '.join(lib_dirs) if lib_dirs else '(none yet; add folders under genomes.raw in config.json)'}")
+print(
+    format_install_report(
+        payload=payload,
+        previous=previous_raw,
+        previous_path=str(cfg_path),
+    )
+)
 print("")
-print("IMPORTANT: bulky genome caches must NOT live under $HOME (quota).")
+print("Note: bulky genome caches should not live under $HOME (quota).")
 print("  Each `samovar exec` pins XDG_CACHE_HOME/SAMOVAR_GENOMES to $out_dir/.cache.")
-print("  Optional shared scratch library: SAMOVAR_GENOMES=/scratch/... ./install.sh")
-print("IMPORTANT: data/test_genomes contains TRUNCATED assemblies for ISS and CI only.")
-print("They are never used as NCBI substitutes. Real metagenomes reuse only genomes")
-print("previously downloaded by SamovaR or listed in genomes.raw.")
-print("  samovar prepare --reuse-genomes      # default: symlink from cache if found")
-print("  samovar prepare --no-reuse-genomes   # download into the genomes cache")
-print("  samovar prepare --genome-dirs DIR[:DIR]")
-print("  samovar prepare --test-genomes       # allow truncated stubs (ISS/CI only)")
-print("Prefer symlinks into $out_dir/genomes; copy with a warning if linking fails.")
-_tools = _it(payload)
-if _tp(_tools.get("opal.py") or _tools.get("opal"), "opal.py"):
-    print(f"OPAL (cami-opal): {_tp(_tools.get('opal.py') or _tools.get('opal'), 'opal.py')}")
-else:
-    print("OPAL: not found. ./install.sh OPAL to install CAMI OPAL and record tools.opal.py.")
-if _tp(_tools.get("multiqc"), "multiqc"):
-    print(f"MultiQC: {_tp(_tools.get('multiqc'), 'multiqc')}")
-else:
-    print("MultiQC: not found. ./install.sh MultiQC to install MultiQC and record tools.multiqc.")
-if _tp(_tools.get("camisim"), "camisim"):
-    print(f"CAMISIM: {_tp(_tools.get('camisim'), 'camisim')}")
-else:
-    print("CAMISIM: not found. ./install.sh CAMISIM")
-if _tp(_tools.get("nanosim") or _tools.get("simulator.py"), "nanosim"):
-    print(f"NanoSim: {_tp(_tools.get('nanosim') or _tools.get('simulator.py'), 'nanosim')}")
-else:
-    print("NanoSim: not found. ./install.sh NanoSim (separate conda env for CAMISIM ONT)")
-if _tp(_tools.get("art_illumina") or _tools.get("art"), "art_illumina"):
-    print(f"ART: {_tp(_tools.get('art_illumina') or _tools.get('art'), 'art_illumina')}")
-else:
-    print("ART: not found. ./install.sh ART (separate conda env) or let CAMISIM Nextflow create it")
+print("  Shared library: SAMOVAR_DATABASE=/scratch/... ./install.sh")
+print("  data/test_genomes is truncated (ISS/CI only), never an NCBI substitute.")
 PY
 
 BIN_DIR="$ROOT/bin"
@@ -910,11 +900,6 @@ fi
 if [ ! -f "$ROOT/workflow/annotators/Snakefile" ]; then
     echo "  workflow: MISSING"; SMOKE_FAIL=1
 fi
-"$PYTHON_PATH" -c "from samovar.opal import opal_executable; p=opal_executable(); print('  opal.py:', p or 'not found (optional; ./install.sh OPAL)')" || true
-"$PYTHON_PATH" -c "from samovar.paths import discover_multiqc; p=discover_multiqc(); print('  multiqc:', p or 'not found (optional; ./install.sh MultiQC)')" || true
-"$PYTHON_PATH" -c "from samovar.camisim import discover_camisim; p=discover_camisim(); print('  CAMISIM:', p or 'not found (optional; ./install.sh CAMISIM)')" || true
-"$PYTHON_PATH" -c "from samovar.paths import discover_nanosim; p=discover_nanosim(); print('  NanoSim:', p or 'not found (optional; ./install.sh NanoSim)')" || true
-"$PYTHON_PATH" -c "from samovar.paths import discover_art; p=discover_art(); print('  ART:', p or 'not found (optional; ./install.sh ART)')" || true
 if [ "$SMOKE_FAIL" != "0" ]; then
     echo "Smoke test reported missing pieces (see above). Core Python package may still work."
 else

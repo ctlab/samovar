@@ -5,6 +5,7 @@ from samovar.main_config import (
     build_install_config,
     disk_payload,
     extra_genome_dirs,
+    format_install_report,
     iter_tools,
     migrate_legacy,
     parse_tool_entry,
@@ -195,3 +196,54 @@ def test_home_symlink_to_scratch_is_not_stored(tmp_path, monkeypatch):
     raw_paths = list(payload["genomes"]["raw"].values())
     assert raw_paths == [str(scratch)]
     assert not any(str(home) in p for p in raw_paths)
+
+
+def test_format_install_report_first_install(tmp_path):
+    cfg = build_install_config(
+        root=str(tmp_path),
+        python_path=str(tmp_path / "python"),
+        version=get_version(),
+        ncbi_email="n@e.c",
+        samovar_database=str(tmp_path / "genomes"),
+    )
+    text = format_install_report(
+        payload=disk_payload(cfg),
+        previous=None,
+        previous_path=str(tmp_path / "config.json"),
+    )
+    assert "Previous installation config: not found" in text
+    assert "writing" in text
+    assert "New / updated options this install:" in text
+    assert "genomes.samovar_database" in text
+    assert "Options aligned from the previous install:" not in text
+
+
+def test_format_install_report_keeps_previous_options(tmp_path):
+    store = str(tmp_path / "library")
+    previous = {
+        "version": "0.0.1",
+        "root": str(tmp_path),
+        "genomes": {"samovar_database": store},
+        "databases": {"kaiju": {"index": str(tmp_path / "kaiju.fmi")}},
+        "tools": {"kraken2": str(tmp_path / "bin" / "kraken2")},
+    }
+    cfg = build_install_config(
+        root=str(tmp_path),
+        python_path=str(tmp_path / "python"),
+        version=get_version(),
+        existing=previous,
+        samovar_database=store,
+        ncbi_email="new@e.c",
+    )
+    text = format_install_report(
+        payload=disk_payload(cfg),
+        previous=previous,
+        previous_path=str(tmp_path / "config.json"),
+    )
+    assert "Previous installation config: found" in text
+    assert "Options aligned from the previous install:" in text
+    assert "databases.kaiju" in text
+    assert "genomes.samovar_database" in text
+    assert "New / updated options this install:" in text
+    assert "API.ncbi_email" in text
+    assert "new@e.c" in text
