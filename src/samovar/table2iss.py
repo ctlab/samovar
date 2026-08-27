@@ -1184,13 +1184,14 @@ def samovar_annotation_regenerate(
 ) -> None:
     """Regenerate taxonomy tables to abundance CSVs.
 
-    Modes (``regeneration_mode`` in config):
+    Modes (``regeneration_mode`` / ``table_reads_generator`` in config):
 
     - ``direct`` (default; alias ``preserve``): observed counts, same samples.
     - ``bootstrap`` / ``vae`` / ``glm``: Python generative models.
     - ``samovar``: optional R regenerator (not part of the Python install).
+    - any other name: imported ``table_reads_generator`` (``samovar tools import --type table``).
     """
-    from samovar.regenerate import normalize_regeneration_mode
+    from samovar.regenerate import resolve_regeneration_mode
 
     tmp_config_path = None
     if config_samovar is None:
@@ -1209,10 +1210,11 @@ def samovar_annotation_regenerate(
         if not output_dir:
             raise ValueError("output_dir is required")
 
-    mode = normalize_regeneration_mode(
-        config_samovar_dict.get("regeneration_mode", "direct")
+    kind, mode = resolve_regeneration_mode(
+        config_samovar_dict.get("table_reads_generator")
+        or config_samovar_dict.get("regeneration_mode", "direct")
     )
-    if mode != "samovar":
+    if not (kind == "builtin" and mode == "samovar"):
         _samovar_annotation_regenerate_python(
             annotation_dir, config_samovar_dict, output_dir
         )

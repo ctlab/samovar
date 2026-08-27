@@ -18,6 +18,7 @@ from samovar.regenerate import (
     regenerate_glm_python,
     regenerate_preserve,
     regenerate_vae,
+    resolve_regeneration_mode,
     sample_names_from_abundance_columns,
     synthetic_sample_names,
     write_samovar_config_defaults,
@@ -88,6 +89,10 @@ def test_normalize_regeneration_mode_aliases():
     assert normalize_regeneration_mode("boil") == "samovar"
     with pytest.raises(ValueError):
         normalize_regeneration_mode("unknown")
+    assert resolve_regeneration_mode("unknown") == ("custom", "unknown")
+    assert resolve_regeneration_mode("preserve") == ("builtin", "direct")
+    assert not is_direct_mode("glm")
+    assert not is_direct_mode("myboil")
 
 
 def test_preserve_keeps_observed_counts(toy_annotation_dir):
@@ -575,4 +580,80 @@ def test_iss_readcounts_match_regenerated_glm_tables(
     # Abundance rows count pairs; ISS's readcount file counts individual reads.
     assert iss_total == expected_total * 2
     assert expected_total > 0
+
+
+def test_missing_custom_table_regenerator_errors(tmp_path, monkeypatch, toy_annotation_dir):
+    from samovar.paths import write_config
+    from samovar.table_regenerators import MissingTableRegeneratorError, require_known_regeneration_mode
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    with pytest.raises(MissingTableRegeneratorError, match="not in the main install config"):
+        require_known_regeneration_mode("no_such_boil")
+    with pytest.raises(MissingTableRegeneratorError):
+        regenerate_annotation_tables(
+            toy_annotation_dir,
+            tmp_path / "out",
+            {"regeneration_mode": "no_such_boil"},
+        )
+
+
+def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_dir):
+    from samovar.parse_annotators import Annotation
+    from samovar.paths import write_config
+    from samovar.tools_import import import_tool
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    script = tmp_path / "myboil.py"
+    script.write_text(
+        "from samovar.regenerate import regenerate_preserve\n"
+        "\n"
+        "def regenerate(annotation, metadata, config):\n"
+        "    assert metadata is None\n"
+        "    assert annotation.DataFrame is not None\n"
+        "    return regenerate_preserve(annotation.DataFrame)\n"
+    )
+    import_tool(
+        name="myboil",
+        tool_type="table",
+        exec_path=str(script),
+        also_repo_build=False,
+    )
+    data = read_annotation_dir(toy_annotation_dir)
+    wrapped = Annotation.from_long_table(data)
+    assert "sample" in wrapped.DataFrame.columns
+    tables = regenerate_annotation_tables(
+        toy_annotation_dir,
+        tmp_path / "out",
+        {"regeneration_mode": "myboil"},
+    )
+    assert "kaiju" in tables
+    assert "taxid" in tables["kaiju"].columns
+
+
+def test_prepare_rejects_unimported_table_generator(tmp_path, monkeypatch):
+    from samovar.config import PipelineConfig
+    from samovar.paths import write_config
+    from samovar.table_regenerators import MissingTableRegeneratorError
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "table_reads_generator": "ghost_boil",
+        },
+    )()
+    with pytest.raises(MissingTableRegeneratorError, match="ghost_boil"):
+        PipelineConfig.from_args(args)
+
 

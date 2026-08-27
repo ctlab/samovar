@@ -2,7 +2,7 @@ import os
 import glob
 import logging
 
-from samovar.regenerate import normalize_regeneration_mode, synthetic_sample_names
+from samovar.regenerate import resolve_regeneration_mode, synthetic_sample_names
 from samovar.seqio import fastq_pair_paths
 from samovar.table2iss import process_annotation_tables
 
@@ -23,9 +23,12 @@ COVERAGE = config["coverage"]
 MODEL = config.get("model", "hiseq")
 MAX_GENOMES = config.get("max_genomes", None)
 CORES = int(config.get("cores", 2))
-REGENERATION_MODE = normalize_regeneration_mode(config.get("regeneration_mode", "direct"))
+_KIND, REGENERATION_MODE = resolve_regeneration_mode(
+    config.get("table_reads_generator") or config.get("regeneration_mode", "direct")
+)
 REGENERATION_CONFIG = {
     "regeneration_mode": REGENERATION_MODE,
+    "table_reads_generator": REGENERATION_MODE,
     "N_reads": int(config.get("N_reads", 1000)),
     "seed": config.get("seed", 42),
     "threshold_amount": config.get("threshold_amount", config.get("treshhold_amount", 1e-5)),
@@ -35,6 +38,8 @@ REGENERATION_CONFIG = {
     "min_cluster_size": config.get("min_cluster_size", 2),
     "max_cluster_size": config.get("max_cluster_size", 100),
 }
+if config.get("samples_metadata"):
+    REGENERATION_CONFIG["samples_metadata"] = config["samples_metadata"]
 if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])
 GZIP_GENOMES = bool(config.get("gzip_genomes", True))
@@ -80,7 +85,7 @@ def get_sample_names():
     for file in annotation_files:
         sample_name = os.path.basename(file).split(".")[0]
         original.append(sample_name)
-    if REGENERATION_MODE == "direct":
+    if _KIND == "builtin" and REGENERATION_MODE == "direct":
         return original
     n_cfg = REGENERATION_CONFIG.get("N")
     n = int(n_cfg) if n_cfg not in (None, "", 0) else 0

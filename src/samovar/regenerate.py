@@ -9,6 +9,8 @@ Modes:
 - ``glm``: correlation-aware synthetic communities (Python).
 - ``samovar``: optional R regenerator (not part of the Python install). Looked
   up via ``SAMOVAR_R_REGENERATE`` / config ``annotation_regenerate_r``.
+- any other name: custom ``table_reads_generator`` registered with
+  ``samovar tools import --type table`` (see ``table_regenerators``).
 """
 
 from __future__ import annotations
@@ -31,24 +33,44 @@ GENERATIVE_MODES = frozenset({"glm", "bootstrap", "vae"})
 SAMOVAR_R_MODES = frozenset({"samovar", "r", "boil"})
 
 
-def normalize_regeneration_mode(mode: Optional[str]) -> str:
+def resolve_regeneration_mode(mode: Optional[str]) -> Tuple[str, str]:
+    """Return ``("builtin", canonical)`` or ``("custom", name)``.
+
+    Built-ins: ``direct`` (aliases preserve/exact/…), ``bootstrap``, ``vae``,
+    ``glm``, ``samovar`` (aliases r/boil). Any other non-empty string is a
+    custom ``table_reads_generator`` name (validated against the install
+    config at prepare / run).
+    """
     if mode is None:
-        return "direct"
-    key = str(mode).strip().lower()
-    if key in DIRECT_MODES:
-        return "direct"
-    if key in GENERATIVE_MODES:
-        return key
-    if key in SAMOVAR_R_MODES:
-        return "samovar"
+        return "builtin", "direct"
+    key = str(mode).strip()
+    if not key:
+        return "builtin", "direct"
+    low = key.lower()
+    if low in DIRECT_MODES:
+        return "builtin", "direct"
+    if low in GENERATIVE_MODES:
+        return "builtin", low
+    if low in SAMOVAR_R_MODES:
+        return "builtin", "samovar"
+    return "custom", key
+
+
+def normalize_regeneration_mode(mode: Optional[str]) -> str:
+    """Built-in modes only. Custom names must go through ``resolve_regeneration_mode``."""
+    kind, name = resolve_regeneration_mode(mode)
+    if kind == "builtin":
+        return name
     raise ValueError(
         f"Unknown regeneration_mode={mode!r}. "
-        "Use direct, bootstrap, vae, glm, or samovar."
+        "Use direct, bootstrap, vae, glm, samovar, or an imported "
+        "table_reads_generator name (`samovar tools import --type table`)."
     )
 
 
 def is_direct_mode(mode: Optional[str]) -> bool:
-    return normalize_regeneration_mode(mode) == "direct"
+    kind, name = resolve_regeneration_mode(mode)
+    return kind == "builtin" and name == "direct"
 
 
 def coerce_seed(seed: Any, default: int = 42) -> int:
@@ -373,67 +395,24 @@ def regenerate_annotation_tables(
     data: Optional[pd.DataFrame] = None,
 ) -> Dict[str, pd.DataFrame]:
     """Regenerate per-annotator abundance CSVs from an annotation directory."""
-    cfg = dict(config or {})
-    mode = normalize_regeneration_mode(cfg.get("regeneration_mode", "direct"))
-    n_reads = cfg.get("N_reads")
-    if n_reads is not None:
-        n_reads = int(n_reads)
-    threshold = float(cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5)))
-    seed = coerce_seed(cfg.get("seed", 42))
-    rescale = bool(cfg.get("rescale_abundance", False))
-    latent_dim = int(cfg.get("vae_latent_dim", 4))
-    min_cluster_size = int(cfg.get("min_cluster_size", 2))
-    max_cluster_size = int(cfg.get("max_cluster_size", 100))
-    error_scale = float(cfg.get("bootstrap_error_scale", 0.15))
+    from samovar.table_regenerators import (
+        as_annotation,
+        get_table_regenerator,
+        load_samples_metadata,
+    )
 
+    cfg = dict(config or {})
+    mode = cfg.get("table_reads_generator") or cfg.get("regeneration_mode", "direct")
     if data is None:
         data = read_annotation_dir(annotation_dir)
-    n_samples = _n_samples_or_observed(data, cfg.get("N"))
-
-    if mode == "direct":
-        tables = regenerate_preserve(
-            data,
-            n_reads=n_reads,
-            rescale=rescale,
-            threshold_amount=threshold,
-        )
-    elif mode == "bootstrap":
-        tables = regenerate_bootstrap(
-            data,
-            n_samples=n_samples,
-            n_reads=n_reads,
-            threshold_amount=threshold,
-            seed=seed,
-            rescale=rescale,
-            error_scale=error_scale,
-        )
-    elif mode == "vae":
-        tables = regenerate_vae(
-            data,
-            n_samples=n_samples,
-            n_reads=n_reads,
-            threshold_amount=threshold,
-            latent_dim=latent_dim,
-            seed=seed,
-            rescale=rescale,
-        )
-    elif mode == "glm":
-        tables = regenerate_glm_python(
-            data,
-            n_samples=n_samples,
-            n_reads=n_reads,
-            threshold_amount=threshold,
-            seed=seed,
-            rescale=rescale,
-            min_cluster_size=min_cluster_size,
-            max_cluster_size=max_cluster_size,
-        )
-    else:
-        raise ValueError(
-            "regeneration_mode='samovar' uses the optional R regenerator. "
-            "Call samovar_annotation_regenerate() after installing it, or set "
-            "SAMOVAR_R_REGENERATE to annotation_regenerate.R."
-        )
+    cfg["annotation_dir"] = str(annotation_dir)
+    cfg["output_dir"] = str(output_dir)
+    regenerator = get_table_regenerator(mode)
+    tables = regenerator.run(
+        as_annotation(data, annotation_dir),
+        load_samples_metadata(cfg),
+        cfg,
+    )
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)

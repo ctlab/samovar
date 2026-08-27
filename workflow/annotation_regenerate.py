@@ -7,8 +7,8 @@ from pathlib import Path
 
 import yaml
 
-from samovar.regenerate import normalize_regeneration_mode
 from samovar.table2iss import samovar_annotation_regenerate
+from samovar.table_regenerators import require_known_regeneration_mode
 
 
 def main() -> None:
@@ -20,8 +20,10 @@ def main() -> None:
     parser.add_argument("--config", help="YAML config (samovaR-style keys)")
     parser.add_argument(
         "--regeneration_mode",
-        default="direct",
-        choices=["direct", "preserve", "glm", "bootstrap", "vae", "samovar"],
+        "--table_reads_generator",
+        dest="regeneration_mode",
+        default=None,
+        help="direct|bootstrap|vae|glm|samovar or an imported table_reads_generator name",
     )
     parser.add_argument(
         "--N",
@@ -31,6 +33,12 @@ def main() -> None:
     )
     parser.add_argument("--N_reads", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--samples-metadata",
+        dest="samples_metadata",
+        default=None,
+        help="Optional samples metadata CSV (custom regenerators; builtins ignore it)",
+    )
     parser.add_argument(
         "--rescale_abundance",
         action="store_true",
@@ -44,15 +52,20 @@ def main() -> None:
             cfg = yaml.safe_load(handle) or {}
     else:
         cfg = {}
-    cfg["regeneration_mode"] = normalize_regeneration_mode(
-        args.regeneration_mode or cfg.get("regeneration_mode", "direct")
+    raw_mode = (
+        args.regeneration_mode
+        or cfg.get("table_reads_generator")
+        or cfg.get("regeneration_mode", "direct")
     )
+    cfg["regeneration_mode"] = require_known_regeneration_mode(raw_mode)
     if args.N is not None:
         cfg["N"] = args.N
     cfg["N_reads"] = args.N_reads
     cfg["seed"] = args.seed
     cfg["rescale_abundance"] = bool(args.rescale_abundance)
     cfg["output_dir"] = args.output_dir
+    if args.samples_metadata:
+        cfg["samples_metadata"] = args.samples_metadata
 
     tmp = Path(args.output_dir) / ".regeneration_config.yaml"
     tmp.parent.mkdir(parents=True, exist_ok=True)

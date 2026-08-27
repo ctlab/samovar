@@ -11,7 +11,7 @@ import re
 import sys
 import hashlib
 import tempfile
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import sqlite3
 import pickle
 from pathlib import Path
@@ -966,6 +966,40 @@ class Annotation:
         self.annotation_list = self.list2set(set_columns)
         self.true_annotation_list = self.list2set(self.true_annotation)
         self.rank_list = self.list2set([*self.annotation_list, *self.true_annotation_list])
+
+    @classmethod
+    def from_long_table(cls, df: Optional[pd.DataFrame]) -> "Annotation":
+        """Build from a concatenated annotation table (``taxID_*``, ``sample``).
+
+        Used by table regenerators. Does not read raw ``.out`` files or hit NCBI.
+        """
+        obj = cls.__new__(cls)
+        obj.id = 0
+        obj.DataFrame = pd.DataFrame() if df is None else df.copy()
+        if not obj.DataFrame.empty:
+            obj.DataFrame = obj.DataFrame.fillna("0")
+        obj.true_annotation = []
+        if "true" in obj.DataFrame.columns:
+            obj.true_annotation = [str(x) for x in obj.DataFrame["true"].tolist()]
+        set_columns: List = []
+        for _name, column in obj.tr().items():
+            set_columns += list(set(column.tolist()))
+        obj.annotation_list = cls.list2set(set_columns)
+        obj.true_annotation_list = cls.list2set(obj.true_annotation)
+        obj.rank_list = cls.list2set([*obj.annotation_list, *obj.true_annotation_list])
+        return obj
+
+    @classmethod
+    def from_annotation_dir(
+        cls,
+        path: Union[str, Path],
+        sample_name_position: int = 0,
+    ) -> "Annotation":
+        from samovar.annotation_io import read_annotation_dir
+
+        return cls.from_long_table(
+            read_annotation_dir(path, sample_name_position=sample_name_position)
+        )
 
     def true_annotation_unique(self) -> set:
         """Get unique true annotations."""

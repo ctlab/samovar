@@ -15,7 +15,7 @@ from samovar.paths import (
     repo_root,
     runtime_path_prefix,
 )
-from samovar.regenerate import normalize_regeneration_mode
+from samovar.table_regenerators import require_known_regeneration_mode
 from samovar.genome_resolve import normalize_reannotation_level
 
 DEFAULT_OUTPUT_DIR = "samovar_out"
@@ -132,6 +132,7 @@ class PipelineConfig:
     regeneration_seed: int = 42
     reannotation_level: str = "taxid"
     rescale_abundance: bool = False
+    samples_metadata: Optional[str] = None
     gzip_genomes: bool = True
     gzip_reads: bool = False
     reuse_genomes: bool = True
@@ -170,9 +171,17 @@ class PipelineConfig:
                 config.read_length = input_config.get('read_length', config.read_length)
                 config.coverage = input_config.get('coverage', config.coverage)
                 config.email = input_config.get('email', config.email)
-                config.regeneration_mode = normalize_regeneration_mode(
-                    input_config.get('regeneration_mode', config.regeneration_mode)
+                yaml_mode = (
+                    input_config.get("table_reads_generator")
+                    or input_config.get("regeneration_mode")
+                    or config.regeneration_mode
                 )
+                config.regeneration_mode = require_known_regeneration_mode(yaml_mode)
+                meta = input_config.get("samples_metadata") or input_config.get(
+                    "metadata"
+                )
+                if meta not in (None, "", False):
+                    config.samples_metadata = absolute_path(str(meta))
                 config.reannotation_level = normalize_reannotation_level(
                     input_config.get(
                         "reannotation_level",
@@ -314,6 +323,15 @@ class PipelineConfig:
         if level:
             config.reannotation_level = normalize_reannotation_level(level)
 
+        cli_mode = getattr(args, "table_reads_generator", None) or getattr(
+            args, "regeneration_mode", None
+        )
+        if cli_mode:
+            config.regeneration_mode = require_known_regeneration_mode(cli_mode)
+        cli_meta = getattr(args, "samples_metadata", None)
+        if cli_meta:
+            config.samples_metadata = absolute_path(str(cli_meta))
+
         return config
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
@@ -357,6 +375,7 @@ class PipelineConfig:
             'max_genomes': getattr(self, 'max_genomes', 50),
             'cores': self.cores,
             'regeneration_mode': self.regeneration_mode,
+            'table_reads_generator': self.regeneration_mode,
             'reannotation_level': self.reannotation_level,
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
@@ -366,6 +385,8 @@ class PipelineConfig:
         }
         if self.regeneration_n:
             annotation2iss_config['N'] = self.regeneration_n
+        if self.samples_metadata:
+            annotation2iss_config['samples_metadata'] = self.samples_metadata
         annotation2iss_path = configs_dir / 'config_annotation2iss.yaml'
         with open(annotation2iss_path, 'w') as f:
             yaml.dump(annotation2iss_config, f)

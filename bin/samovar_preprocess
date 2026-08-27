@@ -29,6 +29,23 @@ def main():
     parser.add_argument(
         '--N_reads', '--n_reads', dest='N_reads', type=int, default=None,
         help='Read depth of each regenerated sample (default: 1000, or N_reads in --input_config)')
+    parser.add_argument(
+        '--table_reads_generator',
+        '--table-reads-generator',
+        '--regeneration_mode',
+        dest='table_reads_generator',
+        default=None,
+        help=(
+            'Abundance table regenerator: direct|bootstrap|vae|glm|samovar, '
+            'or a name imported with `samovar tools import --type table`'
+        ),
+    )
+    parser.add_argument(
+        '--samples-metadata',
+        dest='samples_metadata',
+        default=None,
+        help='Optional samples metadata CSV for custom table regenerators (builtins ignore it)',
+    )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
     gzip_group = parser.add_mutually_exclusive_group()
     gzip_group.add_argument(
@@ -129,6 +146,8 @@ def main():
         "input_dir", "input_config", "output_dir", "cores", "max_genomes",
         "N_reads", "n_reads", "genome-dirs", "genome_dirs", "index",
         "reannotation-level", "reannotation_level",
+        "table_reads_generator", "table-reads-generator", "regeneration_mode",
+        "samples-metadata", "samples_metadata",
     }
     cmd_args = {}
     i = 0
