@@ -95,6 +95,36 @@ def test_import_flags_fifth_slot(tmp_path, monkeypatch):
     assert len(raw4) == 4
 
 
+def test_import_scoring_writes_inputs_slot(tmp_path, monkeypatch):
+    script = tmp_path / "counts.py"
+    script.write_text("def score(inputs, output_dir, config):\n    return None\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    spec = import_tool(
+        name="counts",
+        tool_type="viz",
+        exec_path=str(script),
+        also_repo_build=False,
+    )
+    assert spec[3] == "scoring"
+    assert spec[5] == "*annotations"
+    raw = json.loads(cfg.read_text())["tools"]["counts"]
+    assert len(raw) == 6
+    assert raw[4] == ""
+    assert raw[5] == "*annotations"
+    spec2 = import_tool(
+        name="table_score",
+        tool_type="scoring",
+        exec_path=str(script),
+        inputs="*annotations/combined_annotation_table.csv",
+        flags="--tag t",
+        also_repo_build=False,
+    )
+    assert spec2[4] == "--tag t"
+    assert spec2[5] == "*annotations/combined_annotation_table.csv"
+
+
 def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
     script = tmp_path / "clf"
     script.write_text("#!/bin/sh\nexit 0\n")

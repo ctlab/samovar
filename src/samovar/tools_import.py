@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from samovar.main_config import (
+    DEFAULT_SCORING_INPUTS,
     TOOL_GROUPS,
     iter_tools,
     normalize_tool_group,
@@ -67,9 +68,10 @@ def import_tool(
     exec_name: str = "",
     exec_path: str = "",
     flags: str = "",
+    inputs: str = "",
     also_repo_build: bool = True,
 ) -> list:
-    """Write ``tools.<name> = [env, workflow, path, group, flags?]`` and return the spec."""
+    """Write ``tools.<name> = [env, workflow, path, group, flags?, inputs?]``."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("--name is required")
@@ -78,16 +80,20 @@ def import_tool(
     exe = str(exec_name or "").strip() or name
     path = resolve_import_path(name=name, exec_name=exe, exec_path=exec_path, env=env)
     workflow = env if env else "bash"
+    glob = str(inputs or "").strip()
+    if group == "scoring" and not glob:
+        glob = DEFAULT_SCORING_INPUTS
     cfg = load_config()
-    set_tool(
-        cfg,
-        name,
+    kwargs = dict(
         path=path,
         env=env,
         workflow=workflow,
         group=group,
         flags=str(flags or "").strip(),
     )
+    if glob:
+        kwargs["inputs"] = glob
+    set_tool(cfg, name, **kwargs)
     spec = parse_tool_entry(iter_tools(cfg).get(name), name)
     update_config({"tools": {name: spec}}, also_repo_build=also_repo_build)
     return parse_tool_entry(iter_tools(load_config()).get(name), name)
@@ -125,12 +131,24 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         "--type",
         required=True,
-        help=f"Tool group: {', '.join(TOOL_GROUPS)} (aliases: a, reads, meta, table, score)",
+        help=f"Tool group: {', '.join(TOOL_GROUPS)} (aliases: a, reads, meta, table, score, viz)",
     )
     parser.add_argument(
         "--flags",
         default="",
         help="Optional extra CLI flags stored as the 5th tools.* slot (omitted when empty)",
+    )
+    parser.add_argument(
+        "--inputs",
+        "--input",
+        "--glob",
+        dest="inputs",
+        default="",
+        help=(
+            "Input glob under the run output dir (6th tools.* slot). "
+            "Scoring/viz default: *annotations (initial/regenerated/reprofiled_annotations). "
+            "Examples: *annotations, *annotations/combined_annotation_table.csv, *_plots"
+        ),
     )
     return parser
 
@@ -145,15 +163,19 @@ def main(argv: Optional[list] = None) -> int:
             exec_name=args.exec_name,
             exec_path=args.exec_path,
             flags=args.flags,
+            inputs=args.inputs,
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     env, workflow, path, group = spec[:4]
     extra = spec[4] if len(spec) > 4 else ""
+    inputs = spec[5] if len(spec) > 5 else ""
     row = f"[{env!r}, {workflow!r}, {path}, {group}"
-    if extra:
+    if extra or inputs:
         row += f", {extra!r}"
+    if inputs:
+        row += f", {inputs!r}"
     row += "]"
     print(f"Imported tools.{args.name} = {row}")
     return 0

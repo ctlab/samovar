@@ -10,6 +10,7 @@ from samovar.main_config import (
     migrate_legacy,
     parse_tool_entry,
     sync_by_keys,
+    tool_inputs,
     tool_path,
 )
 from samovar.version import get_version
@@ -44,6 +45,29 @@ def test_migrate_drops_duplicate_flat_keys():
     kraken = parse_tool_entry(payload["tools"]["kraken2"], "kraken2")
     assert kraken[2].endswith("kraken2")
     assert kraken[3] == "annotator"
+
+
+def test_parse_tool_entry_keeps_empty_flags_when_inputs_set():
+    spec = parse_tool_entry(
+        ["", "bash", "/opt/counts.py", "scoring", "", "*annotations"],
+        "counts",
+    )
+    assert spec == ["", "bash", "/opt/counts.py", "scoring", "", "*annotations"]
+    assert tool_inputs(spec, "counts") == "*annotations"
+    table = parse_tool_entry(
+        {
+            "env": "",
+            "workflow": "bash",
+            "path": "/opt/table.py",
+            "group": "scoring",
+            "inputs": "combined_annotation_table.csv",
+        },
+        "table_score",
+    )
+    assert table[5] == "combined_annotation_table.csv"
+    assert table[4] == ""
+    four = parse_tool_entry(["", "bash", "/usr/bin/iss", "reads_generator"], "iss")
+    assert len(four) == 4
 
 
 def test_install_config_legacy_get():

@@ -148,6 +148,7 @@ def test_generate_configs():
     assert os.path.exists(configs['init_annotator'])
     assert os.path.exists(configs['annotation2iss'])
     assert os.path.exists(configs['reannotate'])
+    assert os.path.exists(configs['scoring'])
     with open(configs['init_annotator'], 'r') as f:
         init_config = yaml.safe_load(f)
         assert init_config['r1_dir'] == str((Path(test_output_dir) / 'initial').resolve())
@@ -259,6 +260,7 @@ def test_generate_pipeline():
         assert "ckpt_skip" in pipeline_content
         assert "ckpt_finish" in pipeline_content
         assert "samovar.stage_report" in pipeline_content
+        assert "samovar.scorers run" in pipeline_content
         assert "SAMOVAR_MULTIQC" in pipeline_content
         for step in (
             "setup_reads",

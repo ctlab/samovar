@@ -78,9 +78,18 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "table_reads_generator": "table_reads_generator",
     "score": "scoring",
     "scoring": "scoring",
+    "viz": "scoring",
+    "visualisation": "scoring",
+    "visualization": "scoring",
+    "visualizations": "scoring",
+    "visualisations": "scoring",
+    "plots": "scoring",
     "workflow": "workflow",
     "wf": "workflow",
 }
+
+# Scoring / viz tools: glob under the run output directory (6th tools.* slot).
+DEFAULT_SCORING_INPUTS = "*annotations"
 
 TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "bash": "runtime",
@@ -202,24 +211,33 @@ def normalize_tool_group(value: str) -> str:
 
 
 def parse_tool_entry(value: Any, name: str = "") -> List[str]:
-    """Normalize a tools.* value to ``[env, workflow, path, group]`` or 5 items with flags.
+    """Normalize a tools.* value to ``[env, workflow, path, group]``.
 
-    The 5th slot is optional extra CLI flags. It is omitted when empty so
-    existing 4-element JSON rows stay 4-element.
+    Optional 5th slot: extra CLI flags. Optional 6th: input glob (scoring/viz).
+    Empty trailing slots are omitted so existing 4-element JSON rows stay 4-element.
+    An empty flags slot is kept when the 6th (inputs) slot is set.
     """
     group = tool_group_for(name)
     flags = ""
+    inputs = ""
     if value is None or value is False:
-        return _trim_tool_spec(["", "bash", "", group, ""])
+        return _trim_tool_spec(["", "bash", "", group, "", ""])
     if isinstance(value, dict):
         env = str(value.get("env") or "").strip()
         workflow = str(value.get("workflow") or value.get("workflow_name") or "").strip()
         path = str(value.get("path") or "").strip()
         grp = str(value.get("group") or value.get("tool_group") or group).strip() or group
         flags = str(value.get("flags") or value.get("extra") or "").strip()
+        inputs = str(
+            value.get("inputs")
+            or value.get("input")
+            or value.get("glob")
+            or value.get("input_glob")
+            or ""
+        ).strip()
         if not workflow:
             workflow = env if env else "bash"
-        return _trim_tool_spec([env, workflow, path, grp, flags])
+        return _trim_tool_spec([env, workflow, path, grp, flags, inputs])
     if isinstance(value, (list, tuple)):
         parts = [str(x).strip() if x is not None else "" for x in value]
         while len(parts) < 4:
@@ -227,33 +245,50 @@ def parse_tool_entry(value: Any, name: str = "") -> List[str]:
         env, workflow, path, grp = parts[0], parts[1], parts[2], parts[3]
         if len(parts) > 4:
             flags = parts[4]
+        if len(parts) > 5:
+            inputs = parts[5]
         if not path and len(parts) == 1:
             path = parts[0]
         if not grp:
             grp = group
         if not workflow:
             workflow = env if env else "bash"
-        return _trim_tool_spec([env, workflow, path, grp, flags])
+        return _trim_tool_spec([env, workflow, path, grp, flags, inputs])
     path = str(value).strip()
-    return _trim_tool_spec(["", "bash", path, group, ""])
+    return _trim_tool_spec(["", "bash", path, group, "", ""])
 
 
 def _trim_tool_spec(spec: List[str]) -> List[str]:
-    """Drop an empty 5th (flags) slot so default JSON rows stay 4-element."""
-    out = list(spec)
+    """Keep 4, 5 (flags), or 6 (flags + inputs) elements; drop empty tails."""
+    out = [str(x) if x is not None else "" for x in spec]
     while len(out) < 4:
         out.append("")
-    if len(out) > 5:
-        out = out[:5]
-    if len(out) == 5 and not str(out[4]).strip():
-        return out[:4]
-    return out
+    if len(out) > 6:
+        out = out[:6]
+    flags = str(out[4]).strip() if len(out) > 4 else ""
+    inputs = str(out[5]).strip() if len(out) > 5 else ""
+    if inputs:
+        return [out[0], out[1], out[2], out[3], flags, inputs]
+    if flags:
+        return [out[0], out[1], out[2], out[3], flags]
+    return out[:4]
 
 
 def tool_flags(entry: Any, name: str = "") -> str:
     spec = parse_tool_entry(entry, name)
     if len(spec) > 4:
         return str(spec[4]).strip()
+    return ""
+
+
+def tool_inputs(entry: Any, name: str = "") -> str:
+    """6th tools.* slot (input glob). Scoring defaults to ``*annotations``."""
+    spec = parse_tool_entry(entry, name)
+    if len(spec) > 5 and str(spec[5]).strip():
+        return str(spec[5]).strip()
+    group = str(spec[3] or "").strip() if len(spec) > 3 else ""
+    if group == "scoring":
+        return DEFAULT_SCORING_INPUTS
     return ""
 
 
@@ -360,10 +395,11 @@ def set_tool(
     workflow: str = "",
     group: str = "",
     flags: Optional[str] = None,
+    inputs: Optional[str] = None,
 ) -> Dict[str, Any]:
     tools = dict(_raw_get(cfg, "tools") or {})
     spec = parse_tool_entry(tools.get(name), name)
-    while len(spec) < 5:
+    while len(spec) < 6:
         spec.append("")
     if env:
         spec[0] = env
@@ -377,6 +413,8 @@ def set_tool(
         spec[3] = group
     if flags is not None:
         spec[4] = str(flags).strip()
+    if inputs is not None:
+        spec[5] = str(inputs).strip()
     if not spec[1]:
         spec[1] = spec[0] if spec[0] else "bash"
     if not spec[3]:
@@ -851,6 +889,7 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
                         path=spec[2],
                         group=spec[3],
                         flags=spec[4] if len(spec) > 4 else "",
+                        inputs=spec[5] if len(spec) > 5 else None,
                     )
             continue
         if key == "tool_envs":

@@ -67,6 +67,16 @@ def main():
         ),
     )
     parser.add_argument(
+        '--scoring',
+        action='append',
+        default=None,
+        help=(
+            'Imported scoring/viz tool to run after each viz checkpoint '
+            '(repeatable). Default: all custom scoring tools. '
+            '`none` disables them. Import with `samovar tools import --type scoring`.'
+        ),
+    )
+    parser.add_argument(
         '--flags',
         nargs=2,
         action='append',
@@ -78,7 +88,8 @@ def main():
             '--flags annotator "--foo 1" or '
             '--flags table_reads_generator "--log-mu 1" or '
             '--flags reads_generator "--gc_bias" or '
-            '--flags metagenome_generator "--model hiseq"'
+            '--flags metagenome_generator "--model hiseq" or '
+            '--flags scoring "--min-files 1"'
         ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)

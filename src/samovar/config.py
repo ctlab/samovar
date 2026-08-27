@@ -24,6 +24,7 @@ from samovar.metagenome_generators import (
     flags_apply_to_metagenome_generator,
     require_known_metagenome_generator,
 )
+from samovar.scorers import is_scoring_flag_target
 from samovar.genome_resolve import normalize_reannotation_level
 from samovar.main_config import (
     flags_target_matches,
@@ -190,12 +191,17 @@ class PipelineConfig:
     use_test_genomes: bool = False
     genome_dirs: Optional[List[str]] = None
     run_multiqc: Optional[bool] = None
+    scoring_flags: Optional[str] = None
+    scoring_tools: Optional[List[str]] = None
+    scoring_tool_flags: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
         if self.annotators is None:
             self.annotators = []
         if self.genome_dirs is None:
             self.genome_dirs = []
+        if self.scoring_tool_flags is None:
+            self.scoring_tool_flags = {}
         if not self.email:
             self.email = _default_email()
 
@@ -255,6 +261,24 @@ class PipelineConfig:
                 yaml_mflags = input_config.get("metagenome_generator_flags")
                 if yaml_mflags:
                     config.metagenome_generator_flags = str(yaml_mflags)
+                yaml_sflags = input_config.get("scoring_flags")
+                if yaml_sflags:
+                    config.scoring_flags = str(yaml_sflags)
+                yaml_stools = input_config.get("scoring_tools")
+                if yaml_stools not in (None, "", False):
+                    if isinstance(yaml_stools, (list, tuple)):
+                        config.scoring_tools = [str(x) for x in yaml_stools]
+                    else:
+                        config.scoring_tools = [
+                            p.strip()
+                            for p in str(yaml_stools).replace(",", " ").split()
+                            if p.strip()
+                        ]
+                yaml_stf = input_config.get("scoring_tool_flags")
+                if isinstance(yaml_stf, dict):
+                    config.scoring_tool_flags = {
+                        str(k): str(v) for k, v in yaml_stf.items()
+                    }
                 config.reannotation_level = normalize_reannotation_level(
                     input_config.get(
                         "reannotation_level",
@@ -409,6 +433,13 @@ class PipelineConfig:
             config.metagenome_generator = require_known_metagenome_generator(
                 cli_meta_gen
             )
+        cli_scoring = getattr(args, "scoring", None)
+        if cli_scoring:
+            tokens = [str(x).strip() for x in cli_scoring if str(x).strip()]
+            if any(t.lower() in {"none", "off", "false", "0"} for t in tokens):
+                config.scoring_tools = []
+            else:
+                config.scoring_tools = tokens
         cli_meta = getattr(args, "samples_metadata", None)
         if cli_meta:
             config.samples_metadata = absolute_path(str(cli_meta))
@@ -441,6 +472,34 @@ class PipelineConfig:
             ):
                 mflag_parts.append(flags)
         config.metagenome_generator_flags = merge_flag_strings(*mflag_parts) or None
+        sflag_parts = [config.scoring_flags]
+        named_sflags = dict(config.scoring_tool_flags or {})
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if not is_scoring_flag_target(str(target)):
+                continue
+            if flags_target_matches(
+                str(target),
+                groups=(
+                    "scoring",
+                    "score",
+                    "viz",
+                    "visualization",
+                    "visualisation",
+                    "visualizations",
+                    "visualisations",
+                    "plots",
+                ),
+            ):
+                sflag_parts.append(flags)
+            else:
+                named_sflags[str(target)] = merge_flag_strings(
+                    named_sflags.get(str(target)), flags
+                )
+        config.scoring_flags = merge_flag_strings(*sflag_parts) or None
+        config.scoring_tool_flags = named_sflags or {}
 
         return config
 
@@ -512,6 +571,18 @@ class PipelineConfig:
         with open(annotation2iss_path, 'w') as f:
             yaml.dump(annotation2iss_config, f)
         configs['annotation2iss'] = str(annotation2iss_path)
+
+        scoring_config = {
+            'output_dir': str(base_path),
+            'scoring_flags': self.scoring_flags or "",
+            'scoring_tool_flags': self.scoring_tool_flags or {},
+        }
+        if self.scoring_tools is not None:
+            scoring_config['scoring_tools'] = self.scoring_tools
+        scoring_path = configs_dir / 'config_scoring.yaml'
+        with open(scoring_path, 'w') as f:
+            yaml.dump(scoring_config, f)
+        configs['scoring'] = str(scoring_path)
 
         # Generate reannotate config
         reannotate_config = {
@@ -656,7 +727,9 @@ fi""",
             f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
     --annotation_dir "$out_dir/initial_annotations" \\
     --output_dir "$out_dir/initial_annotations_plots" \\
-    --show_top 0""",
+    --show_top 0
+"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_initial \\
+    --config {configs['scoring']}""",
         )
 
         seed_genomes = _checkpoint_block(
@@ -710,7 +783,9 @@ fi
     --annotation_dir "$out_dir/regenerated_annotations" \\
     --output_dir "$out_dir/regenerated_annotations_plots" \\
     --csv "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
-    --show_top 0""",
+    --show_top 0
+"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_regenerated \\
+    --config {configs['scoring']}""",
         )
 
         reprofile = _checkpoint_block(
@@ -738,7 +813,9 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --annotation_dir "$out_dir/reprofiled_annotations" \\
     --output_dir "$out_dir/reprofiled_annotations_plots" \\
     --csv "$out_dir/reprofiled_annotations/combined_annotation_table.csv" \\
-    --show_top 0""",
+    --show_top 0
+"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_reprofiled \\
+    --config {configs['scoring']}""",
         )
 
         footer = """"$PYTHON_PATH" -m samovar.stage_report overview "$out_dir" || true
