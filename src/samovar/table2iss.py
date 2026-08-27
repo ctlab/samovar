@@ -8,8 +8,9 @@ import glob
 import random
 import pandas as pd
 import subprocess
+from contextlib import contextmanager
 from .genome_fetcher import fetch_genome, default_entrez_email
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
 import yaml
 import json
 import tempfile
@@ -96,8 +97,23 @@ SKIP_TAXIDS = {"0", "nan", "None", ""}
 CONTIG_SPACER = "N" * 500
 
 
+_ISS_EXTRA_FLAGS: List[str] = []
+
+
+@contextmanager
+def iss_cli_extra_flags(extra: Optional[Sequence[str]] = None) -> Iterator[None]:
+    """Append import/prepare extra flags to every ISS CLI invocation."""
+    global _ISS_EXTRA_FLAGS
+    prev = list(_ISS_EXTRA_FLAGS)
+    _ISS_EXTRA_FLAGS = [str(x) for x in (extra or []) if str(x).strip()]
+    try:
+        yield
+    finally:
+        _ISS_EXTRA_FLAGS = prev
+
+
 def _iss_cmd(*args: str) -> List[str]:
-    return [iss_executable(), *args]
+    return [iss_executable(), *args, *_ISS_EXTRA_FLAGS]
 
 
 def _run_iss(cmd: Sequence[str]) -> None:
@@ -960,60 +976,24 @@ def process_annotation_tables(
         warnings.warn("No genome files available for any taxid; emitted empty FASTQ files")
         return
 
-    os.makedirs(output_dir, exist_ok=True)
-    pool_dir = os.path.join(output_dir, ".iss_full")
-    os.makedirs(pool_dir, exist_ok=True)
+    from samovar.reads_generators import simulate_from_sample_tables
 
-    for annotator_name in annotators:
-        sample_source_counts: Dict[str, Dict[str, int]] = {}
-        total_by_taxid: Dict[str, int] = {}
-        for sample_name, table in sample_tables.items():
-            counts: Dict[str, int] = {}
-            n_col = next(
-                (col for col in _n_columns(table) if _annotator_from_n_col(col) == annotator_name),
-                None,
-            )
-            if n_col is not None and not table.empty:
-                amounts = table[n_col].tolist()
-                taxids = table["taxid"].tolist()
-                amounts = _scale_amounts(amounts, total_amount)
-                for taxid, n_reads in zip(taxids, amounts):
-                    taxid = str(taxid)
-                    if taxid not in available_genomes or n_reads <= 0:
-                        continue
-                    counts[taxid] = counts.get(taxid, 0) + int(n_reads)
-                    total_by_taxid[taxid] = total_by_taxid.get(taxid, 0) + int(n_reads)
-            sample_source_counts[sample_name] = counts
-
-        genome_ids = [taxid for taxid, n_reads in total_by_taxid.items() if n_reads > 0]
-        if not genome_ids:
-            _emit_empty_for_annotators(
-                output_dir, sample_names, [annotator_name], gzip_reads=gzip_reads
-            )
-            continue
-
-        r1_full, r2_full = generate_reads_metagenome(
-            genome_files=[available_genomes[taxid] for taxid in genome_ids],
-            output_dir=pool_dir,
-            amount=[total_by_taxid[taxid] for taxid in genome_ids],
-            read_length=read_length,
-            sample_name="full",
-            annotator_name=annotator_name,
-            model=model,
-            genome_ids=genome_ids,
-            cpus=cpus,
-            seed=seed + annotators.index(annotator_name),
-        )
-        split_metagenome_to_samples(
-            r1_full,
-            r2_full,
-            sample_source_counts,
-            output_dir,
-            annotator_name,
-            gzip_reads=gzip_reads,
-        )
-
-    shutil.rmtree(pool_dir, ignore_errors=True)
+    annotator_map: Dict[str, str] = dict(annotator_cols)
+    simulate_from_sample_tables(
+        sample_tables,
+        available_genomes,
+        output_dir,
+        annotator_cols=annotator_map,
+        total_amount=total_amount,
+        model=model,
+        read_length=read_length,
+        cpus=cpus,
+        seed=int(seed or 42),
+        gzip_reads=gzip_reads,
+        reads_generator=regen_cfg.get("reads_generator") or regen_cfg.get("reads-generator"),
+        extra_flags=None,
+        config=regen_cfg,
+    )
 
 
 def generate_iss_test_samples(
@@ -1027,14 +1007,31 @@ def generate_iss_test_samples(
     model: str = "hiseq",
     genomes: Optional[Sequence[str]] = None,
     cpus: int = 2,
+    extra_flags: Optional[Sequence[str]] = None,
+    abundance_table: Optional[Union[str, pd.DataFrame]] = None,
 ) -> List[str]:
     """
     Generate one host pool and one metagenome pool, then split them into samples.
     """
     from samovar.regenerate import coerce_seed
+    from samovar.seqio import taxid_from_fasta_name
 
     os.makedirs(output_dir, exist_ok=True)
     seed = coerce_seed(seed)
+    if abundance_table not in (None, "", False):
+        with iss_cli_extra_flags(extra_flags):
+            return generate_iss_from_abundance_table(
+                abundance_table,
+                genome_dir=genome_dir,
+                output_dir=output_dir,
+                host_genome=host_genome,
+                host_fraction=host_fraction,
+                total_reads=total_reads,
+                seed=seed,
+                model=model,
+                genomes=genomes,
+                cpus=cpus,
+            )
     rng = random.Random(seed)
     samples = [str(i) for i in range(1, int(n_samples) + 1)]
 
@@ -1057,38 +1054,46 @@ def generate_iss_test_samples(
     pool_dir = os.path.join(output_dir, ".iss_full")
     os.makedirs(pool_dir, exist_ok=True)
 
-    host_r1 = os.path.join(pool_dir, "host_R1.fastq")
-    host_r2 = os.path.join(pool_dir, "host_R2.fastq")
-    total_host = sum(host_counts.values())
-    if total_host > 0 and host_genome and os.path.exists(host_genome):
-        generate_reads_genome(
-            host_genome,
-            os.path.join(pool_dir, "host"),
-            total_host,
-            model=model,
-            cpus=cpus,
-            seed=seed,
-        )
-    else:
-        _write_empty_fastq_pair(host_r1, host_r2)
+    with iss_cli_extra_flags(extra_flags):
+        host_r1 = os.path.join(pool_dir, "host_R1.fastq")
+        host_r2 = os.path.join(pool_dir, "host_R2.fastq")
+        total_host = sum(host_counts.values())
+        if total_host > 0 and host_genome and os.path.exists(host_genome):
+            generate_reads_genome(
+                host_genome,
+                os.path.join(pool_dir, "host"),
+                total_host,
+                model=model,
+                cpus=cpus,
+                seed=seed,
+            )
+            host_tax = taxid_from_fasta_name(host_genome) or ""
+            if host_tax:
+                from samovar.camisim import tag_fastq_file
 
-    total_meta = sum(meta_counts.values())
-    meta_r1 = os.path.join(pool_dir, "meta_full_R1.fastq")
-    meta_r2 = os.path.join(pool_dir, "meta_full_R2.fastq")
-    if genome_files and total_meta > 0:
-        generate_reads_metagenome(
-            genome_files=genome_files,
-            output_dir=pool_dir,
-            amount=[1] * len(genome_files),
-            total_amount=total_meta,
-            sample_name="meta",
-            annotator_name="full",
-            model=model,
-            cpus=cpus,
-            seed=None if seed is None else seed + 1,
-        )
-    else:
-        _write_empty_fastq_pair(meta_r1, meta_r2)
+                tag_fastq_file(host_r1, host_r1, "", str(host_tax))
+                if os.path.exists(host_r2):
+                    tag_fastq_file(host_r2, host_r2, "", str(host_tax))
+        else:
+            _write_empty_fastq_pair(host_r1, host_r2)
+
+        total_meta = sum(meta_counts.values())
+        meta_r1 = os.path.join(pool_dir, "meta_full_R1.fastq")
+        meta_r2 = os.path.join(pool_dir, "meta_full_R2.fastq")
+        if genome_files and total_meta > 0:
+            generate_reads_metagenome(
+                genome_files=genome_files,
+                output_dir=pool_dir,
+                amount=[1] * len(genome_files),
+                total_amount=total_meta,
+                sample_name="meta",
+                annotator_name="full",
+                model=model,
+                cpus=cpus,
+                seed=None if seed is None else seed + 1,
+            )
+        else:
+            _write_empty_fastq_pair(meta_r1, meta_r2)
 
     tmp_host = {
         sample: (
@@ -1119,6 +1124,153 @@ def generate_iss_test_samples(
 
     shutil.rmtree(pool_dir, ignore_errors=True)
     return outputs
+
+
+def generate_iss_from_abundance_table(
+    table: Union[str, pd.DataFrame],
+    genome_dir: str,
+    output_dir: str,
+    host_genome: str = "",
+    host_fraction: Union[str, float] = 0,
+    total_reads: Optional[int] = None,
+    seed: int = 42,
+    model: str = "hiseq",
+    genomes: Optional[Sequence[str]] = None,
+    cpus: int = 2,
+) -> List[str]:
+    """ISS generate from a taxid × ``N_<sample>`` table; names ``{sample}_full_R*``."""
+    from samovar.seqio import taxid_from_fasta_name
+
+    if isinstance(table, str):
+        abundance = pd.read_csv(table)
+    else:
+        abundance = table.copy()
+    if "taxid" not in abundance.columns:
+        raise ValueError("abundance table must have a taxid column")
+    abundance["taxid"] = abundance["taxid"].astype(str).str.split(".").str[0]
+    n_cols = _n_columns(abundance)
+    sample_names = []
+    for col in n_cols:
+        name = str(col)
+        if name.lower().startswith("n_"):
+            name = name[2:]
+        sample_names.append(name or str(col))
+    if not n_cols:
+        _write_empty_fastq_pair(
+            os.path.join(output_dir, "1_full_R1.fastq"),
+            os.path.join(output_dir, "1_full_R2.fastq"),
+        )
+        return [
+            os.path.join(output_dir, "1_full_R1.fastq"),
+            os.path.join(output_dir, "1_full_R2.fastq"),
+        ]
+
+    sample_tables: Dict[str, pd.DataFrame] = {}
+    for sample, col in zip(sample_names, n_cols):
+        piece = abundance[["taxid", col]].copy()
+        piece = piece.rename(columns={col: f"N_{sample}"})
+        sample_tables[str(sample)] = piece
+
+    if genomes:
+        genome_files = {
+            _genome_id_from_path(p): (
+                os.path.join(genome_dir, p) if not os.path.isabs(p) else p
+            )
+            for p in genomes
+        }
+        available = {k: v for k, v in genome_files.items() if os.path.exists(v)}
+    else:
+        available = _resolve_genomes_for_taxids(
+            abundance["taxid"].astype(str).tolist(),
+            genome_dir,
+            default_entrez_email(),
+            True,
+        )
+    outputs: List[str] = []
+    pool_dir = os.path.join(output_dir, ".iss_full")
+    os.makedirs(pool_dir, exist_ok=True)
+    annotator_name = "full"
+    sample_source_counts: Dict[str, Dict[str, int]] = {}
+    total_by_taxid: Dict[str, int] = {}
+    for sample_name, tbl in sample_tables.items():
+        counts: Dict[str, int] = {}
+        col = _n_columns(tbl)[0]
+        amounts = tbl[col].tolist()
+        if total_reads:
+            amounts = _scale_amounts(amounts, int(total_reads))
+        for taxid, n_reads in zip(tbl["taxid"].astype(str), amounts):
+            if taxid not in available or int(n_reads) <= 0:
+                continue
+            counts[taxid] = counts.get(taxid, 0) + int(n_reads)
+            total_by_taxid[taxid] = total_by_taxid.get(taxid, 0) + int(n_reads)
+        sample_source_counts[sample_name] = counts
+    genome_ids = [t for t, n in total_by_taxid.items() if n > 0]
+    if genome_ids:
+        r1_full, r2_full = generate_reads_metagenome(
+            genome_files=[available[t] for t in genome_ids],
+            output_dir=pool_dir,
+            amount=[total_by_taxid[t] for t in genome_ids],
+            sample_name="full",
+            annotator_name=annotator_name,
+            model=model,
+            genome_ids=genome_ids,
+            cpus=cpus,
+            seed=seed,
+        )
+        split_metagenome_to_samples(
+            r1_full,
+            r2_full,
+            sample_source_counts,
+            output_dir,
+            annotator_name,
+            gzip_reads=False,
+        )
+        # split writes {sample}_full_R* already because annotator_name is full.
+    else:
+        for sample_name in sample_tables:
+            _write_empty_fastq_pair(
+                os.path.join(output_dir, f"{sample_name}_full_R1.fastq"),
+                os.path.join(output_dir, f"{sample_name}_full_R2.fastq"),
+            )
+    if host_genome and os.path.exists(host_genome) and str(host_fraction).upper() not in {"0", "0.0", ""}:
+        # Optional host spike-in on top of the table (same fractions as generate).
+        host_tax = taxid_from_fasta_name(host_genome) or ""
+        rng = random.Random(seed)
+        for sample_name in sample_tables:
+            dest_r1 = os.path.join(output_dir, f"{sample_name}_full_R1.fastq")
+            dest_r2 = os.path.join(output_dir, f"{sample_name}_full_R2.fastq")
+            if str(host_fraction).upper() == "RANDOM":
+                host_n = rng.randint(0, int(total_reads or 0))
+            else:
+                host_n = int(float(host_fraction) * int(total_reads or 0))
+            if host_n <= 0:
+                continue
+            tmp_prefix = os.path.join(pool_dir, f"{sample_name}_host")
+            generate_reads_genome(
+                host_genome, tmp_prefix, host_n, model=model, cpus=cpus, seed=seed
+            )
+            hr1, hr2 = f"{tmp_prefix}_R1.fastq", f"{tmp_prefix}_R2.fastq"
+            if host_tax:
+                from samovar.camisim import tag_fastq_file
+
+                tag_fastq_file(hr1, hr1, "", str(host_tax))
+                if os.path.exists(hr2):
+                    tag_fastq_file(hr2, hr2, "", str(host_tax))
+            concat_fastq_files([hr1, dest_r1], dest_r1 + ".mix")
+            shutil.move(dest_r1 + ".mix", dest_r1)
+            if os.path.exists(hr2) and os.path.exists(dest_r2):
+                concat_fastq_files([hr2, dest_r2], dest_r2 + ".mix")
+                shutil.move(dest_r2 + ".mix", dest_r2)
+    shutil.rmtree(pool_dir, ignore_errors=True)
+    for sample_name in sample_tables:
+        outputs.extend(
+            [
+                os.path.join(output_dir, f"{sample_name}_full_R1.fastq"),
+                os.path.join(output_dir, f"{sample_name}_full_R2.fastq"),
+            ]
+        )
+    return outputs
+
 
 def _resolve_r_executable() -> Tuple[str, Optional[str]]:
     """Resolve R binary and optional library path from user/repo config or PATH."""

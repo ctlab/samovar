@@ -34,6 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 import yaml
 
+from samovar.table_regenerators import extra_flags_argv
 from samovar.main_config import iter_tools, tool_path as tool_entry_path
 from samovar.paths import (
     absolute_path,
@@ -1325,6 +1326,10 @@ def _run_camisim_reads(
     if kind == "nextflow":
         nxt = discover_nextflow() or run_cfg.get("nextflow") or "nextflow"
         cmd = nextflow_run_cmd(str(nxt), str(root), nf, work / f"nf_work_{cam_type}")
+        extra = extra_flags_argv(
+            run_cfg.get("extra_flags") or run_cfg.get("reads_generator_flags")
+        )
+        cmd.extend(extra)
         logger.info("Running CAMISIM: %s (cwd=%s)", " ".join(cmd), root)
         try:
             with open(log_path, "w", encoding="utf-8") as log:
@@ -1499,6 +1504,8 @@ def tag_fastq_file(
     taxid: str = "",
     rows: Optional[Sequence[Dict[str, str]]] = None,
 ) -> None:
+    src = Path(src)
+    dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     def chunks() -> Iterable[str]:
@@ -1671,7 +1678,7 @@ def _iss_from_distributions(
     samples: Sequence[Dict[str, float]],
     out_dir: Path,
 ) -> List[str]:
-    from samovar.table2iss import generate_reads_genome, generate_reads_metagenome
+    from samovar.table2iss import generate_reads_genome, generate_reads_metagenome, iss_cli_extra_flags
 
     out_dir.mkdir(parents=True, exist_ok=True)
     total_reads = int(cfg.get("total_reads") or 2000)
@@ -1679,6 +1686,7 @@ def _iss_from_distributions(
     seed = int(cfg.get("seed") or 42)
     model = str(cfg.get("iss_model") or "hiseq")
     cpus = int(cfg.get("cores") or 1)
+    extra = extra_flags_argv(cfg.get("extra_flags") or cfg.get("reads_generator_flags"))
     rng = random.Random(seed)
     host_row = next((r for r in rows if r.get("host") == "1"), None)
     if host_row is None and cfg.get("host_genome"):
@@ -1691,60 +1699,66 @@ def _iss_from_distributions(
         }
     meta_rows = [r for r in rows if r.get("host") != "1"] or list(rows)
     outputs: List[str] = []
-    for i, table in enumerate(samples, start=1):
-        if str(host_fraction).upper() == "RANDOM":
-            host_n = rng.randint(0, total_reads)
-        else:
-            host_n = int(float(host_fraction) * total_reads)
-        meta_n = max(0, total_reads - host_n)
-        sample_dir = out_dir / f".iss_s{i}"
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        host_r1 = sample_dir / "host_R1.fastq"
-        host_r2 = sample_dir / "host_R2.fastq"
-        if host_n > 0 and host_row and Path(host_row["path"]).is_file():
-            generate_reads_genome(
-                host_row["path"],
-                str(sample_dir / "host"),
-                host_n,
-                model=model,
-                cpus=cpus,
-                seed=seed + i,
-            )
-        else:
-            _write_empty_fastq(host_r1)
-            _write_empty_fastq(host_r2)
-        genome_files = [r["path"] for r in meta_rows]
-        genome_ids = [r["NCBI_ID"] for r in meta_rows]
-        weights = [float(table.get(r["genome_ID"], 0.0)) for r in meta_rows]
-        weight_sum = sum(weights)
-        if meta_n > 0 and genome_files:
-            if weight_sum > 0:
-                amount = [max(0, int(round(w / weight_sum * meta_n))) for w in weights]
+    with iss_cli_extra_flags(extra):
+        for i, table in enumerate(samples, start=1):
+            if str(host_fraction).upper() == "RANDOM":
+                host_n = rng.randint(0, total_reads)
             else:
-                amount = [1] * len(genome_files)
-            generate_reads_metagenome(
-                genome_files=genome_files,
-                output_dir=str(sample_dir),
-                amount=amount,
-                total_amount=meta_n,
-                sample_name="meta",
-                annotator_name="full",
-                model=model,
-                genome_ids=genome_ids,
-                cpus=cpus,
-                seed=seed + 100 + i,
-            )
-        else:
-            _write_empty_fastq(sample_dir / "meta_full_R1.fastq")
-            _write_empty_fastq(sample_dir / "meta_full_R2.fastq")
-        for mate in ("R1", "R2"):
-            dest = out_dir / f"{i}_full_{mate}.fastq"
-            concat_fastq_files(
-                [sample_dir / f"host_{mate}.fastq", sample_dir / f"meta_full_{mate}.fastq"],
-                dest,
-            )
-            outputs.append(str(dest))
-        shutil.rmtree(sample_dir, ignore_errors=True)
+                host_n = int(float(host_fraction) * total_reads)
+            meta_n = max(0, total_reads - host_n)
+            sample_dir = out_dir / f".iss_s{i}"
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            host_r1 = sample_dir / "host_R1.fastq"
+            host_r2 = sample_dir / "host_R2.fastq"
+            if host_n > 0 and host_row and Path(host_row["path"]).is_file():
+                generate_reads_genome(
+                    host_row["path"],
+                    str(sample_dir / "host"),
+                    host_n,
+                    model=model,
+                    cpus=cpus,
+                    seed=seed + i,
+                )
+                host_tax = str(host_row.get("NCBI_ID") or "")
+                if host_tax:
+                    tag_fastq_file(host_r1, host_r1, "", host_tax)
+                    if host_r2.is_file():
+                        tag_fastq_file(host_r2, host_r2, "", host_tax)
+            else:
+                _write_empty_fastq(host_r1)
+                _write_empty_fastq(host_r2)
+            genome_files = [r["path"] for r in meta_rows]
+            genome_ids = [r["NCBI_ID"] for r in meta_rows]
+            weights = [float(table.get(r["genome_ID"], 0.0)) for r in meta_rows]
+            weight_sum = sum(weights)
+            if meta_n > 0 and genome_files:
+                if weight_sum > 0:
+                    amount = [max(0, int(round(w / weight_sum * meta_n))) for w in weights]
+                else:
+                    amount = [1] * len(genome_files)
+                generate_reads_metagenome(
+                    genome_files=genome_files,
+                    output_dir=str(sample_dir),
+                    amount=amount,
+                    total_amount=meta_n,
+                    sample_name="meta",
+                    annotator_name="full",
+                    model=model,
+                    genome_ids=genome_ids,
+                    cpus=cpus,
+                    seed=seed + 100 + i,
+                )
+            else:
+                _write_empty_fastq(sample_dir / "meta_full_R1.fastq")
+                _write_empty_fastq(sample_dir / "meta_full_R2.fastq")
+            for mate in ("R1", "R2"):
+                dest = out_dir / f"{i}_full_{mate}.fastq"
+                concat_fastq_files(
+                    [sample_dir / f"host_{mate}.fastq", sample_dir / f"meta_full_{mate}.fastq"],
+                    dest,
+                )
+                outputs.append(str(dest))
+            shutil.rmtree(sample_dir, ignore_errors=True)
     return outputs
 
 

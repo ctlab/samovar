@@ -47,6 +47,16 @@ def main():
         help='Optional samples metadata CSV for custom table regenerators (builtins ignore it)',
     )
     parser.add_argument(
+        '--reads_generator',
+        '--reads-generator',
+        dest='reads_generator',
+        default=None,
+        help=(
+            'Read simulator for generate/prepare: iss|art|wgsim|nanosim|hybrid, '
+            'or a name imported with `samovar tools import --type reads`'
+        ),
+    )
+    parser.add_argument(
         '--flags',
         nargs=2,
         action='append',
@@ -56,7 +66,8 @@ def main():
         help=(
             'Extra flags for a tool after import, e.g. '
             '--flags annotator "--foo 1" or '
-            '--flags table_reads_generator "--log-mu 1"'
+            '--flags table_reads_generator "--log-mu 1" or '
+            '--flags reads_generator "--gc_bias"'
         ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
@@ -161,6 +172,7 @@ def main():
         "reannotation-level", "reannotation_level",
         "table_reads_generator", "table-reads-generator", "regeneration_mode",
         "samples-metadata", "samples_metadata", "flags",
+        "reads_generator", "reads-generator",
     }
     cmd_args = {}
     i = 0

@@ -16,6 +16,10 @@ from samovar.paths import (
     runtime_path_prefix,
 )
 from samovar.table_regenerators import flags_apply_to_regenerator, require_known_regeneration_mode
+from samovar.reads_generators import (
+    flags_apply_to_reads_generator,
+    require_known_reads_generator,
+)
 from samovar.genome_resolve import normalize_reannotation_level
 from samovar.main_config import (
     flags_target_matches,
@@ -172,6 +176,8 @@ class PipelineConfig:
     rescale_abundance: bool = False
     samples_metadata: Optional[str] = None
     regeneration_extra_flags: Optional[str] = None
+    reads_generator: str = "iss"
+    reads_generator_flags: Optional[str] = None
     gzip_genomes: bool = True
     gzip_reads: bool = False
     reuse_genomes: bool = True
@@ -226,6 +232,15 @@ class PipelineConfig:
                 )
                 if yaml_flags:
                     config.regeneration_extra_flags = str(yaml_flags)
+                yaml_reads = (
+                    input_config.get("reads_generator")
+                    or input_config.get("reads-generator")
+                    or config.reads_generator
+                )
+                config.reads_generator = require_known_reads_generator(yaml_reads)
+                yaml_rflags = input_config.get("reads_generator_flags")
+                if yaml_rflags:
+                    config.reads_generator_flags = str(yaml_rflags)
                 config.reannotation_level = normalize_reannotation_level(
                     input_config.get(
                         "reannotation_level",
@@ -372,6 +387,9 @@ class PipelineConfig:
         )
         if cli_mode:
             config.regeneration_mode = require_known_regeneration_mode(cli_mode)
+        cli_reads = getattr(args, "reads_generator", None)
+        if cli_reads:
+            config.reads_generator = require_known_reads_generator(cli_reads)
         cli_meta = getattr(args, "samples_metadata", None)
         if cli_meta:
             config.samples_metadata = absolute_path(str(cli_meta))
@@ -386,6 +404,14 @@ class PipelineConfig:
                 flag_parts.append(flags)
         merged = merge_flag_strings(*flag_parts)
         config.regeneration_extra_flags = merged or None
+        rflag_parts = [config.reads_generator_flags]
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if flags_apply_to_reads_generator(target, config.reads_generator):
+                rflag_parts.append(flags)
+        config.reads_generator_flags = merge_flag_strings(*rflag_parts) or None
 
         return config
 
@@ -437,6 +463,7 @@ class PipelineConfig:
             'rescale_abundance': self.rescale_abundance,
             'gzip_genomes': self.gzip_genomes,
             'gzip_reads': self.gzip_reads,
+            'reads_generator': self.reads_generator,
         }
         if self.regeneration_n:
             annotation2iss_config['N'] = self.regeneration_n
@@ -444,6 +471,8 @@ class PipelineConfig:
             annotation2iss_config['samples_metadata'] = self.samples_metadata
         if self.regeneration_extra_flags:
             annotation2iss_config['table_reads_generator_flags'] = self.regeneration_extra_flags
+        if self.reads_generator_flags:
+            annotation2iss_config['reads_generator_flags'] = self.reads_generator_flags
         annotation2iss_path = configs_dir / 'config_annotation2iss.yaml'
         with open(annotation2iss_path, 'w') as f:
             yaml.dump(annotation2iss_config, f)

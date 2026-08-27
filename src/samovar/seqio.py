@@ -302,22 +302,32 @@ def find_fastq_mate(directory: PathLike, sample: str, mate: str = "R1") -> Optio
 
 # CAMISIM harvest writes ``{n}_{tech}_R1.fastq`` then copies to ``{n}_full_``.
 # Annotators must only see the ISS-style ``*_full`` names.
+_CAMISIM_TECH_TAIL = re.compile(
+    r"_(illumina|ont|wgsim|nanosim3|art|sequence_type|read_type)$",
+    re.IGNORECASE,
+)
 _CAMISIM_TECH_SAMPLE = re.compile(
-    r"^(?P<n>\d+)_(illumina|ont|wgsim|nanosim3|art)$",
+    r"^(?P<n>\d+)_(illumina|ont|wgsim|nanosim3|art|sequence_type|read_type)$",
     re.IGNORECASE,
 )
 _FULL_SAMPLE = re.compile(r"^(?P<n>\d+)_full$", re.IGNORECASE)
 
 
 def _drop_duplicate_camisim_tech_samples(samples: Sequence[str]) -> List[str]:
+    stems = set(samples)
     full_ns = {m.group("n") for s in samples if (m := _FULL_SAMPLE.match(s))}
-    if not full_ns:
-        return list(samples)
-    return [
-        s
-        for s in samples
-        if not ((m := _CAMISIM_TECH_SAMPLE.match(s)) and m.group("n") in full_ns)
-    ]
+    out: List[str] = []
+    for s in samples:
+        m = _CAMISIM_TECH_SAMPLE.match(s)
+        if m and m.group("n") in full_ns:
+            continue
+        tail = _CAMISIM_TECH_TAIL.search(s)
+        if tail:
+            parent = s[: tail.start()]
+            if parent in stems or f"{parent}_full" in stems:
+                continue
+        out.append(s)
+    return out
 
 
 def list_fastq_samples(directory: PathLike) -> List[str]:

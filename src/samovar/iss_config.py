@@ -16,11 +16,18 @@ class ISSTestConfig:
     seed: int = 42
     model: str = "hiseq"
     cores: int = 1
+    extra_flags: str = ""
+    reads_generator: str = "iss"
+    abundance_table: str = ""
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'ISSTestConfig':
         from samovar.paths import absolute_path
 
+        abundance = getattr(args, "abundance_table", None) or ""
+        if abundance:
+            abundance = absolute_path(abundance)
+        extra = getattr(args, "extra_flags", None) or ""
         return cls(
             genome_dir=absolute_path(args.genome_dir) if args.genome_dir else "",
             output_dir=absolute_path(args.output_dir),
@@ -30,7 +37,10 @@ class ISSTestConfig:
             host_fraction=args.host_fraction if args.host_fraction is not None else "RANDOM",
             seed=args.seed if args.seed is not None else 42,
             model=args.model if args.model is not None else "hiseq",
-            cores=args.cores if getattr(args, 'cores', None) is not None else 1
+            cores=args.cores if getattr(args, 'cores', None) is not None else 1,
+            extra_flags=str(extra),
+            reads_generator=str(getattr(args, "reads_generator", None) or "iss"),
+            abundance_table=str(abundance or ""),
         )
 
     def generate_config(self, base_dir: str) -> str:
@@ -53,8 +63,14 @@ class ISSTestConfig:
             'seed': self.seed,
             'model': self.model,
             'cores': self.cores,
-            'genomes': []  # Will be automatically populated
+            'genomes': [],  # Will be automatically populated
+            'reads_generator': self.reads_generator,
         }
+        if self.extra_flags:
+            config['extra_flags'] = self.extra_flags
+            config['reads_generator_flags'] = self.extra_flags
+        if self.abundance_table:
+            config['abundance_table'] = self.abundance_table
         
         with open(config_path, 'w') as f:
             yaml.dump(config, f)
@@ -163,6 +179,32 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         help='Read/community generator: InSilicoSeq (default) or optional CAMISIM',
     )
     parser.add_argument(
+        '--reads_generator',
+        '--reads-generator',
+        dest='reads_generator',
+        default=None,
+        help=(
+            'iss|art|wgsim|nanosim|hybrid|camisim, or a name imported with '
+            '`samovar tools import --type reads`'
+        ),
+    )
+    parser.add_argument(
+        '-i',
+        '--abundance',
+        dest='abundance_table',
+        default=None,
+        help='Optional abundance CSV (taxid, N_<sample>…) instead of a uniform community',
+    )
+    parser.add_argument(
+        '--flags',
+        nargs=2,
+        action='append',
+        metavar=('TOOL', 'FLAGS'),
+        dest='tool_flags',
+        default=None,
+        help='Extra flags for a reads_generator, e.g. --flags iss "--gc_bias"',
+    )
+    parser.add_argument(
         '--camisim-mode',
         default=None,
         help='CAMISIM mode: table (abundance then ISS), illumina, ont, wgsim, hybrid',
@@ -186,14 +228,71 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     if args is None:
         args = parse_args()
 
+    from samovar.main_config import merge_flag_strings
+    from samovar.reads_generators import (
+        attach_reads_flags,
+        camisim_mode_for_reads_generator,
+        flags_apply_to_reads_generator,
+        require_known_reads_generator,
+        resolve_reads_generator,
+        write_custom_generate_script,
+    )
+
+    raw_name = getattr(args, "reads_generator", None)
     simulator = str(getattr(args, "simulator", None) or "iss").strip().lower()
     camisim_mode = getattr(args, "camisim_mode", None)
-    if camisim_mode and simulator == "iss":
-        simulator = "camisim"
-    if simulator == "camisim":
+    if not raw_name:
+        if camisim_mode and simulator == "iss":
+            simulator = "camisim"
+        if simulator == "camisim":
+            mode = str(camisim_mode or "table").strip().lower()
+            if mode in {"", "table", "community", "abundance", "design"}:
+                raw_name = "camisim"
+            elif mode in {"hybrid", "mix", "multi"}:
+                raw_name = "hybrid"
+            else:
+                raw_name = mode
+        else:
+            raw_name = "iss"
+    kind, canon = resolve_reads_generator(raw_name)
+    if kind == "custom":
+        require_known_reads_generator(canon)
+    args.reads_generator = canon
+
+    flag_parts = [getattr(args, "extra_flags", None)]
+    for item in getattr(args, "tool_flags", None) or []:
+        if not item or len(item) < 2:
+            continue
+        target, flags = item[0], item[1]
+        if flags_apply_to_reads_generator(target, canon):
+            flag_parts.append(flags)
+    merged = attach_reads_flags(canon, {"extra_flags": merge_flag_strings(*flag_parts)})
+    args.extra_flags = merged.get("extra_flags") or ""
+
+    mapped_mode = camisim_mode_for_reads_generator(canon, camisim_mode)
+    if mapped_mode is not None:
         from samovar.camisim import setup_camisim_generate
 
-        return setup_camisim_generate(args)
+        args.camisim_mode = mapped_mode
+        if getattr(args, "abundance_table", None):
+            # CAMISIM generate still uses genome_dir; abundance is stored on the YAML.
+            pass
+        result = setup_camisim_generate(args)
+        yaml_path = result.get("config") or result.get("yaml")
+        if yaml_path and args.extra_flags:
+            from pathlib import Path
+            import yaml
+
+            data = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8")) or {}
+            data["extra_flags"] = args.extra_flags
+            data["reads_generator_flags"] = args.extra_flags
+            data["reads_generator"] = canon
+            if getattr(args, "abundance_table", None):
+                from samovar.paths import absolute_path
+
+                data["abundance_table"] = absolute_path(args.abundance_table)
+            Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
+        return result
 
     accessions = list(getattr(args, "accessions", None) or [])
     reindex_mode = int(getattr(args, "reindex", 0) or 0)
@@ -217,8 +316,13 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
 
     config = ISSTestConfig.from_args(args)
     config_path = config.generate_config(config.output_dir)
-    pipeline_path = config.generate_pipeline(config.output_dir)
-    
+    if kind == "custom":
+        pipeline_path = write_custom_generate_script(
+            config.output_dir, config_path, cores=config.cores
+        )
+    else:
+        pipeline_path = config.generate_pipeline(config.output_dir)
+
     return {
         'config': config_path,
         'pipeline': pipeline_path

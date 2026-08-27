@@ -63,4 +63,6 @@ rule generate_full_metagenome_and_split:
             model=params.model,
             genomes=params.genomes,
             cpus=params.cpus,
+            extra_flags=config.get("extra_flags") or config.get("reads_generator_flags") or None,
+            abundance_table=config.get("abundance_table") or None,
         )
