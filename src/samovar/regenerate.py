@@ -7,6 +7,8 @@ Modes:
 - ``bootstrap``: column bootstrap of observed sample profiles.
 - ``vae``: latent-factor generative model (FactorAnalysis on log abundances).
 - ``glm``: correlation-aware synthetic communities (Python).
+- ``camisim-table`` (aliases camisim, cami): CAMISIM log-normal community
+  design on the observed taxIDs (same engine as ``samovar generate --simulator camisim --camisim-mode table``).
 - ``samovar``: optional R regenerator (not part of the Python install). Looked
   up via ``SAMOVAR_R_REGENERATE`` / config ``annotation_regenerate_r``.
 - any other name: custom ``table_reads_generator`` registered with
@@ -31,6 +33,9 @@ DIRECT_MODES = frozenset(
 )
 GENERATIVE_MODES = frozenset({"glm", "bootstrap", "vae"})
 SAMOVAR_R_MODES = frozenset({"samovar", "r", "boil"})
+CAMISIM_TABLE_MODES = frozenset(
+    {"camisim", "camisim-table", "camisim_table", "cami"}
+)
 
 
 def resolve_regeneration_mode(mode: Optional[str]) -> Tuple[str, str]:
@@ -53,6 +58,8 @@ def resolve_regeneration_mode(mode: Optional[str]) -> Tuple[str, str]:
         return "builtin", low
     if low in SAMOVAR_R_MODES:
         return "builtin", "samovar"
+    if low in CAMISIM_TABLE_MODES:
+        return "builtin", "camisim-table"
     return "custom", key
 
 
@@ -63,7 +70,7 @@ def normalize_regeneration_mode(mode: Optional[str]) -> str:
         return name
     raise ValueError(
         f"Unknown regeneration_mode={mode!r}. "
-        "Use direct, bootstrap, vae, glm, samovar, or an imported "
+        "Use direct, bootstrap, vae, glm, camisim-table, samovar, or an imported "
         "table_reads_generator name (`samovar tools import --type table`)."
     )
 
@@ -388,6 +395,68 @@ def regenerate_glm_python(
     return result
 
 
+def regenerate_camisim(
+    data: pd.DataFrame,
+    n_samples: int,
+    n_reads: Optional[int] = 1000,
+    threshold_amount: float = 1e-5,
+    seed: Optional[int] = 42,
+    rescale: bool = False,
+    distribution: str = "differential",
+    log_mu: float = 1.0,
+    log_sigma: float = 2.0,
+    gauss_mu: float = 1.0,
+    gauss_sigma: float = 1.0,
+) -> Dict[str, pd.DataFrame]:
+    """CAMISIM-style log-normal abundances for taxIDs seen in the annotation table."""
+    from samovar.camisim import design_communities
+
+    seed = coerce_seed(seed)
+    depth = int(n_reads) if n_reads not in (None, "", 0) else 1000
+    result: Dict[str, pd.DataFrame] = {}
+    work = data.copy()
+    sample_col = "sample"
+    if sample_col not in work.columns:
+        work[sample_col] = "1"
+    for col in _taxid_columns(work):
+        mat = _count_matrix(work, col, sample_col)
+        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=False)
+        if mat.empty:
+            continue
+        taxids = [str(t) for t in mat.index if str(t) not in {"0", "nan", "None", ""}]
+        if not taxids:
+            continue
+        names = synthetic_sample_names(list(mat.columns), n_samples)
+        annotator = _annotator_name(col)
+        communities = design_communities(
+            taxids,
+            n_samples=len(names),
+            seed=seed + (zlib.crc32(annotator.encode()) & 0xFFFF),
+            mode=str(distribution or "differential"),
+            log_mu=float(log_mu),
+            log_sigma=float(log_sigma),
+            gauss_mu=float(gauss_mu),
+            gauss_sigma=float(gauss_sigma),
+        )
+        synth_cols = {}
+        for name, frac in zip(names, communities):
+            vec = np.array(
+                [max(float(frac.get(tid, 0.0)), 0.0) for tid in taxids], dtype=float
+            )
+            total = float(vec.sum())
+            if total <= 0:
+                vec = np.ones(len(taxids), dtype=float)
+                total = float(vec.sum())
+            counts = np.round(vec / total * float(depth))
+            if counts.sum() <= 0 and len(counts):
+                counts[int(np.argmax(vec))] = float(depth)
+            synth_cols[name] = counts
+        synth_mat = pd.DataFrame(synth_cols, index=taxids)
+        synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
+        result[annotator] = _abundance_table_from_matrix(synth_mat, annotator)
+    return result
+
+
 def regenerate_annotation_tables(
     annotation_dir: Union[str, Path],
     output_dir: Union[str, Path],
@@ -397,6 +466,7 @@ def regenerate_annotation_tables(
     """Regenerate per-annotator abundance CSVs from an annotation directory."""
     from samovar.table_regenerators import (
         as_annotation,
+        attach_regenerator_flags,
         get_table_regenerator,
         load_samples_metadata,
     )
@@ -407,6 +477,7 @@ def regenerate_annotation_tables(
         data = read_annotation_dir(annotation_dir)
     cfg["annotation_dir"] = str(annotation_dir)
     cfg["output_dir"] = str(output_dir)
+    cfg = attach_regenerator_flags(mode, cfg)
     regenerator = get_table_regenerator(mode)
     tables = regenerator.run(
         as_annotation(data, annotation_dir),

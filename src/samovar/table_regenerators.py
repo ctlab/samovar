@@ -8,22 +8,24 @@ returns per-annotator abundance tables ``{name: DataFrame(taxid, N_<sample>…)}
 from __future__ import annotations
 
 import importlib.util
+import shlex
 import subprocess
 import sys
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import pandas as pd
 
-from samovar.main_config import iter_tools, parse_tool_entry, tool_path
+from samovar.main_config import iter_tools, parse_tool_entry, tool_flags, tool_path
 from samovar.parse_annotators import Annotation
 from samovar.paths import load_config
 from samovar.regenerate import (
     _n_samples_or_observed,
     coerce_seed,
     regenerate_bootstrap,
+    regenerate_camisim,
     regenerate_glm_python,
     regenerate_preserve,
     regenerate_vae,
@@ -35,6 +37,102 @@ TABLE_READS_GENERATOR_GROUP = "table_reads_generator"
 
 class MissingTableRegeneratorError(ValueError):
     """``tools.<name>`` is missing or is not a ``table_reads_generator``."""
+
+
+def merge_flag_strings(*parts: Optional[str]) -> str:
+    chunks = [str(p).strip() for p in parts if p is not None and str(p).strip()]
+    return " ".join(chunks)
+
+
+def extra_flags_argv(text: Optional[str]) -> List[str]:
+    if not text or not str(text).strip():
+        return []
+    return shlex.split(str(text))
+
+
+def flags_apply_to_regenerator(target: str, mode: Optional[str]) -> bool:
+    """True if ``--flags TARGET …`` should attach to the current table regenerator."""
+    kind, name = resolve_regeneration_mode(mode)
+    t = str(target or "").strip().lower().replace("-", "_")
+    aliases = {
+        "table_reads_generator",
+        "table_reads",
+        "table",
+        str(name).lower().replace("-", "_"),
+        str(mode or "").strip().lower().replace("-", "_"),
+    }
+    if kind == "builtin" and name == "camisim-table":
+        aliases.update({"camisim", "camisim_table", "cami"})
+    return bool(t) and t in aliases
+
+
+def apply_extra_flags(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse ``extra_flags`` / ``table_reads_generator_flags`` into config keys."""
+    cfg = dict(config or {})
+    raw = merge_flag_strings(
+        cfg.get("extra_flags"),
+        cfg.get("table_reads_generator_flags"),
+    )
+    argv = extra_flags_argv(raw)
+    mapping = {
+        "--log-mu": ("log_mu", float),
+        "--log_mu": ("log_mu", float),
+        "--log-sigma": ("log_sigma", float),
+        "--log_sigma": ("log_sigma", float),
+        "--gauss-mu": ("gauss_mu", float),
+        "--gauss_mu": ("gauss_mu", float),
+        "--gauss-sigma": ("gauss_sigma", float),
+        "--gauss_sigma": ("gauss_sigma", float),
+        "--distribution": ("camisim_distribution", str),
+        "--mode": ("camisim_distribution", str),
+        "--N": ("N", int),
+        "--N_reads": ("N_reads", int),
+        "--seed": ("seed", int),
+    }
+    leftover: List[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        key = None
+        caster = str
+        value = None
+        consumed = 1
+        if tok.startswith("--") and "=" in tok:
+            flag, value = tok.split("=", 1)
+            mapped = mapping.get(flag)
+            if mapped:
+                key, caster = mapped
+        else:
+            mapped = mapping.get(tok)
+            if mapped and i + 1 < len(argv):
+                key, caster = mapped
+                value = argv[i + 1]
+                consumed = 2
+        if key is not None and value is not None:
+            try:
+                cfg[key] = caster(value)
+            except (TypeError, ValueError):
+                cfg[key] = value
+        i += consumed
+    cfg["extra_argv"] = argv
+    cfg["extra_flags"] = raw
+    return cfg
+
+
+def attach_regenerator_flags(mode: Optional[str], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge import-time flags (tools.*[4]) with prepare ``--flags`` / YAML."""
+    cfg = dict(config or {})
+    kind, name = resolve_regeneration_mode(mode)
+    imported = ""
+    if kind == "custom":
+        spec = lookup_table_regenerator(name)
+        imported = tool_flags(spec, name)
+    cfg["extra_flags"] = merge_flag_strings(
+        imported,
+        cfg.get("extra_flags"),
+        cfg.get("table_reads_generator_flags"),
+    )
+    return apply_extra_flags(cfg)
 
 
 def as_annotation(
@@ -217,6 +315,34 @@ class SamovarRTableRegenerator(TableRegenerator):
         )
 
 
+class CamisimTableRegenerator(TableRegenerator):
+    def run(self, annotation, metadata, config):
+        _ = metadata
+        cfg = apply_extra_flags(dict(config or {}))
+        n_reads = cfg.get("N_reads")
+        if n_reads is not None:
+            n_reads = int(n_reads)
+        return regenerate_camisim(
+            annotation.DataFrame,
+            n_samples=_n_samples_or_observed(annotation.DataFrame, cfg.get("N")),
+            n_reads=n_reads,
+            threshold_amount=float(
+                cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5))
+            ),
+            seed=coerce_seed(cfg.get("seed", 42)),
+            rescale=bool(cfg.get("rescale_abundance", False)),
+            distribution=str(
+                cfg.get("camisim_distribution")
+                or cfg.get("distribution")
+                or "differential"
+            ),
+            log_mu=float(cfg.get("log_mu", 1.0)),
+            log_sigma=float(cfg.get("log_sigma", 2.0)),
+            gauss_mu=float(cfg.get("gauss_mu", 1.0)),
+            gauss_sigma=float(cfg.get("gauss_sigma", 1.0)),
+        )
+
+
 class CustomTableRegenerator(TableRegenerator):
     """User tool registered as ``tools.<name>`` with group ``table_reads_generator``."""
 
@@ -298,6 +424,8 @@ def _run_cli_regenerator(
             cmd.extend(["--N", str(int(config["N"]))])
         if config.get("N_reads") is not None:
             cmd.extend(["--N_reads", str(int(config["N_reads"]))])
+        extra = list(config.get("extra_argv") or extra_flags_argv(config.get("extra_flags")))
+        cmd.extend(extra)
         if path.suffix.lower() == ".py":
             cmd = [sys.executable, *cmd]
         subprocess.run(cmd, check=True)
@@ -328,6 +456,7 @@ _BUILTIN: Dict[str, type] = {
     "vae": VaeTableRegenerator,
     "glm": GlmTableRegenerator,
     "samovar": SamovarRTableRegenerator,
+    "camisim-table": CamisimTableRegenerator,
 }
 
 

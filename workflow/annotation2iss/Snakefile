@@ -40,6 +40,10 @@ REGENERATION_CONFIG = {
 }
 if config.get("samples_metadata"):
     REGENERATION_CONFIG["samples_metadata"] = config["samples_metadata"]
+if config.get("table_reads_generator_flags") or config.get("extra_flags"):
+    REGENERATION_CONFIG["table_reads_generator_flags"] = (
+        config.get("table_reads_generator_flags") or config.get("extra_flags")
+    )
 if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])
 GZIP_GENOMES = bool(config.get("gzip_genomes", True))

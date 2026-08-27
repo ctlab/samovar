@@ -66,9 +66,10 @@ def import_tool(
     env: str = "",
     exec_name: str = "",
     exec_path: str = "",
+    flags: str = "",
     also_repo_build: bool = True,
 ) -> list:
-    """Write ``tools.<name> = [env, workflow, path, group]`` and return the spec."""
+    """Write ``tools.<name> = [env, workflow, path, group, flags?]`` and return the spec."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("--name is required")
@@ -78,7 +79,15 @@ def import_tool(
     path = resolve_import_path(name=name, exec_name=exe, exec_path=exec_path, env=env)
     workflow = env if env else "bash"
     cfg = load_config()
-    set_tool(cfg, name, path=path, env=env, workflow=workflow, group=group)
+    set_tool(
+        cfg,
+        name,
+        path=path,
+        env=env,
+        workflow=workflow,
+        group=group,
+        flags=str(flags or "").strip(),
+    )
     spec = parse_tool_entry(iter_tools(cfg).get(name), name)
     update_config({"tools": {name: spec}}, also_repo_build=also_repo_build)
     return parse_tool_entry(iter_tools(load_config()).get(name), name)
@@ -118,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=f"Tool group: {', '.join(TOOL_GROUPS)} (aliases: a, reads, meta, table, score)",
     )
+    parser.add_argument(
+        "--flags",
+        default="",
+        help="Optional extra CLI flags stored as the 5th tools.* slot (omitted when empty)",
+    )
     return parser
 
 
@@ -130,12 +144,18 @@ def main(argv: Optional[list] = None) -> int:
             env=args.env,
             exec_name=args.exec_name,
             exec_path=args.exec_path,
+            flags=args.flags,
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    env, workflow, path, group = spec
-    print(f"Imported tools.{args.name} = [{env!r}, {workflow!r}, {path}, {group}]")
+    env, workflow, path, group = spec[:4]
+    extra = spec[4] if len(spec) > 4 else ""
+    row = f"[{env!r}, {workflow!r}, {path}, {group}"
+    if extra:
+        row += f", {extra!r}"
+    row += "]"
+    print(f"Imported tools.{args.name} = {row}")
     return 0
 
 

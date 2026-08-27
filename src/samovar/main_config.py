@@ -202,32 +202,59 @@ def normalize_tool_group(value: str) -> str:
 
 
 def parse_tool_entry(value: Any, name: str = "") -> List[str]:
-    """Normalize a tools.* value to ``[env, workflow, path, group]``."""
+    """Normalize a tools.* value to ``[env, workflow, path, group]`` or 5 items with flags.
+
+    The 5th slot is optional extra CLI flags. It is omitted when empty so
+    existing 4-element JSON rows stay 4-element.
+    """
     group = tool_group_for(name)
+    flags = ""
     if value is None or value is False:
-        return ["", "bash", "", group]
+        return _trim_tool_spec(["", "bash", "", group, ""])
     if isinstance(value, dict):
         env = str(value.get("env") or "").strip()
         workflow = str(value.get("workflow") or value.get("workflow_name") or "").strip()
         path = str(value.get("path") or "").strip()
         grp = str(value.get("group") or value.get("tool_group") or group).strip() or group
+        flags = str(value.get("flags") or value.get("extra") or "").strip()
         if not workflow:
             workflow = env if env else "bash"
-        return [env, workflow, path, grp]
+        return _trim_tool_spec([env, workflow, path, grp, flags])
     if isinstance(value, (list, tuple)):
         parts = [str(x).strip() if x is not None else "" for x in value]
         while len(parts) < 4:
             parts.append("")
         env, workflow, path, grp = parts[0], parts[1], parts[2], parts[3]
+        if len(parts) > 4:
+            flags = parts[4]
         if not path and len(parts) == 1:
             path = parts[0]
         if not grp:
             grp = group
         if not workflow:
             workflow = env if env else "bash"
-        return [env, workflow, path, grp]
+        return _trim_tool_spec([env, workflow, path, grp, flags])
     path = str(value).strip()
-    return ["", "bash", path, group]
+    return _trim_tool_spec(["", "bash", path, group, ""])
+
+
+def _trim_tool_spec(spec: List[str]) -> List[str]:
+    """Drop an empty 5th (flags) slot so default JSON rows stay 4-element."""
+    out = list(spec)
+    while len(out) < 4:
+        out.append("")
+    if len(out) > 5:
+        out = out[:5]
+    if len(out) == 5 and not str(out[4]).strip():
+        return out[:4]
+    return out
+
+
+def tool_flags(entry: Any, name: str = "") -> str:
+    spec = parse_tool_entry(entry, name)
+    if len(spec) > 4:
+        return str(spec[4]).strip()
+    return ""
 
 
 def tool_path(entry: Any, name: str = "") -> str:
@@ -293,9 +320,12 @@ def set_tool(
     env: str = "",
     workflow: str = "",
     group: str = "",
+    flags: Optional[str] = None,
 ) -> Dict[str, Any]:
     tools = dict(_raw_get(cfg, "tools") or {})
     spec = parse_tool_entry(tools.get(name), name)
+    while len(spec) < 5:
+        spec.append("")
     if env:
         spec[0] = env
     if workflow:
@@ -306,11 +336,13 @@ def set_tool(
         spec[2] = path
     if group:
         spec[3] = group
+    if flags is not None:
+        spec[4] = str(flags).strip()
     if not spec[1]:
         spec[1] = spec[0] if spec[0] else "bash"
     if not spec[3]:
         spec[3] = tool_group_for(name)
-    tools[name] = spec
+    tools[name] = _trim_tool_spec(spec)
     dict.__setitem__(cfg, "tools", tools)
     return cfg
 
@@ -779,6 +811,7 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
                         workflow=spec[1],
                         path=spec[2],
                         group=spec[3],
+                        flags=spec[4] if len(spec) > 4 else "",
                     )
             continue
         if key == "tool_envs":

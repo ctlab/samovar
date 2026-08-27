@@ -87,11 +87,15 @@ def test_normalize_regeneration_mode_aliases():
     assert normalize_regeneration_mode("glm") == "glm"
     assert normalize_regeneration_mode("samovar") == "samovar"
     assert normalize_regeneration_mode("boil") == "samovar"
+    assert normalize_regeneration_mode("camisim") == "camisim-table"
+    assert normalize_regeneration_mode("camisim-table") == "camisim-table"
     with pytest.raises(ValueError):
         normalize_regeneration_mode("unknown")
     assert resolve_regeneration_mode("unknown") == ("custom", "unknown")
     assert resolve_regeneration_mode("preserve") == ("builtin", "direct")
+    assert resolve_regeneration_mode("cami") == ("builtin", "camisim-table")
     assert not is_direct_mode("glm")
+    assert not is_direct_mode("camisim-table")
     assert not is_direct_mode("myboil")
 
 
@@ -240,7 +244,7 @@ def test_python_modes_are_self_contained(toy_annotation_dir, tmp_path, monkeypat
     monkeypatch.delenv("SAMOVAR_R_REGENERATE", raising=False)
     monkeypatch.delenv("SAMOVAR_ANNOTATION_REGENERATE_R", raising=False)
     monkeypatch.setattr("samovar.table2iss.annotation_regenerate_r", lambda: None)
-    for mode in ("direct", "bootstrap", "vae", "glm"):
+    for mode in ("direct", "bootstrap", "vae", "glm", "camisim-table"):
         out = tmp_path / mode
         tables = regenerate_annotation_tables(
             toy_annotation_dir,
@@ -299,7 +303,7 @@ def test_real_toy_annotations_direct(test_data_dir, tmp_path):
 def test_real_toy_annotations_generative_modes(test_data_dir, tmp_path):
     if not test_data_dir.exists():
         pytest.skip("data/test_annotations missing")
-    for mode in ("bootstrap", "vae", "glm"):
+    for mode in ("bootstrap", "vae", "glm", "camisim-table"):
         out = tmp_path / mode
         regenerate_annotation_tables(
             test_data_dir,
@@ -655,5 +659,147 @@ def test_prepare_rejects_unimported_table_generator(tmp_path, monkeypatch):
     )()
     with pytest.raises(MissingTableRegeneratorError, match="ghost_boil"):
         PipelineConfig.from_args(args)
+
+
+@pytest.mark.parametrize(
+    "mode,canonical",
+    [
+        ("direct", "direct"),
+        ("preserve", "direct"),
+        ("bootstrap", "bootstrap"),
+        ("vae", "vae"),
+        ("glm", "glm"),
+        ("camisim-table", "camisim-table"),
+        ("camisim", "camisim-table"),
+        ("samovar", "samovar"),
+    ],
+)
+def test_prepare_parses_all_regeneration_modes(tmp_path, mode, canonical):
+    from samovar.config import PipelineConfig
+
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "table_reads_generator": mode,
+        },
+    )()
+    cfg = PipelineConfig.from_args(args)
+    assert cfg.regeneration_mode == canonical
+
+
+def test_prepare_flags_table_reads_generator(tmp_path):
+    from samovar.config import PipelineConfig
+
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "table_reads_generator": "camisim-table",
+            "tool_flags": [["table_reads_generator", "--log-mu 0.5 --log-sigma 1"]],
+        },
+    )()
+    cfg = PipelineConfig.from_args(args)
+    assert cfg.regeneration_mode == "camisim-table"
+    assert "--log-mu 0.5" in (cfg.regeneration_extra_flags or "")
+    yaml_path = Path(cfg.generate_configs(str(tmp_path / "out"))["annotation2iss"])
+    text = yaml_path.read_text()
+    assert "camisim-table" in text
+    assert "table_reads_generator_flags" in text
+
+
+def test_camisim_table_toy_io_and_extra_flags(toy_annotation_dir, tmp_path):
+    out = tmp_path / "cami"
+    tables = regenerate_annotation_tables(
+        toy_annotation_dir,
+        out,
+        {
+            "regeneration_mode": "camisim-table",
+            "N": 2,
+            "N_reads": 100,
+            "seed": 3,
+            "table_reads_generator_flags": "--log-mu 1 --log-sigma 0.5 --distribution differential",
+        },
+    )
+    assert tables
+    for name, table in tables.items():
+        assert "taxid" in table.columns
+        n_cols = [c for c in table.columns if str(c).startswith("N_")]
+        assert len(n_cols) == 2
+        assert int(table[n_cols].sum().sum()) > 0
+        table.to_csv  # written
+        assert (out / f"{name}.csv").is_file()
+    direct = regenerate_annotation_tables(
+        toy_annotation_dir, tmp_path / "direct", {"regeneration_mode": "direct"}
+    )
+    # CAMISIM redraws abundances; should not clone observed counts.
+    assert not _n_matrix(tables["kaiju"]).equals(_n_matrix(direct["kaiju"]))
+
+
+def test_custom_cli_receives_import_and_prepare_flags(
+    tmp_path, monkeypatch, toy_annotation_dir
+):
+    from samovar.paths import write_config
+    from samovar.tools_import import import_tool
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    script = tmp_path / "cli_boil.py"
+    script.write_text(
+        "import argparse\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from samovar.parse_annotators import Annotation\n"
+        "from samovar.regenerate import regenerate_preserve\n"
+        "\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument('-i', required=True)\n"
+        "    p.add_argument('-o', required=True)\n"
+        "    p.add_argument('-m', default=None)\n"
+        "    p.add_argument('--seed', default=None)\n"
+        "    p.add_argument('--N', default=None)\n"
+        "    p.add_argument('--N_reads', default=None)\n"
+        "    p.add_argument('--marker', default='')\n"
+        "    args, _rest = p.parse_known_args()\n"
+        "    out = Path(args.o)\n"
+        "    out.mkdir(parents=True, exist_ok=True)\n"
+        "    (out / 'argv.txt').write_text(' '.join(sys.argv))\n"
+        "    tables = regenerate_preserve(Annotation.from_annotation_dir(args.i).DataFrame)\n"
+        "    for name, table in tables.items():\n"
+        "        table.to_csv(out / f'{name}.csv', index=False)\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+    import_tool(
+        name="cli_boil",
+        tool_type="table",
+        exec_path=str(script),
+        flags="--marker imported",
+        also_repo_build=False,
+    )
+    out = tmp_path / "out"
+    regenerate_annotation_tables(
+        toy_annotation_dir,
+        out,
+        {
+            "regeneration_mode": "cli_boil",
+            "table_reads_generator_flags": "--marker prepare",
+        },
+    )
+    argv = (out / "argv.txt").read_text()
+    assert "--marker" in argv
+    assert "imported" in argv or "prepare" in argv
+    assert list(out.glob("*.csv"))
 
 

@@ -36,7 +36,7 @@ def main():
         dest='table_reads_generator',
         default=None,
         help=(
-            'Abundance table regenerator: direct|bootstrap|vae|glm|samovar, '
+            'Abundance table regenerator: direct|bootstrap|vae|glm|camisim-table|samovar, '
             'or a name imported with `samovar tools import --type table`'
         ),
     )
@@ -45,6 +45,18 @@ def main():
         dest='samples_metadata',
         default=None,
         help='Optional samples metadata CSV for custom table regenerators (builtins ignore it)',
+    )
+    parser.add_argument(
+        '--flags',
+        nargs=2,
+        action='append',
+        metavar=('TOOL', 'FLAGS'),
+        dest='tool_flags',
+        default=None,
+        help=(
+            'Extra flags for a tool after import, e.g. '
+            '--flags table_reads_generator "--log-mu 1 --log-sigma 2"'
+        ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
     gzip_group = parser.add_mutually_exclusive_group()
@@ -147,7 +159,7 @@ def main():
         "N_reads", "n_reads", "genome-dirs", "genome_dirs", "index",
         "reannotation-level", "reannotation_level",
         "table_reads_generator", "table-reads-generator", "regeneration_mode",
-        "samples-metadata", "samples_metadata",
+        "samples-metadata", "samples_metadata", "flags",
     }
     cmd_args = {}
     i = 0

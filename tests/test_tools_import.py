@@ -66,6 +66,35 @@ def test_import_cli_conda_prefix(tmp_path, monkeypatch):
     assert Path(spec[2]).resolve() == prefix.resolve()
 
 
+def test_import_flags_fifth_slot(tmp_path, monkeypatch):
+    binary = tmp_path / "myboil.py"
+    binary.write_text("def regenerate(annotation, metadata, config):\n    return {}\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    spec = import_tool(
+        name="myboil",
+        tool_type="table",
+        exec_path=str(binary),
+        flags="--log-mu 1 --foo bar",
+        also_repo_build=False,
+    )
+    assert spec[3] == "table_reads_generator"
+    assert spec[4] == "--log-mu 1 --foo bar"
+    raw = json.loads(cfg.read_text())["tools"]["myboil"]
+    assert len(raw) == 5
+    assert raw[4] == "--log-mu 1 --foo bar"
+    spec4 = import_tool(
+        name="plain",
+        tool_type="table",
+        exec_path=str(binary),
+        also_repo_build=False,
+    )
+    assert len(spec4) == 4
+    raw4 = json.loads(cfg.read_text())["tools"]["plain"]
+    assert len(raw4) == 4
+
+
 def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
     script = tmp_path / "clf"
     script.write_text("#!/bin/sh\nexit 0\n")
