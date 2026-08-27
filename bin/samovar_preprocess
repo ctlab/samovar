@@ -21,6 +21,12 @@ def main():
         '--max_genomes', type=int, default=50,
         help='Max taxids to fetch for annotation2iss (top by abundance)')
     parser.add_argument(
+        '--reannotation-level',
+        dest='reannotation_level',
+        default='taxid',
+        help='Genome lookup for table→ISS: taxid/t, species/s, genus/g, family/f, any/a',
+    )
+    parser.add_argument(
         '--N_reads', '--n_reads', dest='N_reads', type=int, default=None,
         help='Read depth of each regenerated sample (default: 1000, or N_reads in --input_config)')
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
@@ -122,6 +128,7 @@ def main():
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "cores", "max_genomes",
         "N_reads", "n_reads", "genome-dirs", "genome_dirs", "index",
+        "reannotation-level", "reannotation_level",
     }
     cmd_args = {}
     i = 0

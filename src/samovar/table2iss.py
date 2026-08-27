@@ -659,7 +659,10 @@ def _resolve_genomes_for_taxids(
     reference_only: bool,
     max_genomes: Optional[int] = None,
     gzip_genomes: bool = True,
+    reannotation_level: str = "taxid",
 ) -> Dict[str, str]:
+    from samovar.genome_resolve import resolve_genome_file
+
     available = {}
     for taxid in taxids:
         if max_genomes is not None and len(available) >= max_genomes:
@@ -667,27 +670,15 @@ def _resolve_genomes_for_taxids(
         taxid = str(taxid).split(".")[0]
         if taxid in SKIP_TAXIDS or taxid in available:
             continue
-        genome_file = get_genome_file(genome_dir, taxid)
-        if genome_file is None:
-            try:
-                genome_file = fetch_genome(
-                    taxid,
-                    genome_dir,
-                    email,
-                    reference_only=reference_only,
-                    gzip_genomes=gzip_genomes,
-                )
-            except Exception as exc:
-                warnings.warn(f"Failed to fetch genome for taxid {taxid}: {exc}")
-                genome_file = None
+        genome_file = resolve_genome_file(
+            taxid,
+            genome_dir,
+            email,
+            level=reannotation_level,
+            reference_only=reference_only,
+            gzip_genomes=gzip_genomes,
+        )
         if genome_file is not None:
-            try:
-                if gzip_genomes and not is_gzip_path(genome_file):
-                    genome_file = str(gzip_file(genome_file))
-                elif not gzip_genomes and is_gzip_path(genome_file):
-                    genome_file = str(gunzip_file(genome_file, remove_source=True))
-            except OSError as exc:
-                warnings.warn(f"Could not apply gzip_genomes={gzip_genomes} to {genome_file}: {exc}")
             available[taxid] = genome_file
     return available
 
@@ -720,6 +711,7 @@ def process_abundance_table(
     sample_name: str = None,
     gzip_genomes: bool = True,
     gzip_reads: bool = False,
+    reannotation_level: str = "taxid",
 ) -> pd.DataFrame:
     """
     Process abundance table and generate simulated reads for each taxid.
@@ -764,6 +756,7 @@ def process_abundance_table(
         email,
         reference_only,
         gzip_genomes=gzip_genomes,
+        reannotation_level=reannotation_level,
     )
 
     N_cols = _n_columns(abundance_table)
@@ -864,6 +857,7 @@ def process_annotation_tables(
     regeneration_config: Optional[dict] = None,
     gzip_genomes: bool = True,
     gzip_reads: bool = False,
+    reannotation_level: str = "taxid",
 ) -> None:
     """
     Generate one full metagenome per annotator, then split reads into samples.
@@ -959,6 +953,7 @@ def process_annotation_tables(
         reference_only,
         max_genomes=max_genomes,
         gzip_genomes=gzip_genomes,
+        reannotation_level=reannotation_level,
     )
     if not available_genomes:
         _emit_empty_for_annotators(output_dir, sample_names, annotators, gzip_reads=gzip_reads)

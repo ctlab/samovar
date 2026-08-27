@@ -32,6 +32,8 @@ from samovar.seqio import (
     processed_genome_path,
 )
 from samovar.genome_index import (
+    accession_from_fasta,
+    catalog_processed_genome,
     is_assembly_accession,
     normalize_accession,
     processed_filename,
@@ -42,6 +44,7 @@ from samovar.genome_index import (
     run_processed_dir,
     run_raw_dir,
     index_processed_file,
+    proteome_storage_dir,
     stage_into_dir,
 )
 
@@ -148,8 +151,18 @@ def _normalize_taxid(taxid: str | int) -> str:
     return taxid.split(".")[0]
 
 
-def _assembly_ftp_path(taxid: str | int, email: str, silent: bool = False) -> Optional[str]:
-    """Return RefSeq (preferred) or GenBank FTP path for a taxid assembly."""
+def _accession_from_ftp_path(ftp_path: str) -> str:
+    name = os.path.basename(str(ftp_path or "").rstrip("/"))
+    parts = name.split("_")
+    if len(parts) >= 2:
+        cand = f"{parts[0]}_{parts[1]}"
+        if is_assembly_accession(cand):
+            return cand
+    return ""
+
+
+def _assembly_doc_for_taxid(taxid: str | int, email: str, silent: bool = False) -> Optional[dict]:
+    """NCBI assembly DocumentSummary for ``taxid`` (descendant complete RefSeq)."""
     taxid = _normalize_taxid(taxid)
     Entrez.email = email
     search_term = f"txid{taxid}[Organism:exp] AND \"complete genome\"[filter] AND \"latest refseq\"[filter]"
@@ -168,7 +181,15 @@ def _assembly_ftp_path(taxid: str | int, email: str, silent: bool = False) -> Op
     handle = Entrez.esummary(db="assembly", id=assembly_id)
     summary = Entrez.read(handle)
     handle.close()
-    doc = summary["DocumentSummarySet"]["DocumentSummary"][0]
+    docs = summary["DocumentSummarySet"]["DocumentSummary"]
+    return docs[0] if docs else None
+
+
+def _assembly_ftp_path(taxid: str | int, email: str, silent: bool = False) -> Optional[str]:
+    """Return RefSeq (preferred) or GenBank FTP path for a taxid assembly."""
+    doc = _assembly_doc_for_taxid(taxid, email, silent=silent)
+    if not doc:
+        return None
     ftp_path = doc.get("FtpPath_RefSeq") or doc.get("FtpPath_GenBank")
     if not ftp_path and not silent:
         logger.warning(f"No FTP path found for taxid {taxid}")
@@ -363,6 +384,30 @@ def materialize_accessions(
     return paths
 
 
+def _library_annotation_candidates(taxid: str, dest_name: str) -> List[Path]:
+    taxid = _normalize_taxid(taxid)
+    roots: List[Path] = []
+    try:
+        roots.append(proteome_storage_dir())
+    except Exception:
+        pass
+    indexed = resolve_indexed_path(taxid)
+    if indexed is not None:
+        roots.append(indexed.parent)
+        if indexed.parent.name == "processed":
+            roots.append(indexed.parent.parent / "proteomes")
+    names = {dest_name, f"{taxid}{Path(dest_name).suffix}"}
+    if dest_name.endswith(".gz"):
+        names.add(dest_name[:-3])
+    found: List[Path] = []
+    for root in roots:
+        for name in names:
+            cand = root / name
+            if cand.is_file():
+                found.append(cand)
+    return found
+
+
 def _download_assembly_file(
     taxid: str | int,
     output_folder: str,
@@ -374,6 +419,7 @@ def _download_assembly_file(
     """Download an NCBI assembly file (suffix like '_protein.faa.gz').
 
     Files stay gzipped on disk; callers that need plain text open them via seqio.
+    Shared copies live under ``samovar_database/proteomes``.
     """
     taxid = _normalize_taxid(taxid)
     output_path = Path(output_folder)
@@ -381,9 +427,17 @@ def _download_assembly_file(
     dest = output_path / dest_name
     dest_gz = dest if is_gzip_path(dest) else Path(str(dest) + ".gz")
     dest_plain = Path(str(dest).removesuffix(".gz")) if is_gzip_path(dest) else dest
-    for candidate in (dest, dest_gz, dest_plain):
+    for candidate in (dest, dest_gz, dest_plain, *_library_annotation_candidates(taxid, dest_name)):
         if candidate.exists():
             return str(candidate)
+    try:
+        lib = proteome_storage_dir()
+        lib.mkdir(parents=True, exist_ok=True)
+        lib_dest = lib / dest_name
+        if lib_dest.exists():
+            return str(lib_dest)
+    except Exception:
+        lib_dest = dest_gz
     try:
         ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
         if not ftp_path:
@@ -392,8 +446,8 @@ def _download_assembly_file(
         url = f"{ftp_path}/{asm_name}{suffix}".replace("ftp://", "https://")
         if not silent:
             logger.info(f"Downloading {url}")
-        _download_url(url, dest_gz)
-        return str(dest_gz)
+        _download_url(url, lib_dest if lib_dest.parent.exists() else dest_gz)
+        return str(lib_dest if lib_dest.exists() else dest_gz)
     except Exception as e:
         if not silent:
             logger.error(f"Failed to download {suffix} for taxid {taxid}: {e}")
@@ -531,6 +585,7 @@ def fetch_genome(
     silent: bool = False,
     gzip_genomes: bool = True,
     reuse: Optional[bool] = None,
+    index: bool = True,
     ) -> Optional[str]:
 
     if is_assembly_accession(str(taxid)):
@@ -540,8 +595,117 @@ def fetch_genome(
             email,
             silent=silent,
             keep_raw=False,
-            index=False,
+            index=index,
         )
+
+    if isinstance(taxid, str) and taxid.split(".")[0].isdigit():
+        taxid = taxid.split(".")[0]
+
+    existing = find_existing_processed_genome(output_folder, taxid)
+    if existing is not None:
+        if gzip_genomes and not is_gzip_path(existing):
+            existing = gzip_file(existing)
+        elif not gzip_genomes and is_gzip_path(existing):
+            existing = gunzip_file(existing, remove_source=True)
+        if not silent:
+            logger.info(f"Processed genome for taxid {taxid} already exists at {existing}")
+        return str(existing)
+
+    indexed = resolve_indexed_path(str(taxid))
+    if indexed is not None:
+        if not silent:
+            logger.info("Using indexed genome for %s: %s", taxid, indexed)
+        return str(indexed)
+
+    do_reuse = reuse_enabled(reuse)
+    if do_reuse:
+        library = find_library_genome(
+            taxid, extra=[output_folder], include_test_genomes=False, processed_only=True
+        )
+        if library is not None:
+            placed = place_genome(library, output_folder, taxid)
+            if gzip_genomes and not is_gzip_path(placed):
+                placed = Path(gzip_file(placed))
+            elif not gzip_genomes and is_gzip_path(placed):
+                placed = Path(gunzip_file(placed, remove_source=False))
+                placed = place_genome(placed, output_folder, taxid)
+            if index:
+                try:
+                    catalog_processed_genome(
+                        placed,
+                        taxid=str(taxid),
+                        keep_src=True,
+                        stage_dir=output_folder,
+                    )
+                except Exception:
+                    logger.warning("Could not catalog reused genome for %s", taxid, exc_info=True)
+            if not silent:
+                logger.info(f"Reusing processed library genome for taxid {taxid}: {placed}")
+            return str(placed)
+
+    genome_path = fetch_genome_raw(
+        taxid, output_folder, email, reference_only, silent, reuse=reuse
+    )
+    if genome_path is None:
+        return None
+
+    processed_dir = cache_processed_dir()
+    try:
+        processed_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Never fall back to $HOME — keep artifacts next to the run genomes.
+        processed_dir = Path(output_folder)
+        try:
+            processed_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    cache_processed = processed_genome_path(processed_dir, taxid, gzip_genomes=gzip_genomes)
+    run_processed = processed_genome_path(output_folder, taxid, gzip_genomes=gzip_genomes)
+
+    try:
+        preprocess_fasta(
+            input_file=genome_path,
+            output_file=str(cache_processed),
+            mutation_rate=0.0,
+            include_percent=100.0,
+        )
+        ensure_genome_config()
+        register_genome_dir(processed_dir)
+        if Path(cache_processed).resolve() != Path(run_processed).resolve():
+            place_genome(cache_processed, output_folder, taxid)
+        logger.info(f"Successfully processed genome for taxid {taxid}")
+        found = find_existing_processed_genome(output_folder, taxid)
+        result = str(found or cache_processed)
+        if index:
+            acc = accession_from_fasta(genome_path) or accession_from_fasta(result)
+            species = ""
+            try:
+                _tax, species = assembly_taxonomy(acc, email, silent=True) if is_assembly_accession(acc) else ("", "")
+            except Exception:
+                species = ""
+            if not acc or acc == str(taxid):
+                try:
+                    doc = _assembly_doc_for_taxid(taxid, email, silent=True)
+                    if doc:
+                        acc = str(doc.get("AssemblyAccession") or acc or taxid)
+                        species = str(doc.get("SpeciesTaxid") or species or taxid)
+                except Exception:
+                    pass
+            try:
+                catalog_processed_genome(
+                    result,
+                    taxid=str(taxid),
+                    accession=acc if is_assembly_accession(acc) else "",
+                    species_taxid=species or str(taxid),
+                    keep_src=True,
+                    stage_dir=output_folder,
+                )
+            except Exception:
+                logger.warning("Processed %s but could not update install config", taxid, exc_info=True)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to process genome for taxid {taxid}: {str(e)}")
+        return None
 
     if isinstance(taxid, str) and taxid.split(".")[0].isdigit():
         taxid = taxid.split(".")[0]

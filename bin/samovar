@@ -46,7 +46,7 @@ show_usage() {
     echo "  samovar generate --genome_dir [...] --output_dir [...] --host_genome [...]"
     echo "  samovar generate --simulator camisim --camisim-mode table --output_dir samovar/camisim-table ..."
     echo "  samovar prepare --input_dir [...] --output_dir [...]"
-    echo "  samovar prepare --reuse-genomes --genome-dirs DIR[:DIR]"
+    echo "  samovar prepare --reannotation-level genus --output_dir [...]"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...]"
     echo "  samovar exec --output_dir [...]"
     echo "  samovar exec --output_dir [...] --redo"

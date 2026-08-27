@@ -248,6 +248,10 @@ def processed_storage_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
     return samovar_database_dir(cfg) / "processed"
 
 
+def proteome_storage_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
+    return samovar_database_dir(cfg) / "proteomes"
+
+
 def raw_storage_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
     return samovar_database_dir(cfg) / "raw"
 
@@ -587,6 +591,103 @@ def index_processed_file(
     update_config({"genomes": block})
     logger.info("Indexed %s (%s) -> %s", taxid_key, acc, src)
     return src
+
+
+def catalog_enabled(cfg: Optional[Dict[str, Any]] = None) -> bool:
+    """True when the install config (or ``SAMOVAR_DATABASE``) names a genome store."""
+    from samovar.main_config import genomes_block
+
+    data = cfg if cfg is not None else _cfg()
+    block = genomes_block(data) if data else {}
+    if str((block or {}).get("samovar_database") or "").strip():
+        return True
+    return bool(os.environ.get("SAMOVAR_DATABASE", "").strip())
+
+
+def catalog_processed_genome(
+    path: PathLike,
+    *,
+    taxid: str = "",
+    accession: str = "",
+    species_taxid: str = "",
+    keep_src: bool = True,
+    stage_dir: Optional[PathLike] = None,
+) -> Path:
+    """Copy/hardlink ``path`` into ``samovar_database/processed`` and update config.
+
+    Run-folder FASTAs are left in place when ``keep_src`` is true; the catalog
+    always points at the library copy so later Kaiju/Kraken/ISS stages reuse it.
+    """
+    if not catalog_enabled():
+        src = _as_path(path)
+        if stage_dir:
+            return stage_into_dir(src, stage_dir)
+        return src
+    src = ensure_gzip_fasta(_as_path(path))
+    acc = accession or accession_from_fasta(src)
+    store = processed_storage_dir()
+    store.mkdir(parents=True, exist_ok=True)
+    target = store / processed_filename(acc)
+    try:
+        same = src.resolve() == target.resolve()
+    except OSError:
+        same = str(src) == str(target)
+    if not same:
+        if target.exists() or target.is_symlink():
+            try:
+                if target.stat().st_ino == src.stat().st_ino:
+                    same = True
+            except OSError:
+                same = False
+        if not same:
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            if keep_src:
+                try:
+                    os.link(src, target)
+                except OSError:
+                    shutil.copy2(src, target)
+            else:
+                shutil.move(str(src), str(target))
+            src = target
+    indexed = index_processed_file(
+        src,
+        accession=acc,
+        taxid=taxid,
+        species_taxid=species_taxid,
+        move_to=store,
+    )
+    if stage_dir:
+        return stage_into_dir(indexed, stage_dir)
+    return indexed
+
+
+def harvest_run_genomes(output_dir: PathLike) -> int:
+    """Index processed FASTAs under a run dir into the install catalog."""
+    if not catalog_enabled():
+        return 0
+    counted = 0
+    roots = [
+        _as_path(output_dir) / ".genomes",
+    ]
+    seen = set()
+    for root in roots:
+        for path in iter_processed_fastas(root):
+            try:
+                key = str(path.resolve())
+            except OSError:
+                key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                catalog_processed_genome(path, keep_src=True, stage_dir=path.parent)
+                counted += 1
+            except Exception:
+                logger.warning("Could not catalog %s", path, exc_info=True)
+    if counted:
+        logger.info("Harvested %s processed genome(s) into the install catalog", counted)
+    return counted
 
 
 def register_database(tool: str, name: str, path: str, flags: str = "") -> None:

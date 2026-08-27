@@ -81,6 +81,91 @@ def names_dmp(cfg: Optional[Dict[str, Any]] = None) -> Optional[Path]:
     return find_dmp("names.dmp", taxdump_dir(cfg))
 
 
+_MERGED_CACHE: Optional[Dict[str, str]] = None
+
+
+def merged_taxid_map(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """``old_taxid → new_taxid`` from ``merged.dmp`` (empty if the file is missing)."""
+    global _MERGED_CACHE
+    if _MERGED_CACHE is not None:
+        return _MERGED_CACHE
+    path = find_dmp("merged.dmp", taxdump_dir(cfg))
+    mapping: Dict[str, str] = {}
+    if path is None:
+        _MERGED_CACHE = mapping
+        return mapping
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                parts = line.split("\t|\t")
+                if len(parts) < 2:
+                    continue
+                old = parts[0].strip()
+                new = parts[1].strip().rstrip("|").strip()
+                if old.isdigit() and new.isdigit():
+                    mapping[old] = new
+    except OSError:
+        mapping = {}
+    _MERGED_CACHE = mapping
+    return mapping
+
+
+def canonical_ncbi_taxid(taxid: str, cfg: Optional[Dict[str, Any]] = None) -> str:
+    """Follow ``merged.dmp`` so retired taxids hit the current catalog key."""
+    text = str(taxid or "").strip().split(".")[0]
+    if not text.isdigit():
+        return text
+    mapping = merged_taxid_map(cfg)
+    seen = set()
+    current = text
+    while current in mapping and current not in seen:
+        seen.add(current)
+        current = mapping[current]
+    return current
+
+
+_MERGED: Optional[Dict[str, str]] = None
+
+
+def merged_map(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """``old_taxid → current_taxid`` from ``merged.dmp`` (cached)."""
+    global _MERGED
+    if _MERGED is not None:
+        return _MERGED
+    mapping: Dict[str, str] = {}
+    path = find_dmp("merged.dmp", taxdump_dir(cfg))
+    if path is None:
+        _MERGED = mapping
+        return mapping
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                parts = [p.strip() for p in line.replace("\t|\n", "").split("\t|")]
+                if len(parts) < 2:
+                    continue
+                old, new = parts[0].strip(), parts[1].strip()
+                if old.isdigit() and new.isdigit():
+                    mapping[old] = new
+    except OSError:
+        pass
+    _MERGED = mapping
+    return mapping
+
+
+def follow_merged(taxid: str, cfg: Optional[Dict[str, Any]] = None) -> str:
+    """Walk ``merged.dmp`` so obsolete taxids hit the current catalog key."""
+    text = str(taxid or "").strip().split(".")[0]
+    if not text.isdigit():
+        return text
+    mapping = merged_map(cfg)
+    seen = set()
+    current = text
+    while current in mapping and current not in seen:
+        seen.add(current)
+        current = mapping[current]
+    return current
+
+
 def taxdump_tarball(cfg: Optional[Dict[str, Any]] = None) -> Optional[Path]:
     root = taxdump_dir(cfg)
     for name in ("taxdump.tar.gz", "ncbi-taxonomy.tar.gz"):

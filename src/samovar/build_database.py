@@ -382,14 +382,23 @@ def process_fasta_kaiju(input_file: str,
     else:
         kind, annot_path = find_local_proteome_or_gff(input_file, taxid)
         if kind is None and fetch_missing:
-            cache_dir = str(Path(db_path) / "proteomes")
-            proteome = fetch_proteome(taxid, cache_dir, email, silent=False)
-            if proteome:
-                kind, annot_path = "protein", proteome
-            else:
-                gff = fetch_gff(taxid, cache_dir, email, silent=False)
-                if gff:
-                    kind, annot_path = "gff", gff
+            from samovar.genome_index import proteome_storage_dir, resolve_indexed_path
+
+            cache_dir = str(proteome_storage_dir())
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            indexed = resolve_indexed_path(taxid)
+            if indexed is not None:
+                sibling_kind, sibling_path = find_local_proteome_or_gff(str(indexed), taxid)
+                if sibling_kind is not None:
+                    kind, annot_path = sibling_kind, sibling_path
+            if kind is None:
+                proteome = fetch_proteome(taxid, cache_dir, email, silent=False)
+                if proteome:
+                    kind, annot_path = "protein", proteome
+                else:
+                    gff = fetch_gff(taxid, cache_dir, email, silent=False)
+                    if gff:
+                        kind, annot_path = "gff", gff
 
         if kind == "protein":
             for rec in iter_seqio_fasta(annot_path):

@@ -78,6 +78,13 @@ def mark_done(output_dir: PathLike, name: str) -> Path:
         except OSError:
             pass
         raise
+    if name in {"seed_genomes", "regenerate_reads"}:
+        try:
+            from samovar.genome_index import harvest_run_genomes
+
+            harvest_run_genomes(output_dir)
+        except Exception:
+            pass
     try:
         from samovar.stage_report import write_stage_report
 

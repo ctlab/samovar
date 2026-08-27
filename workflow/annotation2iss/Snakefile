@@ -39,6 +39,7 @@ if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])
 GZIP_GENOMES = bool(config.get("gzip_genomes", True))
 GZIP_READS = bool(config.get("gzip_reads", False))
+REANNOTATION_LEVEL = config.get("reannotation_level", "taxid")
 
 # Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -136,6 +137,7 @@ rule process_annotations:
                 regeneration_config=params.regeneration_config,
                 gzip_genomes=GZIP_GENOMES,
                 gzip_reads=GZIP_READS,
+                reannotation_level=REANNOTATION_LEVEL,
             )
             logger.info(
                 "Generated a full metagenome per annotator and split it into %s samples",

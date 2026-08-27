@@ -16,6 +16,7 @@ from samovar.paths import (
     runtime_path_prefix,
 )
 from samovar.regenerate import normalize_regeneration_mode
+from samovar.genome_resolve import normalize_reannotation_level
 
 DEFAULT_OUTPUT_DIR = "samovar_out"
 
@@ -129,6 +130,7 @@ class PipelineConfig:
     regeneration_n: Optional[int] = None
     regeneration_n_reads: int = 1000
     regeneration_seed: int = 42
+    reannotation_level: str = "taxid"
     rescale_abundance: bool = False
     gzip_genomes: bool = True
     gzip_reads: bool = False
@@ -170,6 +172,12 @@ class PipelineConfig:
                 config.email = input_config.get('email', config.email)
                 config.regeneration_mode = normalize_regeneration_mode(
                     input_config.get('regeneration_mode', config.regeneration_mode)
+                )
+                config.reannotation_level = normalize_reannotation_level(
+                    input_config.get(
+                        "reannotation_level",
+                        input_config.get("reannotation-level", config.reannotation_level),
+                    )
                 )
                 config.regeneration_n = input_config.get('N', config.regeneration_n)
                 config.regeneration_n_reads = input_config.get(
@@ -302,6 +310,10 @@ class PipelineConfig:
         if n_reads is not None:
             config.regeneration_n_reads = int(n_reads)
 
+        level = getattr(args, "reannotation_level", None)
+        if level:
+            config.reannotation_level = normalize_reannotation_level(level)
+
         return config
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
@@ -345,6 +357,7 @@ class PipelineConfig:
             'max_genomes': getattr(self, 'max_genomes', 50),
             'cores': self.cores,
             'regeneration_mode': self.regeneration_mode,
+            'reannotation_level': self.reannotation_level,
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
             'rescale_abundance': self.rescale_abundance,
