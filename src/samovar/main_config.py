@@ -257,6 +257,45 @@ def tool_flags(entry: Any, name: str = "") -> str:
     return ""
 
 
+def merge_flag_strings(*parts: Optional[str]) -> str:
+    chunks = [str(p).strip() for p in parts if p is not None and str(p).strip()]
+    return " ".join(chunks)
+
+
+def normalize_flag_target(value: str) -> str:
+    return str(value or "").strip().lower().replace("-", "_")
+
+
+def flags_target_matches(
+    target: str,
+    *names: str,
+    groups: Optional[Sequence[str]] = None,
+) -> bool:
+    """True if ``--flags TARGET …`` should attach to a tool with these names."""
+    token = normalize_flag_target(target)
+    if not token:
+        return False
+    aliases = {normalize_flag_target(name) for name in names if name}
+    if groups:
+        aliases.update(normalize_flag_target(group) for group in groups)
+    return token in aliases
+
+
+def imported_flags_for_names(tools: Dict[str, List[str]], *names: str) -> str:
+    """Return ``tools.<name>[4]`` for the first matching key (case-insensitive)."""
+    for name in names:
+        key = str(name or "").strip()
+        if not key:
+            continue
+        if key in tools:
+            return tool_flags(tools[key], key)
+        low = key.lower()
+        for stored, spec in tools.items():
+            if stored.lower() == low:
+                return tool_flags(spec, stored)
+    return ""
+
+
 def tool_path(entry: Any, name: str = "") -> str:
     spec = parse_tool_entry(entry, name)
     path = spec[2]
@@ -285,7 +324,7 @@ def tool_path(entry: Any, name: str = "") -> str:
 
 def tool_env_prefix(entry: Any, name: str = "") -> str:
     spec = parse_tool_entry(entry, name)
-    env, _workflow, path, _group = spec
+    env, _workflow, path, _group = spec[:4]
     if not path:
         return ""
     candidate = Path(path).expanduser()

@@ -15,14 +15,52 @@ from samovar.paths import (
     repo_root,
     runtime_path_prefix,
 )
-from samovar.table_regenerators import require_known_regeneration_mode
+from samovar.table_regenerators import flags_apply_to_regenerator, require_known_regeneration_mode
 from samovar.genome_resolve import normalize_reannotation_level
+from samovar.main_config import (
+    flags_target_matches,
+    imported_flags_for_names,
+    iter_tools,
+    merge_flag_strings,
+)
 
 DEFAULT_OUTPUT_DIR = "samovar_out"
 
 
 def _default_email() -> str:
     return ncbi_email()
+
+
+def _cmd_basename(cmd: str) -> str:
+    if not cmd:
+        return ""
+    return Path(str(cmd).split()[0]).name.split(".")[0]
+
+
+def _merge_annotator_launch_flags(
+    annotators: List["AnnotatorConfig"],
+    tool_flag_pairs: Optional[List],
+) -> None:
+    """Import ``tools.*[4]`` plus prepare ``--flags`` into each annotator's extra."""
+    from samovar.paths import load_config
+
+    tools = iter_tools(load_config())
+    pairs = tool_flag_pairs or []
+    groups = ("annotator", "annotators", "a", "ann")
+    for ann in annotators:
+        cmd_base = _cmd_basename(ann.cmd)
+        imported = imported_flags_for_names(tools, ann.run_name, ann.type, cmd_base)
+        launch = []
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if flags_target_matches(
+                target, ann.run_name, ann.type, cmd_base, groups=groups
+            ):
+                launch.append(flags)
+        merged = merge_flag_strings(imported, ann.extra, *launch)
+        ann.extra = merged or None
 
 
 def _indent_bash(text: str, spaces: int = 2) -> str:
@@ -338,8 +376,7 @@ class PipelineConfig:
         if cli_meta:
             config.samples_metadata = absolute_path(str(cli_meta))
         pairs = getattr(args, "tool_flags", None) or []
-        from samovar.table_regenerators import flags_apply_to_regenerator, merge_flag_strings
-
+        _merge_annotator_launch_flags(config.annotators, pairs)
         flag_parts = [config.regeneration_extra_flags]
         for item in pairs:
             if not item or len(item) < 2:

@@ -55,7 +55,8 @@ def main():
         default=None,
         help=(
             'Extra flags for a tool after import, e.g. '
-            '--flags table_reads_generator "--log-mu 1 --log-sigma 2"'
+            '--flags annotator "--foo 1" or '
+            '--flags table_reads_generator "--log-mu 1"'
         ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)

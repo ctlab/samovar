@@ -84,6 +84,13 @@ def test_custom_annotator_uses_wrapper_path_when_given():
     assert "-p centrifuge" in cmd
 
 
+def test_custom_annotator_extra_on_router():
+    router = _custom("centrifuge")
+    router.extra = "--foo 1"
+    cmd = router.get_snakemake_shell_cmd("r1", "r2", ["/tmp/x.out"])
+    assert cmd.rstrip().endswith("--foo 1")
+
+
 def test_match_annotation_custom_tools():
     assert match_annotation("s.custom_centrifuge.out") == "centrifuge"
     assert match_annotation("s.custom_metauto.out") == "metauto"

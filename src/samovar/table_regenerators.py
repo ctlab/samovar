@@ -18,7 +18,14 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import pandas as pd
 
-from samovar.main_config import iter_tools, parse_tool_entry, tool_flags, tool_path
+from samovar.main_config import (
+    flags_target_matches,
+    iter_tools,
+    merge_flag_strings,
+    parse_tool_entry,
+    tool_flags,
+    tool_path,
+)
 from samovar.parse_annotators import Annotation
 from samovar.paths import load_config
 from samovar.regenerate import (
@@ -39,11 +46,6 @@ class MissingTableRegeneratorError(ValueError):
     """``tools.<name>`` is missing or is not a ``table_reads_generator``."""
 
 
-def merge_flag_strings(*parts: Optional[str]) -> str:
-    chunks = [str(p).strip() for p in parts if p is not None and str(p).strip()]
-    return " ".join(chunks)
-
-
 def extra_flags_argv(text: Optional[str]) -> List[str]:
     if not text or not str(text).strip():
         return []
@@ -53,17 +55,14 @@ def extra_flags_argv(text: Optional[str]) -> List[str]:
 def flags_apply_to_regenerator(target: str, mode: Optional[str]) -> bool:
     """True if ``--flags TARGET …`` should attach to the current table regenerator."""
     kind, name = resolve_regeneration_mode(mode)
-    t = str(target or "").strip().lower().replace("-", "_")
-    aliases = {
-        "table_reads_generator",
-        "table_reads",
-        "table",
-        str(name).lower().replace("-", "_"),
-        str(mode or "").strip().lower().replace("-", "_"),
-    }
+    names = [name, mode]
     if kind == "builtin" and name == "camisim-table":
-        aliases.update({"camisim", "camisim_table", "cami"})
-    return bool(t) and t in aliases
+        names.extend(["camisim", "camisim_table", "cami"])
+    return flags_target_matches(
+        target,
+        *names,
+        groups=("table_reads_generator", "table_reads", "table"),
+    )
 
 
 def apply_extra_flags(config: Dict[str, Any]) -> Dict[str, Any]:

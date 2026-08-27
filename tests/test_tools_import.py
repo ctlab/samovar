@@ -117,3 +117,67 @@ def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
     assert "-i a_R1.fastq" in cmd
     assert "-d /db" in cmd
     assert "-p clf" not in cmd
+
+
+def test_custom_annotator_appends_extra_flags(tmp_path):
+    script = tmp_path / "clf"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    inst = get_annotator_instance(
+        "clf",
+        {
+            "run_name": "clf",
+            "type": "clf",
+            "cmd": str(script),
+            "db_path": "/db",
+            "threads": 2,
+            "extra": "--confidence 0.1 --keep-tmp",
+        },
+        {},
+    )
+    cmd = inst.get_snakemake_shell_cmd("a_R1.fastq", "a_R2.fastq", ["/tmp/out.out"])
+    assert cmd.rstrip().endswith("--confidence 0.1 --keep-tmp")
+
+
+def test_prepare_merges_import_and_launch_annotator_flags(tmp_path, monkeypatch):
+    from samovar.config import PipelineConfig
+    from samovar.paths import write_config
+    from samovar.tools_import import import_tool
+
+    binary = tmp_path / "myclf.py"
+    binary.write_text("#!/usr/bin/env python3\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="myclf",
+        tool_type="annotator",
+        exec_path=str(binary),
+        flags="--confidence 0.1",
+        also_repo_build=False,
+    )
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "cmd_myclf-test": [["myclf /db --threads 8"]],
+            "tool_flags": [
+                ["myclf", "--keep-tmp"],
+                ["annotator", "--global-ann"],
+            ],
+        },
+    )()
+    config = PipelineConfig.from_args(args)
+    assert len(config.annotators) == 1
+    extra = config.annotators[0].extra or ""
+    assert "--confidence 0.1" in extra
+    assert "--threads 8" in extra
+    assert "--keep-tmp" in extra
+    assert "--global-ann" in extra
+    yaml_text = Path(config.generate_configs(str(tmp_path / "out"))["init_annotator"]).read_text()
+    assert "--confidence 0.1" in yaml_text
+    assert "--keep-tmp" in yaml_text
