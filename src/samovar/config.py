@@ -20,6 +20,10 @@ from samovar.reads_generators import (
     flags_apply_to_reads_generator,
     require_known_reads_generator,
 )
+from samovar.metagenome_generators import (
+    flags_apply_to_metagenome_generator,
+    require_known_metagenome_generator,
+)
 from samovar.genome_resolve import normalize_reannotation_level
 from samovar.main_config import (
     flags_target_matches,
@@ -178,6 +182,8 @@ class PipelineConfig:
     regeneration_extra_flags: Optional[str] = None
     reads_generator: str = "iss"
     reads_generator_flags: Optional[str] = None
+    metagenome_generator: Optional[str] = None
+    metagenome_generator_flags: Optional[str] = None
     gzip_genomes: bool = True
     gzip_reads: bool = False
     reuse_genomes: bool = True
@@ -241,6 +247,14 @@ class PipelineConfig:
                 yaml_rflags = input_config.get("reads_generator_flags")
                 if yaml_rflags:
                     config.reads_generator_flags = str(yaml_rflags)
+                yaml_meta = input_config.get("metagenome_generator")
+                if yaml_meta:
+                    config.metagenome_generator = require_known_metagenome_generator(
+                        yaml_meta
+                    )
+                yaml_mflags = input_config.get("metagenome_generator_flags")
+                if yaml_mflags:
+                    config.metagenome_generator_flags = str(yaml_mflags)
                 config.reannotation_level = normalize_reannotation_level(
                     input_config.get(
                         "reannotation_level",
@@ -390,6 +404,11 @@ class PipelineConfig:
         cli_reads = getattr(args, "reads_generator", None)
         if cli_reads:
             config.reads_generator = require_known_reads_generator(cli_reads)
+        cli_meta_gen = getattr(args, "metagenome_generator", None)
+        if cli_meta_gen:
+            config.metagenome_generator = require_known_metagenome_generator(
+                cli_meta_gen
+            )
         cli_meta = getattr(args, "samples_metadata", None)
         if cli_meta:
             config.samples_metadata = absolute_path(str(cli_meta))
@@ -412,6 +431,16 @@ class PipelineConfig:
             if flags_apply_to_reads_generator(target, config.reads_generator):
                 rflag_parts.append(flags)
         config.reads_generator_flags = merge_flag_strings(*rflag_parts) or None
+        mflag_parts = [config.metagenome_generator_flags]
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if config.metagenome_generator and flags_apply_to_metagenome_generator(
+                target, config.metagenome_generator
+            ):
+                mflag_parts.append(flags)
+        config.metagenome_generator_flags = merge_flag_strings(*mflag_parts) or None
 
         return config
 
@@ -465,6 +494,8 @@ class PipelineConfig:
             'gzip_reads': self.gzip_reads,
             'reads_generator': self.reads_generator,
         }
+        if self.metagenome_generator:
+            annotation2iss_config['metagenome_generator'] = self.metagenome_generator
         if self.regeneration_n:
             annotation2iss_config['N'] = self.regeneration_n
         if self.samples_metadata:
@@ -473,6 +504,10 @@ class PipelineConfig:
             annotation2iss_config['table_reads_generator_flags'] = self.regeneration_extra_flags
         if self.reads_generator_flags:
             annotation2iss_config['reads_generator_flags'] = self.reads_generator_flags
+        if self.metagenome_generator_flags:
+            annotation2iss_config['metagenome_generator_flags'] = (
+                self.metagenome_generator_flags
+            )
         annotation2iss_path = configs_dir / 'config_annotation2iss.yaml'
         with open(annotation2iss_path, 'w') as f:
             yaml.dump(annotation2iss_config, f)

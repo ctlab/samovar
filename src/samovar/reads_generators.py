@@ -186,6 +186,7 @@ def attach_reads_flags(name: Optional[str], config: Dict[str, Any]) -> Dict[str,
         imported,
         cfg.get("extra_flags"),
         cfg.get("reads_generator_flags"),
+        cfg.get("metagenome_generator_flags"),
     )
     cfg["extra_argv"] = extra_flags_argv(cfg.get("extra_flags"))
     cfg["reads_generator"] = canon
@@ -531,6 +532,7 @@ def simulate_from_sample_tables(
     extra_ids: Optional[Sequence[str]] = None,
     metadata: Optional[pd.DataFrame] = None,
     config: Optional[Dict[str, Any]] = None,
+    genome_dir: str = "",
 ) -> None:
     """ISS (or custom) mix from per-sample abundance tables (prepare/regenerate)."""
     from samovar.table2iss import (
@@ -543,13 +545,55 @@ def simulate_from_sample_tables(
     )
 
     cfg = attach_reads_flags(reads_generator, dict(config or {}))
+    sample_names = list(sample_tables)
+    annotators = list(annotator_cols.keys()) or ["any"]
+    meta_name = cfg.get("metagenome_generator")
+    if meta_name:
+        from samovar.metagenome_generators import (
+            attach_metagenome_flags,
+            get_metagenome_generator,
+            resolve_metagenome_generator,
+        )
+
+        cfg = attach_metagenome_flags(meta_name, cfg)
+        mkind, mcanon = resolve_metagenome_generator(meta_name)
+        flags = list(
+            extra_flags or cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags"))
+        )
+        if mkind == "custom":
+            import tempfile
+
+            gen = get_metagenome_generator(mcanon)
+            for annotator_name in annotators:
+                with tempfile.TemporaryDirectory() as tmp:
+                    csv_path = Path(tmp) / f"{annotator_name}.csv"
+                    _write_annotator_abundance_csv(
+                        sample_tables, annotator_name, csv_path
+                    )
+                    job = dict(cfg)
+                    job.update(
+                        {
+                            "abundance_table": str(csv_path),
+                            "output_dir": output_dir,
+                            "genome_dir": genome_dir or cfg.get("genome_dir"),
+                            "stage": "regenerate",
+                            "annotator_name": annotator_name,
+                            "annotator": annotator_name,
+                            "gzip_reads": gzip_reads,
+                            "extra_argv": flags,
+                            "seed": seed,
+                            "model": model,
+                        }
+                    )
+                    gen.generate(metadata, job)
+            return
+        reads_generator = mcanon
+
     kind, canon = resolve_reads_generator(reads_generator or cfg.get("reads_generator"))
     flags = list(extra_flags or cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
     ids = list(extra_ids if extra_ids is not None else extra_ids_for_generator(canon, cfg))
     if kind == "builtin" and canon == "hybrid":
         ids = []
-    sample_names = list(sample_tables)
-    annotators = list(annotator_cols.keys()) or ["any"]
     os_makedirs = __import__("os").makedirs
     os_path = __import__("os").path
     rmtree = shutil.rmtree
@@ -569,6 +613,7 @@ def simulate_from_sample_tables(
                     {
                         "abundance_table": str(csv_path),
                         "output_dir": output_dir,
+                        "genome_dir": genome_dir or cfg.get("genome_dir"),
                         "stage": "regenerate",
                         "annotator_name": annotator_name,
                         "gzip_reads": gzip_reads,
@@ -698,8 +743,18 @@ def run_generate_from_yaml(config_path: str) -> List[str]:
     import yaml
 
     cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
-    name = cfg.get("reads_generator") or "iss"
-    gen = get_reads_generator(name)
+    meta_name = cfg.get("metagenome_generator")
+    if meta_name:
+        from samovar.metagenome_generators import (
+            attach_metagenome_flags,
+            get_metagenome_generator,
+        )
+
+        cfg = attach_metagenome_flags(meta_name, cfg)
+        gen = get_metagenome_generator(meta_name)
+    else:
+        name = cfg.get("reads_generator") or "iss"
+        gen = get_reads_generator(name)
     meta = None
     raw = cfg.get("samples_metadata") or cfg.get("metadata")
     if raw:

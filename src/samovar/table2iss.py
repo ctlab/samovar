@@ -993,6 +993,7 @@ def process_annotation_tables(
         reads_generator=regen_cfg.get("reads_generator") or regen_cfg.get("reads-generator"),
         extra_flags=None,
         config=regen_cfg,
+        genome_dir=genome_dir,
     )
 
 
@@ -1137,9 +1138,12 @@ def generate_iss_from_abundance_table(
     model: str = "hiseq",
     genomes: Optional[Sequence[str]] = None,
     cpus: int = 2,
+    annotator_name: str = "full",
 ) -> List[str]:
-    """ISS generate from a taxid × ``N_<sample>`` table; names ``{sample}_full_R*``."""
+    """ISS from a taxid × ``N_<sample>`` table; names ``{sample}_{annotator}_R*``."""
     from samovar.seqio import taxid_from_fasta_name
+
+    annotator_name = str(annotator_name or "full")
 
     if isinstance(table, str):
         abundance = pd.read_csv(table)
@@ -1157,12 +1161,12 @@ def generate_iss_from_abundance_table(
         sample_names.append(name or str(col))
     if not n_cols:
         _write_empty_fastq_pair(
-            os.path.join(output_dir, "1_full_R1.fastq"),
-            os.path.join(output_dir, "1_full_R2.fastq"),
+            os.path.join(output_dir, f"1_{annotator_name}_R1.fastq"),
+            os.path.join(output_dir, f"1_{annotator_name}_R2.fastq"),
         )
         return [
-            os.path.join(output_dir, "1_full_R1.fastq"),
-            os.path.join(output_dir, "1_full_R2.fastq"),
+            os.path.join(output_dir, f"1_{annotator_name}_R1.fastq"),
+            os.path.join(output_dir, f"1_{annotator_name}_R2.fastq"),
         ]
 
     sample_tables: Dict[str, pd.DataFrame] = {}
@@ -1189,7 +1193,6 @@ def generate_iss_from_abundance_table(
     outputs: List[str] = []
     pool_dir = os.path.join(output_dir, ".iss_full")
     os.makedirs(pool_dir, exist_ok=True)
-    annotator_name = "full"
     sample_source_counts: Dict[str, Dict[str, int]] = {}
     total_by_taxid: Dict[str, int] = {}
     for sample_name, tbl in sample_tables.items():
@@ -1210,7 +1213,7 @@ def generate_iss_from_abundance_table(
             genome_files=[available[t] for t in genome_ids],
             output_dir=pool_dir,
             amount=[total_by_taxid[t] for t in genome_ids],
-            sample_name="full",
+            sample_name="pool",
             annotator_name=annotator_name,
             model=model,
             genome_ids=genome_ids,
@@ -1229,16 +1232,16 @@ def generate_iss_from_abundance_table(
     else:
         for sample_name in sample_tables:
             _write_empty_fastq_pair(
-                os.path.join(output_dir, f"{sample_name}_full_R1.fastq"),
-                os.path.join(output_dir, f"{sample_name}_full_R2.fastq"),
+                os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq"),
+                os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq"),
             )
     if host_genome and os.path.exists(host_genome) and str(host_fraction).upper() not in {"0", "0.0", ""}:
         # Optional host spike-in on top of the table (same fractions as generate).
         host_tax = taxid_from_fasta_name(host_genome) or ""
         rng = random.Random(seed)
         for sample_name in sample_tables:
-            dest_r1 = os.path.join(output_dir, f"{sample_name}_full_R1.fastq")
-            dest_r2 = os.path.join(output_dir, f"{sample_name}_full_R2.fastq")
+            dest_r1 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
+            dest_r2 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq")
             if str(host_fraction).upper() == "RANDOM":
                 host_n = rng.randint(0, int(total_reads or 0))
             else:
@@ -1265,8 +1268,8 @@ def generate_iss_from_abundance_table(
     for sample_name in sample_tables:
         outputs.extend(
             [
-                os.path.join(output_dir, f"{sample_name}_full_R1.fastq"),
-                os.path.join(output_dir, f"{sample_name}_full_R2.fastq"),
+                os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq"),
+                os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq"),
             ]
         )
     return outputs

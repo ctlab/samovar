@@ -48,6 +48,12 @@ if config.get("reads_generator"):
     REGENERATION_CONFIG["reads_generator"] = config["reads_generator"]
 if config.get("reads_generator_flags"):
     REGENERATION_CONFIG["reads_generator_flags"] = config["reads_generator_flags"]
+if config.get("metagenome_generator"):
+    REGENERATION_CONFIG["metagenome_generator"] = config["metagenome_generator"]
+if config.get("metagenome_generator_flags"):
+    REGENERATION_CONFIG["metagenome_generator_flags"] = config[
+        "metagenome_generator_flags"
+    ]
 if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])
 GZIP_GENOMES = bool(config.get("gzip_genomes", True))

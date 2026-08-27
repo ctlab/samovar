@@ -18,6 +18,7 @@ class ISSTestConfig:
     cores: int = 1
     extra_flags: str = ""
     reads_generator: str = "iss"
+    metagenome_generator: str = ""
     abundance_table: str = ""
 
     @classmethod
@@ -40,6 +41,7 @@ class ISSTestConfig:
             cores=args.cores if getattr(args, 'cores', None) is not None else 1,
             extra_flags=str(extra),
             reads_generator=str(getattr(args, "reads_generator", None) or "iss"),
+            metagenome_generator=str(getattr(args, "metagenome_generator", None) or ""),
             abundance_table=str(abundance or ""),
         )
 
@@ -66,9 +68,13 @@ class ISSTestConfig:
             'genomes': [],  # Will be automatically populated
             'reads_generator': self.reads_generator,
         }
+        if self.metagenome_generator:
+            config['metagenome_generator'] = self.metagenome_generator
         if self.extra_flags:
             config['extra_flags'] = self.extra_flags
             config['reads_generator_flags'] = self.extra_flags
+            if self.metagenome_generator:
+                config['metagenome_generator_flags'] = self.extra_flags
         if self.abundance_table:
             config['abundance_table'] = self.abundance_table
         
@@ -189,6 +195,16 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        '--metagenome_generator',
+        '--metagenome-generator',
+        dest='metagenome_generator',
+        default=None,
+        help=(
+            'Combined community+reads tool: camisim|hybrid|nanosim, or a name '
+            'imported with `samovar tools import --type meta`'
+        ),
+    )
+    parser.add_argument(
         '-i',
         '--abundance',
         dest='abundance_table',
@@ -202,7 +218,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         metavar=('TOOL', 'FLAGS'),
         dest='tool_flags',
         default=None,
-        help='Extra flags for a reads_generator, e.g. --flags iss "--gc_bias"',
+        help='Extra flags for a generator, e.g. --flags iss "--gc_bias" or --flags metagenome_generator "--model hiseq"',
     )
     parser.add_argument(
         '--camisim-mode',
@@ -229,6 +245,12 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         args = parse_args()
 
     from samovar.main_config import merge_flag_strings
+    from samovar.metagenome_generators import (
+        attach_metagenome_flags,
+        flags_apply_to_metagenome_generator,
+        require_known_metagenome_generator,
+        resolve_metagenome_generator,
+    )
     from samovar.reads_generators import (
         attach_reads_flags,
         camisim_mode_for_reads_generator,
@@ -237,6 +259,67 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         resolve_reads_generator,
         write_custom_generate_script,
     )
+
+    meta_raw = getattr(args, "metagenome_generator", None)
+    if meta_raw:
+        mkind, mcanon = resolve_metagenome_generator(meta_raw)
+        if mkind == "custom":
+            require_known_metagenome_generator(mcanon)
+        args.metagenome_generator = mcanon
+        flag_parts = [getattr(args, "extra_flags", None)]
+        for item in getattr(args, "tool_flags", None) or []:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if flags_apply_to_metagenome_generator(target, mcanon):
+                flag_parts.append(flags)
+        merged = attach_metagenome_flags(
+            mcanon, {"extra_flags": merge_flag_strings(*flag_parts)}
+        )
+        args.extra_flags = merged.get("extra_flags") or ""
+        mapped_mode = camisim_mode_for_reads_generator(mcanon, getattr(args, "camisim_mode", None))
+        if mkind == "builtin" and mapped_mode is not None:
+            from samovar.camisim import setup_camisim_generate
+
+            args.camisim_mode = mapped_mode
+            result = setup_camisim_generate(args)
+            yaml_path = result.get("config") or result.get("yaml")
+            if yaml_path:
+                from pathlib import Path
+                import yaml
+
+                data = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8")) or {}
+                if args.extra_flags:
+                    data["extra_flags"] = args.extra_flags
+                    data["metagenome_generator_flags"] = args.extra_flags
+                data["metagenome_generator"] = mcanon
+                Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
+            return result
+        accessions = list(getattr(args, "accessions", None) or [])
+        reindex_mode = int(getattr(args, "reindex", 0) or 0)
+        keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
+        if accessions:
+            from samovar.genome_fetcher import default_entrez_email, materialize_accessions
+            from samovar.genome_index import run_processed_dir
+
+            paths = materialize_accessions(
+                accessions,
+                output_dir=args.output_dir,
+                email=default_entrez_email(),
+                reindex_mode=reindex_mode,
+                keep_raw=keep_raw,
+            )
+            if not paths:
+                raise SystemExit("generate: no genomes materialized from --accessions")
+            args.genome_dir = str(run_processed_dir(args.output_dir))
+        elif not getattr(args, "genome_dir", None):
+            raise SystemExit("generate: --genome_dir or --accessions is required")
+        config = ISSTestConfig.from_args(args)
+        config_path = config.generate_config(config.output_dir)
+        pipeline_path = write_custom_generate_script(
+            config.output_dir, config_path, cores=config.cores
+        )
+        return {"config": config_path, "pipeline": pipeline_path}
 
     raw_name = getattr(args, "reads_generator", None)
     simulator = str(getattr(args, "simulator", None) or "iss").strip().lower()

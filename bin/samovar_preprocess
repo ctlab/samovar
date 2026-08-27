@@ -57,6 +57,16 @@ def main():
         ),
     )
     parser.add_argument(
+        '--metagenome_generator',
+        '--metagenome-generator',
+        dest='metagenome_generator',
+        default=None,
+        help=(
+            'Combined community+reads tool: camisim|hybrid|nanosim, or a name '
+            'imported with `samovar tools import --type meta`'
+        ),
+    )
+    parser.add_argument(
         '--flags',
         nargs=2,
         action='append',
@@ -67,7 +77,8 @@ def main():
             'Extra flags for a tool after import, e.g. '
             '--flags annotator "--foo 1" or '
             '--flags table_reads_generator "--log-mu 1" or '
-            '--flags reads_generator "--gc_bias"'
+            '--flags reads_generator "--gc_bias" or '
+            '--flags metagenome_generator "--model hiseq"'
         ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
@@ -173,6 +184,7 @@ def main():
         "table_reads_generator", "table-reads-generator", "regeneration_mode",
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
+        "metagenome_generator", "metagenome-generator",
     }
     cmd_args = {}
     i = 0
