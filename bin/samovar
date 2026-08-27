@@ -38,7 +38,7 @@ show_usage() {
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
     echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
-    echo "  tools       --sort reads, or --status for required/optional programs"
+    echo "  tools       import a binary; --sort reads; --status for programs"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
     echo "  help        Show this help message"
     echo ""
@@ -53,6 +53,7 @@ show_usage() {
     echo "  samovar exec --output_dir [...] --cleanup-tmp"
     echo "  samovar prepare --output_dir [...] --no-multiqc"
     echo "  samovar multiqc --output_dir [...] -- --export"
+    echo "  samovar tools import -n kaiju --exec kaiju --exec-path /usr/bin/kaiju --type annotator"
     echo "  samovar tools --sort --output_dir [...]"
     echo "  samovar generate --accessions GCF_... --reindex 1 --output_dir [...]"
     echo "  samovar reindex [FOLDER ...]"
@@ -148,6 +149,11 @@ case "${1:-}" in
     "tools")
         shift
         case "${1:-}" in
+            "import")
+                shift
+                PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+                    "$PYTHON" -m samovar.tools_import "$@"
+                ;;
             "--sort")
                 shift
                 "$PYTHON" "$SCRIPT_DIR/samovar_sort_reads" "$@"
@@ -156,9 +162,16 @@ case "${1:-}" in
                 PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
                     "$PYTHON" -c "from samovar.paths import format_install_status; print(format_install_status())"
                 ;;
+            "help"|"-h"|"--help"|"")
+                echo "Usage: samovar tools <command>"
+                echo "  import     Register a binary in the install config"
+                echo "  --status   Required/optional programs"
+                echo "  --sort     Sort paired FASTQ by read ID"
+                echo "See wiki/tools_import.md"
+                ;;
             *)
                 echo "Error: Unknown tool '${1:-}'"
-                echo "Available tools: --sort  --status"
+                echo "Available: import  --sort  --status"
                 exit 1
                 ;;
         esac

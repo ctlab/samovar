@@ -59,6 +59,29 @@ TOOL_GROUPS = (
     "workflow",
 )
 
+TOOL_GROUP_ALIASES: Dict[str, str] = {
+    "a": "annotator",
+    "ann": "annotator",
+    "annotator": "annotator",
+    "annotators": "annotator",
+    "runtime": "runtime",
+    "compiler": "compiler",
+    "reads": "reads_generator",
+    "read": "reads_generator",
+    "reads_generator": "reads_generator",
+    "iss": "reads_generator",
+    "meta": "metagenome_generator",
+    "metagenome": "metagenome_generator",
+    "metagenome_generator": "metagenome_generator",
+    "table": "table_reads_generator",
+    "table_reads": "table_reads_generator",
+    "table_reads_generator": "table_reads_generator",
+    "score": "scoring",
+    "scoring": "scoring",
+    "workflow": "workflow",
+    "wf": "workflow",
+}
+
 TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "bash": "runtime",
     "python": "runtime",
@@ -164,6 +187,18 @@ def _split_dirs(value: Any) -> List[str]:
 
 def tool_group_for(name: str) -> str:
     return TOOL_GROUP_BY_NAME.get(name, TOOL_GROUP_BY_NAME.get(Path(name).name, "runtime"))
+
+
+def normalize_tool_group(value: str) -> str:
+    """Map CLI ``--type`` / aliases onto ``TOOL_GROUPS``."""
+    key = str(value or "").strip().lower().replace("-", "_")
+    if key in TOOL_GROUP_ALIASES:
+        return TOOL_GROUP_ALIASES[key]
+    if key in TOOL_GROUPS:
+        return key
+    raise ValueError(
+        f"Unknown tool type {value!r}. Use one of: {', '.join(TOOL_GROUPS)}"
+    )
 
 
 def parse_tool_entry(value: Any, name: str = "") -> List[str]:

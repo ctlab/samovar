@@ -25,6 +25,13 @@ CUSTOM_WRAPPER_SCRIPTS = {
     "assembly_hybrid.sh",
 }
 
+# These names always go through custom.sh (native CLIs are not the SamovaR flags).
+CUSTOM_SH_ROUTER_TOOLS = {
+    "centrifuge",
+    "metauto",
+    "assembly_hybrid",
+} | DUMMY_TOOL_NAMES
+
 
 def skip_empty_reads_cmd(input_r1: str, outputs: Sequence[str], run_cmd: str) -> str:
     """If R1 is empty, touch expected outputs instead of running the classifier.
@@ -413,10 +420,38 @@ class CustomAnnotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
-        # ``--centrifuge "centrifuge $DB"`` stores the binary as cmd; custom.sh
-        # is the router that translates -i/-I/-d/-o/-p into the native CLI.
-        cmd = self.cmd if _cmd_is_custom_wrapper(self.cmd) else self.default_cmd
         extra = self.extra or ""
+        use_router = _cmd_is_custom_wrapper(self.cmd) or (
+            str(self.tool_name).lower() in CUSTOM_SH_ROUTER_TOOLS
+        )
+        if use_router:
+            cmd = self.cmd if _cmd_is_custom_wrapper(self.cmd) else self.default_cmd
+            return (
+                f"{cmd} "
+                f"-i {input_r1} "
+                f"-I {input_r2} "
+                f"-d {self.db_path} "
+                f"-o {out_file} "
+                f"-p {self.tool_name} "
+                f"-t {self.threads} "
+                f"{extra}"
+            )
+        first = str(self.cmd or "").split()[0]
+        try:
+            direct = bool(first) and Path(first).expanduser().is_file()
+        except OSError:
+            direct = False
+        if direct:
+            return (
+                f"{self.cmd} "
+                f"-i {input_r1} "
+                f"-I {input_r2} "
+                f"-d {self.db_path} "
+                f"-o {out_file} "
+                f"-t {self.threads} "
+                f"{extra}"
+            )
+        cmd = self.default_cmd
         return (
             f"{cmd} "
             f"-i {input_r1} "
