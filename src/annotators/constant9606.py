@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import argparse
 import gzip
+from pathlib import Path
 from typing import Iterator, Optional, TextIO
 
 
 def _open_text(path: str) -> TextIO:
-    if path.endswith(".gz"):
+    gzipped = str(path).endswith(".gz")
+    if not gzipped:
+        try:
+            with open(path, "rb") as raw:
+                gzipped = raw.read(2) == b"\x1f\x8b"
+        except OSError:
+            gzipped = False
+    if gzipped:
         return gzip.open(path, "rt")
     return open(path, "r", encoding="utf-8", errors="replace")
 
@@ -28,8 +36,15 @@ def iter_fastq_ids(path: str) -> Iterator[str]:
             handle.readline()
             handle.readline()
             handle.readline()
-            raw_id = header[1:].split()[0]
-            yield raw_id.replace("/1", "").replace("/2", "")
+            stripped = header.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("@"):
+                stripped = stripped[1:]
+            tokens = stripped.split()
+            if not tokens:
+                continue
+            yield tokens[0].replace("/1", "").replace("/2", "")
 
 
 def classify_fastq(r1: str, output: str, taxid: str = "9606", r2: Optional[str] = None) -> int:
@@ -38,10 +53,10 @@ def classify_fastq(r1: str, output: str, taxid: str = "9606", r2: Optional[str] 
     n = 0
     with open(output, "w", encoding="utf-8") as out:
         for path in (r1, r2):
-            if not path:
+            if not path or not Path(path).is_file():
                 continue
             for read_id in iter_fastq_ids(path):
-                if read_id in seen:
+                if not read_id or read_id in seen:
                     continue
                 seen.add(read_id)
                 out.write(f"{read_id}\t{taxid}\n")

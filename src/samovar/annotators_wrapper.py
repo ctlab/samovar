@@ -499,14 +499,15 @@ class ConstantTaxidAnnotator(CustomAnnotator):
         if not cmd or os.path.basename(str(cmd).split()[0]).split(".")[0].lower() in DUMMY_TOOL_NAMES:
             cmd = self.default_cmd
         extra = self.extra or ""
-        return (
+        run = (
             f"{cmd} "
-            f"-i {input_r1} "
-            f"-I {input_r2} "
-            f"-o {out_file} "
-            f"--taxid {self.taxid} "
+            f"-i {shlex.quote(str(input_r1))} "
+            f"-I {shlex.quote(str(input_r2))} "
+            f"-o {shlex.quote(str(out_file))} "
+            f"--taxid {shlex.quote(self.taxid)} "
             f"{extra}"
         )
+        return skip_empty_reads_cmd(input_r1, [out_file], run)
 
 
 def get_annotator_instance(

@@ -242,8 +242,8 @@ def _iss_reads_for_pairs(n_pairs: int) -> int:
 def _write_empty_fastq_pair(r1: str, r2: str) -> None:
     for path in (r1, r2):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open_text(path, "wt") as handle:
-            handle.write("\n")
+        with open_text(path, "wt"):
+            pass
 
 
 def _cleanup_iss_tmp(prefix: str) -> None:
@@ -448,12 +448,6 @@ def split_metagenome_to_samples(
     finally:
         for r1_handle, r2_handle in output_handles.values():
             for handle in (r1_handle, r2_handle):
-                try:
-                    empty = handle.tell() == 0
-                except OSError:
-                    empty = False
-                if empty:
-                    handle.write("\n")
                 handle.close()
 
     return written

@@ -67,6 +67,24 @@ def test_constant9606_script_assigns_human_taxid(tmp_path):
     assert set(df["seq"]) == {"read0", "read1", "read2"}
 
 
+def test_constant9606_tolerates_blank_and_missing_mates(tmp_path):
+    r1 = tmp_path / "blank_R1.fastq"
+    r2 = tmp_path / "blank_R2.fastq"
+    r1.write_text("\n")
+    r2.write_text("\n")
+    out = tmp_path / "blank.out"
+    n = classify_fastq(str(r1), str(out), taxid="9606", r2=str(r2))
+    assert n == 0
+    assert out.read_text() == ""
+    mixed = tmp_path / "ok_R1.fastq"
+    _tiny_fastq(mixed, n=1, prefix="ok")
+    out2 = tmp_path / "mixed.out"
+    n2 = classify_fastq(str(mixed), str(out2), taxid="9606", r2=str(r2))
+    assert n2 == 1
+    missing = classify_fastq(str(mixed), str(tmp_path / "nomate.out"), r2=str(tmp_path / "nope.fastq"))
+    assert missing == 1
+
+
 def test_constant_taxid_annotator_parse_and_shell(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r2 = tmp_path / "s_R2.fastq"

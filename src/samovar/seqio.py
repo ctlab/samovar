@@ -385,19 +385,14 @@ def write_text_lines(path: PathLike, chunks: Iterable[str]) -> None:
     dest = as_path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open_text(dest, "wt") as handle:
-        wrote = False
         for chunk in chunks:
             handle.write(chunk)
-            wrote = True
-        if not wrote:
-            handle.write("\n")
 
 
 def concat_fastq_files(sources: Sequence[PathLike], dest: PathLike) -> Path:
     dest_p = as_path(dest)
     dest_p.parent.mkdir(parents=True, exist_ok=True)
     with open_text(dest_p, "wt") as out:
-        wrote = False
         for src in sources:
             src_p = as_path(src)
             if not src_p.exists():
@@ -408,9 +403,6 @@ def concat_fastq_files(sources: Sequence[PathLike], dest: PathLike) -> Path:
                 out.write(text)
                 if not text.endswith("\n"):
                     out.write("\n")
-                wrote = True
-        if not wrote:
-            out.write("\n")
     return dest_p
 
 
