@@ -44,5 +44,3 @@ project/
 *.log
 genomes/
 taxdump.tar.gz
-examples/reprofiling/pipeline.sh
-examples/reprofiling/linear_classifier.py
