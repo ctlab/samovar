@@ -57,6 +57,9 @@ def test_ks_identical_vectors_is_zero():
     assert row["ks_statistic"] == 0.0
     assert row["pvalue"] == 1.0
     assert row["rank_value"] == 0.0
+    assert row["metric"] == 0.0
+    assert row["metric_name"] == "ks_statistic"
+    assert "n_observed" in row and "n_generated" in row
 
 
 def test_pick_best_prefers_lower_ks():
@@ -81,4 +84,34 @@ def test_score_generated_tables_on_toy(toy_annotation_dir):
     )
     score = score_generated_tables(data, tables, "shannon_ks")
     assert score["ks_statistic"] == 0.0
+    assert score["metric_name"] == "ks_statistic"
     assert canonicalize_table_scorer("alpha-ks") == "shannon_ks"
+
+
+def test_rank_methods_shannon_has_score_matrix(toy_annotation_dir, tmp_path):
+    from samovar.regenerate import regenerate_annotation_tables
+    from samovar.table_scorers import CANDIDATE_KEYS, rank_methods_per_annotator
+
+    data = read_annotation_dir(toy_annotation_dir)
+    direct = regenerate_annotation_tables(
+        toy_annotation_dir, tmp_path / "direct", {"regeneration_mode": "direct", "N": 2, "seed": 1}
+    )
+    bootstrap = regenerate_annotation_tables(
+        toy_annotation_dir,
+        tmp_path / "boot",
+        {"regeneration_mode": "bootstrap", "N": 2, "seed": 1},
+    )
+    ranked = rank_methods_per_annotator(
+        data,
+        {"direct": direct, "bootstrap": bootstrap},
+        "shannon_ks",
+        modes=["direct", "bootstrap"],
+    )
+    assert ranked["metric_name"] == "ks_statistic"
+    block = ranked["by_annotator"]["kaiju"]
+    assert "score_matrix" in block
+    assert "direct" in block["score_matrix"]["direct"]
+    row = next(r for r in ranked["candidates"] if r["mode"] == "direct" and r["annotator"] == "kaiju")
+    for key in CANDIDATE_KEYS:
+        assert key in row
+    assert row["ks_statistic"] == 0.0

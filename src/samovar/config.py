@@ -472,6 +472,9 @@ class PipelineConfig:
             n_reads = getattr(args, "n_reads", None)
         if n_reads is not None:
             config.regeneration_n_reads = int(n_reads)
+        regen_n = getattr(args, "regeneration_n", None)
+        if regen_n is not None:
+            config.regeneration_n = int(regen_n)
 
         level = getattr(args, "reannotation_level", None)
         if level:
@@ -515,12 +518,24 @@ class PipelineConfig:
         pairs = getattr(args, "tool_flags", None) or []
         _merge_annotator_launch_flags(config.annotators, pairs)
         flag_parts = [config.regeneration_extra_flags]
+        regen_targets = list(config.regeneration_modes or [config.regeneration_mode])
+        sd2_score = str(config.table_score or "").lower().replace("-", "_") in {
+            "sparsedossa2_cv",
+            "sparsedossa2",
+            "sd2_cv",
+            "fitcv",
+        }
         for item in pairs:
             if not item or len(item) < 2:
                 continue
             target, flags = item[0], item[1]
-            if flags_apply_to_regenerator(target, config.regeneration_mode):
+            if any(flags_apply_to_regenerator(target, mode) for mode in regen_targets):
                 flag_parts.append(flags)
+                continue
+            low = str(target).lower().replace("-", "_")
+            if "sparsedossa2" in low or low in {"sd2", "sd2_cv", "sd2_fit"}:
+                if any(str(m).startswith("sparsedossa2") for m in regen_targets) or sd2_score:
+                    flag_parts.append(flags)
         merged = merge_flag_strings(*flag_parts)
         config.regeneration_extra_flags = merged or None
         rflag_parts = [config.reads_generator_flags]

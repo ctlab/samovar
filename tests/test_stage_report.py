@@ -255,3 +255,65 @@ def test_bundle_unknown_truth_omits_nan_metrics(tmp_path):
         payload = json.loads(bars[0].read_text())
         assert "F1 (current)" not in payload.get("data", {})
 
+
+def test_bundle_multiqc_includes_table_score(tmp_path):
+    selection = {
+        "scorer": "shannon_ks",
+        "winner": "direct",
+        "winner_by_annotator": {"kaiju": "direct"},
+        "metric_name": "ks_statistic",
+        "by_annotator": {
+            "kaiju": {
+                "scorer": "shannon_ks",
+                "winner": "direct",
+                "metric_name": "ks_statistic",
+                "score_matrix": {
+                    "direct": {"direct": 0.0, "bootstrap": 0.2},
+                    "bootstrap": {"direct": 0.2, "bootstrap": 0.4},
+                },
+                "candidates": [
+                    {
+                        "mode": "direct",
+                        "annotator": "kaiju",
+                        "scorer": "shannon_ks",
+                        "ok": True,
+                        "rank_value": 0.0,
+                        "metric": 0.0,
+                        "metric_name": "ks_statistic",
+                        "pvalue": 1.0,
+                        "n_observed": 2,
+                        "n_generated": 2,
+                        "ks_statistic": 0.0,
+                    },
+                    {
+                        "mode": "bootstrap",
+                        "annotator": "kaiju",
+                        "scorer": "shannon_ks",
+                        "ok": True,
+                        "rank_value": 0.4,
+                        "metric": 0.4,
+                        "metric_name": "ks_statistic",
+                        "pvalue": 0.1,
+                        "n_observed": 2,
+                        "n_generated": 2,
+                        "ks_statistic": 0.4,
+                    },
+                ],
+            }
+        },
+        "candidates": [],
+    }
+    dest = tmp_path / "regenerated" / ".regenerated_abundance"
+    dest.mkdir(parents=True)
+    (dest / "table_selection.json").write_text(json.dumps(selection), encoding="utf-8")
+    staged = bundle_multiqc(tmp_path)
+    names = [p.name for p in staged.glob("*TableScore*_mqc.json")]
+    assert any("TableScore_kaiju_mqc.json" in n for n in names)
+    assert any("quality_scores" in n for n in names)
+    heat = json.loads(next(p for p in staged.glob("*TableScore_kaiju_mqc.json")).read_text())
+    assert heat["plot_type"] == "heatmap"
+    assert heat["parent_id"] == "samovar_regenerated"
+    table = json.loads(next(p for p in staged.glob("*TableScore_quality_scores_mqc.json")).read_text())
+    assert table["plot_type"] == "table"
+    assert "kaiju / direct" in table["data"]
+

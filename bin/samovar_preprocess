@@ -30,6 +30,13 @@ def main():
         '--N_reads', '--n_reads', dest='N_reads', type=int, default=None,
         help='Read depth of each regenerated sample (default: 1000, or N_reads in --input_config)')
     parser.add_argument(
+        '--N',
+        dest='regeneration_n',
+        type=int,
+        default=None,
+        help='Number of synthetic samples for table regeneration (default: same as input)',
+    )
+    parser.add_argument(
         '--table_reads_generator',
         '--table-reads-generator',
         '--regeneration_mode',
@@ -37,7 +44,8 @@ def main():
         action='append',
         default=None,
         help=(
-            'Abundance table regenerator: direct|bootstrap|vae|glm|camisim-table|samovar, '
+            'Abundance table regenerator: direct|bootstrap|vae|glm|camisim-table|'
+            'sparsedossa2-fit|sparsedossa2-stool|samovar, '
             'or a name imported with `samovar tools import --type table`. '
             'Repeat to try several methods; the best is chosen with --table-score'
         ),
@@ -50,7 +58,7 @@ def main():
         default=None,
         help=(
             'How to pick among multiple --table_reads_generator values '
-            '(default: shannon_ks, KS test on Shannon alpha-diversity)'
+            '(default: shannon_ks; sparsedossa2_cv if SparseDOSSA2 is installed)'
         ),
     )
     parser.add_argument(
@@ -235,7 +243,8 @@ def main():
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "cores", "max_genomes",
-        "N_reads", "n_reads", "genome-dirs", "genome_dirs", "index",
+        "N_reads", "n_reads", "N",
+        "genome-dirs", "genome_dirs", "index",
         "reannotation-level", "reannotation_level",
         "table_reads_generator", "table-reads-generator", "regeneration_mode",
         "table-score", "table_score", "table-reads-scorer",

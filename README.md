@@ -27,7 +27,7 @@ chmod +x install.sh
 
 `install.sh` may ask you some questions, like e-mail for the NCBI API.
 
-Some tools are optional but may be useful (R package, CAMISIM, MultiQC, OPAL, NanoSim, ART, seqtk, Nextflow). Install them all with:
+Some tools are optional but may be useful (R package, SparseDOSSA2, CAMISIM, MultiQC, OPAL, NanoSim, ART, seqtk, Nextflow). Install them all with:
 
 ```bash
 ./install.sh full

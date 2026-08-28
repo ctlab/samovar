@@ -36,6 +36,22 @@ SAMOVAR_R_MODES = frozenset({"samovar", "r", "boil"})
 CAMISIM_TABLE_MODES = frozenset(
     {"camisim", "camisim-table", "camisim_table", "cami"}
 )
+SPARSEDOSSA2_MODE_ALIASES = {
+    "sparsedossa2": "sparsedossa2-fit",
+    "sparsedossa2-fit": "sparsedossa2-fit",
+    "sparsedossa2_fit": "sparsedossa2-fit",
+    "sd2": "sparsedossa2-fit",
+    "sd2-fit": "sparsedossa2-fit",
+    "sparsedossa2-stool": "sparsedossa2-stool",
+    "sparsedossa2_stool": "sparsedossa2-stool",
+    "sd2-stool": "sparsedossa2-stool",
+    "sparsedossa2-vaginal": "sparsedossa2-vaginal",
+    "sparsedossa2_vaginal": "sparsedossa2-vaginal",
+    "sd2-vaginal": "sparsedossa2-vaginal",
+    "sparsedossa2-ibd": "sparsedossa2-ibd",
+    "sparsedossa2_ibd": "sparsedossa2-ibd",
+    "sd2-ibd": "sparsedossa2-ibd",
+}
 
 
 def resolve_regeneration_mode(mode: Optional[str]) -> Tuple[str, str]:
@@ -60,6 +76,9 @@ def resolve_regeneration_mode(mode: Optional[str]) -> Tuple[str, str]:
         return "builtin", "samovar"
     if low in CAMISIM_TABLE_MODES:
         return "builtin", "camisim-table"
+    sd2 = SPARSEDOSSA2_MODE_ALIASES.get(low.replace("_", "-")) or SPARSEDOSSA2_MODE_ALIASES.get(low)
+    if sd2:
+        return "builtin", sd2
     return "custom", key
 
 
@@ -70,7 +89,8 @@ def normalize_regeneration_mode(mode: Optional[str]) -> str:
         return name
     raise ValueError(
         f"Unknown regeneration_mode={mode!r}. "
-        "Use direct, bootstrap, vae, glm, camisim-table, samovar, or an imported "
+        "Use direct, bootstrap, vae, glm, camisim-table, sparsedossa2-fit, "
+        "sparsedossa2-stool, samovar, or an imported "
         "table_reads_generator name (`samovar tools import --type table`)."
     )
 
@@ -510,9 +530,10 @@ def regenerate_annotation_tables(
     """
     from samovar.table_regenerators import canonical_regeneration_modes
     from samovar.table_scorers import (
-        pick_best_table_method,
-        score_generated_tables,
+        rank_methods_per_annotator,
+        write_table_score_plots,
         write_table_selection,
+        table_score_plot_dirs,
     )
 
     cfg = dict(config or {})
@@ -536,48 +557,69 @@ def regenerate_annotation_tables(
 
     scorer = cfg.get("table_score") or cfg.get("table_reads_scorer") or "shannon_ks"
     candidates_root = out / ".table_candidates"
-    rows: List[Dict[str, Any]] = []
     tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
+    generate_errors: Dict[str, str] = {}
     for mode in modes:
         cand = candidates_root / re.sub(r"[^A-Za-z0-9._-]+", "_", mode)
         one = dict(cfg)
         one["table_reads_generator"] = mode
         one["regeneration_mode"] = mode
         one["table_reads_generators"] = [mode]
+        one["output_dir"] = str(cand)
         try:
-            tables = _regenerate_one_mode(annotation_dir, cand, one, data)
-            score = score_generated_tables(data, tables, scorer)
-            score["ok"] = True
+            tables_by_mode[mode] = _regenerate_one_mode(annotation_dir, cand, one, data)
         except Exception as exc:
-            tables = {}
-            score = {
-                "scorer": str(scorer),
-                "ks_statistic": 1.0,
-                "pvalue": 0.0,
-                "rank_value": 1.0,
-                "ok": False,
-                "error": str(exc),
-            }
-        score["mode"] = mode
-        rows.append(score)
-        tables_by_mode[mode] = tables
+            tables_by_mode[mode] = {}
+            generate_errors[mode] = str(exc)
 
-    winner = pick_best_table_method(rows) or modes[0]
-    winning_tables = tables_by_mode.get(winner) or {}
-    if not winning_tables:
+    from samovar.table_scorers import rank_methods_per_annotator
+
+    try:
+        ranked = rank_methods_per_annotator(
+            data, tables_by_mode, scorer, config=cfg, modes=modes
+        )
+    except Exception as exc:
+        ranked = {
+            "scorer": str(scorer),
+            "winner": modes[0],
+            "winner_by_annotator": {},
+            "by_annotator": {},
+            "candidates": [
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "rank_value": 1.0e9,
+                    "scorer": str(scorer),
+                }
+            ],
+            "tables": {},
+        }
+    for mode, err in generate_errors.items():
+        ranked.setdefault("generate_errors", {})[mode] = err
+    mixed = ranked.get("tables") or {}
+    if not mixed:
+        for mode in modes:
+            if tables_by_mode.get(mode):
+                mixed = tables_by_mode[mode]
+                ranked["winner"] = mode
+                ranked["tables"] = mixed
+                break
+    if not mixed:
         raise RuntimeError(
             "No table_reads_generator produced abundance tables. "
             f"Tried: {', '.join(modes)}"
+            + (f" Errors: {generate_errors}" if generate_errors else "")
         )
-    _write_abundance_tables(out, winning_tables)
-    payload = {
-        "scorer": rows[0].get("scorer", scorer) if rows else scorer,
-        "winner": winner,
-        "candidates": rows,
-    }
+    _write_abundance_tables(out, mixed)
+    payload = {k: v for k, v in ranked.items() if k != "tables"}
     write_table_selection(out / "table_selection.json", payload)
     write_table_selection(candidates_root / "table_selection.json", payload)
-    return winning_tables
+    try:
+        for dest in table_score_plot_dirs(out):
+            write_table_score_plots(payload, dest, config=cfg)
+    except Exception:
+        pass
+    return mixed
 
 
 def write_samovar_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:

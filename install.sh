@@ -12,6 +12,7 @@
 #   ./install.sh NanoSim         optional NanoSim in a separate conda env (ONT / hybrid)
 #   ./install.sh ART             optional ART Illumina simulator in a separate conda env
 #   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
+#   ./install.sh SparseDOSSA2    optional SparseDOSSA2 (table generators + CV scorer)
 #   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
 #
 # Environment:
@@ -25,7 +26,7 @@
 #   SAMOVAR_INSTALL_NANOSIM=1  also sidecar-conda NanoSim (same as ./install.sh NanoSim)
 #   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
-#   SAMOVAR_INSTALL_NEXTFLOW=1 also nextflow (conda/bioconda, or record PATH)
+#   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
@@ -178,6 +179,60 @@ cfg["annotation_regenerate_r"] = str(dest)
 cfg["r_path"] = shutil.which("R") or cfg.get("r_path") or ""
 write_config(cfg)
 print("Updated config annotation_regenerate_r")
+PY
+    return 0
+}
+
+install_sparsedossa2() {
+    if ! command -v R >/dev/null 2>&1 && ! command -v Rscript >/dev/null 2>&1; then
+        echo "R is not on PATH; cannot install SparseDOSSA2."
+        echo "See https://github.com/biobakery/SparseDOSSA2 and https://github.com/biobakery/biobakery/wiki/SparseDOSSA2"
+        return 1
+    fi
+    if [ "${SAMOVAR_OFFLINE:-0}" = "0" ]; then
+        echo "Ensuring SparseDOSSA2 R dependencies (future, future.apply, tmvtnorm, remotes) ..."
+        R --vanilla -s -e "if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', repos='https://cloud.r-project.org')" || true
+        R --vanilla -s -e "pkgs <- c('future', 'future.apply', 'tmvtnorm'); for (p in pkgs) if (!requireNamespace(p, quietly=TRUE)) install.packages(p, repos='https://cloud.r-project.org')" || true
+    fi
+    local info
+    info="$(R --vanilla -s -e 'if (requireNamespace("SparseDOSSA2", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("SparseDOSSA2")), find.package("SparseDOSSA2")) } else cat("MISSING")' 2>/dev/null || true)"
+    if echo "$info" | grep -q '^INSTALLED'; then
+        echo "SparseDOSSA2 is already installed ($info). Recording table generators and CV scorer in the install config."
+    elif [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Skipping SparseDOSSA2 install in offline mode."
+        return 1
+    else
+        echo "Installing SparseDOSSA2 from https://github.com/biobakery/SparseDOSSA2 ..."
+        if ! R --vanilla -s -e "library(remotes); remotes::install_github('biobakery/SparseDOSSA2', upgrade='never', dependencies=TRUE)"; then
+            echo "GitHub SparseDOSSA2 install failed."
+            echo "Install later with: ./install.sh SparseDOSSA2"
+            echo "Wiki: https://github.com/biobakery/biobakery/wiki/SparseDOSSA2"
+            return 1
+        fi
+        info="$(R --vanilla -s -e 'if (requireNamespace("SparseDOSSA2", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("SparseDOSSA2"))) } else cat("MISSING")' 2>/dev/null || true)"
+        echo "SparseDOSSA2: $info"
+        if ! echo "$info" | grep -q '^INSTALLED'; then
+            return 1
+        fi
+    fi
+    mkdir -p "$USER_CFG_DIR"
+    local driver_src="$ROOT/src/samovar/sparsedossa2.R"
+    local driver_dest="$USER_CFG_DIR/sparsedossa2.R"
+    if [ -f "$driver_src" ]; then
+        cp -f "$driver_src" "$driver_dest"
+        echo "SparseDOSSA2 R driver: $driver_dest"
+    fi
+    export SAMOVAR_SPARSEDOSSA2_R="$driver_dest"
+    "$PYTHON_PATH" - <<'PY'
+try:
+    from samovar.sparsedossa2 import register_sparsedossa2_tools
+except ImportError as exc:
+    print("Warning: samovar is not importable yet; re-run ./install.sh SparseDOSSA2:", exc)
+    raise SystemExit(0)
+
+register_sparsedossa2_tools()
+print("Updated config: sparsedossa2-fit / sparsedossa2-stool / sparsedossa2-vaginal / sparsedossa2-ibd (table)")
+print("Updated config: sparsedossa2-cv (fitCV_SparseDOSSA2 table scorer)")
 PY
     return 0
 }
@@ -461,6 +516,7 @@ normalize_optional_arg() {
         art|art_illumina) echo "art" ;;
         nextflow) echo "nextflow" ;;
         seqtk) echo "seqtk" ;;
+        sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
         full|all|everything) echo "full" ;;
         *) echo "" ;;
     esac
@@ -495,6 +551,7 @@ run_optional_named() {
         art) install_art ;;
         seqtk) install_seqtk ;;
         nextflow) install_nextflow ;;
+        sparsedossa2) install_sparsedossa2 ;;
         *) return 1 ;;
     esac
 }
@@ -508,6 +565,7 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_ART=1
     export SAMOVAR_INSTALL_SEQTK=1
     export SAMOVAR_INSTALL_NEXTFLOW=1
+    export SAMOVAR_INSTALL_SPARSEDOSSA2=1
 }
 
 INSTALL_FULL=0
@@ -703,6 +761,12 @@ else
     echo "Skipping nextflow (not required). Use ./install.sh nextflow or ./install.sh full."
 fi
 
+if [ "${SAMOVAR_INSTALL_SPARSEDOSSA2:-0}" != "0" ]; then
+    install_sparsedossa2 || echo "Warning: optional SparseDOSSA2 install did not complete."
+else
+    echo "Skipping SparseDOSSA2 (not required). Use ./install.sh SparseDOSSA2 for table generators + CV scoring."
+fi
+
 # Write main config.json (location: $SAMOVAR_CONFIG) and build/config_path
 export USER_CFG_DIR
 export SAMOVAR_CONFIG
@@ -875,6 +939,12 @@ payload = build_install_config(
     conda_sidecars=sidecars,
 )
 write_config(payload)
+try:
+    from samovar.sparsedossa2 import register_sparsedossa2_tools, sparsedossa2_available
+    if sparsedossa2_available():
+        register_sparsedossa2_tools()
+except Exception as exc:
+    print("SparseDOSSA2 config skip:", exc)
 from samovar.paths import user_config_path, write_install_config_pointer
 cfg_path = user_config_path()
 pointer = write_install_config_pointer(cfg_path, root=Path(root))

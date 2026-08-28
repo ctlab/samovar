@@ -672,6 +672,9 @@ def test_prepare_rejects_unimported_table_generator(tmp_path, monkeypatch):
         ("camisim-table", "camisim-table"),
         ("camisim", "camisim-table"),
         ("samovar", "samovar"),
+        ("sparsedossa2-fit", "sparsedossa2-fit"),
+        ("sparsedossa2-stool", "sparsedossa2-stool"),
+        ("sd2", "sparsedossa2-fit"),
     ],
 )
 def test_prepare_parses_all_regeneration_modes(tmp_path, mode, canonical):
@@ -825,6 +828,11 @@ def test_multiple_table_generators_select_direct(toy_annotation_dir, tmp_path):
     assert modes >= {"direct", "bootstrap"}
     direct_row = next(r for r in selection["candidates"] if r["mode"] == "direct")
     assert direct_row["ks_statistic"] == 0.0
+    for key in ("metric", "metric_name", "pvalue", "n_observed", "n_generated", "rank_value"):
+        assert key in direct_row
+    plots = out / "table_score_plots"
+    assert (plots / "TableScore_quality_scores_mqc.json").is_file()
+    assert list(plots.glob("TableScore_*_mqc.json"))
     assert (out / "kaiju.csv").is_file()
 
 

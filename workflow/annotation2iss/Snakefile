@@ -44,6 +44,7 @@ if isinstance(_multi, (list, tuple)) and len(_multi) > 1:
     REGENERATION_CONFIG["table_reads_generator"] = list(_multi)
 if config.get("table_score"):
     REGENERATION_CONFIG["table_score"] = config.get("table_score")
+REGENERATION_CONFIG["cores"] = CORES
 if config.get("samples_metadata"):
     REGENERATION_CONFIG["samples_metadata"] = config["samples_metadata"]
 if config.get("table_reads_generator_flags") or config.get("extra_flags"):

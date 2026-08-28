@@ -448,14 +448,19 @@ def _is_finite_number(val: Any) -> bool:
     return val == val and abs(val) != float("inf")
 
 
-def _heatmap_pconfig(plot_id: str, title: str, xlab: str, ylab: str) -> Dict[str, Any]:
+def _heatmap_pconfig(
+    plot_id: str,
+    title: str,
+    xlab: str,
+    ylab: str,
+    min_value: Optional[float] = 0,
+) -> Dict[str, Any]:
     # Keep FPC / true-vs-pred order; do not treat taxIDs as sample names.
-    return {
+    cfg: Dict[str, Any] = {
         "id": plot_id,
         "title": title,
         "xlab": xlab,
         "ylab": ylab,
-        "min": 0,
         "square": False,
         "xcats_samples": False,
         "ycats_samples": False,
@@ -463,6 +468,125 @@ def _heatmap_pconfig(plot_id: str, title: str, xlab: str, ylab: str) -> Dict[str
         "cluster_cols": False,
         "colstops": HEATMAP_COLSTOPS,
     }
+    if min_value is not None:
+        cfg["min"] = min_value
+    return cfg
+
+
+def write_table_mqc(
+    rows: Sequence[Dict[str, Any]],
+    path: PathLike,
+    *,
+    section_name: str,
+    description: str = "",
+    col1_header: str = "Method",
+    plot_id: Optional[str] = None,
+    parent_id: Optional[str] = None,
+    parent_name: Optional[str] = None,
+    id_field: str = "mode",
+    numeric_fields: Optional[Sequence[str]] = None,
+) -> Path:
+    """Native MultiQC table (same shape as quality_scores)."""
+    dest = as_path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pid, pname, pdesc = plot_parent(dest.parent)
+    stem = dest.stem.replace("_mqc", "")
+    cid = plot_id or f"{pid}_{stem}"
+    data: Dict[str, Dict[str, Any]] = {}
+    headers: Dict[str, Dict[str, str]] = {}
+    skip = {id_field, "annotator", "scorer", "ok", "error", "details", "mode"}
+    for row in rows:
+        name = str(row.get(id_field) or row.get("mode") or "method")
+        entry: Dict[str, Any] = {}
+        keys = list(numeric_fields) if numeric_fields else [
+            k for k, v in row.items() if k not in skip and _is_finite_number(v)
+        ]
+        for key in keys:
+            val = row.get(key)
+            if not _is_finite_number(val):
+                continue
+            entry[key] = round(float(val), 4)
+            headers.setdefault(key, {"title": _metric_label(key), "format": "{:.3f}"})
+        if entry:
+            data[name] = entry
+    payload = {
+        "id": cid,
+        "section_id": cid,
+        "parent_id": parent_id or pid,
+        "parent_name": parent_name or pname,
+        "parent_description": pdesc,
+        "section_name": section_name,
+        "description": description,
+        "plot_type": "table",
+        "pconfig": {
+            "id": f"{cid}_table",
+            "title": section_name,
+            "col1_header": col1_header,
+        },
+        "headers": headers,
+        "data": data,
+    }
+    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    return dest
+
+
+def write_bargraph_mqc(
+    series: Dict[str, Dict[str, float]],
+    path: PathLike,
+    *,
+    section_name: str,
+    description: str = "",
+    xlab: str = "Score",
+    plot_id: Optional[str] = None,
+    parent_id: Optional[str] = None,
+    parent_name: Optional[str] = None,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+) -> Path:
+    """Native MultiQC bar graph (grouped, same defaults as score bars)."""
+    dest = as_path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pid, pname, pdesc = plot_parent(dest.parent)
+    stem = dest.stem.replace("_mqc", "")
+    cid = plot_id or f"{pid}_{stem}"
+    names: List[str] = []
+    seen = set()
+    for metric_series in series.values():
+        for name in metric_series:
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+    cats = {
+        name: {"name": name, "color": _annotator_color(name, i)}
+        for i, name in enumerate(names)
+    }
+    pconfig: Dict[str, Any] = {
+        "id": f"{cid}_plot",
+        "title": section_name,
+        "xlab": xlab,
+        "stacking": "group",
+        "cpswitch": False,
+        "sort_samples": False,
+    }
+    if ymin is not None:
+        pconfig["ymin"] = ymin
+    if ymax is not None:
+        pconfig["ymax"] = ymax
+    payload = {
+        "id": cid,
+        "section_id": cid,
+        "parent_id": parent_id or pid,
+        "parent_name": parent_name or pname,
+        "parent_description": pdesc,
+        "section_name": section_name,
+        "description": description,
+        "plot_type": "bargraph",
+        "categories": cats,
+        "pconfig": pconfig,
+        "data": series,
+    }
+    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    return dest
 
 
 def write_heatmap_mqc(
@@ -476,6 +600,7 @@ def write_heatmap_mqc(
     plot_id: Optional[str] = None,
     parent_id: Optional[str] = None,
     parent_name: Optional[str] = None,
+    min_value: Optional[float] = 0,
 ) -> Path:
     """Native MultiQC heatmap (selectable + ``--export``)."""
     dest = as_path(path)
@@ -483,7 +608,9 @@ def write_heatmap_mqc(
     pid, pname, pdesc = plot_parent(dest.parent)
     stem = dest.stem.replace("_mqc", "")
     cid = plot_id or f"{pid}_{stem}"
-    values = matrix.to_numpy(dtype=float).tolist()
+    values = []
+    for row in matrix.to_numpy(dtype=float).tolist():
+        values.append([None if not _is_finite_number(v) else v for v in row])
     payload = {
         "id": cid,
         "section_id": cid,
@@ -495,7 +622,9 @@ def write_heatmap_mqc(
         "plot_type": "heatmap",
         "xcats": [str(c) for c in matrix.columns],
         "ycats": [str(c) for c in matrix.index],
-        "pconfig": _heatmap_pconfig(f"{cid}_plot", section_name, xlab, ylab),
+        "pconfig": _heatmap_pconfig(
+            f"{cid}_plot", section_name, xlab, ylab, min_value=min_value
+        ),
         "data": values,
     }
     dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
@@ -1086,6 +1215,24 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
+
+    plots = root / REPORT_SECTION["viz_regenerated"]["folder"]
+    if not plots.is_dir() or not any(plots.glob("TableScore_*_mqc.json")):
+        for candidate in (
+            root / "regenerated" / ".regenerated_abundance" / "table_selection.json",
+            root / "regenerated" / "table_selection.json",
+        ):
+            if candidate.is_file():
+                try:
+                    from samovar.table_scorers import write_table_score_plots
+
+                    write_table_score_plots(
+                        json.loads(candidate.read_text(encoding="utf-8")),
+                        plots,
+                    )
+                except Exception:
+                    pass
+                break
 
     for i, stage in enumerate(REPORT_STAGES, start=1):
         folder = root / REPORT_SECTION[stage]["folder"]

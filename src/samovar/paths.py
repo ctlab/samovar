@@ -1130,6 +1130,14 @@ def install_status_rows() -> List[Dict[str, Any]]:
             config_key="r_path",
             install="./install.sh R-package",
         ),
+        row(
+            "SparseDOSSA2",
+            required=False,
+            role="Optional table generators (fit / Stool / Vaginal / IBD) and fitCV scorer",
+            path=str(cfg.get("sparsedossa2_r") or "") or None,
+            config_key="sparsedossa2 / tools.sparsedossa2-fit",
+            install="./install.sh SparseDOSSA2",
+        ),
     ]
     try:
         from samovar.camisim import discover_camisim as _dc
@@ -1155,6 +1163,25 @@ def install_status_rows() -> List[Dict[str, Any]]:
                 found = shutil.which("nextflow") or ""
             item["path"] = found
             item["found"] = bool(found)
+        if item["name"] == "SparseDOSSA2":
+            try:
+                from samovar.sparsedossa2 import sparsedossa2_available
+
+                found = sparsedossa2_available()
+            except Exception:
+                found = bool(cfg.get("sparsedossa2"))
+            item["found"] = bool(found)
+            if found:
+                try:
+                    from samovar.sparsedossa2 import driver_script
+
+                    item["path"] = str(driver_script())
+                except Exception:
+                    item["path"] = str(
+                        cfg.get("sparsedossa2_r") or "SparseDOSSA2 R package"
+                    )
+            elif not item["path"]:
+                item["path"] = str(cfg.get("sparsedossa2_r") or "")
     return rows
 
 

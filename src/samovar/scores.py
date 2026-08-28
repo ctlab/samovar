@@ -473,6 +473,11 @@ SCORE_DISPLAY = {
     "fnr": "FN rate",
     "accuracy_purity": "Accuracy purity",
     "f1_purity": "F1 purity",
+    "ks_statistic": "KS D",
+    "cv_goodness_of_fit": "CV goodness of fit",
+    "rank_value": "Rank value",
+    "metric": "Score",
+    "pvalue": "p-value",
 }
 
 OPAL_DISPLAY = {
@@ -501,6 +506,9 @@ BAR_COLORS = {
     "jaccard": "#B3DE69",
     "l1_norm": "#FCCDE5",
     "bray_curtis": "#D9D9D9",
+    "ks_statistic": "#1B9E77",
+    "cv_goodness_of_fit": "#7570B3",
+    "rank_value": "#666666",
 }
 
 

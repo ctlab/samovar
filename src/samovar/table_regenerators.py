@@ -52,6 +52,12 @@ def extra_flags_argv(text: Optional[str]) -> List[str]:
     return shlex.split(str(text))
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "t", "on"}
+
+
 def parse_regeneration_modes(raw: Any) -> List[str]:
     """Split CLI/YAML ``table_reads_generator`` into ordered unique names."""
     if raw in (None, False, ""):
@@ -82,6 +88,8 @@ def flags_apply_to_regenerator(target: str, mode: Optional[str]) -> bool:
     names = [name, mode]
     if kind == "builtin" and name == "camisim-table":
         names.extend(["camisim", "camisim_table", "cami"])
+    if kind == "builtin" and str(name).startswith("sparsedossa2"):
+        names.extend(["sparsedossa2", "sd2", "SparseDOSSA2"])
     return flags_target_matches(
         target,
         *names,
@@ -111,8 +119,33 @@ def apply_extra_flags(config: Dict[str, Any]) -> Dict[str, Any]:
         "--N": ("N", int),
         "--N_reads": ("N_reads", int),
         "--seed": ("seed", int),
+        "--template": ("sparsedossa2_template", str),
+        "--n-feature": ("n_feature", int),
+        "--n_feature": ("n_feature", int),
+        "--n-features": ("n_feature", int),
+        "--workers": ("sparsedossa2_workers", int),
+        "--parallel": ("sparsedossa2_workers", int),
+        "--cores": ("cores", int),
+        "--cv-folds": ("cv_folds", int),
+        "--K": ("cv_folds", int),
+        "--lambdas": ("lambdas", str),
+        "--lambda": ("fit_lambda", float),
+        "--maxit": ("maxit", int),
+        "--max-eval": ("max_eval", int),
+        "--max_eval": ("max_eval", int),
+        "--prec-bits": ("prec_bits", int),
+        "--precBits": ("prec_bits", int),
+        "--timeout": ("timeout", int),
     }
-    leftover: List[str] = []
+    bool_flags = {
+        "--fit": ("sparsedossa2_fit", True),
+        "--verbose": ("verbose", True),
+        "-v": ("verbose", True),
+    }
+    optional_bool = {
+        "--new-features": "new_features",
+        "--new_features": "new_features",
+    }
     i = 0
     while i < len(argv):
         tok = argv[i]
@@ -125,6 +158,19 @@ def apply_extra_flags(config: Dict[str, Any]) -> Dict[str, Any]:
             mapped = mapping.get(flag)
             if mapped:
                 key, caster = mapped
+            elif flag in optional_bool:
+                key, caster = optional_bool[flag], _as_bool
+            elif flag in bool_flags:
+                key, value = bool_flags[flag][0], bool_flags[flag][1]
+                caster = lambda x: x
+        elif tok in bool_flags:
+            key, value = bool_flags[tok][0], bool_flags[tok][1]
+            caster = lambda x: x
+        elif tok in optional_bool:
+            if i + 1 < len(argv) and not str(argv[i + 1]).startswith("-"):
+                key, caster, value, consumed = optional_bool[tok], _as_bool, argv[i + 1], 2
+            else:
+                key, value, caster = optional_bool[tok], True, lambda x: x
         else:
             mapped = mapping.get(tok)
             if mapped and i + 1 < len(argv):
@@ -473,6 +519,19 @@ def _read_abundance_dir(output_dir: Path) -> Dict[str, pd.DataFrame]:
     return tables
 
 
+class SparseDOSSA2TableRegenerator(TableRegenerator):
+    def __init__(self, mode: str = "sparsedossa2-fit"):
+        self.mode = str(mode)
+
+    def run(self, annotation, metadata, config):
+        cfg = dict(config or {})
+        cfg["table_reads_generator"] = self.mode
+        cfg["regeneration_mode"] = self.mode
+        from samovar.sparsedossa2 import regenerate as sd2_regenerate
+
+        return sd2_regenerate(annotation, metadata, cfg)
+
+
 _BUILTIN: Dict[str, type] = {
     "direct": DirectTableRegenerator,
     "bootstrap": BootstrapTableRegenerator,
@@ -480,6 +539,10 @@ _BUILTIN: Dict[str, type] = {
     "glm": GlmTableRegenerator,
     "samovar": SamovarRTableRegenerator,
     "camisim-table": CamisimTableRegenerator,
+    "sparsedossa2-fit": SparseDOSSA2TableRegenerator,
+    "sparsedossa2-stool": SparseDOSSA2TableRegenerator,
+    "sparsedossa2-vaginal": SparseDOSSA2TableRegenerator,
+    "sparsedossa2-ibd": SparseDOSSA2TableRegenerator,
 }
 
 
@@ -488,6 +551,8 @@ def get_table_regenerator(mode: Optional[str]) -> TableRegenerator:
     kind, name = resolve_regeneration_mode(mode)
     if kind == "builtin":
         cls = _BUILTIN[name]
+        if cls is SparseDOSSA2TableRegenerator:
+            return SparseDOSSA2TableRegenerator(name)
         return cls()
     lookup_table_regenerator(name)
     return CustomTableRegenerator(name)
