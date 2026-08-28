@@ -1,7 +1,7 @@
-"""End-to-end integrity: generate → prepare → exec like samovar_fix2, on bundled genomes.
+"""Generate → prepare (dummy annotator) → exec on bundled test genomes.
 
-Uses the real ``iss`` CLI and the dummy annotator (no Kraken/Kaiju index). NCBI is
-not required: genomes come from ``data/test_genomes``.
+Uses the real ``iss`` CLI. NCBI is not required: genomes come from
+``data/test_genomes``.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _run(cmd, cwd, env, timeout=600):
     return proc
 
 
-def test_fix2_style_generate_prepare_exec(tmp_path):
+def test_generate_prepare_exec_dummy_annotator(tmp_path):
     root = repo_root()
     genomes = bundled_genomes_dir()
     meta = genomes / "meta"

@@ -418,12 +418,17 @@ def split_paired_fastq_by_counts(
     """
     Split a paired FASTQ into samples using sequential chunks proportional to counts.
     """
-    if not os.path.exists(r1_path) or not os.path.exists(r2_path):
+    if not os.path.exists(r1_path):
         for sample, (r1_out, r2_out) in output_paths.items():
             _write_empty_fastq_pair(r1_out, r2_out)
         return {sample: 0 for sample in output_paths}
 
-    pairs = list(_iter_fastq_pairs(r1_path, r2_path))
+    if not os.path.exists(r2_path) or not _fastq_has_records(r2_path):
+        recs = [list(rec) for rec in iter_fastq_records(r1_path) if rec[0].strip()]
+        empty = ["", "", "", ""]
+        pairs = [(rec, list(empty)) for rec in recs]
+    else:
+        pairs = list(_iter_fastq_pairs(r1_path, r2_path))
     allocated = _allocate_counts(len(pairs), sample_counts)
     offset = 0
     written = {}

@@ -1507,6 +1507,8 @@ def tag_fastq_file(
     src = Path(src)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    same_file = src.resolve() == dest.resolve()
+    write_to = dest.with_name(dest.name + ".tagging.tmp") if same_file else dest
 
     def chunks() -> Iterable[str]:
         for header, seq, plus, qual in iter_fastq_records(src):
@@ -1516,7 +1518,9 @@ def tag_fastq_file(
             yield plus
             yield qual
 
-    write_text_lines(dest, chunks())
+    write_text_lines(write_to, chunks())
+    if same_file:
+        write_to.replace(dest)
 
 
 def _harvest_camisim_reads(

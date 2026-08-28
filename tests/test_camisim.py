@@ -253,6 +253,8 @@ def test_tag_fastq_file(tmp_path):
     assert "read_type:ont" in text
     assert "taxid:4932" in text
     assert text.splitlines()[1] == "ACGT"
+    tag_fastq_file(dest, dest, "ont", "4932")
+    assert dest.read_text().splitlines()[1] == "ACGT"
 
 
 def test_score_annotators_splits_hybrid_read_type():
