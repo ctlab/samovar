@@ -25,6 +25,11 @@ from samovar.metagenome_generators import (
     require_known_metagenome_generator,
 )
 from samovar.scorers import is_scoring_flag_target
+from samovar.reprofilers import (
+    REPROFILER_FLAG_GROUPS,
+    is_reprofiler_flag_target,
+    require_known_reprofiler,
+)
 from samovar.genome_resolve import normalize_reannotation_level
 from samovar.main_config import (
     flags_target_matches,
@@ -194,6 +199,9 @@ class PipelineConfig:
     scoring_flags: Optional[str] = None
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
+    reprofiler: str = "ensemble"
+    reprofiler_flags: Optional[str] = None
+    reprofiler_tool_flags: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
         if self.annotators is None:
@@ -202,6 +210,8 @@ class PipelineConfig:
             self.genome_dirs = []
         if self.scoring_tool_flags is None:
             self.scoring_tool_flags = {}
+        if self.reprofiler_tool_flags is None:
+            self.reprofiler_tool_flags = {}
         if not self.email:
             self.email = _default_email()
 
@@ -278,6 +288,23 @@ class PipelineConfig:
                 if isinstance(yaml_stf, dict):
                     config.scoring_tool_flags = {
                         str(k): str(v) for k, v in yaml_stf.items()
+                    }
+                yaml_reprofiler = (
+                    input_config.get("reprofiler")
+                    or input_config.get("ml")
+                    or input_config.get("reprofiling")
+                )
+                if yaml_reprofiler:
+                    config.reprofiler = require_known_reprofiler(yaml_reprofiler)
+                yaml_rfl = input_config.get("reprofiler_flags") or input_config.get(
+                    "ml_flags"
+                )
+                if yaml_rfl:
+                    config.reprofiler_flags = str(yaml_rfl)
+                yaml_rtf = input_config.get("reprofiler_tool_flags")
+                if isinstance(yaml_rtf, dict):
+                    config.reprofiler_tool_flags = {
+                        str(k): str(v) for k, v in yaml_rtf.items()
                     }
                 config.reannotation_level = normalize_reannotation_level(
                     input_config.get(
@@ -440,6 +467,12 @@ class PipelineConfig:
                 config.scoring_tools = []
             else:
                 config.scoring_tools = tokens
+        cli_reprofiler = (
+            getattr(args, "reprofiler", None)
+            or getattr(args, "ml", None)
+        )
+        if cli_reprofiler:
+            config.reprofiler = require_known_reprofiler(cli_reprofiler)
         cli_meta = getattr(args, "samples_metadata", None)
         if cli_meta:
             config.samples_metadata = absolute_path(str(cli_meta))
@@ -500,6 +533,22 @@ class PipelineConfig:
                 )
         config.scoring_flags = merge_flag_strings(*sflag_parts) or None
         config.scoring_tool_flags = named_sflags or {}
+        rprof_parts = [config.reprofiler_flags]
+        named_rprof = dict(config.reprofiler_tool_flags or {})
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if not is_reprofiler_flag_target(str(target)):
+                continue
+            if flags_target_matches(str(target), groups=REPROFILER_FLAG_GROUPS):
+                rprof_parts.append(flags)
+            else:
+                named_rprof[str(target)] = merge_flag_strings(
+                    named_rprof.get(str(target)), flags
+                )
+        config.reprofiler_flags = merge_flag_strings(*rprof_parts) or None
+        config.reprofiler_tool_flags = named_rprof or {}
 
         return config
 
@@ -583,6 +632,23 @@ class PipelineConfig:
         with open(scoring_path, 'w') as f:
             yaml.dump(scoring_config, f)
         configs['scoring'] = str(scoring_path)
+
+        reprofiling_config = {
+            'output_dir': str(base_path / 'reprofiled_annotations'),
+            'initial_dir': str(base_path / 'initial_annotations'),
+            'regenerated_path': str(
+                base_path / 'regenerated_annotations' / 'combined_annotation_table.csv'
+            ),
+            'ground_truth_dir': str(base_path / 'regenerated' / '.regenerated_abundance'),
+            'reprofiler': self.reprofiler,
+            'reprofiler_flags': self.reprofiler_flags or "",
+            'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
+            'seed': self.regeneration_seed,
+        }
+        reprofiling_path = configs_dir / 'config_reprofiling.yaml'
+        with open(reprofiling_path, 'w') as f:
+            yaml.dump(reprofiling_config, f)
+        configs['reprofiling'] = str(reprofiling_path)
 
         # Generate reannotate config
         reannotate_config = {
@@ -802,7 +868,10 @@ fi
 $PYTHON_PATH {wf / 'ML.py'} \\
     --reprofiling_dir "$out_dir/initial_annotations" \\
     --validation_file "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
+    --ground-truth "$out_dir/regenerated/.regenerated_abundance" \\
     --output_dir "$out_dir/reprofiled_annotations" \\
+    --reprofiler {self.reprofiler} \\
+    --config {configs['reprofiling']} \\
     --seed {self.regeneration_seed} \\
     $FEATURE_ARG""",
         )

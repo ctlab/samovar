@@ -56,6 +56,7 @@ TOOL_GROUPS = (
     "metagenome_generator",
     "table_reads_generator",
     "scoring",
+    "reprofiler",
     "workflow",
 )
 
@@ -84,6 +85,10 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "visualizations": "scoring",
     "visualisations": "scoring",
     "plots": "scoring",
+    "ml": "reprofiler",
+    "reprofile": "reprofiler",
+    "reprofiler": "reprofiler",
+    "reprofiling": "reprofiler",
     "workflow": "workflow",
     "wf": "workflow",
 }
@@ -120,6 +125,8 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "opal": "scoring",
     "opal.py": "scoring",
     "multiqc": "scoring",
+    "random_forest": "reprofiler",
+    "adaboost": "reprofiler",
     "snakemake": "workflow",
     "nextflow": "workflow",
 }

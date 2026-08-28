@@ -136,15 +136,17 @@ def preprocess_data(df, drop_missing_true: bool = True):
     
     return df
 
-def train_models(df, test_size=0.2, random_state=42):
+def train_models(df, test_size=0.2, random_state=42, methods=None):
     """
-    Train RandomForest and AdaBoost models for taxID prediction.
-    
+    Train RandomForest and/or AdaBoost models for taxID prediction.
+
     Args:
         df (pd.DataFrame): Input dataframe
         test_size (float): Proportion of data to use for testing
         random_state (int): Random seed for reproducibility
-        
+        methods: ``ensemble`` (both, pick best), ``random_forest``, ``adaboost``,
+            or an iterable of those names.
+
     Returns:
         tuple: (best_model, models_dict, metrics_dict, feature_cols)
     """
@@ -180,12 +182,13 @@ def train_models(df, test_size=0.2, random_state=42):
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, **split_kwargs
     )
-    
-    # Initialize models
-    models = {
-        'RandomForest': RandomForestClassifier(random_state=random_state, n_estimators=100),
-        'AdaBoost': AdaBoostClassifier(random_state=random_state, n_estimators=100)
+
+    wanted = _normalize_sklearn_methods(methods)
+    catalog = {
+        "RandomForest": RandomForestClassifier(random_state=random_state, n_estimators=100),
+        "AdaBoost": AdaBoostClassifier(random_state=random_state, n_estimators=100),
     }
+    models = {name: catalog[name] for name in wanted}
     
     # Train and evaluate models
     metrics = {}
@@ -202,6 +205,43 @@ def train_models(df, test_size=0.2, random_state=42):
             best_model = model
     
     return best_model, models, metrics, feature_cols
+
+
+def _normalize_sklearn_methods(methods) -> list:
+    alias = {
+        "ensemble": ("RandomForest", "AdaBoost"),
+        "samovar": ("RandomForest", "AdaBoost"),
+        "default": ("RandomForest", "AdaBoost"),
+        "both": ("RandomForest", "AdaBoost"),
+        "random_forest": ("RandomForest",),
+        "rf": ("RandomForest",),
+        "randomforest": ("RandomForest",),
+        "adaboost": ("AdaBoost",),
+        "ada": ("AdaBoost",),
+        "randomforestclassifier": ("RandomForest",),
+        "adaboostclassifier": ("AdaBoost",),
+    }
+    if methods is None or methods is False:
+        names = ["ensemble"]
+    elif isinstance(methods, str):
+        names = [methods]
+    else:
+        names = list(methods)
+    out = []
+    seen = set()
+    for raw in names:
+        key = str(raw or "ensemble").strip().lower().replace("-", "_")
+        mapped = alias.get(key)
+        if mapped is None:
+            raise ValueError(
+                f"Unknown built-in reprofiler {raw!r}. Use ensemble, random_forest, or adaboost."
+            )
+        for name in mapped:
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+    return out or ["RandomForest", "AdaBoost"]
+
 
 def plot_roc_curves(models, X_test, y_test, output_dir='tests_outs'):
     """

@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         "--type",
         required=True,
-        help=f"Tool group: {', '.join(TOOL_GROUPS)} (aliases: a, reads, meta, table, score, viz)",
+        help=f"Tool group: {', '.join(TOOL_GROUPS)} (aliases: a, reads, meta, table, score, viz, ml)",
     )
     parser.add_argument(
         "--flags",

@@ -77,6 +77,16 @@ def main():
         ),
     )
     parser.add_argument(
+        '--reprofiler',
+        '--ml',
+        dest='reprofiler',
+        default=None,
+        help=(
+            'ML reprofiler: ensemble|random_forest|adaboost, or a name imported '
+            'with `samovar tools import --type ml`'
+        ),
+    )
+    parser.add_argument(
         '--flags',
         nargs=2,
         action='append',
@@ -89,7 +99,8 @@ def main():
             '--flags table_reads_generator "--log-mu 1" or '
             '--flags reads_generator "--gc_bias" or '
             '--flags metagenome_generator "--model hiseq" or '
-            '--flags scoring "--min-files 1"'
+            '--flags scoring "--min-files 1" or '
+            '--flags ml "--C 1"'
         ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
