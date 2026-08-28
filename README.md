@@ -1,4 +1,4 @@
-# SAMOVAR <a href=""><img src="data/img/logos/logo_stable.png" align="right" width="150" ></a>
+# SAMOVAR <img src="data/img/logos/logo_stable.png" align="right" width="150" alt="SAMOVAR logo">
 ### Metagenomic ensemble taxonomic annotation, cross-validation, and ML re-profiling
 
 [![ITMO](https://raw.githubusercontent.com/aimclub/open-source-ops/43bb283758b43d75ec1df0a6bb4ae3eb20066323/badges/ITMO_badge.svg)](https://itmo.ru/)
@@ -27,9 +27,15 @@ chmod +x install.sh
 
 `install.sh` may ask you some questions, like e-mail for the NCBI API.
 
-Some tools are optional but may be usefull (samovar R package, CAMISIM, MultiQC and other). More details on the installation [github wiki page](wiki/How-to-install). 
+Some tools are optional but may be useful (R package, CAMISIM, MultiQC, OPAL, NanoSim, ART, seqtk, Nextflow). Install them all with:
 
-The install JSON layout is described in [wiki](wiki/Configs-&-data).
+```bash
+./install.sh full
+```
+
+Already-installed extras are reused and written into the install config. More details: [installation wiki](https://github.com/ctlab/samovar/wiki/How-to-install).
+
+The tool main config layout is described in [config wiki](https://github.com/ctlab/samovar/wiki/Configs-&-data).
 
 ## Ensemble annotation
 
@@ -69,9 +75,12 @@ graph TD
     subgraph Re-profiling
         C --> ML[Train ensemble]
         F --> ML
-        ML --> R[taxid_SAMOVAR]
+        F --> R
+        ML --> R[SAMOVAR results]
     end
 ```
+
+Each stage have built-in & custom options. Their usage & integration approaches ar described in the [tool wiki](https://github.com/ctlab/samovar/wiki/Custom-tools-import).
 
 ## Brief Usage
 

@@ -4,6 +4,7 @@
 #
 # Usage:
 #   ./install.sh                 Python pipeline only
+#   ./install.sh full            core + every optional extra (reuse if already installed)
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
 #   ./install.sh MultiQC         optional MultiQC HTML reports
@@ -16,6 +17,7 @@
 # Environment:
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
+#   SAMOVAR_INSTALL_FULL=1     same as ./install.sh full
 #   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
 #   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
 #   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
@@ -23,6 +25,7 @@
 #   SAMOVAR_INSTALL_NANOSIM=1  also sidecar-conda NanoSim (same as ./install.sh NanoSim)
 #   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
+#   SAMOVAR_INSTALL_NEXTFLOW=1 also nextflow (conda/bioconda, or record PATH)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
@@ -180,20 +183,23 @@ PY
 }
 
 install_opal() {
-    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+    if "$PYTHON_PATH" -c "from samovar.paths import discover_opal; raise SystemExit(0 if discover_opal() else 1)" 2>/dev/null; then
+        echo "OPAL already present; recording it in the install config."
+    elif [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
         echo "Skipping OPAL install in offline mode."
         return 1
+    else
+        echo "Installing optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL) ..."
+        # cami-opal pins exact numpy/pandas/scipy; those pins fight the SamovaR env
+        # and can hang pip. Install the package only; scientific stack is already here.
+        if ! "$PYTHON_PATH" -m pip install "cami-opal" --no-deps "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
+            echo "Warning: pip install cami-opal failed. Profiling HTML from OPAL will be skipped."
+            echo "Install later with: ./install.sh OPAL"
+            return 1
+        fi
+        "$PYTHON_PATH" -m pip install "bokeh>=3" "jinja2>=3" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}" || true
+        hash -r 2>/dev/null || true
     fi
-    echo "Installing optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL) ..."
-    # cami-opal pins exact numpy/pandas/scipy; those pins fight the SamovaR env
-    # and can hang pip. Install the package only; scientific stack is already here.
-    if ! "$PYTHON_PATH" -m pip install "cami-opal" --no-deps "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
-        echo "Warning: pip install cami-opal failed. Profiling HTML from OPAL will be skipped."
-        echo "Install later with: ./install.sh OPAL"
-        return 1
-    fi
-    "$PYTHON_PATH" -m pip install "bokeh>=3" "jinja2>=3" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}" || true
-    hash -r 2>/dev/null || true
     export PY_BIN
     "$PYTHON_PATH" - <<'PY'
 import os, shutil, stat, sys
@@ -233,17 +239,20 @@ PY
 }
 
 install_multiqc() {
-    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+    if "$PYTHON_PATH" -c "from samovar.paths import discover_multiqc; import shutil; raise SystemExit(0 if (discover_multiqc() or shutil.which('multiqc')) else 1)" 2>/dev/null; then
+        echo "MultiQC already present; recording it in the install config."
+    elif [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
         echo "Skipping MultiQC install in offline mode."
         return 1
+    else
+        echo "Installing optional MultiQC (https://seqera.io/multiqc/) ..."
+        if ! "$PYTHON_PATH" -m pip install "multiqc>=1.21" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
+            echo "Warning: pip install multiqc failed. HTML reports from MultiQC will be skipped."
+            echo "Install later with: ./install.sh MultiQC"
+            return 1
+        fi
+        hash -r 2>/dev/null || true
     fi
-    echo "Installing optional MultiQC (https://seqera.io/multiqc/) ..."
-    if ! "$PYTHON_PATH" -m pip install "multiqc>=1.21" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
-        echo "Warning: pip install multiqc failed. HTML reports from MultiQC will be skipped."
-        echo "Install later with: ./install.sh MultiQC"
-        return 1
-    fi
-    hash -r 2>/dev/null || true
     export PY_BIN
     "$PYTHON_PATH" - <<'PY'
 import os, shutil, sys
@@ -395,6 +404,39 @@ install_seqtk() {
     return 1
 }
 
+install_nextflow() {
+    if command -v nextflow >/dev/null 2>&1; then
+        echo "nextflow: $(command -v nextflow)"
+        return 0
+    fi
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Skipping nextflow install in offline mode. conda install -c bioconda nextflow"
+        return 1
+    fi
+    local conda_bin="${SAMOVAR_CONDA:-}"
+    if [ -z "$conda_bin" ]; then
+        conda_bin="$(command -v mamba || command -v conda || true)"
+    fi
+    if [ -z "$conda_bin" ]; then
+        echo "nextflow is not on PATH and conda/mamba was not found."
+        echo "Install with: conda install -c bioconda nextflow"
+        echo "or https://www.nextflow.io/docs/latest/install.html"
+        return 1
+    fi
+    echo "Installing optional Nextflow via bioconda (needed for CAMISIM 2 read simulation) ..."
+    if ! "$conda_bin" install -y -c bioconda -c conda-forge nextflow; then
+        echo "Warning: nextflow install failed. CAMISIM table+ISS mode still works without it."
+        return 1
+    fi
+    hash -r 2>/dev/null || true
+    if command -v nextflow >/dev/null 2>&1; then
+        echo "nextflow: $(command -v nextflow)"
+        return 0
+    fi
+    echo "nextflow installed but not on PATH in this shell."
+    return 1
+}
+
 print_install_status() {
     "$PYTHON_PATH" - <<'PY' || true
 try:
@@ -419,6 +461,7 @@ normalize_optional_arg() {
         art|art_illumina) echo "art" ;;
         nextflow) echo "nextflow" ;;
         seqtk) echo "seqtk" ;;
+        full|all|everything) echo "full" ;;
         *) echo "" ;;
     esac
 }
@@ -451,22 +494,47 @@ run_optional_named() {
         nanosim) install_nanosim ;;
         art) install_art ;;
         seqtk) install_seqtk ;;
-        nextflow)
-            echo "Nextflow is not bundled. Install with: conda install -c bioconda nextflow"
-            echo "or https://www.nextflow.io/docs/latest/install.html"
-            echo "Then set nextflow_path in ~/.config/samovar/config.json"
-            if command -v nextflow >/dev/null 2>&1; then
-                echo "Found: $(command -v nextflow)"
-            else
-                return 1
-            fi
-            ;;
+        nextflow) install_nextflow ;;
         *) return 1 ;;
     esac
 }
 
+enable_full_install_flags() {
+    export SAMOVAR_INSTALL_R=1
+    export SAMOVAR_INSTALL_OPAL=1
+    export SAMOVAR_INSTALL_MULTIQC=1
+    export SAMOVAR_INSTALL_CAMISIM=1
+    export SAMOVAR_INSTALL_NANOSIM=1
+    export SAMOVAR_INSTALL_ART=1
+    export SAMOVAR_INSTALL_SEQTK=1
+    export SAMOVAR_INSTALL_NEXTFLOW=1
+}
+
+INSTALL_FULL=0
+if [ "${SAMOVAR_INSTALL_FULL:-0}" != "0" ]; then
+    INSTALL_FULL=1
+fi
+FILTERED_ARGS=()
+for arg in "$@"; do
+    mapped="$(normalize_optional_arg "$arg")"
+    if [ "$mapped" = "full" ]; then
+        INSTALL_FULL=1
+        continue
+    fi
+    FILTERED_ARGS+=("$arg")
+done
+if [ "${#FILTERED_ARGS[@]}" -gt 0 ]; then
+    set -- "${FILTERED_ARGS[@]}"
+else
+    set --
+fi
+if [ "$INSTALL_FULL" = "1" ]; then
+    echo "Full install: Python pipeline plus every optional extra (reuse if already present, then record in config)."
+    enable_full_install_flags
+fi
+
 OPTIONAL_ONLY_ARGS=()
-if [ "$#" -gt 0 ]; then
+if [ "$INSTALL_FULL" != "1" ] && [ "$#" -gt 0 ]; then
     ALL_OPTIONAL=1
     for arg in "$@"; do
         mapped="$(normalize_optional_arg "$arg")"
@@ -627,6 +695,12 @@ if [ "${SAMOVAR_INSTALL_SEQTK:-0}" != "0" ]; then
     install_seqtk || echo "Warning: optional seqtk install did not complete."
 else
     echo "Skipping seqtk (not required). Use ./install.sh seqtk for FASTQ subsample / rarefaction."
+fi
+
+if [ "${SAMOVAR_INSTALL_NEXTFLOW:-0}" != "0" ]; then
+    install_nextflow || echo "Warning: optional nextflow install did not complete."
+else
+    echo "Skipping nextflow (not required). Use ./install.sh nextflow or ./install.sh full."
 fi
 
 # Write main config.json (location: $SAMOVAR_CONFIG) and build/config_path
