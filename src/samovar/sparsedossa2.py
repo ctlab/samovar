@@ -445,26 +445,23 @@ def regenerate(
         or cfg.get("regeneration_mode")
         or "sparsedossa2-fit"
     )
-    data = annotation.DataFrame
-    if "sample" not in data.columns:
-        data = data.copy()
-        data["sample"] = "1"
-    n_samples = _n_samples_or_observed(data, cfg.get("N"))
+    from samovar.abundance import abundance_to_matrix, input_to_abundance_tables
+
+    n_samples = _n_samples_or_observed(annotation, cfg.get("N"))
     n_reads = cfg.get("N_reads")
     if n_reads is not None:
         n_reads = int(n_reads)
     rescale = bool(cfg.get("rescale_abundance", False))
     threshold = float(cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5)))
     result: Dict[str, pd.DataFrame] = {}
-    for col in _taxid_columns(data):
-        mat = _count_matrix(data, col, "sample")
+    for name, table in input_to_abundance_tables(annotation).items():
+        mat = abundance_to_matrix(table)
         mat = _filter_taxa(mat, threshold, n_reads, rescale=False)
         if mat.empty:
             continue
         simulated = simulate_count_matrix(mat, mode=mode, n_sample=n_samples, config=cfg)
         simulated.columns = [str(c) for c in simulated.columns]
         simulated = _apply_abundance_scale(simulated, n_reads, rescale)
-        name = _annotator_name(col)
         result[name] = _abundance_table_from_matrix(simulated, name)
     if not result:
         raise RuntimeError("SparseDOSSA2 produced no per-annotator abundance tables")

@@ -1,8 +1,8 @@
 """Abundance-table regenerators: builtins plus imported ``table_reads_generator`` tools.
 
-Analog of ``annotators_wrapper.get_annotator_instance`` / ``CustomAnnotator``.
-Each regenerator takes an ``Annotation`` (and optional samples metadata) and
-returns per-annotator abundance tables ``{name: DataFrame(taxid, N_<sample>…)}``.
+Each regenerator takes an abundance table (``taxid`` × ``N_<sample>``), an
+``Annotation``, or a long per-read table, and returns
+``{name: DataFrame(taxid, N_<sample>…)}``.
 """
 
 from __future__ import annotations
@@ -208,12 +208,18 @@ def as_annotation(
     data: Union[Annotation, pd.DataFrame, None],
     annotation_dir: Union[str, Path, None] = None,
 ) -> Annotation:
+    from samovar.abundance import is_abundance_table, load_table_input
+
     if isinstance(data, Annotation):
         return data
+    if annotation_dir is not None and data is None:
+        return load_table_input(annotation_dir)
     if data is not None:
+        if is_abundance_table(data):
+            return Annotation.from_abundance_tables({"table": data})
         return Annotation.from_long_table(data)
     if annotation_dir is not None:
-        return Annotation.from_annotation_dir(annotation_dir)
+        return load_table_input(annotation_dir)
     return Annotation.from_long_table(pd.DataFrame())
 
 
@@ -304,7 +310,7 @@ class DirectTableRegenerator(TableRegenerator):
         if n_reads is not None:
             n_reads = int(n_reads)
         return regenerate_preserve(
-            annotation.DataFrame,
+            annotation,
             n_reads=n_reads,
             rescale=bool(cfg.get("rescale_abundance", False)),
             threshold_amount=float(
@@ -321,8 +327,8 @@ class BootstrapTableRegenerator(TableRegenerator):
         if n_reads is not None:
             n_reads = int(n_reads)
         return regenerate_bootstrap(
-            annotation.DataFrame,
-            n_samples=_n_samples_or_observed(annotation.DataFrame, cfg.get("N")),
+            annotation,
+            n_samples=_n_samples_or_observed(annotation, cfg.get("N")),
             n_reads=n_reads,
             threshold_amount=float(
                 cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5))
@@ -341,8 +347,8 @@ class VaeTableRegenerator(TableRegenerator):
         if n_reads is not None:
             n_reads = int(n_reads)
         return regenerate_vae(
-            annotation.DataFrame,
-            n_samples=_n_samples_or_observed(annotation.DataFrame, cfg.get("N")),
+            annotation,
+            n_samples=_n_samples_or_observed(annotation, cfg.get("N")),
             n_reads=n_reads,
             threshold_amount=float(
                 cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5))
@@ -361,8 +367,8 @@ class GlmTableRegenerator(TableRegenerator):
         if n_reads is not None:
             n_reads = int(n_reads)
         return regenerate_glm_python(
-            annotation.DataFrame,
-            n_samples=_n_samples_or_observed(annotation.DataFrame, cfg.get("N")),
+            annotation,
+            n_samples=_n_samples_or_observed(annotation, cfg.get("N")),
             n_reads=n_reads,
             threshold_amount=float(
                 cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5))
@@ -376,11 +382,92 @@ class GlmTableRegenerator(TableRegenerator):
 
 class SamovarRTableRegenerator(TableRegenerator):
     def run(self, annotation, metadata, config):
-        _ = annotation, metadata, config
+        from samovar.abundance import input_to_abundance_tables
+        from samovar.regenerate import _write_abundance_tables, write_samovar_config_defaults
+        from samovar.table2iss import (
+            R_REGENERATE_DRIVER,
+            _resolve_r_executable,
+        )
+        import os
+        import tempfile
+        import yaml
+
+        _ = metadata
+        cfg = write_samovar_config_defaults(dict(config or {}))
+        out = Path(str(cfg.get("output_dir") or "regenerated_abundance"))
+        out.mkdir(parents=True, exist_ok=True)
+        tables = input_to_abundance_tables(annotation)
+        staging = out / ".samovar_r_input"
+        if tables:
+            _write_abundance_tables(staging, tables)
+            input_dir = str(staging)
+        else:
+            input_dir = str(cfg.get("annotation_dir") or "")
+            if not input_dir:
+                raise ValueError(
+                    "regeneration_mode='samovar' needs an abundance table or annotation_dir."
+                )
+        r_cfg = {
+            "N": int(cfg.get("N") or 1),
+            "N_reads": int(cfg.get("N_reads") or 100),
+            "regeneration_mode": "samovar",
+            "seed": cfg.get("seed", 42),
+            "threshold_amount": cfg.get("threshold_amount", 1e-5),
+            "plot_log": False,
+        }
+        r_path, r_lib_path = _resolve_r_executable()
+        env = os.environ.copy()
+        if r_lib_path:
+            env["R_LIBS"] = r_lib_path
+            env["R_LIBS_USER"] = r_lib_path
+        cfg_tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        )
+        yaml.safe_dump(r_cfg, cfg_tmp)
+        cfg_tmp.close()
+        drv_tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".R", delete=False, encoding="utf-8"
+        )
+        drv_tmp.write(R_REGENERATE_DRIVER)
+        drv_tmp.close()
+        cmd = [
+            r_path,
+            "--vanilla",
+            "-s",
+            "-f",
+            drv_tmp.name,
+            "--args",
+            "--config",
+            cfg_tmp.name,
+            "--annotation_dir",
+            input_dir,
+            "--output_dir",
+            str(out),
+        ]
+        try:
+            subprocess.run(cmd, check=True, env=env)
+        except FileNotFoundError as exc:
+            raise ValueError(
+                "regeneration_mode='samovar' uses the optional R regenerator. "
+                "Install samovaR (./install.sh R-package) and set r_path."
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"samovaR regenerator failed (exit {exc.returncode})"
+            ) from exc
+        finally:
+            Path(cfg_tmp.name).unlink(missing_ok=True)
+            Path(drv_tmp.name).unlink(missing_ok=True)
+        written = {
+            p.stem: pd.read_csv(p)
+            for p in sorted(out.glob("*.csv"))
+            if "taxid" in pd.read_csv(p, nrows=0).columns
+        }
+        if written:
+            return written
         raise ValueError(
             "regeneration_mode='samovar' uses the optional R regenerator. "
-            "Call samovar_annotation_regenerate() after installing it, or set "
-            "SAMOVAR_R_REGENERATE to annotation_regenerate.R."
+            "Install samovaR (./install.sh R-package) and set SAMOVAR_R_REGENERATE."
         )
 
 
@@ -392,8 +479,8 @@ class CamisimTableRegenerator(TableRegenerator):
         if n_reads is not None:
             n_reads = int(n_reads)
         return regenerate_camisim(
-            annotation.DataFrame,
-            n_samples=_n_samples_or_observed(annotation.DataFrame, cfg.get("N")),
+            annotation,
+            n_samples=_n_samples_or_observed(annotation, cfg.get("N")),
             n_reads=n_reads,
             threshold_amount=float(
                 cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5))
@@ -469,14 +556,28 @@ def _run_cli_regenerator(
 ) -> Dict[str, pd.DataFrame]:
     annotation_dir = config.get("annotation_dir")
     output_dir = config.get("output_dir")
-    if not annotation_dir or not output_dir:
+    if not output_dir:
         raise ValueError(
-            f"CLI table_reads_generator {path} needs annotation_dir and output_dir "
+            f"CLI table_reads_generator {path} needs output_dir "
             "in config (or define regenerate() in a Python module)."
         )
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    cmd = [str(path), "-i", str(annotation_dir), "-o", str(out)]
+    from samovar.abundance import dir_looks_like_annotation, input_to_abundance_tables
+    from samovar.regenerate import _write_abundance_tables
+
+    if annotation_dir and dir_looks_like_annotation(annotation_dir):
+        input_path = str(annotation_dir)
+    else:
+        staging = out / ".input_abundance"
+        tables = input_to_abundance_tables(annotation)
+        if not tables:
+            raise ValueError(
+                f"CLI table_reads_generator {path} needs annotation_dir or an abundance table."
+            )
+        _write_abundance_tables(staging, tables)
+        input_path = str(staging)
+    cmd = [str(path), "-i", input_path, "-o", str(out)]
     meta_tmp = None
     try:
         if metadata is not None:

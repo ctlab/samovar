@@ -924,6 +924,7 @@ class Annotation:
         """
         self.id = 0
         self.DataFrame = pd.DataFrame()
+        self.abundance_tables = None
         
         # Read and combine all annotation files
         for path, tool_type in file_path_type.items():
@@ -987,6 +988,20 @@ class Annotation:
         obj.annotation_list = cls.list2set(set_columns)
         obj.true_annotation_list = cls.list2set(obj.true_annotation)
         obj.rank_list = cls.list2set([*obj.annotation_list, *obj.true_annotation_list])
+        obj.abundance_tables = None
+        return obj
+
+    @classmethod
+    def from_abundance_tables(cls, tables: Dict[str, pd.DataFrame]) -> "Annotation":
+        """Wrap taxa×sample count tables (``taxid``, ``N_<sample>``)."""
+        from samovar.abundance import normalize_abundance_table
+
+        obj = cls.from_long_table(pd.DataFrame())
+        obj.abundance_tables = {
+            str(name): normalize_abundance_table(table)
+            for name, table in (tables or {}).items()
+            if table is not None
+        }
         return obj
 
     @classmethod

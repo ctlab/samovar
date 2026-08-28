@@ -54,21 +54,17 @@ def _drop_unclassified_rows(matrix: pd.DataFrame) -> pd.DataFrame:
 
 
 def shannon_vector_from_annotation(data: pd.DataFrame) -> np.ndarray:
-    """Shannon diversity per (annotator, sample) from a long annotation table."""
-    from samovar.regenerate import _count_matrix, _taxid_columns
+    """Shannon diversity per (annotator, sample) from annotation or abundance."""
+    from samovar.abundance import input_to_abundance_tables
 
-    if data is None or data.empty:
+    chunks = [
+        shannon_vector_from_table(table)
+        for table in input_to_abundance_tables(data).values()
+    ]
+    nonempty = [c for c in chunks if c.size]
+    if not nonempty:
         return np.array([], dtype=float)
-    frame = data
-    if "sample" not in frame.columns:
-        frame = frame.copy()
-        frame["sample"] = "1"
-    values: List[float] = []
-    for col in _taxid_columns(frame):
-        matrix = _drop_unclassified_rows(_count_matrix(frame, col, "sample"))
-        for sample in matrix.columns:
-            values.append(shannon_entropy(matrix[sample].to_numpy()))
-    return np.asarray(values, dtype=float)
+    return np.concatenate(nonempty)
 
 
 def shannon_vector_from_table(table: pd.DataFrame) -> np.ndarray:
@@ -94,22 +90,14 @@ def shannon_vector_from_tables(tables: Dict[str, pd.DataFrame]) -> np.ndarray:
 
 
 def shannon_vector_from_annotation_annotator(data: pd.DataFrame, annotator: str) -> np.ndarray:
-    from samovar.regenerate import _annotator_name, _count_matrix, _taxid_columns
+    from samovar.abundance import input_to_abundance_tables
 
-    if data is None or data.empty:
-        return np.array([], dtype=float)
-    frame = data
-    if "sample" not in frame.columns:
-        frame = frame.copy()
-        frame["sample"] = "1"
-    values: List[float] = []
-    for col in _taxid_columns(frame):
-        if _annotator_name(col) != annotator:
-            continue
-        matrix = _drop_unclassified_rows(_count_matrix(frame, col, "sample"))
-        for sample in matrix.columns:
-            values.append(shannon_entropy(matrix[sample].to_numpy()))
-    return np.asarray(values, dtype=float)
+    tables = input_to_abundance_tables(data)
+    if annotator in tables:
+        return shannon_vector_from_table(tables[annotator])
+    if len(tables) == 1:
+        return shannon_vector_from_table(next(iter(tables.values())))
+    return np.array([], dtype=float)
 
 
 def ks_shannon(

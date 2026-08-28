@@ -1,4 +1,8 @@
-"""Regenerate metagenome abundance tables from annotation directories.
+"""Regenerate metagenome abundance tables from annotations or abundance CSVs.
+
+Minimal contract: ``taxid`` × ``N_<sample>`` in, same shape out. Long
+annotation tables (``taxID_*``) and phyloseq-style OTU tables are converted
+first. Sequence regenerate (ISS) consumes that same abundance shape.
 
 Modes:
 
@@ -25,8 +29,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
-
-from samovar.annotation_io import read_annotation_dir
 
 DIRECT_MODES = frozenset(
     {"direct", "preserve", "none", "exact", "raw", "off", "false", ""}
@@ -139,22 +141,15 @@ def _noisy_copy_column(
 
 
 def _taxid_columns(df: pd.DataFrame) -> List[str]:
-    cols = []
-    for col in df.columns:
-        name = str(col)
-        if name in {"seq", "length", "sample", "true"}:
-            continue
-        if "confidence" in name.lower() or name.endswith("_conf"):
-            continue
-        if name.startswith("taxID") or name == "true":
-            cols.append(col)
-    return cols
+    from samovar.abundance import taxid_annotation_columns
+
+    return taxid_annotation_columns(df)
 
 
 def _annotator_name(col: str) -> str:
-    name = re.sub(r"^taxID_", "", str(col))
-    name = re.sub(r"_[0-9]+$", "", name)
-    return name
+    from samovar.abundance import annotator_name
+
+    return annotator_name(col)
 
 
 def _count_matrix(
@@ -235,24 +230,28 @@ def _abundance_table_from_matrix(matrix: pd.DataFrame, annotator_name: str) -> p
     return out
 
 
+def _source_matrices(data: Any) -> List[Tuple[str, pd.DataFrame]]:
+    from samovar.abundance import abundance_to_matrix, input_to_abundance_tables
+
+    out: List[Tuple[str, pd.DataFrame]] = []
+    for name, table in input_to_abundance_tables(data).items():
+        mat = abundance_to_matrix(table)
+        if mat is not None and not mat.empty:
+            out.append((str(name), mat))
+    return out
+
+
 def regenerate_preserve(
     data: pd.DataFrame,
     n_reads: Optional[int] = None,
     rescale: bool = False,
     threshold_amount: float = 0.0,
 ) -> Dict[str, pd.DataFrame]:
-    """Count taxIDs per sample; default keeps observed abundances."""
+    """Keep observed abundances (annotation counts or an abundance table)."""
     result: Dict[str, pd.DataFrame] = {}
-    sample_col = "sample" if "sample" in data.columns else None
-    if sample_col is None:
-        data = data.copy()
-        data["sample"] = "1"
-        sample_col = "sample"
-    for col in _taxid_columns(data):
-        mat = _count_matrix(data, col, sample_col)
+    for name, mat in _source_matrices(data):
         mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
         mat = _apply_abundance_scale(mat, n_reads, rescale)
-        name = _annotator_name(col)
         result[name] = _abundance_table_from_matrix(mat, name)
     return result
 
@@ -275,12 +274,7 @@ def regenerate_bootstrap(
     """
     seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
-    sample_col = "sample" if "sample" in data.columns else "sample"
-    work = data.copy()
-    if sample_col not in work.columns:
-        work[sample_col] = "1"
-    for col in _taxid_columns(work):
-        mat = _count_matrix(work, col, sample_col)
+    for annotator, mat in _source_matrices(data):
         if mat.shape[1] == 0:
             continue
         n_src = mat.shape[1]
@@ -289,7 +283,6 @@ def regenerate_bootstrap(
         names = synthetic_sample_names(src_names, n_samples)
         values = mat.to_numpy(dtype=float)
         synth = {}
-        annotator = _annotator_name(col)
         pick_rng = rng_for(seed, annotator, "source-pick")
         for name in names:
             rng = rng_for(seed, annotator, name)
@@ -304,8 +297,7 @@ def regenerate_bootstrap(
         synth_mat = pd.DataFrame(synth)
         synth_mat = _filter_taxa(synth_mat, threshold_amount, n_reads, rescale=rescale)
         synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
-        name = _annotator_name(col)
-        result[name] = _abundance_table_from_matrix(synth_mat, name)
+        result[annotator] = _abundance_table_from_matrix(synth_mat, annotator)
     return result
 
 
@@ -323,15 +315,9 @@ def regenerate_vae(
 
     seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
-    sample_col = "sample" if "sample" in data.columns else "sample"
-    work = data.copy()
-    if sample_col not in work.columns:
-        work[sample_col] = "1"
-    for col in _taxid_columns(work):
-        mat = _count_matrix(work, col, sample_col)
+    for annotator, mat in _source_matrices(data):
         mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
         names = synthetic_sample_names(list(mat.columns), n_samples)
-        annotator = _annotator_name(col)
         if mat.shape[0] < 2 or mat.shape[1] < 2:
             synth = {}
             cols = list(mat.columns) or ["1"]
@@ -387,19 +373,13 @@ def regenerate_glm_python(
     """
     seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
-    sample_col = "sample" if "sample" in data.columns else "sample"
-    work = data.copy()
-    if sample_col not in work.columns:
-        work[sample_col] = "1"
-    for col in _taxid_columns(work):
-        mat = _count_matrix(work, col, sample_col)
+    for annotator, mat in _source_matrices(data):
         mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
         if mat.empty:
             continue
         names = synthetic_sample_names(list(mat.columns), n_samples)
         values = np.maximum(mat.to_numpy(dtype=float), 0.0)
         synth_cols = {}
-        annotator = _annotator_name(col)
         for name in names:
             profile = _glm_boil_one(
                 values,
@@ -434,12 +414,7 @@ def regenerate_camisim(
     seed = coerce_seed(seed)
     depth = int(n_reads) if n_reads not in (None, "", 0) else 1000
     result: Dict[str, pd.DataFrame] = {}
-    work = data.copy()
-    sample_col = "sample"
-    if sample_col not in work.columns:
-        work[sample_col] = "1"
-    for col in _taxid_columns(work):
-        mat = _count_matrix(work, col, sample_col)
+    for annotator, mat in _source_matrices(data):
         mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=False)
         if mat.empty:
             continue
@@ -447,7 +422,6 @@ def regenerate_camisim(
         if not taxids:
             continue
         names = synthetic_sample_names(list(mat.columns), n_samples)
-        annotator = _annotator_name(col)
         communities = design_communities(
             taxids,
             n_samples=len(names),
@@ -494,13 +468,14 @@ def _regenerate_one_mode(
     cfg: Dict[str, Any],
     data: pd.DataFrame,
 ) -> Dict[str, pd.DataFrame]:
+    from samovar.abundance import load_table_input
     from samovar.table_regenerators import (
-        as_annotation,
         attach_regenerator_flags,
         get_table_regenerator,
         load_samples_metadata,
     )
 
+    source = load_table_input(annotation_dir, data)
     mode = cfg.get("table_reads_generator") or cfg.get("regeneration_mode", "direct")
     local = dict(cfg)
     local["annotation_dir"] = str(annotation_dir)
@@ -508,7 +483,7 @@ def _regenerate_one_mode(
     local = attach_regenerator_flags(mode, local)
     regenerator = get_table_regenerator(mode)
     tables = regenerator.run(
-        as_annotation(data, annotation_dir),
+        source,
         load_samples_metadata(local),
         local,
     )
@@ -538,7 +513,9 @@ def regenerate_annotation_tables(
 
     cfg = dict(config or {})
     if data is None:
-        data = read_annotation_dir(annotation_dir)
+        from samovar.abundance import load_table_input
+
+        data = load_table_input(annotation_dir)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -699,9 +676,9 @@ def synthetic_sample_names(
 
 
 def _n_samples_or_observed(data: pd.DataFrame, n_samples: Optional[int]) -> int:
-    observed = 1
-    if "sample" in data.columns and len(data.index):
-        observed = max(int(pd.Series(data["sample"].astype(str)).nunique()), 1)
+    from samovar.abundance import observed_n_samples
+
+    observed = max(int(observed_n_samples(data)), 1)
     if n_samples is None or int(n_samples) <= 0:
         return observed
     return int(n_samples)

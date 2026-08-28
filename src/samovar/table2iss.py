@@ -48,6 +48,8 @@ i <- 1
 while (i <= length(args)) {
   if (args[i] == "--annotation_dir") {
     annotation_dir <- args[i + 1]; i <- i + 2
+  } else if (args[i] %in% c("--abundance_dir", "--abundance")) {
+    annotation_dir <- args[i + 1]; i <- i + 2
   } else if (args[i] == "--output_dir") {
     output_dir <- args[i + 1]; i <- i + 2
   } else if (args[i] == "--config") {
@@ -63,6 +65,7 @@ if (is.null(config_samovar)) {
 }
 if (!("N" %in% names(config))) config$N <- 1
 if (!("N_reads" %in% names(config))) config$N_reads <- 100
+if (!("plot_log" %in% names(config))) config$plot_log <- FALSE
 if ("output_dir" %in% names(config)) output_dir <- config$output_dir
 if (is.null(annotation_dir)) stop("--annotation_dir is required")
 if (!is.null(output_dir)) {
@@ -71,8 +74,40 @@ if (!is.null(output_dir)) {
   output_dir <- "."
 }
 
-samovar_data_long <- read_annotation_dir(annotation_dir)
-samovar_data_list <- annotation2samovar(samovar_data_long)
+is_abundance_csv <- function(path) {
+  hdr <- tryCatch(colnames(utils::read.csv(path, nrows = 1, check.names = FALSE)), error = function(e) character())
+  any(tolower(hdr) %in% c("taxid", "otu", "otu_id", "feature")) &&
+    (any(startsWith(hdr, "N_")) || sum(!tolower(hdr) %in% c("taxid", "otu", "otu_id", "feature")) >= 1)
+}
+
+load_abundance_list <- function(root) {
+  files <- list.files(root, pattern = "\\.csv$", full.names = TRUE)
+  files <- files[!grepl("^combined_annotation_table|^\\.", basename(files))]
+  out <- list()
+  for (f in files) {
+    df <- tryCatch(utils::read.csv(f, check.names = FALSE), error = function(e) NULL)
+    if (is.null(df) || !nrow(df)) next
+    id_idx <- which(tolower(names(df)) %in% c("taxid", "otu", "otu_id", "feature"))
+    if (!length(id_idx)) next
+    ids <- make.unique(as.character(df[[id_idx[[1]]]]))
+    rest <- df[-id_idx[[1]]]
+    keep <- vapply(rest, function(x) is.numeric(x) || is.integer(x), logical(1))
+    if (!any(keep)) next
+    rest <- rest[, keep, drop = FALSE]
+    names(rest) <- sub("^N_", "", names(rest))
+    mat <- data.matrix(rest)
+    rownames(mat) <- ids
+    name <- tools::file_path_sans_ext(basename(f))
+    out[[name]] <- table2samovar(mat)
+  }
+  out
+}
+
+samovar_data_list <- load_abundance_list(annotation_dir)
+if (!length(samovar_data_list)) {
+  samovar_data_long <- read_annotation_dir(annotation_dir)
+  samovar_data_list <- annotation2samovar(samovar_data_long)
+}
 for (i in seq_along(samovar_data_list)) {
   annotator <- names(samovar_data_list)[i]
   tryCatch({
@@ -803,6 +838,9 @@ def process_abundance_table(
         abundance_table = pd.read_csv(table, sep=",")
     else:
         abundance_table = table
+    from samovar.abundance import normalize_abundance_table
+
+    abundance_table = normalize_abundance_table(abundance_table)
     
     if sample_name is None:
         if isinstance(table, str):
@@ -1075,7 +1113,10 @@ def generate_iss_test_samples(
 
     os.makedirs(output_dir, exist_ok=True)
     seed = coerce_seed(seed)
-    if abundance_table not in (None, "", False):
+    has_table = isinstance(abundance_table, pd.DataFrame) or (
+        abundance_table not in (None, "", False)
+    )
+    if has_table:
         with iss_cli_extra_flags(extra_flags):
             return generate_iss_from_abundance_table(
                 abundance_table,
@@ -1211,6 +1252,9 @@ def generate_iss_from_abundance_table(
         abundance = pd.read_csv(table)
     else:
         abundance = table.copy()
+    from samovar.abundance import normalize_abundance_table
+
+    abundance = normalize_abundance_table(abundance)
     if "taxid" not in abundance.columns:
         raise ValueError("abundance table must have a taxid column")
     abundance["taxid"] = abundance["taxid"].astype(str).str.split(".").str[0]
