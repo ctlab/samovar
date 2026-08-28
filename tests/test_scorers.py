@@ -13,8 +13,7 @@ from samovar.scorers import (
 )
 from samovar.tools_import import import_tool
 
-REPO = Path(__file__).resolve().parents[1]
-EXAMPLE = REPO / "examples" / "scoring" / "count_annotations.py"
+COUNT_WRAPPER = Path(__file__).resolve().parent / "tools" / "count_annotations.py"
 
 
 def test_expand_scoring_inputs_annotations_and_table(tmp_path):
@@ -45,7 +44,7 @@ def test_custom_python_scorer_and_flags(tmp_path, monkeypatch):
     import_tool(
         name="counts",
         tool_type="scoring",
-        exec_path=str(EXAMPLE),
+        exec_path=str(COUNT_WRAPPER),
         flags="--min-files 0",
         inputs="*annotations",
         also_repo_build=False,
@@ -133,7 +132,7 @@ def test_prepare_scoring_flags_and_pipeline(tmp_path, monkeypatch):
     import_tool(
         name="counts",
         tool_type="scoring",
-        exec_path=str(EXAMPLE),
+        exec_path=str(COUNT_WRAPPER),
         flags="--min-files 0",
         also_repo_build=False,
     )

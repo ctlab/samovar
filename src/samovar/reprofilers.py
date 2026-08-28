@@ -53,6 +53,10 @@ _BUILTIN_ALIASES = {
     "randomforest": "random_forest",
     "adaboost": "adaboost",
     "ada": "adaboost",
+    "linear": "linear",
+    "logistic": "linear",
+    "logistic_regression": "linear",
+    "logreg": "linear",
 }
 
 REPROFILER_FLAG_GROUPS = (
@@ -108,6 +112,8 @@ def flags_apply_to_reprofiler(target: str, name: Optional[str] = None) -> bool:
             names.extend(["ada"])
         if canon == "ensemble":
             names.extend(["samovar", "default", "both"])
+        if canon == "linear":
+            names.extend(["logistic", "logistic_regression", "logreg"])
     return flags_target_matches(target, *names, groups=REPROFILER_FLAG_GROUPS)
 
 
@@ -136,7 +142,7 @@ def lookup_reprofiler(name: str) -> list:
     if not key:
         raise MissingReprofilerError(
             "Empty reprofiler name. Import with "
-            "`samovar tools import -n NAME --type ml` or use ensemble|random_forest|adaboost."
+            "`samovar tools import -n NAME --type ml` or use ensemble|random_forest|adaboost|linear."
         )
     tools = iter_tools(load_config())
     spec = tools.get(key)
@@ -292,6 +298,94 @@ def _coerce_result(value: Any, initial: Dict[str, pd.DataFrame]) -> ReprofileRes
     )
 
 
+def _linear_flag_values(argv: Sequence[str]) -> Dict[str, Any]:
+    extra = list(argv or [])
+    out: Dict[str, Any] = {"C": 1.0, "max_iter": 500, "use_priors": False}
+    i = 0
+    while i < len(extra):
+        tok = extra[i]
+        if tok in {"--C", "-C"} and i + 1 < len(extra):
+            out["C"] = float(extra[i + 1])
+            i += 2
+            continue
+        if tok in {"--max-iter", "--max_iter"} and i + 1 < len(extra):
+            out["max_iter"] = int(extra[i + 1])
+            i += 2
+            continue
+        if tok in {"--use-priors", "--use_priors"}:
+            out["use_priors"] = True
+            i += 1
+            continue
+        i += 1
+    return out
+
+
+def _priors_from_ground_truth(tables: Dict[str, pd.DataFrame]) -> Optional[Dict[int, float]]:
+    counts: Dict[int, float] = {}
+    total = 0.0
+    for table in tables.values():
+        if table is None or table.empty or "taxid" not in table.columns:
+            continue
+        n_cols = [c for c in table.columns if str(c).startswith("N_")]
+        if not n_cols:
+            continue
+        for _, row in table.iterrows():
+            try:
+                taxid = int(row["taxid"])
+            except (TypeError, ValueError):
+                continue
+            n = float(pd.to_numeric(row[n_cols], errors="coerce").fillna(0).sum())
+            counts[taxid] = counts.get(taxid, 0.0) + n
+            total += n
+    if total <= 0 or len(counts) < 2:
+        return None
+    return {k: v / total for k, v in counts.items()}
+
+
+def reprofile_linear(
+    regenerated: pd.DataFrame,
+    ground_truth: Dict[str, pd.DataFrame],
+    initial: Dict[str, pd.DataFrame],
+    config: Dict[str, Any],
+) -> ReprofileResult:
+    """Logistic regression builtin (same contract as imported ML tools)."""
+    from sklearn.linear_model import LogisticRegression
+
+    cfg = dict(config or {})
+    flags = _linear_flag_values(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
+    seed = int(cfg.get("seed") or 42)
+    features_df = cfg.get("features_df")
+    df = preprocess_data(regenerated)
+    output_dir = Path(cfg.get("output_dir") or ".")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if df.empty or "true" not in df.columns:
+        return ReprofileResult(tables={})
+    feature_cols = sorted([c for c in df.columns if c not in {"seq", "true"}])
+    kwargs: Dict[str, Any] = {
+        "C": flags["C"],
+        "max_iter": flags["max_iter"],
+        "random_state": seed,
+        "solver": "lbfgs",
+    }
+    if flags["use_priors"] and _priors_from_ground_truth(ground_truth or {}):
+        kwargs["class_weight"] = "balanced"
+    model = LogisticRegression(**kwargs)
+    model.fit(df[feature_cols], df["true"])
+    tables = profile_tables_with_model(
+        initial,
+        model,
+        features_df=features_df,
+        classify_unclassified=bool(cfg.get("classify_unclassified")),
+    )
+    save_model(model, str(output_dir / "trained_model.joblib"))
+    return ReprofileResult(
+        tables=tables,
+        model=model,
+        models={"LogisticRegression": model},
+        feature_cols=feature_cols,
+    )
+
+
 def run_builtin_reprofiler(
     name: str,
     regenerated: pd.DataFrame,
@@ -299,8 +393,15 @@ def run_builtin_reprofiler(
     initial: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
 ) -> ReprofileResult:
-    _ = ground_truth
     cfg = dict(config or {})
+    if str(name or "").lower().replace("-", "_") in {
+        "linear",
+        "logistic",
+        "logistic_regression",
+        "logreg",
+    }:
+        return reprofile_linear(regenerated, ground_truth, initial, cfg)
+    _ = ground_truth
     features_df = cfg.get("features_df")
     validation = merge_read_features(regenerated.copy(), features_df)
     if "seq" in validation.columns:
@@ -539,7 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ml",
         dest="reprofiler",
         default=None,
-        help="ensemble|random_forest|adaboost or an imported --type ml name",
+        help="ensemble|random_forest|adaboost|linear or an imported --type ml name",
     )
     parser.add_argument("--config", default="", help="config_reprofiling.yaml from prepare")
     parser.add_argument(

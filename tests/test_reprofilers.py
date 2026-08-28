@@ -12,8 +12,8 @@ from samovar.reprofilers import (
 from samovar.reprofiling import preprocess_data, train_models
 from samovar.tools_import import import_tool
 
-REPO = Path(__file__).resolve().parents[1]
-LINEAR = REPO / "examples" / "reprofiling" / "linear_classifier.py"
+TOOLS = Path(__file__).resolve().parent / "tools"
+LINEAR_WRAPPER = TOOLS / "linear_wrapper.py"
 
 
 def _tiny_tables():
@@ -40,7 +40,7 @@ def test_resolve_builtin_reprofilers():
     assert resolve_reprofiler("ensemble") == ("builtin", "ensemble")
     assert resolve_reprofiler("rf") == ("builtin", "random_forest")
     assert resolve_reprofiler("AdaBoost") == ("builtin", "adaboost")
-    assert resolve_reprofiler("linear") == ("custom", "linear")
+    assert resolve_reprofiler("linear") == ("builtin", "linear")
     assert require_known_reprofiler("random_forest") == "random_forest"
 
 
@@ -73,14 +73,32 @@ def test_run_builtin_random_forest(tmp_path):
     assert "taxid_SAMOVAR" in table.columns
 
 
+def test_run_builtin_linear(tmp_path):
+    regenerated, ground, initial = _tiny_tables()
+    dest = tmp_path / "out"
+    result = run_reprofiler(
+        "linear",
+        regenerated=regenerated,
+        ground_truth=ground,
+        initial=initial,
+        output_dir=dest,
+        config={"seed": 0, "reprofiler_flags": "--C 1 --max-iter 200"},
+    )
+    assert result.model is not None
+    assert (dest / "trained_model.joblib").is_file()
+    csvs = list(dest.glob("*_reprofiled.csv"))
+    assert csvs
+    assert "taxid_SAMOVAR" in pd.read_csv(csvs[0]).columns
+
+
 def test_custom_linear_reprofiler(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
     spec = import_tool(
-        name="linear",
+        name="linwrap",
         tool_type="ml",
-        exec_path=str(LINEAR),
+        exec_path=str(LINEAR_WRAPPER),
         flags="--max-iter 200",
         also_repo_build=False,
     )
@@ -89,7 +107,7 @@ def test_custom_linear_reprofiler(tmp_path, monkeypatch):
     regenerated, ground, initial = _tiny_tables()
     dest = tmp_path / "profiled"
     result = run_reprofiler(
-        "linear",
+        "linwrap",
         regenerated=regenerated,
         ground_truth=ground,
         initial=initial,
@@ -108,9 +126,9 @@ def test_prepare_reprofiler_flags(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
     import_tool(
-        name="linear",
+        name="linwrap",
         tool_type="reprofiler",
-        exec_path=str(LINEAR),
+        exec_path=str(LINEAR_WRAPPER),
         flags="--max-iter 300",
         also_repo_build=False,
     )
@@ -122,20 +140,20 @@ def test_prepare_reprofiler_flags(tmp_path, monkeypatch):
             "input_config": None,
             "input_dir": str(tmp_path / "reads"),
             "output_dir": str(tmp_path / "out"),
-            "reprofiler": "linear",
+            "reprofiler": "linwrap",
             "tool_flags": [
                 ["ml", "--C 0.5"],
-                ["linear", "--use-priors"],
+                ["linwrap", "--use-priors"],
             ],
         },
     )()
     config = PipelineConfig.from_args(args)
-    assert config.reprofiler == "linear"
+    assert config.reprofiler == "linwrap"
     assert "--C 0.5" in (config.reprofiler_flags or "")
-    assert "--use-priors" in (config.reprofiler_tool_flags or {}).get("linear", "")
+    assert "--use-priors" in (config.reprofiler_tool_flags or {}).get("linwrap", "")
     paths = config.generate_configs(str(tmp_path / "out"))
     text = Path(paths["reprofiling"]).read_text()
-    assert "linear" in text
-    script = Path(config.generate_pipeline(str(tmp_path / "out"))).read_text()
-    assert "--reprofiler linear" in script
-    assert "--ground-truth" in script
+    assert "linwrap" in text
+    script_text = Path(config.generate_pipeline(str(tmp_path / "out"))).read_text()
+    assert "--reprofiler linwrap" in script_text
+    assert "--ground-truth" in script_text

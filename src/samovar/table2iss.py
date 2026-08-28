@@ -24,6 +24,7 @@ from samovar.seqio import (
     find_genome_file,
     gzip_file,
     gunzip_file,
+    is_gzip_file,
     is_gzip_path,
     iter_fastq_records,
     list_fasta_files,
@@ -244,6 +245,55 @@ def _write_empty_fastq_pair(r1: str, r2: str) -> None:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open_text(path, "wt"):
             pass
+
+
+def _iss_fastq_candidates(prefix: str, mate: str) -> List[str]:
+    return [
+        f"{prefix}_{mate}.fastq",
+        f"{prefix}_{mate}.fastq.gz",
+        f"{prefix}_{mate}.fq",
+        f"{prefix}_{mate}.fq.gz",
+        f"{prefix}.{mate}.fastq",
+        f"{prefix}.{mate}.fastq.gz",
+    ]
+
+
+def _first_existing_fastq(paths: Sequence[str]) -> Optional[str]:
+    nonempty = [p for p in paths if os.path.exists(p) and os.path.getsize(p) > 0]
+    if nonempty:
+        return nonempty[0]
+    empty = [p for p in paths if os.path.exists(p)]
+    return empty[0] if empty else None
+
+
+def _fastq_has_records(path: str) -> bool:
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        next(iter_fastq_records(path))
+        return True
+    except StopIteration:
+        return False
+    except OSError:
+        return False
+
+
+def ensure_uncompressed_iss_pair(prefix: str) -> Tuple[str, str]:
+    """Copy/gunzip ISS output to ``{prefix}_R1.fastq`` / ``_R2.fastq``."""
+    outs: List[str] = []
+    for mate in ("R1", "R2"):
+        dest = f"{prefix}_{mate}.fastq"
+        found = _first_existing_fastq(_iss_fastq_candidates(prefix, mate))
+        if found is None:
+            outs.append(dest)
+            continue
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        if is_gzip_file(found):
+            gunzip_file(found, dest=dest, remove_source=is_gzip_path(found))
+        elif os.path.abspath(found) != os.path.abspath(dest):
+            shutil.copy2(found, dest)
+        outs.append(dest)
+    return outs[0], outs[1]
 
 
 def _cleanup_iss_tmp(prefix: str) -> None:
@@ -498,6 +548,9 @@ def generate_reads_genome(
                 cmd.extend(["--seed", str(seed)])
             _run_iss(cmd)
         _cleanup_iss_tmp(output_file)
+        ensure_uncompressed_iss_pair(output_file)
+        if amount > 0 and not _fastq_has_records(r1):
+            raise RuntimeError(f"ISS did not produce reads for {output_file}")
     return _maybe_gzip_fastq_pair(r1, r2, gzip_reads)
 
 
@@ -578,13 +631,14 @@ def generate_reads_metagenome(
         cmd.extend(["--seed", str(seed)])
     _run_iss(cmd)
     _cleanup_iss_tmp(output_prefix)
+    ensure_uncompressed_iss_pair(output_prefix)
     if os.path.exists(combined_fasta):
         try:
             gzip_file(combined_fasta)
         except OSError:
             pass
 
-    if not os.path.exists(output_file_R1) or not os.path.exists(output_file_R2):
+    if not _fastq_has_records(output_file_R1) or not os.path.exists(output_file_R2):
         raise RuntimeError(
             f"ISS did not produce reads for {output_prefix}"
         )
@@ -1116,6 +1170,12 @@ def generate_iss_test_samples(
             dest = os.path.join(output_dir, f"{sample}_full_{mate}.fastq")
             concat_fastq_files([host_path, meta_path], dest)
             outputs.append(dest)
+
+    if int(total_reads) > 0 and not any(_fastq_has_records(path) for path in outputs):
+        raise RuntimeError(
+            f"ISS generate wrote no FASTQ records under {output_dir} "
+            f"(n_samples={n_samples}, total_reads={total_reads})"
+        )
 
     shutil.rmtree(pool_dir, ignore_errors=True)
     return outputs

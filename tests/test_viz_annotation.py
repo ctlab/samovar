@@ -25,6 +25,25 @@ def test_read_annotation_dir_skips_combined(tmp_path):
     assert "taxID_kaiju" in df.columns
 
 
+def test_read_annotation_dir_skips_empty_and_unreadable(tmp_path):
+    pd.DataFrame({"seq": ["r1"], "taxID_kaiju_0": [562]}).to_csv(
+        tmp_path / "ok.annotation.csv", index=False
+    )
+    (tmp_path / "empty.annotation.csv").write_text("seq,taxID_dummy_0\n")
+    (tmp_path / "blank.annotation.csv").write_text("")
+    df = read_annotation_dir(tmp_path)
+    assert len(df) == 1
+    assert df["seq"].iloc[0] == "r1"
+
+
+def test_compare_annotations_skips_header_only_csv(tmp_path):
+    (tmp_path / "1_full.annotation.csv").write_text(
+        "seq,taxID_constant9606_0,length,true,read_type\n"
+    )
+    data = compare_annotations(annotation_dir=str(tmp_path))
+    assert data.empty
+
+
 def test_annotation_to_abundance_counts(tmp_path):
     df = pd.DataFrame(
         {
@@ -154,24 +173,20 @@ def test_compare_annotations_cli_fails_on_missing_dir(tmp_path):
     assert proc.returncode != 0
 
 
-def test_compare_annotations_fails_on_empty_dir(tmp_path):
-    import pytest
-
-    with pytest.raises(FileNotFoundError, match="per-sample"):
-        compare_annotations(annotation_dir=str(tmp_path))
+def test_compare_annotations_skips_empty_dir(tmp_path):
+    data = compare_annotations(annotation_dir=str(tmp_path))
+    assert data.empty
 
 
-def test_compare_annotations_fails_on_combined_only(tmp_path):
-    import pytest
-
+def test_compare_annotations_skips_combined_only(tmp_path):
     pd.DataFrame({"seq": ["r1"]}).to_csv(
         tmp_path / "combined_annotation_table.csv", index=False
     )
-    with pytest.raises(FileNotFoundError, match="per-sample"):
-        compare_annotations(annotation_dir=str(tmp_path))
+    data = compare_annotations(annotation_dir=str(tmp_path))
+    assert data.empty
 
 
-def test_compare_annotations_cli_fails_on_empty_dir(tmp_path):
+def test_compare_annotations_cli_skips_empty_dir(tmp_path):
     import os
     import subprocess
     import sys
@@ -188,8 +203,8 @@ def test_compare_annotations_cli_fails_on_empty_dir(tmp_path):
         text=True,
         env=env,
     )
-    assert proc.returncode != 0
-    assert "per-sample" in (proc.stderr + proc.stdout)
+    assert proc.returncode == 0
+    assert "skipping visualization" in (proc.stderr + proc.stdout)
 
 
 def test_compare_annotations_cli_integrity(tmp_path):

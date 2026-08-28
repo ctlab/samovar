@@ -68,6 +68,18 @@ def is_gzip_path(path: PathLike) -> bool:
     return name.endswith(".gz") or name.endswith(".bgz") or name.endswith(".gzip")
 
 
+def is_gzip_file(path: PathLike) -> bool:
+    """True when the path looks gzipped or the file starts with gzip magic."""
+    target = as_path(path)
+    if is_gzip_path(target):
+        return True
+    try:
+        with open(target, "rb") as raw:
+            return raw.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
 def strip_compression_suffix(name: str) -> str:
     lower = name.lower()
     for ext in (".gz", ".bgz", ".gzip", ".bz2", ".xz"):
@@ -125,7 +137,10 @@ def open_text(path: PathLike, mode: str = "rt") -> TextIO:
     path = as_path(path)
     if "b" in mode:
         raise ValueError("open_text is for text modes only")
-    if is_gzip_path(path):
+    gzipped = is_gzip_path(path)
+    if not gzipped and "r" in mode:
+        gzipped = is_gzip_file(path)
+    if gzipped:
         return gzip.open(path, mode, encoding="utf-8", errors="replace")
     return open(path, mode, encoding="utf-8", errors="replace")
 
@@ -167,13 +182,22 @@ def gzip_file(path: PathLike, *, remove_source: bool = True) -> Path:
 
 def gunzip_file(path: PathLike, dest: Optional[PathLike] = None, *, remove_source: bool = False) -> Path:
     src = as_path(path)
-    if not is_gzip_path(src):
+    if not is_gzip_file(src):
         return src
-    out = as_path(dest) if dest is not None else Path(strip_compression_suffix(str(src)))
+    if dest is not None:
+        out = as_path(dest)
+    elif is_gzip_path(src):
+        out = Path(strip_compression_suffix(str(src)))
+    else:
+        out = src
     out.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(src, "rb") as fin, open(out, "wb") as fout:
+    same = src.resolve() == out.resolve()
+    write_to = Path(str(out) + ".ungz.tmp") if same else out
+    with gzip.open(src, "rb") as fin, open(write_to, "wb") as fout:
         shutil.copyfileobj(fin, fout)
-    if remove_source:
+    if same:
+        write_to.replace(out)
+    elif remove_source:
         try:
             src.unlink()
         except OSError:

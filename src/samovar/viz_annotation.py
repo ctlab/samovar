@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -958,17 +959,32 @@ def compare_annotations(
     split: bool = False,
 ) -> pd.DataFrame:
     """CLI analog of ``workflow/compare_annotations.R``."""
-    require_viz_backend()
     annotation_path = Path(annotation_dir)
     if not annotation_path.is_dir():
         raise FileNotFoundError(f"annotation_dir not found: {annotation_path}")
     data = read_annotation_dir(annotation_dir)
     if data.empty:
-        raise FileNotFoundError(
-            f"no per-sample annotation tables in {annotation_path} "
-            "(expected *.csv other than combined_annotation_table*)"
+        print(
+            f"no per-sample annotation rows in {annotation_path} "
+            "(expected non-empty *.csv other than combined_annotation_table*); "
+            "skipping visualization",
+            file=sys.stderr,
         )
+        if csv_file:
+            Path(csv_file).parent.mkdir(parents=True, exist_ok=True)
+            data.to_csv(csv_file, index=False)
+        return data
+    require_viz_backend()
     tax_cols = [c for c in data.columns if str(c).startswith("taxID_")]
+    if not tax_cols:
+        print(
+            f"no taxID_* columns in {annotation_path}; skipping visualization",
+            file=sys.stderr,
+        )
+        if csv_file:
+            Path(csv_file).parent.mkdir(parents=True, exist_ok=True)
+            data.to_csv(csv_file, index=False)
+        return data
     annotators = []
     for col in tax_cols:
         parts = str(col).split("_")

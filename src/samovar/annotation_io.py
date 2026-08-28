@@ -51,7 +51,12 @@ def read_annotation_dir(
             continue
         parts = path.name.split(".")
         sample_name = "_".join(parts[: sample_name_position + 1])
-        tmp = pd.read_csv(path)
+        try:
+            tmp = pd.read_csv(path)
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError):
+            continue
+        if tmp.empty:
+            continue
         tmp.columns = _normalize_colnames(tmp.columns)
         tmp = _coalesce_duplicate_columns(tmp)
         tmp["sample"] = sample_name
