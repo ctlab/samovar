@@ -76,15 +76,32 @@ def get_annotation_files():
     files = glob.glob(os.path.join(ANNOTATION_DIR, "*.annotation.csv"))
     return files
 
+
+def get_abundance_files():
+    folder = os.path.join(OUTPUT_DIR, ".regenerated_abundance")
+    files = []
+    for path in glob.glob(os.path.join(folder, "*.csv")):
+        name = os.path.basename(path)
+        if name.startswith(".") or name == "table_selection.json":
+            continue
+        files.append(path)
+    return files
+
+
+def get_process_inputs():
+    return get_annotation_files() or get_abundance_files()
+
+
 # Get list of annotators from all annotation tables
 def get_annotators():
     import pandas as pd
 
     annotation_files = get_annotation_files()
     if not annotation_files:
-        logger.error("No annotation files found!")
-        return []
+        from samovar.abundance import load_abundance_dir
 
+        tables = load_abundance_dir(os.path.join(OUTPUT_DIR, ".regenerated_abundance"))
+        return list(tables)
     annotators = []
     for annotation_file in annotation_files:
         df = pd.read_csv(annotation_file)
@@ -106,6 +123,14 @@ def get_sample_names():
     for file in annotation_files:
         sample_name = os.path.basename(file).split(".")[0]
         original.append(sample_name)
+    if not original:
+        from samovar.abundance import load_abundance_dir, n_sample_columns
+        from samovar.regenerate import sample_names_from_abundance_columns
+
+        tables = load_abundance_dir(os.path.join(OUTPUT_DIR, ".regenerated_abundance"))
+        if tables:
+            n_cols = n_sample_columns(next(iter(tables.values())))
+            original = sample_names_from_abundance_columns(n_cols)
     if _KIND == "builtin" and REGENERATION_MODE == "direct":
         return original
     n_cfg = REGENERATION_CONFIG.get("N")
@@ -123,7 +148,7 @@ rule all:
 
 rule process_annotations:
     input:
-        annotation_files = get_annotation_files()
+        annotation_files = get_process_inputs()
     output:
         DONE_MARKER
     params:
@@ -140,7 +165,7 @@ rule process_annotations:
     run:
         try:
             process_annotation_tables(
-                table_paths=list(input.annotation_files),
+                table_paths=list(input.annotation_files) if get_annotation_files() else [],
                 genome_dir=params.genome_dir,
                 output_dir=params.output_dir,
                 email=params.email,

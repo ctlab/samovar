@@ -23,6 +23,9 @@ CHECKPOINT_STEPS = (
     "annotate_initial",
     "combine_initial",
     "viz_initial",
+    "abundance_tables",
+    "regenerate_tables",
+    "score_regenerated_tables",
     "seed_genomes",
     "regenerate_reads",
     "sort_reads",
@@ -48,6 +51,20 @@ STEP_ALIASES = {
     "annotation_tables": "combine_initial",
     "viz": "viz_initial",
     "plots": "viz_initial",
+    "abundance": "abundance_tables",
+    "abundance_tables": "abundance_tables",
+    "otu": "abundance_tables",
+    "otu_tables": "abundance_tables",
+    "observed_abundance": "abundance_tables",
+    "regenerate_tables": "regenerate_tables",
+    "regen_tables": "regenerate_tables",
+    "regenerated_tables": "regenerate_tables",
+    "table_regen": "regenerate_tables",
+    "score_tables": "score_regenerated_tables",
+    "table_score": "score_regenerated_tables",
+    "table_scoring": "score_regenerated_tables",
+    "regenerated_tables_scoring": "score_regenerated_tables",
+    "score_regenerated_tables": "score_regenerated_tables",
     "genomes": "seed_genomes",
     "seed": "seed_genomes",
     "regenerate": "regenerate_reads",
@@ -246,11 +263,58 @@ def startpoint_gaps(
         if not _has_csv_tables(root / "initial_annotations"):
             gaps.append("annotation CSVs under outdir/initial_annotations")
         return gaps
+    if start_s == "abundance_tables":
+        from samovar.abundance import collect_observed_abundance
+
+        if not collect_observed_abundance(root):
+            gaps.append(
+                "abundance/OTU CSVs in outdir/initial_abundance (or outdir/*.csv / "
+                "initial_annotations that convert to taxid + N_<sample>)"
+            )
+        return gaps
+    if start_s == "regenerate_tables":
+        from samovar.abundance import has_abundance_tables, observed_abundance_dir
+
+        if not has_abundance_tables(observed_abundance_dir(root)):
+            from samovar.abundance import collect_observed_abundance
+
+            if not collect_observed_abundance(root):
+                gaps.append(
+                    "observed abundance CSVs under outdir/initial_abundance "
+                    "(run abundance_tables, or drop OTU tables there)"
+                )
+        return gaps
+    if start_s == "score_regenerated_tables":
+        from samovar.abundance import (
+            collect_observed_abundance,
+            has_abundance_tables,
+            observed_abundance_dir,
+            regenerated_abundance_dir,
+        )
+        from samovar.table_scorers import load_tables_by_mode_from_run
+
+        if not has_abundance_tables(observed_abundance_dir(root)) and not collect_observed_abundance(
+            root
+        ):
+            gaps.append("observed abundance under outdir/initial_abundance")
+        modes = load_tables_by_mode_from_run(root)
+        if not modes and not has_abundance_tables(regenerated_abundance_dir(root)):
+            gaps.append(
+                "regenerated abundance CSVs under "
+                "outdir/regenerated/.regenerated_abundance"
+            )
+        return gaps
     if start_s == "seed_genomes":
         return gaps
     if start_s == "regenerate_reads":
-        if not _has_csv_tables(root / "initial_annotations"):
-            gaps.append("annotation CSVs under outdir/initial_annotations")
+        from samovar.abundance import has_abundance_tables, regenerated_abundance_dir
+
+        if not has_abundance_tables(regenerated_abundance_dir(root)):
+            gaps.append(
+                "regenerated abundance CSVs under "
+                "outdir/regenerated/.regenerated_abundance "
+                "(run regenerate_tables, or start earlier)"
+            )
         return gaps
     if start_s == "sort_reads" or start_s == "annotate_regenerated":
         if not has_r1_reads(root / "regenerated"):
@@ -293,6 +357,31 @@ def check_startpoint(
     except ValueError as exc:
         return [str(exc)]
     return startpoint_gaps(output_dir, start_s, input_dir=input_dir)
+
+
+def run_checkup(
+    output_dir: PathLike,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    input_dir: Optional[str] = None,
+) -> int:
+    """CLI-facing startpoint check. Exit 0 if ready, 1 if gaps, 2 if bad names."""
+    try:
+        start_s, end_s = resolve_window(start, end)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    gaps = startpoint_gaps(output_dir, start_s, input_dir=input_dir)
+    root = as_path(output_dir)
+    print(f"outdir: {root}")
+    print(f"window: {start_s} .. {end_s}")
+    if gaps:
+        print(f"MISSING inputs for --start-point {start_s}:")
+        for gap in gaps:
+            print(f"  - {gap}")
+        return 1
+    print(f"OK: enough inputs to start at {start_s}")
+    return 0
 
 
 def _is_tmp_dir(path: Path) -> bool:
@@ -393,6 +482,15 @@ def _parser() -> argparse.ArgumentParser:
     require.add_argument("--start", default=None)
     require.add_argument("--end", default=None)
     require.add_argument("--input-dir", default=None)
+    check = sub.add_parser(
+        "checkup",
+        help="Print whether outdir has the inputs required for a startpoint",
+    )
+    check.add_argument("output_dir", nargs="?", default=None)
+    check.add_argument("--output_dir", "--outdir", dest="outdir_flag", default=None)
+    check.add_argument("--start", "--startpoint", "--start-point", dest="start", default=None)
+    check.add_argument("--end", "--endpoint", "--end-point", dest="end", default=None)
+    check.add_argument("--input-dir", "--input_dir", dest="input_dir", default=None)
     regen = sub.add_parser(
         "needs-regen",
         help="Exit 0 if missing regenerated FASTQ should stop later stages",
@@ -445,6 +543,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for gap in gaps:
             print(f"  - {gap}", file=sys.stderr)
         return 1
+    if args.command == "checkup":
+        return run_checkup(
+            args.output_dir or args.outdir_flag or ".",
+            start=args.start,
+            end=args.end,
+            input_dir=args.input_dir,
+        )
     if args.command == "needs-regen":
         try:
             return 0 if needs_regen_early_exit(args.start, args.end) else 1

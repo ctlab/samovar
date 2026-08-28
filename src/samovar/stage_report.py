@@ -58,6 +58,27 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
             "Classifier labels on the input metagenome (real or simulated reads)."
         ),
     },
+    "abundance_tables": {
+        "title": "Observed abundance",
+        "description": (
+            "Per-annotator OTU / abundance tables (``taxid`` + ``N_<sample>``) "
+            "in ``initial_abundance/``, converted from annotations or ingested as CSVs."
+        ),
+    },
+    "regenerate_tables": {
+        "title": "Regenerated abundance",
+        "description": (
+            "``table_reads_generator`` writes synthetic communities to "
+            "``regenerated/.regenerated_abundance/`` (candidates kept when several methods run)."
+        ),
+    },
+    "score_regenerated_tables": {
+        "title": "Table scoring",
+        "description": (
+            "``--table-score`` ranks regenerated abundance tables against the observed "
+            "community and writes ``table_selection.json`` plus MultiQC plots."
+        ),
+    },
     "seed_genomes": {
         "title": "Genome library",
         "description": (
@@ -69,8 +90,8 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
     "regenerate_reads": {
         "title": "Community regeneration",
         "description": (
-            "annotation2iss rebuilds an in-silico community from the initial "
-            "calls (``regenerated/``) so the ensemble can be trained against a known mix."
+            "annotation2iss simulates FASTQ from regenerated abundance tables "
+            "(``regenerated/``) so the ensemble can be trained against a known mix."
         ),
     },
     "sort_reads": {
@@ -112,6 +133,9 @@ STAGE_DIRS = {
     "annotate_initial": ("initial_reports",),
     "combine_initial": ("initial_annotations",),
     "viz_initial": ("initial_annotations_plots",),
+    "abundance_tables": ("initial_abundance",),
+    "regenerate_tables": ("regenerated/.regenerated_abundance",),
+    "score_regenerated_tables": ("regenerated/.regenerated_abundance",),
     "seed_genomes": ("genomes",),
     "regenerate_reads": ("regenerated",),
     "sort_reads": ("regenerated",),

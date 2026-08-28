@@ -5,6 +5,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pandas as pd
+
 from samovar.exec_control import (
     CHECKPOINT_STEPS,
     cleanup_tmp,
@@ -199,6 +201,10 @@ def test_canonicalize_and_window():
     )
 
     assert canonicalize_step("tables") == "combine_initial"
+    assert canonicalize_step("abundance") == "abundance_tables"
+    assert canonicalize_step("otu") == "abundance_tables"
+    assert canonicalize_step("regenerated_tables") == "regenerate_tables"
+    assert canonicalize_step("table_score") == "score_regenerated_tables"
     assert canonicalize_step("ML") == "reprofile"
     assert resolve_window("annotate", "tables") == (
         "annotate_initial",
@@ -229,6 +235,52 @@ def test_startpoint_require_reports(tmp_path):
     assert exec_control_main(["active", "setup_reads", "--start", "tables", "--end", "viz"]) == 1
     assert exec_control_main(["active", "combine_initial", "--start", "tables", "--end", "viz"]) == 0
     assert exec_control_main(["needs-regen", "--start", "tables", "--end", "viz"]) == 1
+
+
+def test_checkup_abundance_start(tmp_path):
+    from samovar.exec_control import check_startpoint, main as exec_control_main
+
+    gaps = check_startpoint(tmp_path, start="abundance_tables", end="score_regenerated_tables")
+    assert gaps
+    ab = tmp_path / "initial_abundance"
+    ab.mkdir()
+    pd.DataFrame({"taxid": [562, 9606], "N_s1": [10, 1], "N_s2": [8, 2]}).to_csv(
+        ab / "table.csv", index=False
+    )
+    assert check_startpoint(tmp_path, start="abundance", end="regenerate_tables") == []
+    rc = exec_control_main(
+        [
+            "checkup",
+            str(tmp_path),
+            "--start-point",
+            "abundance_tables",
+            "--end-point",
+            "score_regenerated_tables",
+        ]
+    )
+    assert rc == 0
+    assert exec_control_main(["checkup", str(tmp_path), "--start", "regenerate_reads"]) == 1
+
+
+def test_abundance_to_scored_tables_window(tmp_path):
+    from samovar.abundance import materialize_observed_abundance, regenerated_abundance_dir
+    from samovar.regenerate import stage_regenerate_tables
+    from samovar.table_scorers import stage_score_regenerated_tables
+
+    src = tmp_path / "gp.csv"
+    pd.DataFrame({"taxid": [562, 9606], "CL3": [10, 1], "CC1": [8, 2]}).to_csv(src, index=False)
+    materialize_observed_abundance(tmp_path)
+    tables = stage_regenerate_tables(
+        tmp_path, {"regeneration_mode": "direct", "table_reads_generator": "direct"}
+    )
+    assert tables
+    assert regenerated_abundance_dir(tmp_path).joinpath("table.csv").is_file() or list(
+        regenerated_abundance_dir(tmp_path).glob("*.csv")
+    )
+    ranked = stage_score_regenerated_tables(tmp_path, {"table_score": "shannon_ks"})
+    assert ranked["scorer"] == "shannon_ks"
+    assert (regenerated_abundance_dir(tmp_path) / "table_selection.json").is_file()
+
 
 
 def test_generate_pipeline_window_file(tmp_path):

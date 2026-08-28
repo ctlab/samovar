@@ -37,6 +37,7 @@ show_usage() {
     echo "  build       Build Kaiju or Kraken2 database from config (alias: build_database)"
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "              Optional --startpoint / --endpoint slice the run (same names as prepare)"
+    echo "  checkup     Verify outdir has inputs for --start-point (does not run the pipeline)"
     echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
     echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
     echo "  tools       import a binary; --sort reads; --status for programs"
@@ -47,7 +48,8 @@ show_usage() {
     echo "  samovar generate --genome_dir [...] --output_dir [...] --host_genome [...]"
     echo "  samovar generate --simulator camisim --camisim-mode table --output_dir samovar/camisim-table ..."
     echo "  samovar prepare --input_dir [...] --output_dir [...]"
-    echo "  samovar prepare --startpoint tables --endpoint viz_initial --output_dir [...]"
+    echo "  samovar checkup --start-point abundance_tables --outdir [...]"
+    echo "  samovar prepare --startpoint abundance_tables --endpoint score_regenerated_tables --output_dir [...]"
     echo "  samovar prepare --reannotation-level genus --output_dir [...]"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...]"
     echo "  samovar exec --output_dir [...]"
@@ -125,6 +127,11 @@ case "${1:-}" in
             set -- "$@" "--output_dir" "."
         fi
         "$SCRIPT_DIR/samovar_exec" "$@"
+        ;;
+    "checkup")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.exec_control checkup "$@"
         ;;
     "multiqc")
         shift

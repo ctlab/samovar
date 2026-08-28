@@ -829,7 +829,7 @@ cleanup_tmp_if_requested() {{
 }}
 
 mkdir -p "$out_dir"
-mkdir -p "$out_dir/initial" "$out_dir/initial_reports" "$out_dir/regenerated" "$out_dir/regenerated_reports"
+mkdir -p "$out_dir/initial" "$out_dir/initial_reports" "$out_dir/initial_abundance" "$out_dir/regenerated" "$out_dir/regenerated_reports"
 "$PYTHON_PATH" -m samovar.exec_control require "$out_dir"
 # NCBI genome cache reuse (truncated data/test_genomes is not a library).
 export SAMOVAR_REUSE_GENOMES="${{SAMOVAR_REUSE_GENOMES:-{reuse_flag}}}"
@@ -880,6 +880,25 @@ fi""",
     --show_top 0
 "$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_initial \\
     --config {configs['scoring']}""",
+        )
+
+        abundance_tables = _checkpoint_block(
+            "abundance_tables",
+            """$PYTHON_PATH -m samovar.abundance materialize --output_dir "$out_dir\"""",
+        )
+
+        regenerate_tables = _checkpoint_block(
+            "regenerate_tables",
+            f"""$PYTHON_PATH -m samovar.regenerate tables \\
+    --output_dir "$out_dir" \\
+    --config {configs['annotation2iss']}""",
+        )
+
+        score_regenerated_tables = _checkpoint_block(
+            "score_regenerated_tables",
+            f"""$PYTHON_PATH -m samovar.table_scorers stage \\
+    --output_dir "$out_dir" \\
+    --config {configs['annotation2iss']}""",
         )
 
         seed_genomes = _checkpoint_block(
@@ -989,6 +1008,9 @@ cleanup_tmp_if_requested
                 annotate_initial,
                 combine_initial,
                 viz_initial,
+                abundance_tables,
+                regenerate_tables,
+                score_regenerated_tables,
                 seed_genomes,
                 regenerate_reads,
                 early_exit,

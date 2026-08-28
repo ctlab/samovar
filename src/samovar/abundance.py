@@ -19,6 +19,9 @@ import pandas as pd
 
 PathLike = Union[str, Path]
 
+INITIAL_ABUNDANCE_DIR = "initial_abundance"
+REGENERATED_ABUNDANCE_DIR = Path("regenerated") / ".regenerated_abundance"
+
 _ID_ALIASES = (
     "taxid",
     "tax_id",
@@ -292,3 +295,107 @@ def observed_n_samples(data: Any) -> int:
     if isinstance(frame, pd.DataFrame) and "sample" in frame.columns and len(frame.index):
         return max(int(pd.Series(frame["sample"].astype(str)).nunique()), 1)
     return 1
+
+
+def skip_abundance_filename(name: str) -> bool:
+    low = str(name).lower()
+    if low.startswith("."):
+        return True
+    if low == "table_selection.json":
+        return True
+    if low.startswith("combined_annotation_table"):
+        return True
+    return False
+
+
+def abundance_csv_paths(directory: PathLike) -> List[Path]:
+    folder = Path(directory)
+    if not folder.is_dir():
+        return []
+    return [
+        path
+        for path in sorted(folder.glob("*.csv"))
+        if path.is_file() and not skip_abundance_filename(path.name)
+    ]
+
+
+def load_abundance_dir(directory: PathLike) -> Dict[str, pd.DataFrame]:
+    tables: Dict[str, pd.DataFrame] = {}
+    for path in abundance_csv_paths(directory):
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            continue
+        if is_abundance_table(frame):
+            tables[path.stem] = normalize_abundance_table(frame)
+    return tables
+
+
+def has_abundance_tables(directory: PathLike) -> bool:
+    return bool(load_abundance_dir(directory))
+
+
+def observed_abundance_dir(output_dir: PathLike) -> Path:
+    return Path(output_dir) / INITIAL_ABUNDANCE_DIR
+
+
+def regenerated_abundance_dir(output_dir: PathLike) -> Path:
+    return Path(output_dir) / REGENERATED_ABUNDANCE_DIR
+
+
+def write_abundance_dir(dest: PathLike, tables: Dict[str, pd.DataFrame]) -> Path:
+    from samovar.regenerate import _write_abundance_tables
+
+    out = Path(dest)
+    _write_abundance_tables(out, tables)
+    return out
+
+
+def collect_observed_abundance(output_dir: PathLike) -> Dict[str, pd.DataFrame]:
+    """Find observed abundance in the run dir (already staged, annotations, or loose CSVs)."""
+    root = Path(output_dir)
+    staged = load_abundance_dir(observed_abundance_dir(root))
+    if staged:
+        return staged
+    for folder in (root / "abundance", root / "initial_annotations", root):
+        tables = load_abundance_dir(folder)
+        if tables:
+            return tables
+    ann = root / "initial_annotations"
+    if ann.is_dir():
+        loaded = load_table_input(ann)
+        tables = input_to_abundance_tables(loaded)
+        if tables:
+            return tables
+    return {}
+
+
+def materialize_observed_abundance(output_dir: PathLike) -> Dict[str, pd.DataFrame]:
+    """Write canonical ``initial_abundance/*.csv`` from annotations or OTU tables."""
+    tables = collect_observed_abundance(output_dir)
+    if not tables:
+        raise FileNotFoundError(
+            f"No abundance or annotation tables under {output_dir}. "
+            "Put OTU/abundance CSVs in initial_abundance/ or annotation CSVs in initial_annotations/."
+        )
+    write_abundance_dir(observed_abundance_dir(output_dir), tables)
+    return tables
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m samovar.abundance")
+    sub = parser.add_subparsers(dest="command", required=True)
+    mat = sub.add_parser("materialize", help="Write outdir/initial_abundance from annotations or OTU CSVs")
+    mat.add_argument("--output_dir", "--outdir", dest="output_dir", required=True)
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "materialize":
+        tables = materialize_observed_abundance(args.output_dir)
+        print(f"Wrote {len(tables)} abundance table(s) under {observed_abundance_dir(args.output_dir)}")
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

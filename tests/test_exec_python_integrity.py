@@ -27,7 +27,7 @@ def test_generated_exec_pipeline_is_python_only(tmp_path):
     assert "snakemake -s " in script
     assert "workflow/annotators/Snakefile" in script
     assert "samovar.exec_control" in script
-    for step in ("setup_reads", "regenerate_reads", "reprofile"):
+    for step in ("setup_reads", "abundance_tables", "regenerate_tables", "score_regenerated_tables", "regenerate_reads", "reprofile"):
         assert f"ckpt_skip {step}" in script
     assert "visualization failed; continuing" not in script
     assert '[ -f "$CKPT/$1.done" ]' in script

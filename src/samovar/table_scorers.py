@@ -1012,3 +1012,92 @@ def write_table_score_plots(
         )
         written.append(table_path)
     return written
+
+
+def load_tables_by_mode_from_run(output_dir: PathLike) -> Dict[str, Dict[str, pd.DataFrame]]:
+    from samovar.abundance import load_abundance_dir, regenerated_abundance_dir
+
+    dest = regenerated_abundance_dir(output_dir)
+    candidates = dest / ".table_candidates"
+    tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
+    if candidates.is_dir():
+        for child in sorted(candidates.iterdir()):
+            if not child.is_dir():
+                continue
+            loaded = load_abundance_dir(child)
+            if loaded:
+                tables_by_mode[child.name] = loaded
+    if not tables_by_mode:
+        loaded = load_abundance_dir(dest)
+        if loaded:
+            tables_by_mode["generated"] = loaded
+    return tables_by_mode
+
+
+def stage_score_regenerated_tables(
+    output_dir: PathLike,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Checkpoint ``score_regenerated_tables``: rank methods and write winner CSVs."""
+    from samovar.abundance import (
+        has_abundance_tables,
+        load_table_input,
+        materialize_observed_abundance,
+        observed_abundance_dir,
+        regenerated_abundance_dir,
+        write_abundance_dir,
+    )
+
+    cfg = dict(config or {})
+    root = Path(output_dir)
+    observed_dir = observed_abundance_dir(root)
+    if not has_abundance_tables(observed_dir):
+        materialize_observed_abundance(root)
+    observed = load_table_input(observed_dir)
+    tables_by_mode = load_tables_by_mode_from_run(root)
+    if not tables_by_mode:
+        raise FileNotFoundError(
+            f"No regenerated abundance tables under {regenerated_abundance_dir(root)}"
+        )
+    scorer = cfg.get("table_score") or cfg.get("table_reads_scorer") or "shannon_ks"
+    ranked = rank_methods_per_annotator(
+        observed, tables_by_mode, scorer, config=cfg, modes=list(tables_by_mode)
+    )
+    mixed = ranked.get("tables") or {}
+    dest = regenerated_abundance_dir(root)
+    if mixed:
+        write_abundance_dir(dest, mixed)
+    payload = {k: v for k, v in ranked.items() if k != "tables"}
+    write_table_selection(dest / "table_selection.json", payload)
+    try:
+        for plot_dest in table_score_plot_dirs(dest):
+            write_table_score_plots(payload, plot_dest, config=cfg)
+    except Exception:
+        pass
+    return ranked
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+
+    import yaml
+
+    parser = argparse.ArgumentParser(prog="python -m samovar.table_scorers")
+    sub = parser.add_subparsers(dest="command", required=True)
+    stage = sub.add_parser("stage", help="Score regenerated abundance tables for a run")
+    stage.add_argument("--output_dir", "--outdir", dest="output_dir", required=True)
+    stage.add_argument("--config", default="")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "stage":
+        cfg: Dict[str, Any] = {}
+        if args.config:
+            cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
+        ranked = stage_score_regenerated_tables(args.output_dir, cfg)
+        print(f"scorer={ranked.get('scorer')} winner={ranked.get('winner')}")
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

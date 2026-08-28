@@ -212,8 +212,9 @@ def main():
         default=None,
         help=(
             'First exec checkpoint to run (default: setup_reads). '
-            'Aliases: annotate, tables/combine, viz, genomes, regenerate/iss, '
-            'sort, reannotate, ml/reprofile. Custom start checks outdir inputs.'
+            'Aliases: annotate, tables/combine, viz, abundance/otu, '
+            'regenerate_tables, score_tables/table_score, genomes, regenerate/iss, '
+            'sort, reannotate, ml/reprofile. checkup verifies outdir inputs.'
         ),
     )
     parser.add_argument(
@@ -223,7 +224,7 @@ def main():
         default=None,
         help=(
             'Last exec checkpoint to run (default: viz_reprofiled). '
-            'Example: --startpoint tables --endpoint viz_initial'
+            'Example: --startpoint abundance_tables --endpoint score_regenerated_tables'
         ),
     )
 

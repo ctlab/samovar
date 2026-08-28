@@ -496,12 +496,14 @@ def regenerate_annotation_tables(
     output_dir: Union[str, Path],
     config: Optional[Dict[str, Any]] = None,
     data: Optional[pd.DataFrame] = None,
+    select_best: bool = True,
 ) -> Dict[str, pd.DataFrame]:
     """Regenerate per-annotator abundance CSVs from an annotation directory.
 
-    If ``table_reads_generators`` (or a list ``table_reads_generator``) names
-    more than one method, each candidate is scored with ``table_score``
-    (default ``shannon_ks``) and only the winner is written to ``output_dir``.
+    If ``table_reads_generators`` names more than one method and
+    ``select_best`` is true, each candidate is scored and only the winner is
+    written to ``output_dir``. With ``select_best=False`` every method is kept
+    under ``.table_candidates/`` and the first success is copied to ``output_dir``.
     """
     from samovar.table_regenerators import canonical_regeneration_modes
     from samovar.table_scorers import (
@@ -548,6 +550,22 @@ def regenerate_annotation_tables(
         except Exception as exc:
             tables_by_mode[mode] = {}
             generate_errors[mode] = str(exc)
+
+    mixed: Dict[str, pd.DataFrame] = {}
+    for mode in modes:
+        if tables_by_mode.get(mode):
+            mixed = tables_by_mode[mode]
+            break
+    if not mixed:
+        raise RuntimeError(
+            "No table_reads_generator produced abundance tables. "
+            f"Tried: {', '.join(modes)}"
+            + (f" Errors: {generate_errors}" if generate_errors else "")
+        )
+
+    if not select_best:
+        _write_abundance_tables(out, mixed)
+        return mixed
 
     from samovar.table_scorers import rank_methods_per_annotator
 
@@ -967,3 +985,51 @@ def _glm_boil_one(
         )
         current_cluster = dst_cid
     return np.maximum(out, 0.0)
+
+
+def stage_regenerate_tables(
+    output_dir: Union[str, Path],
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, pd.DataFrame]:
+    """Checkpoint ``regenerate_tables``: observed abundance → regenerated CSVs."""
+    from samovar.abundance import (
+        has_abundance_tables,
+        materialize_observed_abundance,
+        observed_abundance_dir,
+        regenerated_abundance_dir,
+    )
+
+    root = Path(output_dir)
+    observed = observed_abundance_dir(root)
+    if not has_abundance_tables(observed):
+        materialize_observed_abundance(root)
+    dest = regenerated_abundance_dir(root)
+    return regenerate_annotation_tables(
+        observed, dest, dict(config or {}), select_best=False
+    )
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    import argparse
+
+    import yaml
+
+    parser = argparse.ArgumentParser(prog="python -m samovar.regenerate")
+    sub = parser.add_subparsers(dest="command", required=True)
+    tables = sub.add_parser("tables", help="Regenerate abundance tables for a run directory")
+    tables.add_argument("--output_dir", "--outdir", dest="output_dir", required=True)
+    tables.add_argument("--config", default="", help="YAML (annotation2iss / table regen)")
+    args = parser.parse_args(argv)
+    if args.command == "tables":
+        cfg: Dict[str, Any] = {}
+        if args.config:
+            cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
+        written = stage_regenerate_tables(args.output_dir, cfg)
+        print(f"Wrote {len(written)} regenerated abundance table(s)")
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

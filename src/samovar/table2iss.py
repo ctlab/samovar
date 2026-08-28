@@ -1007,8 +1007,12 @@ def process_annotation_tables(
             annotation_dir = parent
 
     sample_tables: Dict[str, pd.DataFrame] = {}
-    if annotation_dir:
-        regen_dir = os.path.join(output_dir, ".regenerated_abundance")
+    regen_dir = os.path.join(output_dir, ".regenerated_abundance")
+    existing = _sample_tables_from_abundance_dir(regen_dir, sample_names)
+    if existing:
+        sample_tables = existing
+        sample_names = list(sample_tables.keys())
+    elif annotation_dir:
         cfg_out = dict(regen_cfg)
         cfg_out["output_dir"] = regen_dir
         cfg_out["seed"] = seed
