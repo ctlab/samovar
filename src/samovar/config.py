@@ -16,6 +16,7 @@ from samovar.paths import (
     runtime_path_prefix,
 )
 from samovar.table_regenerators import flags_apply_to_regenerator, canonical_regeneration_modes
+from samovar.table_scorers import flags_apply_to_table_scorer
 from samovar.reads_generators import (
     flags_apply_to_reads_generator,
     require_known_reads_generator,
@@ -530,6 +531,9 @@ class PipelineConfig:
                 continue
             target, flags = item[0], item[1]
             if any(flags_apply_to_regenerator(target, mode) for mode in regen_targets):
+                flag_parts.append(flags)
+                continue
+            if flags_apply_to_table_scorer(target, config.table_score):
                 flag_parts.append(flags)
                 continue
             low = str(target).lower().replace("-", "_")

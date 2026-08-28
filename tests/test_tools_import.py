@@ -125,6 +125,30 @@ def test_import_scoring_writes_inputs_slot(tmp_path, monkeypatch):
     assert spec2[5] == "*annotations/combined_annotation_table.csv"
 
 
+def test_import_table_scoring_group(tmp_path, monkeypatch):
+    from samovar.main_config import normalize_tool_group
+
+    assert normalize_tool_group("table-scoring") == "table_scoring"
+    script = tmp_path / "bray_plugin.py"
+    script.write_text(
+        "def score_table(observed, generated, config):\n"
+        "    return {'rank_value': 0.0, 'ok': True}\n"
+    )
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    spec = import_tool(
+        name="bray_plugin",
+        tool_type="table-scoring",
+        exec_path=str(script),
+        also_repo_build=False,
+    )
+    assert spec[3] == "table_scoring"
+    raw = json.loads(cfg.read_text())["tools"]["bray_plugin"]
+    assert raw[3] == "table_scoring"
+    assert len(raw) == 4
+
+
 def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
     script = tmp_path / "clf"
     script.write_text("#!/bin/sh\nexit 0\n")

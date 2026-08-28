@@ -124,3 +124,61 @@ def test_rank_methods_per_annotator_independent_cv(monkeypatch):
     assert "pvalue" in row
     assert "n_observed" in row
     assert "n_generated" in row
+
+
+def test_sd2_regenerate_from_phyloseq_abundance(monkeypatch, tmp_path):
+    from samovar.parse_annotators import Annotation
+    from samovar.sparsedossa2 import regenerate
+
+    phyloseq = pd.DataFrame(
+        {"taxid": ["562", "9606", "4932"], "CL3": [10, 1, 0], "CC1": [8, 2, 4], "SV1": [1, 3, 5]}
+    )
+
+    def fake_sim(matrix, mode="sparsedossa2-fit", n_sample=None, config=None):
+        assert list(matrix.index) == ["562", "9606", "4932"]
+        assert matrix.shape[1] == 3
+        n = int(n_sample or 2)
+        out = pd.DataFrame(index=matrix.index)
+        for i in range(n):
+            out[f"s{i}"] = matrix.iloc[:, i % matrix.shape[1]].to_numpy()
+        return out
+
+    monkeypatch.setattr("samovar.sparsedossa2.simulate_count_matrix", fake_sim)
+    tables = regenerate(
+        Annotation.from_abundance_tables({"table": phyloseq}),
+        None,
+        {"regeneration_mode": "sparsedossa2-fit", "N": 2, "N_reads": 40},
+    )
+    table = tables["table"]
+    assert list(table.columns)[0] == "taxid"
+    assert [c for c in table.columns if str(c).startswith("N_")]
+    assert set(table["taxid"].astype(str)) <= {"562", "9606", "4932"}
+
+
+def test_sd2_cv_accepts_phyloseq_columns(monkeypatch):
+    phyloseq = pd.DataFrame({"taxid": ["562", "9606"], "CL3": [10, 1], "CC1": [8, 2]})
+
+    def fake_fitcv(matrix, config=None):
+        assert matrix.shape == (2, 2)
+        assert list(matrix.index) == ["562", "9606"]
+        return {"cv_goodness_of_fit": 3.0, "n_sample": matrix.shape[1]}
+
+    monkeypatch.setattr("samovar.sparsedossa2.fitcv_score_matrix", fake_fitcv)
+    row = score_generated_tables(pd.DataFrame(), {"gp": phyloseq}, "sparsedossa2-cv")
+    assert row["cv_goodness_of_fit"] == 3.0
+    assert row["n_generated"] == 2
+
+
+def test_write_feature_matrix_keeps_taxa_rows_when_fewer_than_samples(tmp_path):
+    from samovar.sparsedossa2 import _write_feature_matrix
+
+    mat = pd.DataFrame(
+        {"s1": [1, 2], "s2": [3, 4], "s3": [5, 6], "s4": [7, 8], "s5": [9, 9]},
+        index=["562", "9606"],
+    )
+    dest = tmp_path / "obs.csv"
+    _write_feature_matrix(mat, dest)
+    loaded = pd.read_csv(dest, index_col=0)
+    assert loaded.shape == (2, 5)
+    assert list(loaded.index.astype(str)) == ["562", "9606"]
+

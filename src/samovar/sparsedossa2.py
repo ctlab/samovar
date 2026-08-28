@@ -523,9 +523,8 @@ def register_sparsedossa2_tools(cfg: Optional[Dict[str, Any]] = None) -> Dict[st
         path=wrapper,
         env="",
         workflow="bash",
-        group="scoring",
+        group="table_scoring",
         flags="--cv-folds 5",
-        inputs="regenerated/.regenerated_abundance",
     )
     write_config(config)
     return config

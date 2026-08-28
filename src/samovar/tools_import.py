@@ -131,7 +131,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         "--type",
         required=True,
-        help=f"Tool group: {', '.join(TOOL_GROUPS)} (aliases: a, reads, meta, table, score, viz, ml)",
+        help=(
+            f"Tool group: {', '.join(TOOL_GROUPS)} "
+            "(aliases: a, reads, meta, table, table-scoring, score, viz, ml)"
+        ),
     )
     parser.add_argument(
         "--flags",
@@ -146,7 +149,8 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Input glob under the run output dir (6th tools.* slot). "
-            "Scoring/viz default: *annotations (initial/regenerated/reprofiled_annotations). "
+            "Scoring/viz (--type scoring) default: *annotations. "
+            "table-scoring does not use this glob. "
             "Examples: *annotations, *annotations/combined_annotation_table.csv, *_plots"
         ),
     )

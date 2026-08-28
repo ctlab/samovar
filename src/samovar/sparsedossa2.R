@@ -134,12 +134,11 @@ setup_parallel <- function(workers, cv = FALSE) {
 }
 
 read_feature_matrix <- function(path) {
+  # Python always writes features (taxid) as rows and samples as columns.
+  # Do not transpose when n_taxa < n_samples — that is a valid abundance table.
   raw <- utils::read.csv(path, row.names = 1, check.names = FALSE)
   mat <- as.matrix(raw)
   storage.mode(mat) <- "numeric"
-  if (nrow(mat) < ncol(mat)) {
-    mat <- t(mat)
-  }
   mat[!is.finite(mat)] <- 0
   mat
 }

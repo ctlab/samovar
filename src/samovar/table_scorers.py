@@ -1,9 +1,16 @@
 """Score regenerated abundance tables against the observed annotation.
 
-The default builtin ``shannon_ks`` compares Shannon alpha-diversity
-distributions (one value per annotator×sample) with a two-sample Kolmogorov–
-Smirnov test. Lower KS statistic means the generated community better matches
-the observed diversity; that candidate is selected for ISS.
+Built-ins at this stage (``--table-score`` / ``table_score``) share the same
+ranking block: one row per regeneration method, lower ``rank_value`` wins.
+
+- ``shannon_ks``: KS on per-sample Shannon entropy
+- ``bray_ks``: KS on pairwise Bray–Curtis distances
+- ``sparsedossa2_cv``: SparseDOSSA2 ``fitCV`` (higher GOF → lower rank_value)
+
+Imported ``--type table-scoring`` Python modules fill the same ranking block
+via ``score_annotator(...)`` or ``score_table(observed, generated, config)``.
+Annotation/viz ``--type scoring`` (``score(inputs, dest, config)``) is a
+different contract and is not used here.
 """
 
 from __future__ import annotations
@@ -24,6 +31,9 @@ BUILTIN_TABLE_SCORERS = frozenset(
         "ks",
         "shannon",
         "alpha_ks",
+        "bray_ks",
+        "bray",
+        "bray_curtis_ks",
         "sparsedossa2_cv",
         "sparsedossa2-cv",
         "sparsedossa2",
@@ -34,6 +44,64 @@ BUILTIN_TABLE_SCORERS = frozenset(
 )
 
 PathLike = Union[str, Path]
+TABLE_SCORING_GROUP = "table_scoring"
+
+
+class MissingTableScorerError(ValueError):
+    """``tools.<name>`` is missing or is not ``--type table-scoring``."""
+
+
+def flags_apply_to_table_scorer(target: str, name: Optional[str] = None) -> bool:
+    from samovar.main_config import flags_target_matches
+
+    names = [name] if name else []
+    return flags_target_matches(
+        target,
+        *names,
+        groups=("table_scoring", "table-scoring", "table_score"),
+    )
+
+
+def lookup_table_scorer(name: str):
+    """Return ``(config_key, parsed_spec)`` for an imported table scorer."""
+    from samovar.main_config import iter_tools, parse_tool_entry, tool_path
+    from samovar.paths import load_config
+
+    key = str(name or "").strip()
+    if not key:
+        raise MissingTableScorerError(
+            "Empty table scorer name. Import a tool with "
+            "`samovar tools import -n NAME --type table-scoring`."
+        )
+    tools = iter_tools(load_config())
+    spec = tools.get(key)
+    matched = key
+    if spec is None:
+        low = key.lower()
+        for stored, value in tools.items():
+            if stored.lower() == low:
+                spec = value
+                matched = stored
+                break
+    if spec is None:
+        raise MissingTableScorerError(
+            f"table-scoring tool {key!r} is not in the install config. "
+            "Register it with `samovar tools import -n "
+            f"{key} --exec-path /path/to/script.py --type table-scoring`."
+        )
+    parsed = parse_tool_entry(spec, matched)
+    group = str(parsed[3] or "").strip()
+    if group != TABLE_SCORING_GROUP:
+        raise MissingTableScorerError(
+            f"tools.{matched} has group {group!r}, expected {TABLE_SCORING_GROUP!r}. "
+            "Re-import with --type table-scoring (not --type scoring)."
+        )
+    path = tool_path(parsed, matched)
+    if not path:
+        raise MissingTableScorerError(
+            f"tools.{matched} has an empty path. Re-import with --exec-path."
+        )
+    return matched, parsed
 
 
 def shannon_entropy(counts: Iterable[float]) -> float:
@@ -68,15 +136,20 @@ def shannon_vector_from_annotation(data: pd.DataFrame) -> np.ndarray:
 
 
 def shannon_vector_from_table(table: pd.DataFrame) -> np.ndarray:
-    values: List[float] = []
-    if table is None or table.empty or "taxid" not in table.columns:
+    from samovar.abundance import abundance_to_matrix, is_abundance_table, normalize_abundance_table
+
+    if table is None or getattr(table, "empty", True):
         return np.array([], dtype=float)
-    work = table.copy()
-    work["taxid"] = work["taxid"].astype(str)
-    n_cols = [c for c in work.columns if str(c).startswith("N_")]
-    work = work.loc[~work["taxid"].str.lower().isin(UNCLASSIFIED)]
-    for col in n_cols:
-        values.append(shannon_entropy(pd.to_numeric(work[col], errors="coerce").fillna(0)))
+    if is_abundance_table(table) or "taxid" in getattr(table, "columns", []):
+        work = normalize_abundance_table(table)
+        mat = _drop_unclassified_rows(abundance_to_matrix(work))
+    else:
+        return np.array([], dtype=float)
+    if mat.empty:
+        return np.array([], dtype=float)
+    values: List[float] = []
+    for col in mat.columns:
+        values.append(shannon_entropy(mat[col].to_numpy(dtype=float)))
     return np.asarray(values, dtype=float)
 
 
@@ -187,31 +260,41 @@ def _candidate_row(
 
 
 def canonicalize_table_scorer(name: Optional[str]) -> str:
-    key = str(name or "shannon_ks").strip().lower().replace("-", "_")
-    if key in {"sparsedossa2_cv", "sparsedossa2", "sd2_cv", "fitcv"}:
+    key = str(name or "shannon_ks").strip()
+    low = key.lower().replace("-", "_")
+    if low in {"sparsedossa2_cv", "sparsedossa2", "sd2_cv", "fitcv"}:
         return "sparsedossa2_cv"
-    if key in {"shannon_ks", "ks", "shannon", "alpha_ks"}:
+    if low in {"shannon_ks", "ks", "shannon", "alpha_ks"}:
         return "shannon_ks"
+    if low in {"bray_ks", "bray", "bray_curtis_ks"}:
+        return "bray_ks"
     if not key:
         return "shannon_ks"
+    try:
+        matched, _spec = lookup_table_scorer(key)
+        return matched
+    except MissingTableScorerError:
+        pass
     raise ValueError(
-        f"Unknown table scorer {name!r}. Built-in: shannon_ks, sparsedossa2_cv."
+        f"Unknown table scorer {name!r}. Built-in: shannon_ks, sparsedossa2_cv, bray_ks. "
+        "Or import one with `samovar tools import --type table-scoring` and pass its name to --table-score."
     )
 
 
 def _tables_to_matrices(tables: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    from samovar.abundance import abundance_to_matrix, is_abundance_table, normalize_abundance_table
+
     matrices: Dict[str, pd.DataFrame] = {}
     for name, table in (tables or {}).items():
-        if table is None or table.empty or "taxid" not in table.columns:
+        if table is None or getattr(table, "empty", True):
             continue
-        work = table.copy()
-        work["taxid"] = work["taxid"].astype(str)
-        n_cols = [c for c in work.columns if str(c).startswith("N_")]
-        if not n_cols:
+        if is_abundance_table(table) or "taxid" in table.columns:
+            mat = abundance_to_matrix(normalize_abundance_table(table))
+        else:
             continue
-        mat = work.set_index("taxid")[n_cols]
-        mat.columns = [str(c)[2:] if str(c).startswith("N_") else str(c) for c in mat.columns]
-        matrices[str(name)] = mat.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        if mat is None or mat.empty:
+            continue
+        matrices[str(name)] = mat
     return matrices
 
 
@@ -387,6 +470,167 @@ def score_shannon_ks_annotator(
     }
 
 
+def _bray_vector_from_tables(tables: Dict[str, pd.DataFrame]) -> np.ndarray:
+    chunks = [pairwise_bray_curtis(table) for table in (tables or {}).values()]
+    nonempty = [c for c in chunks if c.size]
+    if not nonempty:
+        return np.array([], dtype=float)
+    return np.concatenate(nonempty)
+
+
+def pairwise_bray_curtis(table: pd.DataFrame) -> np.ndarray:
+    """Upper-triangle Bray–Curtis distances between sample columns."""
+    from samovar.abundance import abundance_to_matrix, normalize_abundance_table
+
+    if table is None or getattr(table, "empty", True):
+        return np.array([], dtype=float)
+    mat = _drop_unclassified_rows(abundance_to_matrix(normalize_abundance_table(table)))
+    if mat.shape[1] < 2:
+        return np.array([], dtype=float)
+    arr = np.maximum(mat.to_numpy(dtype=float), 0.0)
+    dists: List[float] = []
+    n = arr.shape[1]
+    for i in range(n):
+        for j in range(i + 1, n):
+            num = float(np.abs(arr[:, i] - arr[:, j]).sum())
+            den = float(arr[:, i].sum() + arr[:, j].sum())
+            dists.append(num / den if den else 0.0)
+    return np.asarray(dists, dtype=float)
+
+
+def ks_bray(observed: pd.DataFrame, generated: pd.DataFrame) -> Dict[str, Any]:
+    """KS test on pairwise Bray–Curtis distances (lower D is a closer community)."""
+    row = ks_shannon(pairwise_bray_curtis(observed), pairwise_bray_curtis(generated))
+    row["scorer"] = "bray_ks"
+    return row
+
+
+def score_bray_ks_annotator(
+    annotation: Any,
+    tables_by_mode: Dict[str, Dict[str, pd.DataFrame]],
+    annotator: str,
+    modes: Sequence[str],
+) -> Dict[str, Any]:
+    from samovar.abundance import input_to_abundance_tables
+
+    observed_tables = input_to_abundance_tables(annotation)
+    observed = observed_tables.get(annotator)
+    if observed is None and len(observed_tables) == 1:
+        observed = next(iter(observed_tables.values()))
+    generated_by_mode: Dict[str, pd.DataFrame] = {}
+    rows: List[Dict[str, Any]] = []
+    for mode in modes:
+        table = (tables_by_mode.get(mode) or {}).get(annotator)
+        generated_by_mode[mode] = table if table is not None else pd.DataFrame()
+        score = ks_bray(observed if observed is not None else pd.DataFrame(), generated_by_mode[mode])
+        score["mode"] = mode
+        score["annotator"] = annotator
+        score["ok"] = bool(table is not None and not getattr(table, "empty", True))
+        rows.append(score)
+    grid: Dict[str, Dict[str, Any]] = {m: {} for m in modes}
+    for mode_i in modes:
+        for mode_j in modes:
+            if mode_i == mode_j:
+                grid[mode_i][mode_j] = next(
+                    (r.get("ks_statistic") for r in rows if r.get("mode") == mode_i),
+                    None,
+                )
+            else:
+                pair = ks_bray(generated_by_mode.get(mode_i), generated_by_mode.get(mode_j))
+                grid[mode_i][mode_j] = pair.get("ks_statistic")
+    return {
+        "scorer": "bray_ks",
+        "annotator": annotator,
+        "winner": pick_best_table_method(rows),
+        "score_matrix": grid,
+        "cv_matrix": grid,
+        "candidates": rows,
+        "metric_name": "ks_statistic",
+    }
+
+
+def _load_imported_table_scorer(name: str) -> Any:
+    import importlib.util
+
+    from samovar.main_config import tool_path
+
+    matched, spec = lookup_table_scorer(name)
+    path = Path(tool_path(spec, matched)).expanduser()
+    if path.suffix.lower() != ".py" or not path.is_file():
+        raise ValueError(
+            f"Imported table scorer {name!r} must be a Python module with "
+            "score_annotator() or score_table() "
+            "(annotation --type scoring is a different contract)."
+        )
+    loaded = importlib.util.spec_from_file_location(f"samovar_table_scorer_{matched}", path)
+    if loaded is None or loaded.loader is None:
+        raise ValueError(f"Cannot load table scorer {path}")
+    module = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(module)
+    return module
+
+
+def score_imported_annotator(
+    name: str,
+    annotation: Any,
+    tables_by_mode: Dict[str, Dict[str, pd.DataFrame]],
+    annotator: str,
+    modes: Sequence[str],
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Same ranking block as shannon_ks, filled by an imported --type table-scoring module."""
+    module = _load_imported_table_scorer(name)
+    cfg = dict(config or {})
+    fn_ann = getattr(module, "score_annotator", None)
+    if callable(fn_ann):
+        block = fn_ann(annotation, tables_by_mode, annotator, list(modes), cfg)
+        if not isinstance(block, dict):
+            raise TypeError(f"{name}.score_annotator() must return a dict")
+        block.setdefault("scorer", name)
+        block.setdefault("annotator", annotator)
+        block.setdefault("metric_name", "rank_value")
+        return block
+    fn_one = getattr(module, "score_table", None)
+    if not callable(fn_one):
+        raise ValueError(
+            f"Imported scorer {name!r} needs score_annotator(...) or score_table(observed, generated, config). "
+            "The annotation-stage score(inputs, dest, config) hook is not used for table regenerate."
+        )
+    from samovar.abundance import input_to_abundance_tables
+
+    observed_tables = input_to_abundance_tables(annotation)
+    observed = observed_tables.get(annotator)
+    if observed is None and len(observed_tables) == 1:
+        observed = next(iter(observed_tables.values()))
+    rows: List[Dict[str, Any]] = []
+    for mode in modes:
+        generated = (tables_by_mode.get(mode) or {}).get(annotator)
+        raw = fn_one(
+            observed if observed is not None else pd.DataFrame(),
+            generated if generated is not None else pd.DataFrame(),
+            cfg,
+        )
+        if not isinstance(raw, dict):
+            raise TypeError(f"{name}.score_table() must return a dict")
+        row = dict(raw)
+        row.setdefault("scorer", name)
+        row["mode"] = mode
+        row["annotator"] = annotator
+        row.setdefault("ok", generated is not None and not getattr(generated, "empty", True))
+        if "rank_value" not in row:
+            row["rank_value"] = float(row.get("metric") or row.get("ks_statistic") or 1.0e9)
+        rows.append(row)
+    return {
+        "scorer": name,
+        "annotator": annotator,
+        "winner": pick_best_table_method(rows),
+        "score_matrix": {},
+        "cv_matrix": {},
+        "candidates": rows,
+        "metric_name": str(rows[0].get("metric_name") or "rank_value") if rows else "rank_value",
+    }
+
+
 def rank_methods_per_annotator(
     annotation: pd.DataFrame,
     tables_by_mode: Dict[str, Dict[str, pd.DataFrame]],
@@ -412,9 +656,17 @@ def rank_methods_per_annotator(
             block = score_sparsedossa2_cv_grid(
                 tables_by_mode, annotator, mode_list, config=config
             )
-        else:
+        elif kind == "shannon_ks":
             block = score_shannon_ks_annotator(
                 annotation, tables_by_mode, annotator, mode_list
+            )
+        elif kind == "bray_ks":
+            block = score_bray_ks_annotator(
+                annotation, tables_by_mode, annotator, mode_list
+            )
+        else:
+            block = score_imported_annotator(
+                kind, annotation, tables_by_mode, annotator, mode_list, config=config
             )
         by_annotator[annotator] = block
         winner = block.get("winner")
@@ -463,9 +715,24 @@ def score_generated_tables(
             shannon_vector_from_annotation(annotation),
             shannon_vector_from_tables(tables),
         )
+    if kind == "bray_ks":
+        from samovar.abundance import input_to_abundance_tables
+
+        row = ks_shannon(
+            _bray_vector_from_tables(input_to_abundance_tables(annotation)),
+            _bray_vector_from_tables(tables),
+        )
+        row["scorer"] = "bray_ks"
+        return row
     if kind == "sparsedossa2_cv":
         return score_sparsedossa2_cv(annotation, tables, config=config)
-    raise ValueError(f"Unsupported table scorer {kind!r}")
+    ranked = rank_methods_per_annotator(
+        annotation, {"_one": tables}, scorer=kind, config=config, modes=["_one"]
+    )
+    cands = list(ranked.get("candidates") or [])
+    if not cands:
+        raise ValueError(f"Imported table scorer {kind!r} returned no candidates")
+    return min(cands, key=lambda r: float(r.get("rank_value", 1.0e9)))
 
 
 def pick_best_table_method(rows: Sequence[Dict[str, Any]]) -> Optional[str]:
