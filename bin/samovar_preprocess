@@ -184,6 +184,27 @@ def main():
         const=False,
         help='Do not run MultiQC from exec (stage JSON is still written)',
     )
+    parser.add_argument(
+        '--startpoint',
+        '--start-point',
+        dest='startpoint',
+        default=None,
+        help=(
+            'First exec checkpoint to run (default: setup_reads). '
+            'Aliases: annotate, tables/combine, viz, genomes, regenerate/iss, '
+            'sort, reannotate, ml/reprofile. Custom start checks outdir inputs.'
+        ),
+    )
+    parser.add_argument(
+        '--endpoint',
+        '--end-point',
+        dest='endpoint',
+        default=None,
+        help=(
+            'Last exec checkpoint to run (default: viz_reprofiled). '
+            'Example: --startpoint tables --endpoint viz_initial'
+        ),
+    )
 
     # Parse known args first to get output_dir
     args, remaining = parser.parse_known_args()
@@ -207,6 +228,7 @@ def main():
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",
+        "startpoint", "start-point", "endpoint", "end-point",
     }
     cmd_args = {}
     i = 0

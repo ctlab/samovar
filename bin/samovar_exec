@@ -16,6 +16,14 @@ while [[ $# -gt 0 ]]; do
             export SAMOVAR_REDO=1
             shift
             ;;
+        --startpoint|--start-point)
+            export SAMOVAR_START="$2"
+            shift 2
+            ;;
+        --endpoint|--end-point)
+            export SAMOVAR_END="$2"
+            shift 2
+            ;;
         --cleanup-tmp)
             export SAMOVAR_CLEANUP_TMP=1
             shift
@@ -25,16 +33,18 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp]"
+            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
             echo ""
             echo "  --redo          Ignore completed checkpoints and rerun every exec step"
+            echo "  --startpoint    First checkpoint to run (overrides prepare; aliases: tables, viz, ml, …)"
+            echo "  --endpoint      Last checkpoint to run (e.g. combine_initial / tables)"
             echo "  --cleanup-tmp   After a successful run, remove .tmp / ISS scratch dirs"
             echo "  --no-cleanup-tmp  Keep temporary directories (default)"
             exit 0
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp]"
+            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
             exit 1
             ;;
     esac
@@ -43,6 +53,15 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${SAMOVAR_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PYTHON="${PYTHON_PATH:-python3}"
+
+_cli_start="${SAMOVAR_START:-}"
+_cli_end="${SAMOVAR_END:-}"
+if [ -f "$OUTPUT_DIR/.log/window.env" ]; then
+    # shellcheck disable=SC1091
+    . "$OUTPUT_DIR/.log/window.env"
+fi
+[ -n "$_cli_start" ] && export SAMOVAR_START="$_cli_start"
+[ -n "$_cli_end" ] && export SAMOVAR_END="$_cli_end"
 
 _cleanup_tmp_if_requested() {
     if [ "${SAMOVAR_CLEANUP_TMP:-0}" = "0" ]; then
@@ -61,10 +80,13 @@ if [ "${SAMOVAR_REDO:-0}" != "0" ]; then
 fi
 
 # Check for .generate directory and run its pipeline if it exists.
-# Skip when initial/ already has reads (CAMISIM Nextflow is slow to redo)
-# unless --redo / SAMOVAR_REDO=1.
+# Skip when the exec window starts after setup_reads, or when initial/ already
+# has reads (CAMISIM Nextflow is slow to redo) unless --redo / SAMOVAR_REDO=1.
 if [ -d "$OUTPUT_DIR/.generate" ] && [ -f "$OUTPUT_DIR/.generate/generate.sh" ]; then
-    if [ "${SAMOVAR_REDO:-0}" = "0" ] && PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+    if [ -n "${SAMOVAR_START:-}" ] && ! PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON" -m samovar.exec_control active setup_reads; then
+        echo "Skipping generate: startpoint ${SAMOVAR_START} is after setup_reads"
+    elif [ "${SAMOVAR_REDO:-0}" = "0" ] && PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
         "$PYTHON" -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads(r'''$OUTPUT_DIR/initial''') else 1)"; then
         echo "Skipping generate: $OUTPUT_DIR/initial already has reads (use --redo to regenerate)"
     else

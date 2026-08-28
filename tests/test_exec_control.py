@@ -187,3 +187,73 @@ def test_exec_cleanup_tmp_flag(tmp_path):
     assert "Cleaning temporary directories" in result.stdout
     assert not (tmp_path / ".tmp").exists()
     assert log.is_dir()
+
+
+def test_canonicalize_and_window():
+    from samovar.exec_control import (
+        canonicalize_step,
+        check_startpoint,
+        needs_regen_early_exit,
+        resolve_window,
+        step_in_window,
+    )
+
+    assert canonicalize_step("tables") == "combine_initial"
+    assert canonicalize_step("ML") == "reprofile"
+    assert resolve_window("annotate", "tables") == (
+        "annotate_initial",
+        "combine_initial",
+    )
+    assert step_in_window("combine_initial", "tables", "viz")
+    assert not step_in_window("setup_reads", "tables", "viz")
+    assert not needs_regen_early_exit("tables", "viz_initial")
+    assert needs_regen_early_exit("regenerate", "reannotate")
+    assert not needs_regen_early_exit("reprofile", "viz_reprofiled")
+    try:
+        resolve_window("reprofile", "tables")
+        raise AssertionError("expected start after end to fail")
+    except ValueError:
+        pass
+
+
+def test_startpoint_require_reports(tmp_path):
+    from samovar.exec_control import check_startpoint, main as exec_control_main
+
+    gaps = check_startpoint(tmp_path, start="tables", end="viz")
+    assert gaps
+    reports = tmp_path / "initial_reports"
+    reports.mkdir()
+    (reports / "sample.out").write_text("x\n")
+    assert check_startpoint(tmp_path, start="tables", end="viz") == []
+    assert exec_control_main(["require", str(tmp_path), "--start", "tables", "--end", "viz"]) == 0
+    assert exec_control_main(["active", "setup_reads", "--start", "tables", "--end", "viz"]) == 1
+    assert exec_control_main(["active", "combine_initial", "--start", "tables", "--end", "viz"]) == 0
+    assert exec_control_main(["needs-regen", "--start", "tables", "--end", "viz"]) == 1
+
+
+def test_generate_pipeline_window_file(tmp_path):
+    from samovar.config import AnnotatorConfig, PipelineConfig
+
+    out = tmp_path / "out"
+    (tmp_path / "reads").mkdir()
+    config = PipelineConfig(
+        input_dir=str(tmp_path / "reads"),
+        output_dir=str(out),
+        startpoint="tables",
+        endpoint="viz",
+        annotators=[
+            AnnotatorConfig(
+                run_name="dummy",
+                type="constant9606",
+                cmd="true",
+                db_path=str(tmp_path),
+            )
+        ],
+    )
+    script_path = Path(config.generate_pipeline(str(out)))
+    script = script_path.read_text()
+    assert 'SAMOVAR_START="${SAMOVAR_START:-combine_initial}"' in script
+    assert 'SAMOVAR_END="${SAMOVAR_END:-viz_initial}"' in script
+    window = (out / ".log" / "window.env").read_text()
+    assert "combine_initial" in window
+    assert "viz_initial" in window

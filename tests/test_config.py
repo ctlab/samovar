@@ -259,6 +259,10 @@ def test_generate_pipeline():
         assert "samovar.exec_control" in pipeline_content
         assert "ckpt_skip" in pipeline_content
         assert "ckpt_finish" in pipeline_content
+        assert 'SAMOVAR_START="${SAMOVAR_START:-setup_reads}"' in pipeline_content
+        assert 'SAMOVAR_END="${SAMOVAR_END:-viz_reprofiled}"' in pipeline_content
+        assert "exec_control require" in pipeline_content
+        assert "exec_control active" in pipeline_content
         assert "samovar.stage_report" in pipeline_content
         assert "samovar.scorers run" in pipeline_content
         assert "SAMOVAR_MULTIQC" in pipeline_content

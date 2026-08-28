@@ -33,6 +33,35 @@ CHECKPOINT_STEPS = (
     "viz_reprofiled",
 )
 
+# User-facing aliases for ``samovar prepare --startpoint/--endpoint``.
+STEP_ALIASES = {
+    "start": "setup_reads",
+    "setup": "setup_reads",
+    "reads": "setup_reads",
+    "initial": "setup_reads",
+    "annotate": "annotate_initial",
+    "annotation": "annotate_initial",
+    "combine": "combine_initial",
+    "tables": "combine_initial",
+    "table": "combine_initial",
+    "generate_tables": "combine_initial",
+    "annotation_tables": "combine_initial",
+    "viz": "viz_initial",
+    "plots": "viz_initial",
+    "genomes": "seed_genomes",
+    "seed": "seed_genomes",
+    "regenerate": "regenerate_reads",
+    "iss": "regenerate_reads",
+    "simulation": "regenerate_reads",
+    "sort": "sort_reads",
+    "reannotate": "annotate_regenerated",
+    "tables_regen": "combine_regenerated",
+    "combine_regen": "combine_regenerated",
+    "ml": "reprofile",
+    "ensemble": "reprofile",
+    "end": "viz_reprofiled",
+}
+
 CHECKPOINT_SUBDIR = Path(".log") / "checkpoints"
 PROTECTED_TOPLEVEL = {".log", ".generate"}
 TMP_DIR_NAMES = {".tmp", ".iss_full", ".combine_tmp"}
@@ -119,6 +148,153 @@ def listed_done(output_dir: PathLike) -> List[str]:
     return names
 
 
+def canonicalize_step(name: str) -> str:
+    raw = str(name).strip()
+    if not raw:
+        raise ValueError("empty pipeline step name")
+    key = raw.lower().replace("-", "_").replace(" ", "_")
+    if key in CHECKPOINT_STEPS:
+        return key
+    alias = STEP_ALIASES.get(key)
+    if alias:
+        return alias
+    known = ", ".join(CHECKPOINT_STEPS)
+    extra = ", ".join(sorted(k for k in STEP_ALIASES if k not in CHECKPOINT_STEPS))
+    raise ValueError(
+        f"Unknown pipeline step {raw!r}. Canonical names: {known}. Aliases: {extra}."
+    )
+
+
+def resolve_window(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> tuple:
+    start_raw = start if start not in (None, "") else os.environ.get("SAMOVAR_START")
+    end_raw = end if end not in (None, "") else os.environ.get("SAMOVAR_END")
+    start_s = canonicalize_step(start_raw or CHECKPOINT_STEPS[0])
+    end_s = canonicalize_step(end_raw or CHECKPOINT_STEPS[-1])
+    if CHECKPOINT_STEPS.index(start_s) > CHECKPOINT_STEPS.index(end_s):
+        raise ValueError(f"startpoint {start_s} is after endpoint {end_s}")
+    return start_s, end_s
+
+
+def step_in_window(
+    name: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> bool:
+    start_s, end_s = resolve_window(start, end)
+    idx = CHECKPOINT_STEPS.index(canonicalize_step(name))
+    return CHECKPOINT_STEPS.index(start_s) <= idx <= CHECKPOINT_STEPS.index(end_s)
+
+
+def needs_regen_early_exit(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> bool:
+    """True when this run simulated reads and still has later regen stages."""
+    if not step_in_window("regenerate_reads", start, end):
+        return False
+    later = CHECKPOINT_STEPS[CHECKPOINT_STEPS.index("regenerate_reads") + 1 :]
+    return any(step_in_window(step, start, end) for step in later)
+
+
+def _has_out_reports(directory: Path) -> bool:
+    if not directory.is_dir():
+        return False
+    return any(path.is_file() for path in directory.rglob("*.out"))
+
+
+def _has_csv_tables(directory: Path) -> bool:
+    if not directory.is_dir():
+        return False
+    return any(path.is_file() and path.suffix == ".csv" for path in directory.glob("*.csv"))
+
+
+def startpoint_gaps(
+    output_dir: PathLike,
+    start: Optional[str] = None,
+    input_dir: Optional[str] = None,
+) -> List[str]:
+    """Describe missing on-disk inputs for ``start`` (empty list if ready)."""
+    start_s, _ = resolve_window(start, CHECKPOINT_STEPS[-1])
+    root = as_path(output_dir)
+    from samovar.seqio import has_r1_reads
+
+    src = input_dir if input_dir not in (None, "") else os.environ.get("SAMOVAR_INPUT_DIR")
+    gaps: List[str] = []
+    if start_s == "setup_reads":
+        generate_sh = root / ".generate" / "generate.sh"
+        if not (
+            (src and has_r1_reads(src))
+            or has_r1_reads(root / "initial")
+            or generate_sh.is_file()
+        ):
+            gaps.append(
+                "FASTQ under outdir/initial or --input_dir, or .generate/generate.sh"
+            )
+        return gaps
+    if start_s == "annotate_initial":
+        if not has_r1_reads(root / "initial"):
+            gaps.append("FASTQ samples under outdir/initial")
+        return gaps
+    if start_s == "combine_initial":
+        if not _has_out_reports(root / "initial_reports"):
+            gaps.append("annotator *.out files under outdir/initial_reports")
+        return gaps
+    if start_s == "viz_initial":
+        if not _has_csv_tables(root / "initial_annotations"):
+            gaps.append("annotation CSVs under outdir/initial_annotations")
+        return gaps
+    if start_s == "seed_genomes":
+        return gaps
+    if start_s == "regenerate_reads":
+        if not _has_csv_tables(root / "initial_annotations"):
+            gaps.append("annotation CSVs under outdir/initial_annotations")
+        return gaps
+    if start_s == "sort_reads" or start_s == "annotate_regenerated":
+        if not has_r1_reads(root / "regenerated"):
+            gaps.append("regenerated FASTQ under outdir/regenerated")
+        return gaps
+    if start_s == "combine_regenerated":
+        if not _has_out_reports(root / "regenerated_reports"):
+            gaps.append("annotator *.out files under outdir/regenerated_reports")
+        return gaps
+    if start_s == "viz_regenerated":
+        if not _has_csv_tables(root / "regenerated_annotations"):
+            gaps.append("annotation CSVs under outdir/regenerated_annotations")
+        return gaps
+    if start_s == "reprofile":
+        if not _has_csv_tables(root / "initial_annotations"):
+            gaps.append("annotation CSVs under outdir/initial_annotations")
+        regen_combined = root / "regenerated_annotations" / "combined_annotation_table.csv"
+        if not regen_combined.is_file() and not _has_csv_tables(root / "regenerated_annotations"):
+            gaps.append(
+                "regenerated combined table "
+                "(outdir/regenerated_annotations/combined_annotation_table.csv)"
+            )
+        return gaps
+    if start_s == "viz_reprofiled":
+        if not _has_csv_tables(root / "reprofiled_annotations"):
+            gaps.append("annotation CSVs under outdir/reprofiled_annotations")
+        return gaps
+    return gaps
+
+
+def check_startpoint(
+    output_dir: PathLike,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    input_dir: Optional[str] = None,
+) -> List[str]:
+    """Validate the exec window and startpoint inputs. Returns error strings."""
+    try:
+        start_s, _end_s = resolve_window(start, end)
+    except ValueError as exc:
+        return [str(exc)]
+    return startpoint_gaps(output_dir, start_s, input_dir=input_dir)
+
+
 def _is_tmp_dir(path: Path) -> bool:
     return path.name in TMP_DIR_NAMES
 
@@ -203,6 +379,27 @@ def _parser() -> argparse.ArgumentParser:
     cleanup.add_argument("output_dir")
     listing = sub.add_parser("list", help="Print completed checkpoint names")
     listing.add_argument("output_dir")
+    active = sub.add_parser(
+        "active", help="Exit 0 if the named step is inside SAMOVAR_START/END"
+    )
+    active.add_argument("name")
+    active.add_argument("--start", default=None)
+    active.add_argument("--end", default=None)
+    require = sub.add_parser(
+        "require",
+        help="Exit 1 if outdir is missing inputs for the startpoint",
+    )
+    require.add_argument("output_dir")
+    require.add_argument("--start", default=None)
+    require.add_argument("--end", default=None)
+    require.add_argument("--input-dir", default=None)
+    regen = sub.add_parser(
+        "needs-regen",
+        help="Exit 0 if missing regenerated FASTQ should stop later stages",
+    )
+    regen.add_argument("--start", default=None)
+    regen.add_argument("--end", default=None)
+    steps = sub.add_parser("steps", help="Print canonical checkpoint names")
     return parser
 
 
@@ -223,6 +420,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.command == "list":
         for name in listed_done(args.output_dir):
+            print(name)
+        return 0
+    if args.command == "active":
+        try:
+            return 0 if step_in_window(args.name, args.start, args.end) else 1
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+    if args.command == "require":
+        gaps = check_startpoint(
+            args.output_dir,
+            start=args.start,
+            end=args.end,
+            input_dir=args.input_dir,
+        )
+        if not gaps:
+            return 0
+        start_s = args.start or os.environ.get("SAMOVAR_START") or CHECKPOINT_STEPS[0]
+        print(
+            f"Error: startpoint {start_s!r} is missing required inputs in {args.output_dir}:",
+            file=sys.stderr,
+        )
+        for gap in gaps:
+            print(f"  - {gap}", file=sys.stderr)
+        return 1
+    if args.command == "needs-regen":
+        try:
+            return 0 if needs_regen_early_exit(args.start, args.end) else 1
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+    if args.command == "steps":
+        for name in CHECKPOINT_STEPS:
             print(name)
         return 0
     return 2

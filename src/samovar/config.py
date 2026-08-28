@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
 
-from samovar.exec_control import CHECKPOINT_STEPS
+from samovar.exec_control import CHECKPOINT_STEPS, resolve_window
 from samovar.paths import (
     absolute_path,
     ncbi_email,
@@ -202,6 +202,8 @@ class PipelineConfig:
     reprofiler: str = "ensemble"
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
+    startpoint: str = "setup_reads"
+    endpoint: str = "viz_reprofiled"
 
     def __post_init__(self):
         if self.annotators is None:
@@ -324,6 +326,20 @@ class PipelineConfig:
                     config.gzip_genomes = bool(input_config.get('gzip_genomes'))
                 if 'gzip_reads' in input_config:
                     config.gzip_reads = bool(input_config.get('gzip_reads'))
+                yaml_start = (
+                    input_config.get("startpoint")
+                    or input_config.get("start_point")
+                    or input_config.get("start")
+                )
+                if yaml_start:
+                    config.startpoint = str(yaml_start)
+                yaml_end = (
+                    input_config.get("endpoint")
+                    or input_config.get("end_point")
+                    or input_config.get("end")
+                )
+                if yaml_end:
+                    config.endpoint = str(yaml_end)
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -550,6 +566,16 @@ class PipelineConfig:
         config.reprofiler_flags = merge_flag_strings(*rprof_parts) or None
         config.reprofiler_tool_flags = named_rprof or {}
 
+        cli_start = getattr(args, "startpoint", None)
+        if cli_start:
+            config.startpoint = str(cli_start)
+        cli_end = getattr(args, "endpoint", None)
+        if cli_end:
+            config.endpoint = str(cli_end)
+        config.startpoint, config.endpoint = resolve_window(
+            config.startpoint, config.endpoint
+        )
+
         return config
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
@@ -683,6 +709,11 @@ class PipelineConfig:
         log_dir.mkdir(parents=True, exist_ok=True)
         
         pipeline_path = log_dir / 'samovar.sh'
+        start_s, end_s = resolve_window(self.startpoint, self.endpoint)
+        (log_dir / "window.env").write_text(
+            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\n",
+            encoding="utf-8",
+        )
         
         # Get config paths
         configs = self.generate_configs(base_dir)
@@ -704,10 +735,12 @@ class PipelineConfig:
             multiqc_flag = "1" if self.run_multiqc else "0"
 
         env_snippet = shell_source_install_env_snippet()
+        input_dir_export = self.input_dir or ""
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
         # skipped on the next exec unless SAMOVAR_REDO=1 / --redo.
+        # SAMOVAR_START / SAMOVAR_END select a slice; exec may override them.
         header = f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
@@ -728,8 +761,14 @@ out_dir="{base_dir}"
 CKPT="$out_dir/.log/checkpoints"
 mkdir -p "$CKPT"
 # Checkpoint names: {step_names}
+export SAMOVAR_START="${{SAMOVAR_START:-{start_s}}}"
+export SAMOVAR_END="${{SAMOVAR_END:-{end_s}}}"
+export SAMOVAR_INPUT_DIR="${{SAMOVAR_INPUT_DIR:-{input_dir_export}}}"
 
 ckpt_skip() {{
+  if ! "$PYTHON_PATH" -m samovar.exec_control active "$1"; then
+    return 0
+  fi
   [ "${{SAMOVAR_REDO:-0}}" = "0" ] && [ -f "$CKPT/$1.done" ]
 }}
 
@@ -747,6 +786,7 @@ cleanup_tmp_if_requested() {{
 
 mkdir -p "$out_dir"
 mkdir -p "$out_dir/initial" "$out_dir/initial_reports" "$out_dir/regenerated" "$out_dir/regenerated_reports"
+"$PYTHON_PATH" -m samovar.exec_control require "$out_dir"
 # NCBI genome cache reuse (truncated data/test_genomes is not a library).
 export SAMOVAR_REUSE_GENOMES="${{SAMOVAR_REUSE_GENOMES:-{reuse_flag}}}"
 export SAMOVAR_ALLOW_TEST_GENOMES="${{SAMOVAR_ALLOW_TEST_GENOMES:-{test_flag}}}"
@@ -816,10 +856,12 @@ mkdir -p "$out_dir/genomes"
 "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )
 
-        early_exit = """if ! $PYTHON_PATH -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads('$out_dir/regenerated') else 1)"; then
+        early_exit = """if "$PYTHON_PATH" -m samovar.exec_control needs-regen; then
+if ! $PYTHON_PATH -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads('$out_dir/regenerated') else 1)"; then
     echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
     cleanup_tmp_if_requested
     exit 0
+fi
 fi
 """
 
@@ -961,7 +1003,11 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     if args is None:
         args = parse_args()
     
-    config = PipelineConfig.from_args(args)
+    try:
+        config = PipelineConfig.from_args(args)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     try:
         from samovar.genome_cache import remember_prepare_genome_paths
 
