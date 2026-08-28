@@ -803,3 +803,52 @@ def test_custom_cli_receives_import_and_prepare_flags(
     assert list(out.glob("*.csv"))
 
 
+def test_multiple_table_generators_select_direct(toy_annotation_dir, tmp_path):
+    import json
+
+    out = tmp_path / "multi"
+    tables = regenerate_annotation_tables(
+        toy_annotation_dir,
+        out,
+        {
+            "table_reads_generators": ["direct", "bootstrap", "glm"],
+            "table_score": "shannon_ks",
+            "N": 2,
+            "N_reads": 50,
+            "seed": 1,
+        },
+    )
+    assert tables
+    selection = json.loads((out / "table_selection.json").read_text())
+    assert selection["winner"] == "direct"
+    modes = {row["mode"] for row in selection["candidates"]}
+    assert modes >= {"direct", "bootstrap"}
+    direct_row = next(r for r in selection["candidates"] if r["mode"] == "direct")
+    assert direct_row["ks_statistic"] == 0.0
+    assert (out / "kaiju.csv").is_file()
+
+
+def test_prepare_parses_multiple_table_generators(tmp_path):
+    from samovar.config import PipelineConfig
+
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "table_reads_generator": ["direct", "bootstrap", "glm"],
+            "table_score": "shannon_ks",
+        },
+    )()
+    cfg = PipelineConfig.from_args(args)
+    assert cfg.regeneration_modes == ["direct", "bootstrap", "glm"]
+    assert cfg.regeneration_mode == "direct"
+    assert cfg.table_score == "shannon_ks"
+    text = Path(cfg.generate_configs(str(tmp_path / "out"))["annotation2iss"]).read_text()
+    assert "bootstrap" in text
+    assert "shannon_ks" in text
+
+

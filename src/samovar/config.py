@@ -15,7 +15,7 @@ from samovar.paths import (
     repo_root,
     runtime_path_prefix,
 )
-from samovar.table_regenerators import flags_apply_to_regenerator, require_known_regeneration_mode
+from samovar.table_regenerators import flags_apply_to_regenerator, canonical_regeneration_modes
 from samovar.reads_generators import (
     flags_apply_to_reads_generator,
     require_known_reads_generator,
@@ -179,6 +179,8 @@ class PipelineConfig:
     cores: int = 1
     max_genomes: int = 50
     regeneration_mode: str = "direct"
+    regeneration_modes: Optional[List[str]] = None
+    table_score: str = "shannon_ks"
     regeneration_n: Optional[int] = None
     regeneration_n_reads: int = 1000
     regeneration_seed: int = 42
@@ -214,6 +216,8 @@ class PipelineConfig:
             self.scoring_tool_flags = {}
         if self.reprofiler_tool_flags is None:
             self.reprofiler_tool_flags = {}
+        if not self.regeneration_modes:
+            self.regeneration_modes = [self.regeneration_mode]
         if not self.email:
             self.email = _default_email()
 
@@ -241,11 +245,21 @@ class PipelineConfig:
                 config.coverage = input_config.get('coverage', config.coverage)
                 config.email = input_config.get('email', config.email)
                 yaml_mode = (
-                    input_config.get("table_reads_generator")
+                    input_config.get("table_reads_generators")
+                    or input_config.get("table_reads_generator")
                     or input_config.get("regeneration_mode")
                     or config.regeneration_mode
                 )
-                config.regeneration_mode = require_known_regeneration_mode(yaml_mode)
+                yaml_modes = canonical_regeneration_modes(yaml_mode) or ["direct"]
+                config.regeneration_modes = yaml_modes
+                config.regeneration_mode = yaml_modes[0]
+                yaml_score = (
+                    input_config.get("table_score")
+                    or input_config.get("table_reads_scorer")
+                    or input_config.get("table-score")
+                )
+                if yaml_score:
+                    config.table_score = str(yaml_score)
                 meta = input_config.get("samples_metadata") or input_config.get(
                     "metadata"
                 )
@@ -467,7 +481,13 @@ class PipelineConfig:
             args, "regeneration_mode", None
         )
         if cli_mode:
-            config.regeneration_mode = require_known_regeneration_mode(cli_mode)
+            cli_modes = canonical_regeneration_modes(cli_mode)
+            if cli_modes:
+                config.regeneration_modes = cli_modes
+                config.regeneration_mode = cli_modes[0]
+        cli_score = getattr(args, "table_score", None)
+        if cli_score:
+            config.table_score = str(cli_score)
         cli_reads = getattr(args, "reads_generator", None)
         if cli_reads:
             config.reads_generator = require_known_reads_generator(cli_reads)
@@ -620,6 +640,7 @@ class PipelineConfig:
             'cores': self.cores,
             'regeneration_mode': self.regeneration_mode,
             'table_reads_generator': self.regeneration_mode,
+            'table_score': self.table_score,
             'reannotation_level': self.reannotation_level,
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
@@ -628,6 +649,10 @@ class PipelineConfig:
             'gzip_reads': self.gzip_reads,
             'reads_generator': self.reads_generator,
         }
+        modes = list(self.regeneration_modes or [self.regeneration_mode])
+        annotation2iss_config["table_reads_generators"] = modes
+        if len(modes) > 1:
+            annotation2iss_config["table_reads_generator"] = modes
         if self.metagenome_generator:
             annotation2iss_config['metagenome_generator'] = self.metagenome_generator
         if self.regeneration_n:

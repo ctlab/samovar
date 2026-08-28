@@ -985,6 +985,9 @@ def process_annotation_tables(
             )
         finally:
             os.unlink(tmp_config)
+        selection = os.path.join(regen_dir, "table_selection.json")
+        if os.path.isfile(selection):
+            shutil.copy2(selection, os.path.join(output_dir, "table_selection.json"))
         sample_tables = _sample_tables_from_abundance_dir(regen_dir, sample_names)
         sample_names = list(sample_tables.keys())
     else:

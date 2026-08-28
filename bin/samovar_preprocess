@@ -34,10 +34,23 @@ def main():
         '--table-reads-generator',
         '--regeneration_mode',
         dest='table_reads_generator',
+        action='append',
         default=None,
         help=(
             'Abundance table regenerator: direct|bootstrap|vae|glm|camisim-table|samovar, '
-            'or a name imported with `samovar tools import --type table`'
+            'or a name imported with `samovar tools import --type table`. '
+            'Repeat to try several methods; the best is chosen with --table-score'
+        ),
+    )
+    parser.add_argument(
+        '--table-score',
+        '--table_score',
+        '--table-reads-scorer',
+        dest='table_score',
+        default=None,
+        help=(
+            'How to pick among multiple --table_reads_generator values '
+            '(default: shannon_ks, KS test on Shannon alpha-diversity)'
         ),
     )
     parser.add_argument(
@@ -225,6 +238,7 @@ def main():
         "N_reads", "n_reads", "genome-dirs", "genome_dirs", "index",
         "reannotation-level", "reannotation_level",
         "table_reads_generator", "table-reads-generator", "regeneration_mode",
+        "table-score", "table_score", "table-reads-scorer",
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",

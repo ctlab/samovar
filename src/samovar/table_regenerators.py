@@ -52,6 +52,30 @@ def extra_flags_argv(text: Optional[str]) -> List[str]:
     return shlex.split(str(text))
 
 
+def parse_regeneration_modes(raw: Any) -> List[str]:
+    """Split CLI/YAML ``table_reads_generator`` into ordered unique names."""
+    if raw in (None, False, ""):
+        return []
+    if isinstance(raw, (list, tuple)):
+        names: List[str] = []
+        for item in raw:
+            names.extend(parse_regeneration_modes(item))
+        return names
+    return [piece.strip() for piece in str(raw).replace(",", " ").split() if piece.strip()]
+
+
+def canonical_regeneration_modes(raw: Any) -> List[str]:
+    names: List[str] = []
+    seen = set()
+    for name in parse_regeneration_modes(raw):
+        canon = require_known_regeneration_mode(name)
+        if canon in seen:
+            continue
+        seen.add(canon)
+        names.append(canon)
+    return names
+
+
 def flags_apply_to_regenerator(target: str, mode: Optional[str]) -> bool:
     """True if ``--flags TARGET …`` should attach to the current table regenerator."""
     kind, name = resolve_regeneration_mode(mode)

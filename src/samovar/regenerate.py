@@ -457,13 +457,23 @@ def regenerate_camisim(
     return result
 
 
-def regenerate_annotation_tables(
+def _write_abundance_tables(
+    output_dir: Union[str, Path],
+    tables: Dict[str, pd.DataFrame],
+) -> None:
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, table in tables.items():
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name))
+        table.to_csv(out / f"{safe}.csv", index=False)
+
+
+def _regenerate_one_mode(
     annotation_dir: Union[str, Path],
     output_dir: Union[str, Path],
-    config: Optional[Dict[str, Any]] = None,
-    data: Optional[pd.DataFrame] = None,
+    cfg: Dict[str, Any],
+    data: pd.DataFrame,
 ) -> Dict[str, pd.DataFrame]:
-    """Regenerate per-annotator abundance CSVs from an annotation directory."""
     from samovar.table_regenerators import (
         as_annotation,
         attach_regenerator_flags,
@@ -471,26 +481,103 @@ def regenerate_annotation_tables(
         load_samples_metadata,
     )
 
-    cfg = dict(config or {})
     mode = cfg.get("table_reads_generator") or cfg.get("regeneration_mode", "direct")
-    if data is None:
-        data = read_annotation_dir(annotation_dir)
-    cfg["annotation_dir"] = str(annotation_dir)
-    cfg["output_dir"] = str(output_dir)
-    cfg = attach_regenerator_flags(mode, cfg)
+    local = dict(cfg)
+    local["annotation_dir"] = str(annotation_dir)
+    local["output_dir"] = str(output_dir)
+    local = attach_regenerator_flags(mode, local)
     regenerator = get_table_regenerator(mode)
     tables = regenerator.run(
         as_annotation(data, annotation_dir),
-        load_samples_metadata(cfg),
-        cfg,
+        load_samples_metadata(local),
+        local,
+    )
+    _write_abundance_tables(output_dir, tables)
+    return tables
+
+
+def regenerate_annotation_tables(
+    annotation_dir: Union[str, Path],
+    output_dir: Union[str, Path],
+    config: Optional[Dict[str, Any]] = None,
+    data: Optional[pd.DataFrame] = None,
+) -> Dict[str, pd.DataFrame]:
+    """Regenerate per-annotator abundance CSVs from an annotation directory.
+
+    If ``table_reads_generators`` (or a list ``table_reads_generator``) names
+    more than one method, each candidate is scored with ``table_score``
+    (default ``shannon_ks``) and only the winner is written to ``output_dir``.
+    """
+    from samovar.table_regenerators import canonical_regeneration_modes
+    from samovar.table_scorers import (
+        pick_best_table_method,
+        score_generated_tables,
+        write_table_selection,
     )
 
+    cfg = dict(config or {})
+    if data is None:
+        data = read_annotation_dir(annotation_dir)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for name, table in tables.items():
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name))
-        table.to_csv(out / f"{safe}.csv", index=False)
-    return tables
+
+    raw_modes = (
+        cfg.get("table_reads_generators")
+        if cfg.get("table_reads_generators") not in (None, "", False, [])
+        else cfg.get("table_reads_generator") or cfg.get("regeneration_mode", "direct")
+    )
+    modes = canonical_regeneration_modes(raw_modes) or ["direct"]
+
+    if len(modes) == 1:
+        one = dict(cfg)
+        one["table_reads_generator"] = modes[0]
+        one["regeneration_mode"] = modes[0]
+        return _regenerate_one_mode(annotation_dir, out, one, data)
+
+    scorer = cfg.get("table_score") or cfg.get("table_reads_scorer") or "shannon_ks"
+    candidates_root = out / ".table_candidates"
+    rows: List[Dict[str, Any]] = []
+    tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
+    for mode in modes:
+        cand = candidates_root / re.sub(r"[^A-Za-z0-9._-]+", "_", mode)
+        one = dict(cfg)
+        one["table_reads_generator"] = mode
+        one["regeneration_mode"] = mode
+        one["table_reads_generators"] = [mode]
+        try:
+            tables = _regenerate_one_mode(annotation_dir, cand, one, data)
+            score = score_generated_tables(data, tables, scorer)
+            score["ok"] = True
+        except Exception as exc:
+            tables = {}
+            score = {
+                "scorer": str(scorer),
+                "ks_statistic": 1.0,
+                "pvalue": 0.0,
+                "rank_value": 1.0,
+                "ok": False,
+                "error": str(exc),
+            }
+        score["mode"] = mode
+        rows.append(score)
+        tables_by_mode[mode] = tables
+
+    winner = pick_best_table_method(rows) or modes[0]
+    winning_tables = tables_by_mode.get(winner) or {}
+    if not winning_tables:
+        raise RuntimeError(
+            "No table_reads_generator produced abundance tables. "
+            f"Tried: {', '.join(modes)}"
+        )
+    _write_abundance_tables(out, winning_tables)
+    payload = {
+        "scorer": rows[0].get("scorer", scorer) if rows else scorer,
+        "winner": winner,
+        "candidates": rows,
+    }
+    write_table_selection(out / "table_selection.json", payload)
+    write_table_selection(candidates_root / "table_selection.json", payload)
+    return winning_tables
 
 
 def write_samovar_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:

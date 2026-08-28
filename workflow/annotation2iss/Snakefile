@@ -3,7 +3,6 @@ import glob
 import logging
 
 from samovar.regenerate import resolve_regeneration_mode, synthetic_sample_names
-from samovar.seqio import fastq_pair_paths
 from samovar.table2iss import process_annotation_tables
 
 # Set up logging
@@ -23,9 +22,10 @@ COVERAGE = config["coverage"]
 MODEL = config.get("model", "hiseq")
 MAX_GENOMES = config.get("max_genomes", None)
 CORES = int(config.get("cores", 2))
-_KIND, REGENERATION_MODE = resolve_regeneration_mode(
-    config.get("table_reads_generator") or config.get("regeneration_mode", "direct")
-)
+_MODE_RAW = config.get("table_reads_generator") or config.get("regeneration_mode", "direct")
+if isinstance(_MODE_RAW, (list, tuple)):
+    _MODE_RAW = _MODE_RAW[0] if _MODE_RAW else "direct"
+_KIND, REGENERATION_MODE = resolve_regeneration_mode(_MODE_RAW)
 REGENERATION_CONFIG = {
     "regeneration_mode": REGENERATION_MODE,
     "table_reads_generator": REGENERATION_MODE,
@@ -38,6 +38,12 @@ REGENERATION_CONFIG = {
     "min_cluster_size": config.get("min_cluster_size", 2),
     "max_cluster_size": config.get("max_cluster_size", 100),
 }
+_multi = config.get("table_reads_generators") or config.get("table_reads_generator")
+if isinstance(_multi, (list, tuple)) and len(_multi) > 1:
+    REGENERATION_CONFIG["table_reads_generators"] = list(_multi)
+    REGENERATION_CONFIG["table_reads_generator"] = list(_multi)
+if config.get("table_score"):
+    REGENERATION_CONFIG["table_score"] = config.get("table_score")
 if config.get("samples_metadata"):
     REGENERATION_CONFIG["samples_metadata"] = config["samples_metadata"]
 if config.get("table_reads_generator_flags") or config.get("extra_flags"):
@@ -108,26 +114,17 @@ def get_sample_names():
 SAMPLES = get_sample_names()
 logger.info(f"Using samples: {SAMPLES}")
 
-ALL_OUTPUT_FILES = []
-for sample in SAMPLES:
-    for annotator in ANNOTATORS:
-        r1, r2 = fastq_pair_paths(
-            os.path.join(OUTPUT_DIR, f"{sample}_{annotator}"),
-            gzip_reads=GZIP_READS,
-        )
-        ALL_OUTPUT_FILES.extend([r1, r2])
-
-logger.info(f"Generating {len(ALL_OUTPUT_FILES)} output files")
+DONE_MARKER = os.path.join(OUTPUT_DIR, ".process_annotations.done")
 
 rule all:
     input:
-        ALL_OUTPUT_FILES
+        DONE_MARKER
 
 rule process_annotations:
     input:
         annotation_files = get_annotation_files()
     output:
-        ALL_OUTPUT_FILES
+        DONE_MARKER
     params:
         genome_dir = GENOME_DIR,
         output_dir = OUTPUT_DIR,
@@ -158,10 +155,9 @@ rule process_annotations:
                 gzip_reads=GZIP_READS,
                 reannotation_level=REANNOTATION_LEVEL,
             )
-            logger.info(
-                "Generated a full metagenome per annotator and split it into %s samples",
-                len(SAMPLES),
-            )
+            logger.info("Finished annotation2iss under %s", params.output_dir)
         except Exception as e:
             logger.error(f"Error processing annotations: {str(e)}")
             raise
+        with open(str(output[0]), "w", encoding="utf-8") as handle:
+            handle.write("ok\n")

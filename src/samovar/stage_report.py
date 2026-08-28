@@ -656,6 +656,18 @@ def collect_run_options(output_dir: PathLike) -> List[tuple]:
             names.append(str(item.get("type") or item.get("run_name") or "annotator"))
         _add("Annotators", names)
     _add("Regeneration mode", regen_cfg.get("regeneration_mode"))
+    modes = regen_cfg.get("table_reads_generators")
+    if isinstance(modes, list) and len(modes) > 1:
+        _add("Table generators", modes)
+        _add("Table score", regen_cfg.get("table_score") or "shannon_ks")
+    selection = root / "regenerated" / ".regenerated_abundance" / "table_selection.json"
+    if selection.is_file():
+        try:
+            payload = json.loads(selection.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        if payload.get("winner"):
+            _add("Selected table generator", payload.get("winner"))
     _add("Regenerated reads", regen_cfg.get("N_reads"))
     _add("Coverage", regen_cfg.get("coverage"))
     _add("Max genomes", regen_cfg.get("max_genomes"))
