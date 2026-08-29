@@ -70,6 +70,7 @@ if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])
 REGENERATION_CONFIG["max_genome_mb"] = MAX_GENOME_MB
 REGENERATION_CONFIG["genome_skip_list"] = GENOME_SKIP_LIST
+REGENERATION_CONFIG["max_genomes"] = MAX_GENOMES
 GZIP_GENOMES = bool(config.get("gzip_genomes", True))
 GZIP_READS = bool(config.get("gzip_reads", False))
 REANNOTATION_LEVEL = config.get("reannotation_level", "taxid")

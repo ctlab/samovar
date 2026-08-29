@@ -31,6 +31,7 @@ from samovar.paths import load_config
 from samovar.regenerate import (
     _n_samples_or_observed,
     coerce_seed,
+    max_genomes_from_config,
     regenerate_bootstrap,
     regenerate_camisim,
     regenerate_glm_python,
@@ -136,6 +137,8 @@ def apply_extra_flags(config: Dict[str, Any]) -> Dict[str, Any]:
         "--prec-bits": ("prec_bits", int),
         "--precBits": ("prec_bits", int),
         "--timeout": ("timeout", int),
+        "--max-genomes": ("max_genomes", str),
+        "--max_genomes": ("max_genomes", str),
     }
     bool_flags = {
         "--fit": ("sparsedossa2_fit", True),
@@ -316,6 +319,7 @@ class DirectTableRegenerator(TableRegenerator):
             threshold_amount=float(
                 cfg.get("threshold_amount", cfg.get("treshhold_amount", 1e-5))
             ),
+            max_genomes=max_genomes_from_config(cfg),
         )
 
 
@@ -336,6 +340,7 @@ class BootstrapTableRegenerator(TableRegenerator):
             seed=coerce_seed(cfg.get("seed", 42)),
             rescale=bool(cfg.get("rescale_abundance", False)),
             error_scale=float(cfg.get("bootstrap_error_scale", 0.15)),
+            max_genomes=max_genomes_from_config(cfg),
         )
 
 
@@ -356,6 +361,7 @@ class VaeTableRegenerator(TableRegenerator):
             latent_dim=int(cfg.get("vae_latent_dim", 4)),
             seed=coerce_seed(cfg.get("seed", 42)),
             rescale=bool(cfg.get("rescale_abundance", False)),
+            max_genomes=max_genomes_from_config(cfg),
         )
 
 
@@ -377,6 +383,7 @@ class GlmTableRegenerator(TableRegenerator):
             rescale=bool(cfg.get("rescale_abundance", False)),
             min_cluster_size=int(cfg.get("min_cluster_size", 2)),
             max_cluster_size=int(cfg.get("max_cluster_size", 100)),
+            max_genomes=max_genomes_from_config(cfg),
         )
 
 
@@ -496,6 +503,7 @@ class CamisimTableRegenerator(TableRegenerator):
             log_sigma=float(cfg.get("log_sigma", 2.0)),
             gauss_mu=float(cfg.get("gauss_mu", 1.0)),
             gauss_sigma=float(cfg.get("gauss_sigma", 1.0)),
+            max_genomes=max_genomes_from_config(cfg),
         )
 
 
@@ -594,6 +602,11 @@ def _run_cli_regenerator(
             cmd.extend(["--N", str(int(config["N"]))])
         if config.get("N_reads") is not None:
             cmd.extend(["--N_reads", str(int(config["N_reads"]))])
+        from samovar.regenerate import finite_max_genomes
+
+        limit = finite_max_genomes(config.get("max_genomes"), default_from_env=False)
+        if limit is not None:
+            cmd.extend(["--max-genomes", str(limit)])
         extra = list(config.get("extra_argv") or extra_flags_argv(config.get("extra_flags")))
         cmd.extend(extra)
         if path.suffix.lower() == ".py":

@@ -34,7 +34,8 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
     },
     "table_reads_generator": {
         "in": "Abundance or long annotation (Annotation / DataFrame / dir of "
-        "taxid+N_* CSVs). Optional metadata DataFrame.",
+        "taxid+N_* CSVs). Optional metadata DataFrame. config may include "
+        "max_genomes (default inf).",
         "out": "dict[str, DataFrame] of taxid + N_<sample> tables from regenerate().",
     },
     "table_scoring": {
@@ -54,7 +55,8 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
     },
     "metagenome_generator": {
         "in": "Same generate(spec, metadata, config) as reads_generator "
-        "(community + sequencing in one tool).",
+        "(community + sequencing in one tool). config may include max_genomes "
+        "(default inf) to cap non-host genomes.",
         "out": "list[str] FASTQ paths.",
     },
     "reprofiler": {

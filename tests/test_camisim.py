@@ -188,6 +188,20 @@ def test_community_design_reproducible(tmp_path):
     float(abund)
 
 
+def test_max_genomes_caps_non_host_rows():
+    from samovar.regenerate import cap_generate_genome_rows
+
+    rows = collect_generate_genomes(str(META), str(HOST))
+    meta = [r for r in rows if r.get("host") != "1"]
+    if len(meta) < 2:
+        import pytest
+
+        pytest.skip("need 2+ non-host genomes")
+    capped = cap_generate_genome_rows(rows, 1)
+    assert len([r for r in capped if r.get("host") != "1"]) == 1
+    assert any(r.get("host") == "1" for r in capped)
+
+
 def test_type_sizes_split_hybrid_records_and_host_fraction():
     sizes = camisim_sizes_by_type(
         200,

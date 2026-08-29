@@ -35,6 +35,7 @@ import numpy as np
 import yaml
 
 from samovar.table_regenerators import extra_flags_argv
+from samovar.regenerate import cap_generate_genome_rows, parse_max_genomes
 from samovar.main_config import iter_tools, tool_path as tool_entry_path
 from samovar.paths import (
     absolute_path,
@@ -746,6 +747,7 @@ def default_generate_config(
     model: str = "hiseq",
     cores: int = 1,
     mode: str = "table",
+    max_genomes: Any = None,
 ) -> Dict[str, Any]:
     mode = normalize_camisim_mode(mode)
     root = discover_camisim()
@@ -810,6 +812,9 @@ def default_generate_config(
             "fragment_size_sd": 27,
             "base_error_rate": 0.0,
         },
+        "max_genomes": parse_max_genomes(
+            max_genomes, default_from_env=max_genomes is None
+        ),
     }
 
 
@@ -828,6 +833,7 @@ def write_camisim_configs(cfg: Dict[str, Any], output_dir: str) -> Dict[str, str
     cam_dir = cfg_dir / "camisim"
     cam_dir.mkdir(parents=True, exist_ok=True)
     rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
+    rows = cap_generate_genome_rows(rows, cfg.get("max_genomes"))
     cfg = dict(cfg)
     if not cfg.get("camisim_root"):
         cfg["camisim_root"] = discover_camisim() or ""
@@ -1120,6 +1126,7 @@ def setup_camisim_generate(args: argparse.Namespace) -> Dict[str, str]:
         model=args.model if args.model is not None else cfg.get("iss_model", "hiseq"),
         cores=getattr(args, "cores", None) if getattr(args, "cores", None) is not None else cfg.get("cores", 1),
         mode=mode,
+        max_genomes=getattr(args, "max_genomes", None),
     )
     # CLI/defaults win for scalars; nested dicts from --camisim-config overlay.
     merged = _deep_overlay(base, cfg if isinstance(cfg, dict) else {})
@@ -1158,6 +1165,7 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
     work = cfg_path.parent / "camisim"
     work.mkdir(parents=True, exist_ok=True)
     rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
+    rows = cap_generate_genome_rows(rows, cfg.get("max_genomes"))
     if normalize_camisim_mode(cfg.get("mode")) != "table":
         rows = stage_genomes_for_camisim(rows, work)
     loc, meta = write_genome_tables(work, rows, taxdump=cfg.get("ncbi_taxdump_file"))
@@ -1320,6 +1328,7 @@ def _run_camisim_reads(
     if not run_cfg.get("ncbi_taxdump_file"):
         run_cfg["ncbi_taxdump_file"] = camisim_taxdump(root)
     rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
+    rows = cap_generate_genome_rows(rows, cfg.get("max_genomes"))
     nf = write_nextflow_config(run_cfg, work, rows)
     kind = _camisim_kind(Path(root))
     log_path = dest / "camisim.nextflow.log"

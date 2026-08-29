@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from samovar.genome_fetcher import argparse_max_genome_mb
+from samovar.regenerate import UNLIMITED_MAX_GENOMES, argparse_max_genomes, parse_max_genomes
 
 
 def _finish_generate(args, result):
@@ -64,6 +65,7 @@ class ISSTestConfig:
     abundance_table: str = ""
     max_genome_mb: float = float("inf")
     genome_skip_list: str = ""
+    max_genomes: float = UNLIMITED_MAX_GENOMES
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'ISSTestConfig':
@@ -83,6 +85,10 @@ class ISSTestConfig:
             getattr(args, "max_genome_mb", None),
             default_from_env=getattr(args, "max_genome_mb", None) is None,
         )
+        max_g = parse_max_genomes(
+            getattr(args, "max_genomes", None),
+            default_from_env=getattr(args, "max_genomes", None) is None,
+        )
         return cls(
             genome_dir=absolute_path(args.genome_dir) if args.genome_dir else "",
             output_dir=absolute_path(args.output_dir),
@@ -99,6 +105,7 @@ class ISSTestConfig:
             abundance_table=str(abundance or ""),
             max_genome_mb=max_mb,
             genome_skip_list=skip_text,
+            max_genomes=max_g,
         )
 
     def generate_config(self, base_dir: str) -> str:
@@ -134,6 +141,7 @@ class ISSTestConfig:
         if self.abundance_table:
             config['abundance_table'] = self.abundance_table
         config['max_genome_mb'] = float(self.max_genome_mb)
+        config['max_genomes'] = float(self.max_genomes)
         if self.genome_skip_list:
             config['genome_skip_list'] = self.genome_skip_list
         
@@ -300,6 +308,13 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         type=float,
         default=None,
         help='CAMISIM sample size in Gbp (default: derived from --total_reads)',
+    )
+    parser.add_argument(
+        '--max-genomes', '--max_genomes',
+        dest='max_genomes',
+        type=argparse_max_genomes,
+        default=None,
+        help='Max taxa/genomes for generate (default: inf)',
     )
     parser.add_argument(
         '--max-genome-mb',

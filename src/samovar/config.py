@@ -37,6 +37,7 @@ from samovar.genome_fetcher import (
     parse_genome_skip_list,
     parse_max_genome_mb,
 )
+from samovar.regenerate import UNLIMITED_MAX_GENOMES, parse_max_genomes
 from samovar.main_config import (
     flags_target_matches,
     imported_flags_for_names,
@@ -254,7 +255,7 @@ class PipelineConfig:
     coverage: int = 30
     email: str = None
     cores: int = 1
-    max_genomes: int = 50
+    max_genomes: float = UNLIMITED_MAX_GENOMES
     regeneration_mode: str = "direct"
     regeneration_modes: Optional[List[str]] = None
     table_score: str = "shannon_ks"
@@ -320,9 +321,10 @@ class PipelineConfig:
                 config.cores = int(custom_cli["--cores"])
             except (TypeError, ValueError):
                 pass
-        config.max_genomes = getattr(args, 'max_genomes', 50)
-        if config.max_genomes is None:
-            config.max_genomes = 50
+        config.max_genomes = parse_max_genomes(
+            getattr(args, "max_genomes", None),
+            default_from_env=getattr(args, "max_genomes", None) is None,
+        )
         n_reads = getattr(args, 'N_reads', None)
         if n_reads is None:
             n_reads = getattr(args, 'n_reads', None)
@@ -435,6 +437,11 @@ class PipelineConfig:
                     config.gzip_genomes = bool(input_config.get('gzip_genomes'))
                 if 'gzip_reads' in input_config:
                     config.gzip_reads = bool(input_config.get('gzip_reads'))
+                yaml_max_g = input_config.get("max_genomes", input_config.get("max-genomes"))
+                if yaml_max_g is not None:
+                    config.max_genomes = parse_max_genomes(
+                        yaml_max_g, default_from_env=False
+                    )
                 yaml_max_mb = input_config.get("max_genome_mb", input_config.get("max-genome-mb"))
                 if yaml_max_mb is not None:
                     config.max_genome_mb = parse_max_genome_mb(
@@ -570,6 +577,10 @@ class PipelineConfig:
                 ]
             else:
                 config.genome_dirs = [str(p) for p in extra_dirs if str(p).strip()]
+        if getattr(args, "max_genomes", None) is not None:
+            config.max_genomes = parse_max_genomes(
+                args.max_genomes, default_from_env=False
+            )
         if getattr(args, "max_genome_mb", None) is not None:
             config.max_genome_mb = parse_max_genome_mb(
                 args.max_genome_mb, default_from_env=False
@@ -769,7 +780,7 @@ class PipelineConfig:
             'email': self.email,
             'read_length': self.read_length,
             'coverage': self.coverage,
-            'max_genomes': getattr(self, 'max_genomes', 50),
+            'max_genomes': float(getattr(self, 'max_genomes', UNLIMITED_MAX_GENOMES)),
             'cores': self.cores,
             'regeneration_mode': self.regeneration_mode,
             'table_reads_generator': self.regeneration_mode,

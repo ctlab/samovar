@@ -4,6 +4,10 @@ Minimal contract: ``taxid`` × ``N_<sample>`` in, same shape out. Long
 annotation tables (``taxID_*``) and phyloseq-style OTU tables are converted
 first. Sequence regenerate (ISS) consumes that same abundance shape.
 
+``config["max_genomes"]`` (CLI ``--max-genomes``, default ``inf``) caps how
+many taxa are kept (top by abundance) before table regenerate and how many
+non-host genomes a metagenome generator uses.
+
 Modes:
 
 - ``direct`` (default; aliases: preserve, exact, raw): observed taxID counts,
@@ -21,6 +25,7 @@ Modes:
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import zlib
@@ -29,6 +34,116 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
+
+UNLIMITED_MAX_GENOMES = float("inf")
+
+
+def parse_max_genomes(
+    value: Any = None,
+    *,
+    default_from_env: bool = True,
+) -> float:
+    """Count cap for taxa / non-host genomes. ``0`` / ``inf`` / empty → unlimited."""
+    if value is None and default_from_env:
+        value = os.environ.get("SAMOVAR_MAX_GENOMES", "")
+    if value is None or value is False:
+        return UNLIMITED_MAX_GENOMES
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"", "inf", "infinity", "+inf", "none", "unlimited"}:
+            return UNLIMITED_MAX_GENOMES
+        try:
+            value = float(text)
+        except ValueError:
+            return UNLIMITED_MAX_GENOMES
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return UNLIMITED_MAX_GENOMES
+    if number <= 0 or math.isinf(number):
+        return UNLIMITED_MAX_GENOMES
+    return float(int(number))
+
+
+def argparse_max_genomes(text: str) -> float:
+    return parse_max_genomes(text, default_from_env=False)
+
+
+def finite_max_genomes(
+    value: Any = None,
+    *,
+    default_from_env: bool = False,
+) -> Optional[int]:
+    """``None`` when unlimited, else a positive integer cap."""
+    parsed = parse_max_genomes(value, default_from_env=default_from_env)
+    if parsed == UNLIMITED_MAX_GENOMES:
+        return None
+    return int(parsed)
+
+
+def max_genomes_from_config(config: Optional[Dict[str, Any]] = None) -> float:
+    cfg = config or {}
+    if "max_genomes" not in cfg:
+        return parse_max_genomes(None, default_from_env=True)
+    return parse_max_genomes(cfg.get("max_genomes"), default_from_env=False)
+
+
+def cap_sequence(items: Sequence[Any], max_genomes: Any = None) -> List[Any]:
+    """Keep the first ``max_genomes`` items; ``inf`` leaves the sequence unchanged."""
+    limit = finite_max_genomes(max_genomes, default_from_env=False)
+    seq = list(items)
+    if limit is None:
+        return seq
+    return seq[:limit]
+
+
+def cap_matrix_taxa(matrix: pd.DataFrame, max_genomes: Any = None) -> pd.DataFrame:
+    """Keep the top ``max_genomes`` rows by row-sum (taxid × sample matrix)."""
+    limit = finite_max_genomes(max_genomes, default_from_env=False)
+    if limit is None or matrix is None or matrix.empty or len(matrix) <= limit:
+        return matrix
+    totals = matrix.sum(axis=1)
+    keep = totals.sort_values(ascending=False, kind="mergesort").index[:limit]
+    return matrix.loc[keep]
+
+
+def cap_abundance_table(frame: pd.DataFrame, max_genomes: Any = None) -> pd.DataFrame:
+    """Keep the top ``max_genomes`` taxa of a ``taxid`` + ``N_*`` table."""
+    from samovar.abundance import n_sample_columns
+
+    limit = finite_max_genomes(max_genomes, default_from_env=False)
+    if limit is None or frame is None or frame.empty:
+        return frame
+    if "taxid" not in frame.columns:
+        return cap_matrix_taxa(frame, max_genomes)
+    n_cols = n_sample_columns(frame)
+    if not n_cols:
+        return frame.iloc[:limit].copy()
+    totals = frame[n_cols].sum(axis=1)
+    keep = totals.sort_values(ascending=False, kind="mergesort").index[:limit]
+    return frame.loc[keep].reset_index(drop=True)
+
+
+def cap_abundance_tables(
+    tables: Dict[str, pd.DataFrame],
+    max_genomes: Any = None,
+) -> Dict[str, pd.DataFrame]:
+    return {name: cap_abundance_table(table, max_genomes) for name, table in tables.items()}
+
+
+def cap_generate_genome_rows(
+    rows: Sequence[Dict[str, str]],
+    max_genomes: Any = None,
+) -> List[Dict[str, str]]:
+    """Keep host rows; cap non-host genomes to ``max_genomes``."""
+    limit = finite_max_genomes(max_genomes, default_from_env=False)
+    listed = list(rows)
+    if limit is None:
+        return listed
+    hosts = [row for row in listed if str(row.get("host") or "") == "1"]
+    meta = [row for row in listed if str(row.get("host") or "") != "1"]
+    return meta[:limit] + hosts
+
 
 DIRECT_MODES = frozenset(
     {"direct", "preserve", "none", "exact", "raw", "off", "false", ""}
@@ -170,6 +285,7 @@ def _filter_taxa(
     threshold_amount: float,
     n_reads: Optional[int] = None,
     rescale: bool = False,
+    max_genomes: Any = None,
 ) -> pd.DataFrame:
     if matrix.empty:
         return matrix
@@ -180,7 +296,7 @@ def _filter_taxa(
         if threshold_amount and threshold_amount > 0:
             keep = mat.max(axis=1) >= threshold_amount * float(n_reads)
             mat = mat.loc[keep]
-        return mat
+        return cap_matrix_taxa(mat, max_genomes)
     if threshold_amount and threshold_amount > 0:
         totals = mat.sum(axis=0).replace(0, 1)
         fracs = mat / totals
@@ -188,7 +304,7 @@ def _filter_taxa(
         if not bool(keep.any()):
             keep = mat.max(axis=1) > 0
         mat = mat.loc[keep]
-    return mat
+    return cap_matrix_taxa(mat, max_genomes)
 
 
 def _scale_columns_to_n_reads(matrix: pd.DataFrame, n_reads: Optional[int]) -> pd.DataFrame:
@@ -246,11 +362,14 @@ def regenerate_preserve(
     n_reads: Optional[int] = None,
     rescale: bool = False,
     threshold_amount: float = 0.0,
+    max_genomes: Any = None,
 ) -> Dict[str, pd.DataFrame]:
     """Keep observed abundances (annotation counts or an abundance table)."""
     result: Dict[str, pd.DataFrame] = {}
     for name, mat in _source_matrices(data):
-        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
+        mat = _filter_taxa(
+            mat, threshold_amount, n_reads, rescale=rescale, max_genomes=max_genomes
+        )
         mat = _apply_abundance_scale(mat, n_reads, rescale)
         result[name] = _abundance_table_from_matrix(mat, name)
     return result
@@ -264,6 +383,7 @@ def regenerate_bootstrap(
     seed: Optional[int] = 42,
     rescale: bool = False,
     error_scale: float = 0.15,
+    max_genomes: Any = None,
 ) -> Dict[str, pd.DataFrame]:
     """Noisy copies of observed samples (Dirichlet-multinomial resampling).
 
@@ -275,6 +395,7 @@ def regenerate_bootstrap(
     seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
     for annotator, mat in _source_matrices(data):
+        mat = cap_matrix_taxa(mat, max_genomes)
         if mat.shape[1] == 0:
             continue
         n_src = mat.shape[1]
@@ -295,7 +416,13 @@ def regenerate_bootstrap(
                 index=mat.index,
             )
         synth_mat = pd.DataFrame(synth)
-        synth_mat = _filter_taxa(synth_mat, threshold_amount, n_reads, rescale=rescale)
+        synth_mat = _filter_taxa(
+            synth_mat,
+            threshold_amount,
+            n_reads,
+            rescale=rescale,
+            max_genomes=max_genomes,
+        )
         synth_mat = _apply_abundance_scale(synth_mat, n_reads, rescale)
         result[annotator] = _abundance_table_from_matrix(synth_mat, annotator)
     return result
@@ -309,6 +436,7 @@ def regenerate_vae(
     latent_dim: int = 4,
     seed: Optional[int] = 42,
     rescale: bool = False,
+    max_genomes: Any = None,
 ) -> Dict[str, pd.DataFrame]:
     """Sample synthetic profiles with a latent linear generative model (FA)."""
     from sklearn.decomposition import FactorAnalysis
@@ -316,7 +444,9 @@ def regenerate_vae(
     seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
     for annotator, mat in _source_matrices(data):
-        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
+        mat = _filter_taxa(
+            mat, threshold_amount, n_reads, rescale=rescale, max_genomes=max_genomes
+        )
         names = synthetic_sample_names(list(mat.columns), n_samples)
         if mat.shape[0] < 2 or mat.shape[1] < 2:
             synth = {}
@@ -364,6 +494,7 @@ def regenerate_glm_python(
     rescale: bool = False,
     min_cluster_size: int = 2,
     max_cluster_size: int = 100,
+    max_genomes: Any = None,
 ) -> Dict[str, pd.DataFrame]:
     """Cluster + Gaussian GLM walk matching ``samovar_boil`` / ``concotion_pour``.
 
@@ -374,7 +505,9 @@ def regenerate_glm_python(
     seed = coerce_seed(seed)
     result: Dict[str, pd.DataFrame] = {}
     for annotator, mat in _source_matrices(data):
-        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=rescale)
+        mat = _filter_taxa(
+            mat, threshold_amount, n_reads, rescale=rescale, max_genomes=max_genomes
+        )
         if mat.empty:
             continue
         names = synthetic_sample_names(list(mat.columns), n_samples)
@@ -407,6 +540,7 @@ def regenerate_camisim(
     log_sigma: float = 2.0,
     gauss_mu: float = 1.0,
     gauss_sigma: float = 1.0,
+    max_genomes: Any = None,
 ) -> Dict[str, pd.DataFrame]:
     """CAMISIM-style log-normal abundances for taxIDs seen in the annotation table."""
     from samovar.camisim import design_communities
@@ -415,7 +549,9 @@ def regenerate_camisim(
     depth = int(n_reads) if n_reads not in (None, "", 0) else 1000
     result: Dict[str, pd.DataFrame] = {}
     for annotator, mat in _source_matrices(data):
-        mat = _filter_taxa(mat, threshold_amount, n_reads, rescale=False)
+        mat = _filter_taxa(
+            mat, threshold_amount, n_reads, rescale=False, max_genomes=max_genomes
+        )
         if mat.empty:
             continue
         taxids = [str(t) for t in mat.index if str(t) not in {"0", "nan", "None", ""}]
@@ -487,6 +623,7 @@ def _regenerate_one_mode(
         load_samples_metadata(local),
         local,
     )
+    tables = cap_abundance_tables(tables, max_genomes_from_config(local))
     _write_abundance_tables(output_dir, tables)
     return tables
 
@@ -631,6 +768,7 @@ def write_samovar_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         "vae_latent_dim": 4,
         "rescale_abundance": False,
         "bootstrap_error_scale": 0.15,
+        "max_genomes": UNLIMITED_MAX_GENOMES,
     }
     merged = {**defaults, **config}
     # keep R spelling alias

@@ -456,7 +456,7 @@ def regenerate(
     result: Dict[str, pd.DataFrame] = {}
     for name, table in input_to_abundance_tables(annotation).items():
         mat = abundance_to_matrix(table)
-        mat = _filter_taxa(mat, threshold, n_reads, rescale=False)
+        mat = _filter_taxa(mat, threshold, n_reads, rescale=False, max_genomes=cfg.get("max_genomes"))
         if mat.empty:
             continue
         simulated = simulate_count_matrix(mat, mode=mode, n_sample=n_samples, config=cfg)

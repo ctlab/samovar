@@ -111,11 +111,22 @@ def test_table_regenerator_contract(request, tmp_path):
     module = load_python_module(path, "contract_table")
     fn = getattr(module, "regenerate", None)
     assert callable(fn), f"{path} must define regenerate(data, metadata, config)"
-    tables = fn(_tiny_abundance(), None, {"output_dir": str(tmp_path), "seed": 1})
+    tables = fn(
+        _tiny_abundance(),
+        None,
+        {"output_dir": str(tmp_path), "seed": 1, "max_genomes": float("inf")},
+    )
     assert isinstance(tables, dict) and tables
     table = next(iter(tables.values()))
     assert "taxid" in table.columns
     assert n_sample_columns(normalize_abundance_table(table))
+    capped = fn(
+        _tiny_abundance(),
+        None,
+        {"output_dir": str(tmp_path), "seed": 1, "max_genomes": 1},
+    )
+    capped_table = next(iter(capped.values()))
+    assert len(capped_table) <= 1
 
 
 def test_table_scoring_contract(request):
@@ -180,7 +191,7 @@ def test_reads_generator_contract(request, tmp_path):
             "total_reads": 10,
         },
         None,
-        {},
+        {"max_genomes": float("inf")},
     )
     assert isinstance(paths, (list, tuple)) and paths
     assert any(str(p).endswith(".fastq") or str(p).endswith(".fastq.gz") for p in paths)
@@ -194,7 +205,11 @@ def test_metagenome_generator_contract(request, tmp_path):
     fn = getattr(module, "generate", None)
     assert callable(fn), f"{path} must define generate(spec, metadata, config) like --type reads"
     out = tmp_path / "meta"
-    paths = fn({"output_dir": str(out), "n_samples": 1, "total_reads": 10}, None, {})
+    paths = fn(
+        {"output_dir": str(out), "n_samples": 1, "total_reads": 10},
+        None,
+        {"max_genomes": float("inf")},
+    )
     assert isinstance(paths, (list, tuple)) and paths
     assert Path(paths[0]).is_file()
 

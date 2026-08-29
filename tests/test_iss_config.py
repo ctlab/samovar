@@ -92,6 +92,7 @@ def test_generate_config():
         assert config_content['seed'] == 123
         assert config_content['model'] == "novaseq"
         assert config_content['genomes'] == []
+        assert config_content['max_genomes'] == float("inf")
 
 def test_generate_pipeline():
     test_output_dir = 'tests_outs/test_generate_pipeline'
@@ -219,6 +220,30 @@ def test_iss_config_writes_skip_list(tmp_path):
     data = yaml.safe_load(Path(path).read_text())
     assert data["max_genome_mb"] == 12.5
     assert data["genome_skip_list"] == "9606"
+
+
+def test_iss_config_max_genomes_cli(tmp_path):
+    from samovar.iss_config import parse_args
+
+    args = parse_args(
+        [
+            "--output_dir",
+            str(tmp_path),
+            "--genome_dir",
+            str(tmp_path),
+            "--max-genomes",
+            "2",
+        ]
+    )
+    assert args.max_genomes == 2.0
+    cfg = ISSTestConfig.from_args(args)
+    assert cfg.max_genomes == 2.0
+    data = yaml.safe_load(Path(cfg.generate_config(str(tmp_path))).read_text())
+    assert data["max_genomes"] == 2.0
+    inf_args = parse_args(
+        ["--output_dir", str(tmp_path), "--max-genomes", "inf"]
+    )
+    assert inf_args.max_genomes == float("inf")
 
 
 def test_parse_args_threads_maps_to_iss_cpus():

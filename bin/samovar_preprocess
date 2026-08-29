@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 from samovar.config import DEFAULT_OUTPUT_DIR, setup_pipeline, parse_args
 from samovar.genome_fetcher import argparse_max_genome_mb
+from samovar.regenerate import argparse_max_genomes
 
 def main():
     # Get the base parser
@@ -25,8 +26,12 @@ def main():
         help='Alias of --cores; translated into each tool via flags-translate',
     )
     parser.add_argument(
-        '--max_genomes', type=int, default=50,
-        help='Max taxids to fetch for annotation2iss (top by abundance)')
+        '--max-genomes', '--max_genomes',
+        dest='max_genomes',
+        type=argparse_max_genomes,
+        default=None,
+        help='Max taxa for table regenerate and genomes for metagenome generate (default: inf)',
+    )
     parser.add_argument(
         '--max-genome-mb',
         dest='max_genome_mb',
@@ -266,7 +271,7 @@ def main():
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "cores", "threads",
-        "max_genomes", "max-genome-mb", "max_genome_mb",
+        "max_genomes", "max-genomes", "max-genome-mb", "max_genome_mb",
         "genome-skip-list", "genome_skip_list",
         "N_reads", "n_reads", "N",
         "genome-dirs", "genome_dirs", "index",

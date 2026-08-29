@@ -27,6 +27,10 @@ if not config.get("genomes"):
     config["genomes"] = genome_files
     print(f"Found genomes: {config['genomes']}")
 
+from samovar.regenerate import cap_sequence
+
+config["genomes"] = cap_sequence(config.get("genomes") or [], config.get("max_genomes"))
+
 SAMPLES = [str(i) for i in range(1, config["n_samples"] + 1)]
 OUTPUT_FILES = []
 for sample in SAMPLES:
@@ -65,4 +69,5 @@ rule generate_full_metagenome_and_split:
             cpus=params.cpus,
             extra_flags=config.get("extra_flags") or config.get("reads_generator_flags") or None,
             abundance_table=config.get("abundance_table") or None,
+            max_genomes=config.get("max_genomes"),
         )

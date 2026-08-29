@@ -785,8 +785,11 @@ def _resolve_genomes_for_taxids(
     from samovar.genome_resolve import resolve_genome_file
 
     available = {}
+    from samovar.regenerate import finite_max_genomes
+
+    limit = finite_max_genomes(max_genomes, default_from_env=False)
     for taxid in taxids:
-        if max_genomes is not None and len(available) >= max_genomes:
+        if limit is not None and len(available) >= limit:
             break
         taxid = str(taxid).split(".")[0]
         if taxid in SKIP_TAXIDS or taxid in available:
@@ -1009,6 +1012,11 @@ def process_annotation_tables(
     )
 
     regen_cfg = write_samovar_config_defaults(dict(regeneration_config or {}))
+    from samovar.regenerate import finite_max_genomes
+
+    if max_genomes is None:
+        max_genomes = regen_cfg.get("max_genomes")
+    max_genomes = finite_max_genomes(max_genomes, default_from_env=False)
     if max_genome_mb is None:
         max_genome_mb = regen_cfg.get("max_genome_mb")
     if genome_skip_list is None:
@@ -1135,6 +1143,7 @@ def generate_iss_test_samples(
     cpus: int = 2,
     extra_flags: Optional[Sequence[str]] = None,
     abundance_table: Optional[Union[str, pd.DataFrame]] = None,
+    max_genomes: Any = None,
 ) -> List[str]:
     """
     Generate one host pool and one metagenome pool, then split them into samples.
@@ -1160,6 +1169,7 @@ def generate_iss_test_samples(
                 model=model,
                 genomes=genomes,
                 cpus=cpus,
+                max_genomes=max_genomes,
             )
     rng = random.Random(seed)
     samples = [str(i) for i in range(1, int(n_samples) + 1)]
@@ -1179,6 +1189,9 @@ def generate_iss_test_samples(
         genome_files = [path for path in genome_files if os.path.exists(path)]
     else:
         genome_files = [str(p) for p in list_fasta_files(genome_dir, nucleotide=True, protein=False)]
+    from samovar.regenerate import cap_sequence
+
+    genome_files = cap_sequence(genome_files, max_genomes)
 
     pool_dir = os.path.join(output_dir, ".iss_full")
     os.makedirs(pool_dir, exist_ok=True)
@@ -1273,6 +1286,7 @@ def generate_iss_from_abundance_table(
     genomes: Optional[Sequence[str]] = None,
     cpus: int = 2,
     annotator_name: str = "full",
+    max_genomes: Any = None,
 ) -> List[str]:
     """ISS from a taxid × ``N_<sample>`` table; names ``{sample}_{annotator}_R*``."""
     from samovar.seqio import taxid_from_fasta_name
@@ -1286,6 +1300,9 @@ def generate_iss_from_abundance_table(
     from samovar.abundance import normalize_abundance_table
 
     abundance = normalize_abundance_table(abundance)
+    from samovar.regenerate import cap_abundance_table, finite_max_genomes
+
+    abundance = cap_abundance_table(abundance, max_genomes)
     if "taxid" not in abundance.columns:
         raise ValueError("abundance table must have a taxid column")
     abundance["taxid"] = abundance["taxid"].astype(str).str.split(".").str[0]
@@ -1313,6 +1330,9 @@ def generate_iss_from_abundance_table(
         sample_tables[str(sample)] = piece
 
     if genomes:
+        from samovar.regenerate import cap_sequence
+
+        genomes = cap_sequence(list(genomes), max_genomes)
         genome_files = {
             _genome_id_from_path(p): (
                 os.path.join(genome_dir, p) if not os.path.isabs(p) else p
@@ -1326,6 +1346,7 @@ def generate_iss_from_abundance_table(
             genome_dir,
             default_entrez_email(),
             True,
+            max_genomes=finite_max_genomes(max_genomes),
         )
     outputs: List[str] = []
     pool_dir = os.path.join(output_dir, ".iss_full")

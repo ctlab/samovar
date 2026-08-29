@@ -110,6 +110,51 @@ def test_preserve_keeps_observed_counts(toy_annotation_dir):
     assert int(row562["N_2"].iloc[0]) == 1
 
 
+def test_parse_max_genomes_unlimited_and_cap():
+    from samovar.regenerate import (
+        UNLIMITED_MAX_GENOMES,
+        cap_abundance_table,
+        cap_generate_genome_rows,
+        parse_max_genomes,
+    )
+
+    assert parse_max_genomes(None, default_from_env=False) == UNLIMITED_MAX_GENOMES
+    assert parse_max_genomes("inf", default_from_env=False) == UNLIMITED_MAX_GENOMES
+    assert parse_max_genomes(0, default_from_env=False) == UNLIMITED_MAX_GENOMES
+    assert parse_max_genomes(3, default_from_env=False) == 3.0
+    frame = pd.DataFrame(
+        {"taxid": ["1", "2", "3"], "N_a": [10, 4, 1], "N_b": [8, 3, 0]}
+    )
+    capped = cap_abundance_table(frame, 1)
+    assert list(capped["taxid"].astype(str)) == ["1"]
+    rows = [
+        {"genome_ID": "a", "host": "0"},
+        {"genome_ID": "b", "host": "0"},
+        {"genome_ID": "h", "host": "1"},
+    ]
+    kept = cap_generate_genome_rows(rows, 1)
+    assert [r["genome_ID"] for r in kept] == ["a", "h"]
+
+
+def test_preserve_max_genomes_keeps_top_taxa(toy_annotation_dir):
+    data = read_annotation_dir(toy_annotation_dir)
+    tables = regenerate_preserve(data, max_genomes=1)
+    kaiju = tables["kaiju"]
+    assert len(kaiju) == 1
+
+
+def test_regenerate_annotation_tables_honors_max_genomes(toy_annotation_dir, tmp_path):
+    out = tmp_path / "regen"
+    tables = regenerate_annotation_tables(
+        toy_annotation_dir,
+        out,
+        config={"regeneration_mode": "direct", "max_genomes": 1, "seed": 1},
+        select_best=False,
+    )
+    first = next(iter(tables.values()))
+    assert len(first) <= 1
+
+
 def test_preserve_rescale_when_requested(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     tables = regenerate_preserve(data, n_reads=100, rescale=True)
@@ -742,6 +787,21 @@ def test_camisim_table_toy_io_and_extra_flags(toy_annotation_dir, tmp_path):
         n_cols = [c for c in table.columns if str(c).startswith("N_")]
         assert len(n_cols) == 2
         assert int(table[n_cols].sum().sum()) > 0
+        assert table["taxid"].nunique() >= 1
+
+    capped = regenerate_annotation_tables(
+        toy_annotation_dir,
+        tmp_path / "cami_cap",
+        {
+            "regeneration_mode": "camisim-table",
+            "N": 2,
+            "N_reads": 100,
+            "seed": 3,
+            "max_genomes": 1,
+        },
+    )
+    for table in capped.values():
+        assert len(table) <= 1
         table.to_csv  # written
         assert (out / f"{name}.csv").is_file()
     direct = regenerate_annotation_tables(

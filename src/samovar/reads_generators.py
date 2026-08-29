@@ -270,6 +270,7 @@ class IssReadsGenerator(ReadsGenerator):
             cpus=int(cfg.get("cores") or cfg.get("cpus") or 2),
             extra_flags=cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")),
             abundance_table=cfg.get("abundance_table") or cfg.get("abundance"),
+            max_genomes=cfg.get("max_genomes"),
         )
 
 
@@ -303,6 +304,7 @@ class CamisimReadsGenerator(ReadsGenerator):
                 "camisim_mode": mode,
                 "camisim_config": cfg.get("camisim_config"),
                 "size_gbp": cfg.get("size_gbp"),
+                "max_genomes": cfg.get("max_genomes"),
             },
         )()
         # Prefer writing YAML then running when this is invoked in-process.
@@ -317,6 +319,8 @@ class CamisimReadsGenerator(ReadsGenerator):
                 mapped = yaml.safe_load(data) or {}
                 mapped["extra_flags"] = extra
                 mapped["reads_generator_flags"] = extra
+                if cfg.get("max_genomes") is not None:
+                    mapped["max_genomes"] = cfg.get("max_genomes")
                 Path(yaml_path).write_text(yaml.dump(mapped), encoding="utf-8")
         if cfg.get("run", True) and yaml_path:
             result = run_from_config(yaml_path)
@@ -357,6 +361,7 @@ def _job_spec(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "annotator": cfg.get("annotator_name") or cfg.get("annotator"),
         "extra_ids": extra_ids_for_generator(cfg.get("reads_generator"), cfg),
         "gzip_reads": bool(cfg.get("gzip_reads")),
+        "max_genomes": cfg.get("max_genomes"),
     }
 
 
@@ -417,6 +422,11 @@ def _run_cli_generator(
         cmd.extend(["--total-reads", str(int(total))])
     if config.get("seed") is not None:
         cmd.extend(["--seed", str(config["seed"])])
+    from samovar.regenerate import finite_max_genomes
+
+    limit = finite_max_genomes(config.get("max_genomes"), default_from_env=False)
+    if limit is not None:
+        cmd.extend(["--max-genomes", str(limit)])
     if config.get("model"):
         cmd.extend(["--model", str(config["model"])])
     if config.get("gzip_reads"):
