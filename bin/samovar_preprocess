@@ -4,6 +4,7 @@ import sys
 import argparse
 from pathlib import Path
 from samovar.config import DEFAULT_OUTPUT_DIR, setup_pipeline, parse_args
+from samovar.genome_fetcher import argparse_max_genome_mb
 
 def main():
     # Get the base parser
@@ -26,6 +27,19 @@ def main():
     parser.add_argument(
         '--max_genomes', type=int, default=50,
         help='Max taxids to fetch for annotation2iss (top by abundance)')
+    parser.add_argument(
+        '--max-genome-mb',
+        dest='max_genome_mb',
+        type=argparse_max_genome_mb,
+        default=None,
+        help='Skip new NCBI downloads larger than this many MB (default: inf; 0 unlimited). Already-cached genomes are kept.',
+    )
+    parser.add_argument(
+        '--genome-skip-list',
+        dest='genome_skip_list',
+        default=None,
+        help='Comma-separated taxids/accessions not to download (already-cached copies are still used)',
+    )
     parser.add_argument(
         '--reannotation-level',
         dest='reannotation_level',
@@ -252,7 +266,8 @@ def main():
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "cores", "threads",
-        "max_genomes",
+        "max_genomes", "max-genome-mb", "max_genome_mb",
+        "genome-skip-list", "genome_skip_list",
         "N_reads", "n_reads", "N",
         "genome-dirs", "genome_dirs", "index",
         "reannotation-level", "reannotation_level",

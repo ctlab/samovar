@@ -824,6 +824,10 @@ def collect_run_options(output_dir: PathLike) -> List[tuple]:
     _add("Regenerated reads", regen_cfg.get("N_reads"))
     _add("Coverage", regen_cfg.get("coverage"))
     _add("Max genomes", regen_cfg.get("max_genomes"))
+    _add("Max genome MB", regen_cfg.get("max_genome_mb"))
+    skip = regen_cfg.get("genome_skip_list")
+    if skip:
+        _add("Genome skip list", skip)
     _add("Regeneration seed", regen_cfg.get("seed"))
     _add("Rescale abundance", regen_cfg.get("rescale_abundance"))
     return rows

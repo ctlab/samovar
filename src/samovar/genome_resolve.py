@@ -181,8 +181,13 @@ def resolve_genome_file(
     reference_only: bool = True,
     gzip_genomes: bool = True,
     cfg: Optional[Dict[str, Any]] = None,
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
 ) -> Optional[str]:
-    """Local run dir, then catalog at ``level``, then NCBI (catalogued immediately)."""
+    """Local run dir, then catalog at ``level``, then NCBI (catalogued immediately).
+
+    Local/catalog hits ignore ``max_genome_mb`` and ``genome-skip-list``.
+    """
     from samovar.genome_fetcher import fetch_genome
     from samovar.seqio import is_gzip_path
     from samovar.seqio import gzip_file, gunzip_file
@@ -219,6 +224,8 @@ def resolve_genome_file(
                 reference_only=reference_only,
                 gzip_genomes=gzip_genomes,
                 index=True,
+                max_genome_mb=max_genome_mb,
+                genome_skip_list=genome_skip_list,
             )
         except Exception as exc:
             logger.warning("Failed to fetch genome for taxid %s: %s", fetch_id, exc)

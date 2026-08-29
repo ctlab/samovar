@@ -6,7 +6,7 @@ import os
 import logging
 import shutil
 import socket
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Collection, FrozenSet, List, Optional, Sequence, Tuple
 import urllib.request
 from Bio import Entrez
 from pathlib import Path
@@ -151,6 +151,159 @@ def _normalize_taxid(taxid: str | int) -> str:
     return taxid.split(".")[0]
 
 
+UNLIMITED_GENOME_MB = float("inf")
+
+
+def parse_max_genome_mb(
+    value: Any = None,
+    *,
+    default_from_env: bool = True,
+) -> float:
+    """Size cap for a *new* NCBI download. ``0`` / ``inf`` / empty → unlimited."""
+    if value is None and default_from_env:
+        value = os.environ.get("SAMOVAR_MAX_GENOME_MB", "")
+    if value is None or value is False:
+        return UNLIMITED_GENOME_MB
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"", "inf", "infinity", "+inf", "none", "unlimited", "unlimited.0"}:
+            return UNLIMITED_GENOME_MB
+        try:
+            value = float(text)
+        except ValueError:
+            return UNLIMITED_GENOME_MB
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return UNLIMITED_GENOME_MB
+    if number <= 0 or number == UNLIMITED_GENOME_MB:
+        return UNLIMITED_GENOME_MB
+    return number
+
+
+def argparse_max_genome_mb(text: str) -> float:
+    return parse_max_genome_mb(text, default_from_env=False)
+
+
+def parse_genome_skip_list(
+    value: Any = None,
+    *,
+    default_from_env: bool = True,
+) -> FrozenSet[str]:
+    """Taxids and/or assembly accessions that must not be newly downloaded."""
+    if value is None and default_from_env:
+        value = os.environ.get("SAMOVAR_GENOME_SKIP_LIST", "")
+    if value is None or value is False:
+        return frozenset()
+    if isinstance(value, (list, tuple, set, frozenset)):
+        parts = [str(item) for item in value]
+    else:
+        text = str(value).strip()
+        if not text:
+            return frozenset()
+        parts = [
+            piece
+            for piece in text.replace(";", ",").replace(":", ",").replace("\n", ",").split(",")
+            if piece.strip()
+        ]
+    keys: set[str] = set()
+    for part in parts:
+        token = str(part).strip()
+        if not token:
+            continue
+        keys.add(token)
+        keys.add(_normalize_taxid(token))
+        acc = normalize_accession(token)
+        if acc:
+            keys.add(acc)
+    keys.discard("")
+    return frozenset(keys)
+
+
+def genome_id_in_skip_list(identity: str, skip: Collection[str]) -> bool:
+    if not skip:
+        return False
+    raw = str(identity or "").strip()
+    if not raw:
+        return False
+    candidates = {raw, _normalize_taxid(raw)}
+    acc = normalize_accession(raw)
+    if acc:
+        candidates.add(acc)
+    return bool(candidates & set(skip))
+
+
+def _remote_fasta_size_mb(ftp_path: str, timeout: int = 30) -> Optional[float]:
+    """HTTP HEAD Content-Length of ``{asm}_genomic.fna.gz``, or None if unknown."""
+    if not ftp_path:
+        return None
+    try:
+        asm_name = os.path.basename(str(ftp_path).rstrip("/"))
+        url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            cl = resp.headers.get("Content-Length")
+            if cl:
+                return int(cl) / (1024 * 1024)
+    except Exception:
+        return None
+    return None
+
+
+def skip_new_ncbi_download(
+    identity: str,
+    *,
+    skip_list: Optional[Collection[str]] = None,
+    max_genome_mb: Any = None,
+    ftp_path: Optional[str] = None,
+    extra_ids: Sequence[str] = (),
+    silent: bool = False,
+) -> bool:
+    """True when a *new* NCBI fetch should be skipped (skip-list or size cap).
+
+    Already-on-disk genomes are the caller's job: this helper is only for the
+    download branch. Default ``max_genome_mb`` is unlimited.
+    """
+    skip = (
+        parse_genome_skip_list(skip_list, default_from_env=False)
+        if skip_list is not None
+        else parse_genome_skip_list(None, default_from_env=True)
+    )
+    max_mb = parse_max_genome_mb(max_genome_mb, default_from_env=max_genome_mb is None)
+    ids = [identity, *extra_ids]
+    for item in ids:
+        if genome_id_in_skip_list(str(item), skip):
+            if not silent:
+                logger.info(
+                    "Skipping NCBI download for %s (genome-skip-list)",
+                    identity,
+                )
+            return True
+    if max_mb == UNLIMITED_GENOME_MB or not ftp_path:
+        return False
+    size_mb = _remote_fasta_size_mb(ftp_path)
+    if size_mb is not None and size_mb > max_mb:
+        if not silent:
+            logger.info(
+                "Skipping NCBI download for %s: %.1f MB > max_genome_mb=%.1f",
+                identity,
+                size_mb,
+                max_mb,
+            )
+        return True
+    return False
+
+
+def _effective_fetch_limits(
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
+) -> Tuple[float, FrozenSet[str]]:
+    return (
+        parse_max_genome_mb(max_genome_mb, default_from_env=max_genome_mb is None),
+        parse_genome_skip_list(genome_skip_list, default_from_env=genome_skip_list is None),
+    )
+
+
 def _accession_from_ftp_path(ftp_path: str) -> str:
     name = os.path.basename(str(ftp_path or "").rstrip("/"))
     parts = name.split("_")
@@ -229,6 +382,8 @@ def fetch_assembly_processed(
     keep_raw: bool = False,
     raw_dir: Optional[str] = None,
     index: bool = True,
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
 ) -> Optional[str]:
     """Download NCBI assembly ``accession`` and write ``{accession}.fa.gz``."""
     accession = normalize_accession(accession) or accession
@@ -253,6 +408,15 @@ def fetch_assembly_processed(
         return str(existing)
     ftp_path = _assembly_ftp_for_accession(accession, email, silent=silent)
     if not ftp_path:
+        return None
+    if skip_new_ncbi_download(
+        accession,
+        skip_list=genome_skip_list,
+        max_genome_mb=max_genome_mb,
+        ftp_path=ftp_path,
+        extra_ids=[taxid, species],
+        silent=silent,
+    ):
         return None
     asm_name = os.path.basename(ftp_path)
     url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
@@ -323,6 +487,8 @@ def materialize_accessions(
     reindex_mode: int = 1,
     keep_raw: bool = False,
     silent: bool = False,
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
 ) -> List[str]:
     """Download/process accessions according to ``samovar generate --reindex``.
 
@@ -376,6 +542,8 @@ def materialize_accessions(
             keep_raw=keep_raw,
             raw_dir=str(raw_dest) if keep_raw else None,
             index=do_index,
+            max_genome_mb=max_genome_mb,
+            genome_skip_list=genome_skip_list,
         )
         if fetched:
             paths.append(str(stage_into_dir(fetched, run_dest)))
@@ -495,6 +663,8 @@ def fetch_genome_raw(
     reference_only: bool = True,
     silent: bool = False,
     reuse: Optional[bool] = None,
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
     ) -> Optional[str]:
     """Fetch a genome for ``taxid``: run dir, NCBI library cache, then NCBI.
 
@@ -557,8 +727,30 @@ def fetch_genome_raw(
         old_timeout = socket.getdefaulttimeout()
         socket.setdefaulttimeout(45)
         try:
+            max_mb, skip = _effective_fetch_limits(max_genome_mb, genome_skip_list)
+            extra_ids: List[str] = []
+            if genome_id_in_skip_list(taxid, skip):
+                if not silent:
+                    logger.info("Skipping NCBI download for %s (genome-skip-list)", taxid)
+                return None
             ftp_path = _assembly_ftp_path(taxid, email, silent=silent)
             if not ftp_path:
+                return None
+            try:
+                doc = _assembly_doc_for_taxid(taxid, email, silent=True)
+                if doc:
+                    extra_ids.append(str(doc.get("AssemblyAccession") or ""))
+                    extra_ids.append(str(doc.get("Taxid") or ""))
+            except Exception:
+                pass
+            if skip_new_ncbi_download(
+                taxid,
+                skip_list=skip,
+                max_genome_mb=max_mb,
+                ftp_path=ftp_path,
+                extra_ids=extra_ids,
+                silent=silent,
+            ):
                 return None
             asm_name = os.path.basename(ftp_path)
             http_url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
@@ -586,7 +778,15 @@ def fetch_genome(
     gzip_genomes: bool = True,
     reuse: Optional[bool] = None,
     index: bool = True,
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
     ) -> Optional[str]:
+    """Fetch/process a genome. Size and skip-list apply only to new NCBI downloads.
+
+    Local, indexed, and library copies are reused at any size (including skip-list
+    taxids that are already on disk).
+    """
+    max_mb, skip = _effective_fetch_limits(max_genome_mb, genome_skip_list)
 
     if is_assembly_accession(str(taxid)):
         return fetch_assembly_processed(
@@ -596,6 +796,8 @@ def fetch_genome(
             silent=silent,
             keep_raw=False,
             index=index,
+            max_genome_mb=max_mb,
+            genome_skip_list=skip,
         )
 
     if isinstance(taxid, str) and taxid.split(".")[0].isdigit():
@@ -644,7 +846,14 @@ def fetch_genome(
             return str(placed)
 
     genome_path = fetch_genome_raw(
-        taxid, output_folder, email, reference_only, silent, reuse=reuse
+        taxid,
+        output_folder,
+        email,
+        reference_only,
+        silent,
+        reuse=reuse,
+        max_genome_mb=max_mb,
+        genome_skip_list=skip,
     )
     if genome_path is None:
         return None
@@ -707,83 +916,13 @@ def fetch_genome(
         logger.error(f"Failed to process genome for taxid {taxid}: {str(e)}")
         return None
 
-    if isinstance(taxid, str) and taxid.split(".")[0].isdigit():
-        taxid = taxid.split(".")[0]
-
-    existing = find_existing_processed_genome(output_folder, taxid)
-    if existing is not None:
-        if gzip_genomes and not is_gzip_path(existing):
-            existing = gzip_file(existing)
-        elif not gzip_genomes and is_gzip_path(existing):
-            existing = gunzip_file(existing, remove_source=True)
-        if not silent:
-            logger.info(f"Processed genome for taxid {taxid} already exists at {existing}")
-        return str(existing)
-
-    indexed = resolve_indexed_path(str(taxid))
-    if indexed is not None:
-        if not silent:
-            logger.info("Using indexed genome for %s: %s", taxid, indexed)
-        return str(indexed)
-
-    do_reuse = reuse_enabled(reuse)
-    if do_reuse:
-        library = find_library_genome(
-            taxid, extra=[output_folder], include_test_genomes=False, processed_only=True
-        )
-        if library is not None:
-            placed = place_genome(library, output_folder, taxid)
-            if gzip_genomes and not is_gzip_path(placed):
-                placed = Path(gzip_file(placed))
-            elif not gzip_genomes and is_gzip_path(placed):
-                placed = Path(gunzip_file(placed, remove_source=False))
-                placed = place_genome(placed, output_folder, taxid)
-            if not silent:
-                logger.info(f"Reusing processed library genome for taxid {taxid}: {placed}")
-            return str(placed)
-
-    genome_path = fetch_genome_raw(
-        taxid, output_folder, email, reference_only, silent, reuse=reuse
-    )
-    if genome_path is None:
-        return None
-
-    processed_dir = cache_processed_dir()
-    try:
-        processed_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        # Never fall back to $HOME — keep artifacts next to the run genomes.
-        processed_dir = Path(output_folder)
-        try:
-            processed_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-    cache_processed = processed_genome_path(processed_dir, taxid, gzip_genomes=gzip_genomes)
-    run_processed = processed_genome_path(output_folder, taxid, gzip_genomes=gzip_genomes)
-
-    try:
-        preprocess_fasta(
-            input_file=genome_path,
-            output_file=str(cache_processed),
-            mutation_rate=0.0,
-            include_percent=100.0,
-        )
-        ensure_genome_config()
-        register_genome_dir(processed_dir)
-        if Path(cache_processed).resolve() != Path(run_processed).resolve():
-            place_genome(cache_processed, output_folder, taxid)
-        logger.info(f"Successfully processed genome for taxid {taxid}")
-        found = find_existing_processed_genome(output_folder, taxid)
-        return str(found or cache_processed)
-    except Exception as e:
-        logger.error(f"Failed to process genome for taxid {taxid}: {str(e)}")
-        return None
 
 def generate_random_taxids(
     group: str = "Bacteria",
     N: int = 10,
     silent: bool = False,
-    max_genome_mb: float | None = 100.0,
+    max_genome_mb: float | None = None,
+    genome_skip_list: Any = None,
     oversample: int = 5,
 ) -> list[str]:
     """
@@ -794,7 +933,9 @@ def generate_random_taxids(
         N (int): Number of unique taxids to generate
         silent (bool): If True, suppress logging output
         max_genome_mb: Prefer assemblies whose genomic FASTA is under this size
-            (via HTTP HEAD Content-Length). None disables size filtering.
+            (via HTTP HEAD Content-Length). Default unlimited (``inf``).
+            ``None`` reads ``SAMOVAR_MAX_GENOME_MB``.
+        genome_skip_list: Taxids/accessions to ignore when sampling.
         oversample: Collect up to N * oversample RefSeq candidates before sampling
         
     Returns:
@@ -803,6 +944,8 @@ def generate_random_taxids(
     # Set up Entrez
     if not hasattr(Entrez, 'email'):
         raise ValueError("Entrez.email must be set before calling this function")
+
+    max_mb, skip = _effective_fetch_limits(max_genome_mb, genome_skip_list)
     
     old_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(45)
@@ -852,22 +995,20 @@ def generate_random_taxids(
             if not taxid:
                 continue
             taxid = str(taxid)
+            if genome_id_in_skip_list(taxid, skip):
+                if not silent:
+                    logger.info(f"Skipping taxid {taxid} (genome-skip-list)")
+                continue
             size_mb = float("inf")
-            if max_genome_mb is not None:
-                try:
-                    asm_name = os.path.basename(ftp_path)
-                    url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
-                    req = urllib.request.Request(url, method="HEAD")
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        cl = resp.headers.get("Content-Length")
-                        if cl:
-                            size_mb = int(cl) / (1024 * 1024)
-                except Exception:
-                    # If size unknown, keep candidate but rank last
+            if max_mb != UNLIMITED_GENOME_MB:
+                size = _remote_fasta_size_mb(ftp_path)
+                if size is None:
                     size_mb = float("inf")
-                if size_mb != float("inf") and size_mb > max_genome_mb:
+                else:
+                    size_mb = size
+                if size_mb != float("inf") and size_mb > max_mb:
                     if not silent:
-                        logger.info(f"Skipping taxid {taxid}: {size_mb:.1f} MB > {max_genome_mb} MB")
+                        logger.info(f"Skipping taxid {taxid}: {size_mb:.1f} MB > {max_mb} MB")
                     continue
             if any(t == taxid for _, t in candidates):
                 continue
@@ -928,8 +1069,18 @@ def main():
     )
     parser.add_argument('--silent', action='store_true',
                       help='Suppress logging output and show progress bars instead')
-    parser.add_argument('--max-genome-mb', type=float, default=100.0,
-                      help='Skip assemblies larger than this many MB (0 disables)')
+    parser.add_argument(
+        '--max-genome-mb',
+        type=argparse_max_genome_mb,
+        default=UNLIMITED_GENOME_MB,
+        help='Skip new NCBI assemblies larger than this many MB (default: inf; 0 also unlimited)',
+    )
+    parser.add_argument(
+        '--genome-skip-list',
+        dest='genome_skip_list',
+        default=None,
+        help='Comma-separated taxids/accessions to skip on new NCBI downloads',
+    )
     parser.add_argument(
         '--gzip-genomes',
         dest='gzip_genomes',
@@ -958,10 +1109,12 @@ def main():
             reindex_mode=int(args.reindex),
             keep_raw=False,
             silent=args.silent,
+            max_genome_mb=args.max_genome_mb,
+            genome_skip_list=args.genome_skip_list,
         )
         return
 
-    max_mb = None if args.max_genome_mb <= 0 else args.max_genome_mb
+    max_mb = parse_max_genome_mb(args.max_genome_mb, default_from_env=False)
     
     # Step 1: Generate candidate taxids (oversample so failed downloads can be replaced)
     if not args.silent:
@@ -971,6 +1124,7 @@ def main():
         N=max(args.N * 3, args.N),
         silent=args.silent,
         max_genome_mb=max_mb,
+        genome_skip_list=args.genome_skip_list,
     )
     
     if not taxids:
@@ -992,6 +1146,8 @@ def main():
             args.email,
             silent=args.silent,
             gzip_genomes=args.gzip_genomes,
+            max_genome_mb=max_mb,
+            genome_skip_list=args.genome_skip_list,
         )
         if not genome_path:
             if not args.silent:

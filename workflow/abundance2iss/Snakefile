@@ -20,6 +20,8 @@ READ_LENGTH = config["read_length"]
 COVERAGE = config["coverage"]
 MODEL = config.get("model", "hiseq")
 MAX_GENOMES = config.get("max_genomes", None)
+MAX_GENOME_MB = config.get("max_genome_mb", float("inf"))
+GENOME_SKIP_LIST = config.get("genome_skip_list") or []
 CORES = int(config.get("cores", 2))
 _MODE_RAW = config.get("table_reads_generator") or config.get("regeneration_mode", "direct")
 if isinstance(_MODE_RAW, (list, tuple)):
@@ -66,6 +68,8 @@ if config.get("metagenome_generator_flags"):
     ]
 if config.get("N") not in (None, "", 0):
     REGENERATION_CONFIG["N"] = int(config["N"])
+REGENERATION_CONFIG["max_genome_mb"] = MAX_GENOME_MB
+REGENERATION_CONFIG["genome_skip_list"] = GENOME_SKIP_LIST
 GZIP_GENOMES = bool(config.get("gzip_genomes", True))
 GZIP_READS = bool(config.get("gzip_reads", False))
 REANNOTATION_LEVEL = config.get("reannotation_level", "taxid")
@@ -160,6 +164,8 @@ rule process_abundance:
         abundance_dir = ABUNDANCE_DIR,
         regeneration_config = REGENERATION_CONFIG,
         seed = REGENERATION_CONFIG.get("seed", 42),
+        max_genome_mb = MAX_GENOME_MB,
+        genome_skip_list = GENOME_SKIP_LIST,
     run:
         try:
             process_annotation_tables(
@@ -179,6 +185,8 @@ rule process_abundance:
                 gzip_genomes=GZIP_GENOMES,
                 gzip_reads=GZIP_READS,
                 reannotation_level=REANNOTATION_LEVEL,
+                max_genome_mb=params.max_genome_mb,
+                genome_skip_list=params.genome_skip_list,
             )
             logger.info("Finished abundance2iss under %s", params.output_dir)
         except Exception as e:

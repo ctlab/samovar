@@ -10,7 +10,7 @@ import pandas as pd
 import subprocess
 from contextlib import contextmanager
 from .genome_fetcher import fetch_genome, default_entrez_email
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
 import yaml
 import json
 import tempfile
@@ -779,6 +779,8 @@ def _resolve_genomes_for_taxids(
     max_genomes: Optional[int] = None,
     gzip_genomes: bool = True,
     reannotation_level: str = "taxid",
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
 ) -> Dict[str, str]:
     from samovar.genome_resolve import resolve_genome_file
 
@@ -796,6 +798,8 @@ def _resolve_genomes_for_taxids(
             level=reannotation_level,
             reference_only=reference_only,
             gzip_genomes=gzip_genomes,
+            max_genome_mb=max_genome_mb,
+            genome_skip_list=genome_skip_list,
         )
         if genome_file is not None:
             available[taxid] = genome_file
@@ -831,6 +835,8 @@ def process_abundance_table(
     gzip_genomes: bool = True,
     gzip_reads: bool = False,
     reannotation_level: str = "taxid",
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
 ) -> pd.DataFrame:
     """
     Process abundance table and generate simulated reads for each taxid.
@@ -879,6 +885,8 @@ def process_abundance_table(
         reference_only,
         gzip_genomes=gzip_genomes,
         reannotation_level=reannotation_level,
+        max_genome_mb=max_genome_mb,
+        genome_skip_list=genome_skip_list,
     )
 
     N_cols = _n_columns(abundance_table)
@@ -981,6 +989,8 @@ def process_annotation_tables(
     gzip_genomes: bool = True,
     gzip_reads: bool = False,
     reannotation_level: str = "taxid",
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
 ) -> None:
     """Simulate FASTQ from abundance tables (abundance2iss).
 
@@ -999,6 +1009,10 @@ def process_annotation_tables(
     )
 
     regen_cfg = write_samovar_config_defaults(dict(regeneration_config or {}))
+    if max_genome_mb is None:
+        max_genome_mb = regen_cfg.get("max_genome_mb")
+    if genome_skip_list is None:
+        genome_skip_list = regen_cfg.get("genome_skip_list")
     if seed is None:
         seed = regen_cfg.get("seed")
     seed = coerce_seed(seed)
@@ -1079,6 +1093,8 @@ def process_annotation_tables(
         max_genomes=max_genomes,
         gzip_genomes=gzip_genomes,
         reannotation_level=reannotation_level,
+        max_genome_mb=max_genome_mb,
+        genome_skip_list=genome_skip_list,
     )
     if not available_genomes:
         _emit_empty_for_annotators(output_dir, sample_names, annotators, gzip_reads=gzip_reads)

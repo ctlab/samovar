@@ -165,6 +165,8 @@ def test_generate_configs():
         assert iss_config['gzip_reads'] is False
         assert iss_config['N_reads'] == 1000
         assert iss_config['max_genomes'] == 50
+        assert iss_config['max_genome_mb'] == float("inf")
+        assert iss_config['genome_skip_list'] == []
 
 
 def test_pipeline_config_n_reads_cli_overrides_default():
@@ -187,6 +189,27 @@ def test_pipeline_config_n_reads_cli_overrides_default():
         iss_config = yaml.safe_load(f)
     assert iss_config["N_reads"] == 20000
     assert iss_config["max_genomes"] == 20
+
+
+def test_pipeline_config_genome_skip_and_max_mb_cli(tmp_path):
+    args = argparse.Namespace(
+        input_config=None,
+        input_dir="/path/to/input",
+        output_dir=str(tmp_path),
+        kraken2=None,
+        kaiju=None,
+        max_genome_mb=50,
+        genome_skip_list="9606,562",
+    )
+    config = PipelineConfig.from_args(args)
+    assert config.max_genome_mb == 50
+    assert "9606" in config.genome_skip_list
+    assert "562" in config.genome_skip_list
+    configs = config.generate_configs(str(tmp_path))
+    with open(configs["annotation2iss"], "r") as f:
+        iss_config = yaml.safe_load(f)
+    assert iss_config["max_genome_mb"] == 50
+    assert "9606" in iss_config["genome_skip_list"]
 
 
 def test_generate_pipeline():

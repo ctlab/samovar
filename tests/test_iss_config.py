@@ -186,6 +186,41 @@ def test_parse_args_reindex_and_raw_genomes():
     assert args.raw_genomes == 0
 
 
+def test_parse_args_genome_skip_and_max_mb():
+    from samovar.iss_config import parse_args
+
+    args = parse_args(
+        [
+            "--output_dir",
+            "out",
+            "--genome_dir",
+            "genomes",
+            "--max-genome-mb",
+            "inf",
+            "--genome-skip-list",
+            "9606,562",
+        ]
+    )
+    assert args.max_genome_mb == float("inf")
+    assert args.genome_skip_list == "9606,562"
+
+
+def test_iss_config_writes_skip_list(tmp_path):
+    from samovar.iss_config import ISSTestConfig
+
+    cfg = ISSTestConfig(
+        genome_dir="/path/to/genomes",
+        output_dir=str(tmp_path),
+        host_genome="",
+        max_genome_mb=12.5,
+        genome_skip_list="9606",
+    )
+    path = cfg.generate_config(str(tmp_path))
+    data = yaml.safe_load(Path(path).read_text())
+    assert data["max_genome_mb"] == 12.5
+    assert data["genome_skip_list"] == "9606"
+
+
 def test_parse_args_threads_maps_to_iss_cpus():
     from samovar.iss_config import parse_args
 

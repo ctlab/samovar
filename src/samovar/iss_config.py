@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 
+from samovar.genome_fetcher import argparse_max_genome_mb
+
 
 def _finish_generate(args, result):
     try:
@@ -20,6 +22,30 @@ def _finish_generate(args, result):
     except Exception as exc:
         print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)
     return result
+
+
+def _materialize_generate_accessions(args):
+    from samovar.genome_fetcher import default_entrez_email, materialize_accessions
+    from samovar.genome_index import run_processed_dir
+
+    accessions = list(getattr(args, "accessions", None) or [])
+    if not accessions:
+        return
+    reindex_mode = int(getattr(args, "reindex", 0) or 0)
+    keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
+    paths = materialize_accessions(
+        accessions,
+        output_dir=args.output_dir,
+        email=default_entrez_email(),
+        reindex_mode=reindex_mode,
+        keep_raw=keep_raw,
+        max_genome_mb=getattr(args, "max_genome_mb", None),
+        genome_skip_list=getattr(args, "genome_skip_list", None),
+    )
+    if not paths:
+        raise SystemExit("generate: no genomes materialized from --accessions")
+    args.genome_dir = str(run_processed_dir(args.output_dir))
+
 
 @dataclass
 class ISSTestConfig:
@@ -36,6 +62,8 @@ class ISSTestConfig:
     reads_generator: str = "iss"
     metagenome_generator: str = ""
     abundance_table: str = ""
+    max_genome_mb: float = float("inf")
+    genome_skip_list: str = ""
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'ISSTestConfig':
@@ -45,6 +73,16 @@ class ISSTestConfig:
         if abundance:
             abundance = absolute_path(abundance)
         extra = getattr(args, "extra_flags", None) or ""
+        from samovar.genome_fetcher import parse_genome_skip_list, parse_max_genome_mb
+
+        skip = getattr(args, "genome_skip_list", None)
+        skip_text = ""
+        if skip is not None:
+            skip_text = ",".join(sorted(parse_genome_skip_list(skip, default_from_env=False)))
+        max_mb = parse_max_genome_mb(
+            getattr(args, "max_genome_mb", None),
+            default_from_env=getattr(args, "max_genome_mb", None) is None,
+        )
         return cls(
             genome_dir=absolute_path(args.genome_dir) if args.genome_dir else "",
             output_dir=absolute_path(args.output_dir),
@@ -59,6 +97,8 @@ class ISSTestConfig:
             reads_generator=str(getattr(args, "reads_generator", None) or "iss"),
             metagenome_generator=str(getattr(args, "metagenome_generator", None) or ""),
             abundance_table=str(abundance or ""),
+            max_genome_mb=max_mb,
+            genome_skip_list=skip_text,
         )
 
     def generate_config(self, base_dir: str) -> str:
@@ -93,6 +133,9 @@ class ISSTestConfig:
                 config['metagenome_generator_flags'] = self.extra_flags
         if self.abundance_table:
             config['abundance_table'] = self.abundance_table
+        config['max_genome_mb'] = float(self.max_genome_mb)
+        if self.genome_skip_list:
+            config['genome_skip_list'] = self.genome_skip_list
         
         with open(config_path, 'w') as f:
             yaml.dump(config, f)
@@ -258,6 +301,19 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         default=None,
         help='CAMISIM sample size in Gbp (default: derived from --total_reads)',
     )
+    parser.add_argument(
+        '--max-genome-mb',
+        dest='max_genome_mb',
+        type=argparse_max_genome_mb,
+        default=None,
+        help='Skip new NCBI downloads larger than this many MB (default: inf). Cached genomes are kept.',
+    )
+    parser.add_argument(
+        '--genome-skip-list',
+        dest='genome_skip_list',
+        default=None,
+        help='Comma-separated taxids/accessions not to download (already-cached copies are still used)',
+    )
     from samovar.tool_spec import apply_translated_flags, parse_known_with_custom
 
     args, leftover = parse_known_with_custom(parser, argv)
@@ -340,24 +396,8 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
                 data["metagenome_generator"] = mcanon
                 Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
             return _finish_generate(args, result)
-        accessions = list(getattr(args, "accessions", None) or [])
-        reindex_mode = int(getattr(args, "reindex", 0) or 0)
-        keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
-        if accessions:
-            from samovar.genome_fetcher import default_entrez_email, materialize_accessions
-            from samovar.genome_index import run_processed_dir
-
-            paths = materialize_accessions(
-                accessions,
-                output_dir=args.output_dir,
-                email=default_entrez_email(),
-                reindex_mode=reindex_mode,
-                keep_raw=keep_raw,
-            )
-            if not paths:
-                raise SystemExit("generate: no genomes materialized from --accessions")
-            args.genome_dir = str(run_processed_dir(args.output_dir))
-        elif not getattr(args, "genome_dir", None):
+        _materialize_generate_accessions(args)
+        if not getattr(args, "genome_dir", None):
             raise SystemExit("generate: --genome_dir or --accessions is required")
         config = ISSTestConfig.from_args(args)
         config_path = config.generate_config(config.output_dir)
@@ -422,24 +462,8 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
         return _finish_generate(args, result)
 
-    accessions = list(getattr(args, "accessions", None) or [])
-    reindex_mode = int(getattr(args, "reindex", 0) or 0)
-    keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
-    if accessions:
-        from samovar.genome_fetcher import default_entrez_email, materialize_accessions
-        from samovar.genome_index import run_processed_dir
-
-        paths = materialize_accessions(
-            accessions,
-            output_dir=args.output_dir,
-            email=default_entrez_email(),
-            reindex_mode=reindex_mode,
-            keep_raw=keep_raw,
-        )
-        if not paths:
-            raise SystemExit("generate: no genomes materialized from --accessions")
-        args.genome_dir = str(run_processed_dir(args.output_dir))
-    elif not getattr(args, "genome_dir", None):
+    _materialize_generate_accessions(args)
+    if not getattr(args, "genome_dir", None):
         raise SystemExit("generate: --genome_dir or --accessions is required")
 
     config = ISSTestConfig.from_args(args)

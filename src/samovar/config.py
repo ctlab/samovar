@@ -32,6 +32,11 @@ from samovar.reprofilers import (
     require_known_reprofiler,
 )
 from samovar.genome_resolve import normalize_reannotation_level
+from samovar.genome_fetcher import (
+    UNLIMITED_GENOME_MB,
+    parse_genome_skip_list,
+    parse_max_genome_mb,
+)
 from samovar.main_config import (
     flags_target_matches,
     imported_flags_for_names,
@@ -269,6 +274,8 @@ class PipelineConfig:
     reuse_genomes: bool = True
     use_test_genomes: bool = False
     genome_dirs: Optional[List[str]] = None
+    max_genome_mb: float = UNLIMITED_GENOME_MB
+    genome_skip_list: Optional[List[str]] = None
     run_multiqc: Optional[bool] = None
     scoring_flags: Optional[str] = None
     scoring_tools: Optional[List[str]] = None
@@ -284,6 +291,8 @@ class PipelineConfig:
             self.annotators = []
         if self.genome_dirs is None:
             self.genome_dirs = []
+        if self.genome_skip_list is None:
+            self.genome_skip_list = []
         if self.scoring_tool_flags is None:
             self.scoring_tool_flags = {}
         if self.reprofiler_tool_flags is None:
@@ -426,6 +435,16 @@ class PipelineConfig:
                     config.gzip_genomes = bool(input_config.get('gzip_genomes'))
                 if 'gzip_reads' in input_config:
                     config.gzip_reads = bool(input_config.get('gzip_reads'))
+                yaml_max_mb = input_config.get("max_genome_mb", input_config.get("max-genome-mb"))
+                if yaml_max_mb is not None:
+                    config.max_genome_mb = parse_max_genome_mb(
+                        yaml_max_mb, default_from_env=False
+                    )
+                yaml_skip = input_config.get("genome_skip_list", input_config.get("genome-skip-list"))
+                if yaml_skip is not None:
+                    config.genome_skip_list = sorted(
+                        parse_genome_skip_list(yaml_skip, default_from_env=False)
+                    )
                 yaml_start = (
                     input_config.get("startpoint")
                     or input_config.get("start_point")
@@ -551,6 +570,14 @@ class PipelineConfig:
                 ]
             else:
                 config.genome_dirs = [str(p) for p in extra_dirs if str(p).strip()]
+        if getattr(args, "max_genome_mb", None) is not None:
+            config.max_genome_mb = parse_max_genome_mb(
+                args.max_genome_mb, default_from_env=False
+            )
+        if getattr(args, "genome_skip_list", None) is not None:
+            config.genome_skip_list = sorted(
+                parse_genome_skip_list(args.genome_skip_list, default_from_env=False)
+            )
 
         # CLI regeneration depth overrides YAML when both are present.
         n_reads = getattr(args, "N_reads", None)
@@ -753,6 +780,8 @@ class PipelineConfig:
             'rescale_abundance': self.rescale_abundance,
             'gzip_genomes': self.gzip_genomes,
             'gzip_reads': self.gzip_reads,
+            'max_genome_mb': float(getattr(self, "max_genome_mb", UNLIMITED_GENOME_MB)),
+            'genome_skip_list': list(getattr(self, "genome_skip_list", None) or []),
             'reads_generator': self.reads_generator,
         }
         modes = list(self.regeneration_modes or [self.regeneration_mode])
