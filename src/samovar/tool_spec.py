@@ -53,6 +53,8 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "samtools": "conda install -y bioconda::samtools",
     "opal.py": "pip install opal",
     "camisim": "pip install CAMISIM",
+    "nanosim": "conda install -y bioconda::nanosim",
+    "nanosim3": "conda install -y bioconda::nanosim",
 }
 
 DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
@@ -62,6 +64,7 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "krakenuniq": {"--threads": "--threads", "--cores": "--threads"},
     "metaphlan": {"--threads": "--nproc", "--cores": "--nproc"},
     "metaphlan4": {"--threads": "--nproc", "--cores": "--nproc"},
+    "centrifuge": {"--threads": "--threads", "--cores": "--threads"},
     "iss": {"--threads": "--cpus", "--cores": "--cpus"},
     "snakemake": {"--threads": "--cores", "--cores": "--cores"},
     "art_illumina": {"--threads": "--p", "--cores": "--p"},

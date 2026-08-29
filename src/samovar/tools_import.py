@@ -88,6 +88,9 @@ def import_tool(
     glob = str(inputs or "").strip()
     if group == "scoring" and not glob:
         glob = DEFAULT_SCORING_INPUTS
+    from samovar.repro import load_lazy_install_text
+
+    lazy = load_lazy_install_text(str(lazy_install or ""))
     cfg = load_config()
     kwargs = dict(
         path=path,
@@ -95,7 +98,7 @@ def import_tool(
         workflow=workflow,
         group=group,
         flags=str(flags or "").strip(),
-        lazy_install=str(lazy_install or "").strip() or None,
+        lazy_install=lazy or None,
         flags_translate=flags_translate or None,
         version=str(version or "").strip() or None,
     )
@@ -169,7 +172,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--lazy-install",
         dest="lazy_install",
         default="",
-        help='Install recipe stored on the tool, e.g. "conda install bioconda::kraken2"',
+        help=(
+            'Install recipe for reproduce/export: a command, a @path to a bash file, '
+            'or "-" for stdin. Multiline scripts are stored on the tool record.'
+        ),
+    )
+    parser.add_argument(
+        "--lazy-install-file",
+        dest="lazy_install_file",
+        default="",
+        help="Read a bash file into lazy-install (same as --lazy-install @FILE).",
     )
     parser.add_argument(
         "--tool-version",
@@ -225,6 +237,10 @@ def main(argv: Optional[list] = None) -> int:
                 print(format_contract(group), file=sys.stderr)
                 return 1
             print(output.rstrip() or "contract pytest passed")
+        lazy = args.lazy_install
+        extra_file = str(getattr(args, "lazy_install_file", "") or "").strip()
+        if extra_file:
+            lazy = "@" + extra_file
         spec = import_tool(
             name=args.name,
             tool_type=args.type,
@@ -233,7 +249,7 @@ def main(argv: Optional[list] = None) -> int:
             exec_path=dest,
             flags=args.flags,
             inputs=args.inputs,
-            lazy_install=args.lazy_install,
+            lazy_install=lazy,
             flags_translate=args.flags_translate,
             version=args.version,
         )

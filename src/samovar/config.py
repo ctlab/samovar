@@ -1170,7 +1170,18 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         print(f"Warning: could not update genome cache config: {exc}", file=sys.stderr)
     configs = config.generate_configs(config.output_dir)
     pipeline_path = config.generate_pipeline(config.output_dir)
-    
+    try:
+        from samovar.repro import record_stage
+
+        record_stage(
+            "prepare",
+            config.output_dir,
+            args=args,
+            argv=sys.argv[1:],
+        )
+    except Exception as exc:
+        print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)
+
     return {
         'configs': configs,
         'pipeline': pipeline_path

@@ -41,6 +41,9 @@ show_usage() {
     echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
     echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
     echo "  tools       import a binary; --sort reads; --status for programs"
+    echo "  import      Alias of tools import"
+    echo "  export      Pack a Hydra run snapshot (+ optional databases) into an archive"
+    echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
     echo "  help        Show this help message"
     echo ""
@@ -57,7 +60,10 @@ show_usage() {
     echo "  samovar exec --output_dir [...] --cleanup-tmp"
     echo "  samovar prepare --output_dir [...] --no-multiqc"
     echo "  samovar multiqc --output_dir [...] -- --export"
-    echo "  samovar tools import -n kaiju --exec kaiju --exec-path /usr/bin/kaiju --type annotator"
+    echo "  samovar tools import -n kaiju --exec kaiju --exec-path /usr/bin/kaiju --type annotator --lazy-install 'conda install bioconda::kaiju'"
+  echo "  samovar export /path/to/run -o run.tgz --config full"
+  echo "  samovar reproduce run.tgz --output_dir /path/to/rerun"
+  echo "  samovar reproduce run.tgz --output_dir /path/to/rerun --stages generate generate.n_samples=2"
     echo "  samovar tools --sort --output_dir [...]"
     echo "  samovar generate --accessions GCF_... --reindex 1 --output_dir [...]"
     echo "  samovar reindex [FOLDER ...]"
@@ -184,6 +190,21 @@ case "${1:-}" in
                 exit 1
                 ;;
         esac
+        ;;
+    "import")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.tools_import "$@"
+        ;;
+    "export")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.repro export "$@"
+        ;;
+    "reproduce")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.repro reproduce "$@"
         ;;
     "build"|"build_database")
         shift

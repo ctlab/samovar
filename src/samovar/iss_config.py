@@ -4,6 +4,22 @@ import argparse
 from typing import Dict, Optional
 from dataclasses import dataclass
 from pathlib import Path
+import sys
+
+
+def _finish_generate(args, result):
+    try:
+        from samovar.repro import record_stage
+
+        record_stage(
+            "generate",
+            getattr(args, "output_dir", None),
+            args=args,
+            argv=sys.argv[1:],
+        )
+    except Exception as exc:
+        print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)
+    return result
 
 @dataclass
 class ISSTestConfig:
@@ -323,7 +339,7 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
                     data["metagenome_generator_flags"] = args.extra_flags
                 data["metagenome_generator"] = mcanon
                 Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
-            return result
+            return _finish_generate(args, result)
         accessions = list(getattr(args, "accessions", None) or [])
         reindex_mode = int(getattr(args, "reindex", 0) or 0)
         keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
@@ -348,7 +364,7 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         pipeline_path = write_custom_generate_script(
             config.output_dir, config_path, cores=config.cores
         )
-        return {"config": config_path, "pipeline": pipeline_path}
+        return _finish_generate(args, {"config": config_path, "pipeline": pipeline_path})
 
     raw_name = getattr(args, "reads_generator", None)
     simulator = str(getattr(args, "simulator", None) or "iss").strip().lower()
@@ -404,7 +420,7 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
 
                 data["abundance_table"] = absolute_path(args.abundance_table)
             Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
-        return result
+        return _finish_generate(args, result)
 
     accessions = list(getattr(args, "accessions", None) or [])
     reindex_mode = int(getattr(args, "reindex", 0) or 0)
@@ -435,7 +451,10 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     else:
         pipeline_path = config.generate_pipeline(config.output_dir)
 
-    return {
-        'config': config_path,
-        'pipeline': pipeline_path
-    } 
+    return _finish_generate(
+        args,
+        {
+            "config": config_path,
+            "pipeline": pipeline_path,
+        },
+    ) 

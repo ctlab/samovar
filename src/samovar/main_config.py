@@ -480,7 +480,7 @@ def set_tool(
 
         rec["flags-translate"] = dict(DEFAULT_FLAGS_TRANSLATE.get(bare) or {})
     ver = str(version or key_ver or previous.get("_version") or "").strip()
-    if not ver and rec["exec"]["path"]:
+    if not ver and rec["exec"]["path"] and bare not in {"samovar"}:
         ver = probe_tool_version(rec["exec"]["path"], bare)
     disk_key = join_tool_key(bare or name, ver)
     for stored in list(tools):

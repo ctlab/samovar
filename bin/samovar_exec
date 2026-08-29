@@ -5,6 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${SAMOVAR_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PYTHON="${PYTHON_PATH:-python3}"
+ORIG_ARGS=("$@")
 
 _is_custom_flag() {
     PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
@@ -133,5 +134,8 @@ else
 fi
 
 _cleanup_tmp_if_requested
+
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON" -m samovar.repro record exec --output_dir "$OUTPUT_DIR" -- "${ORIG_ARGS[@]}" || true
 
 echo "Pipeline execution completed."

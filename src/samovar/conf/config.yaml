@@ -1,0 +1,19 @@
+# Hydra root for a SamovaR run snapshot (generate / prepare / exec).
+# Saved copies live in $output_dir/.hydra/{config,overrides,hydra}.yaml
+defaults:
+  - _self_
+
+samovar_version: ""
+command: ""
+stages: []
+
+generate: {}
+prepare: {}
+exec: {}
+
+env: {}
+tools: {}
+imports: {}
+databases: {}
+custom_flags: []
+warnings: []
