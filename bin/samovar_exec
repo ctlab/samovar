@@ -141,6 +141,6 @@ fi
 _cleanup_tmp_if_requested
 
 PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
-    "$PYTHON" -m samovar.repro record exec --output_dir "$OUTPUT_DIR" -- "${ORIG_ARGS[@]}" || true
+    "$PYTHON" -m samovar.repro record --output_dir "$OUTPUT_DIR" exec -- "${ORIG_ARGS[@]}" || true
 
 echo "Pipeline execution completed."

@@ -32,6 +32,16 @@ from samovar.table_regenerators import extra_flags_argv
 
 SCORING_GROUP = "scoring"
 BUILTIN_SCORING_NAMES = {"opal", "opal.py", "multiqc"}
+
+
+def _is_builtin_scorer_name(name: str) -> bool:
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+    if low in BUILTIN_SCORING_NAMES:
+        return True
+    stem = low.split(":")[0]
+    return stem in BUILTIN_SCORING_NAMES or Path(stem).name in BUILTIN_SCORING_NAMES
 SCORING_FLAG_GROUPS = (
     "scoring",
     "score",
@@ -134,7 +144,7 @@ def iter_custom_scoring_names(tools: Optional[Dict[str, List[str]]] = None) -> L
         group = str(parsed[3] or "").strip()
         if group != SCORING_GROUP:
             continue
-        if name.lower() in BUILTIN_SCORING_NAMES:
+        if _is_builtin_scorer_name(name):
             continue
         if not tool_path(parsed, name):
             continue
@@ -275,6 +285,8 @@ def _selected_names(config: Dict[str, Any], names: Optional[Sequence[str]]) -> L
     known = {n.lower(): n for n in iter_custom_scoring_names()}
     out: List[str] = []
     for item in wanted:
+        if _is_builtin_scorer_name(item):
+            continue
         matched = known.get(item.lower())
         if matched:
             out.append(matched)
