@@ -40,7 +40,15 @@ GCTAGCTA"""
         self.assertNotEqual(mutated, sequence)
         self.assertEqual(len(mutated), len(sequence))
         self.assertTrue(all(n in 'ATCG' for n in mutated))
-    
+
+    def test_preprocess_fasta_keeps_headers_without_taxid(self):
+        output_path = os.path.join(self.temp_dir.name, 'output.fasta')
+        preprocess_fasta(self.test_fasta_path, output_path, 0.0, 50.0, inject_taxid=False)
+        with open(output_path, 'r') as f:
+            content = f.read()
+        self.assertIn(">test_seq1", content)
+        self.assertNotIn("taxid:", content)
+
     def test_preprocess_fasta(self):
         output_path = os.path.join(self.temp_dir.name, 'output.fasta')
         

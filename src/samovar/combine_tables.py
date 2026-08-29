@@ -6,6 +6,7 @@ import csv
 import os
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from samovar.parse_annotators import (
     DEFAULT_TAX_RANK,
@@ -13,6 +14,7 @@ from samovar.parse_annotators import (
     canonical_taxid,
     taxid_value_columns,
 )
+from samovar.seqio import is_gzip_file
 
 
 def repo_root() -> Path:
@@ -103,8 +105,15 @@ def apply_species_level_csv(path: str, level: str = DEFAULT_TAX_RANK) -> None:
 
 
 def combine_with_cpp(
-    input_dir: str, output_dir: str, split_n: int, chunk_rows: int = 500000
+    input_dir: str,
+    output_dir: str,
+    split_n: int,
+    chunk_rows: int = 500000,
+    truth_table: Optional[str] = None,
 ) -> None:
+    import gzip
+    import tempfile
+
     binary = ensure_combine_binary()
     os.makedirs(output_dir, exist_ok=True)
     cmd = [
@@ -118,4 +127,26 @@ def combine_with_cpp(
         "--chunk-rows",
         str(chunk_rows),
     ]
-    subprocess.check_call(cmd)
+    tmp_truth = None
+    if truth_table:
+        src = Path(truth_table)
+        table_path = src
+        if is_gzip_file(src):
+            tmp_truth = tempfile.NamedTemporaryFile(
+                prefix="samovar_truth_", suffix=".tsv", delete=False
+            )
+            tmp_truth.close()
+            with gzip.open(src, "rt", encoding="utf-8", errors="replace") as inn, open(
+                tmp_truth.name, "w", encoding="utf-8"
+            ) as out:
+                out.write(inn.read())
+            table_path = Path(tmp_truth.name)
+        cmd.extend(["--truth-table", str(table_path)])
+    try:
+        subprocess.check_call(cmd)
+    finally:
+        if tmp_truth is not None:
+            try:
+                Path(tmp_truth.name).unlink()
+            except OSError:
+                pass

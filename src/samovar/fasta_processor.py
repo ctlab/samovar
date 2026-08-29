@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
+import os
 import random
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from pathlib import Path
 import argparse
 
@@ -59,12 +60,21 @@ def apply_mutations(sequence: str, mutation_rate: float) -> str:
     
     return ''.join(mutated_sequence)
 
-def preprocess_fasta(input_file: str, output_file: str, mutation_rate: float, include_percent: float):
+def preprocess_fasta(
+    input_file: str,
+    output_file: str,
+    mutation_rate: float,
+    include_percent: float,
+    inject_taxid: Optional[bool] = None,
+):
     """Process FASTA file, apply mutations and split sequences."""
     sequences = read_fasta(input_file)
     input_filename = taxid_from_fasta_name(input_file) or Path(
         str(input_file).removesuffix(".gz")
     ).stem
+    if inject_taxid is None:
+        flag = os.environ.get("SAMOVAR_INJECT_TAXID", "1").strip().lower()
+        inject_taxid = flag not in {"0", "false", "no", "off"}
 
     out_parent = Path(output_file).parent
     if str(out_parent):
@@ -87,7 +97,11 @@ def preprocess_fasta(input_file: str, output_file: str, mutation_rate: float, in
                 mutated_part = apply_mutations(part, mutation_rate)
                 
                 # Write to output file
-                new_header = f">{input_filename}|taxid:{input_filename}|{i+1}|{j//include_length + 1}"
+                if inject_taxid:
+                    new_header = f">{input_filename}|taxid:{input_filename}|{i+1}|{j//include_length + 1}"
+                else:
+                    token = header.split()[0] if header else input_filename
+                    new_header = f">{token}"
                 f.write(f"{new_header}\n")
                 f.write(f"{mutated_part}\n")
 

@@ -41,6 +41,12 @@ def _write_kraken2(path: Path, rows):
             handle.write(f"{classified}\t{seq}\t{name}\t{length}|{length}\t0:1\n")
 
 
+def _write_custom(path: Path, rows):
+    with path.open("w", encoding="utf-8") as handle:
+        for seq, taxid in rows:
+            handle.write(f"{seq}\t{taxid}\n")
+
+
 def test_ensure_combine_binary(combiner):
     assert combiner.exists()
     assert os.access(combiner, os.X_OK)
@@ -110,6 +116,138 @@ def test_true_taxid_prefix_without_token(tmp_path, combiner):
     df = pd.read_csv(out / "1.annotation.csv")
     assert str(int(df.loc[0, "true"])) == "4932"
     assert extract_true_taxid("Scer.fna-NC_001134.8_0_0") == "4932"
+
+
+def test_truth_table_overrides_header_and_cami_ids(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_custom(
+        reports / "sample_0_dummy.custom_dummy.out",
+        [("S0R0", "9606"), ("S0R1", "9606"), ("readA|taxid:562|", "562")],
+    )
+    truth = tmp_path / "reads_mapping.tsv"
+    truth.write_text(
+        "#anonymous_read_id\tgenome_id\ttax_id\tread_id\n"
+        "S0R0/1\tASV153.8\t818\tNZ_JBDQBI010000009.1-9644/1\n"
+        "S0R1/1\tASV149.0\t762982\tNZ_GL883880.1-270717/1\n"
+        "readA|taxid:562|\tignored\t9606\treadA\n",
+        encoding="utf-8",
+    )
+    subprocess.check_call(
+        [
+            str(combiner),
+            "-i",
+            str(reports),
+            "-o",
+            str(out),
+            "-s",
+            "1",
+            "--truth-table",
+            str(truth),
+        ]
+    )
+    df = pd.read_csv(out / "sample_0.annotation.csv")
+    by_seq = df.set_index("seq")
+    assert str(int(by_seq.loc["S0R0", "true"])) == "818"
+    assert str(int(by_seq.loc["S0R1", "true"])) == "762982"
+    assert str(int(by_seq.loc["readA|taxid:562|", "true"])) == "9606"
+
+
+def test_truth_table_prefix_from_fasta_headers(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_custom(
+        reports / "1_dummy.custom_dummy.out",
+        [("NC_000913.3-0_0", "9606")],
+    )
+    truth = tmp_path / "gt.tsv"
+    truth.write_text("seq\ttaxid\nNC_000913.3\t562\n", encoding="utf-8")
+    subprocess.check_call(
+        [
+            str(combiner),
+            "-i",
+            str(reports),
+            "-o",
+            str(out),
+            "--truth-table",
+            str(truth),
+        ]
+    )
+    df = pd.read_csv(out / "1.annotation.csv")
+    assert str(int(df.loc[0, "true"])) == "562"
+
+
+def _true_series(csv_path: Path) -> pd.Series:
+    df = pd.read_csv(csv_path)
+    return (
+        df.assign(seq=df["seq"].astype(str))
+        .set_index("seq")["true"]
+        .map(lambda v: str(int(float(v))) if pd.notna(v) and str(v).strip() not in {"", "nan"} else "")
+    )
+
+
+def test_parse_genome_and_truth_table_agree_on_test_genomes(tmp_path, combiner):
+    from samovar.ground_truth import append_from_genome_dir, iter_genome_truth_rows
+    from samovar.seqio import is_fasta_name
+
+    genomes = REPO / "data" / "test_genomes"
+    truth = tmp_path / "gt.tsv"
+    n = append_from_genome_dir(genomes / "meta", truth)
+    n += append_from_genome_dir(genomes / "host", truth)
+    assert n >= 3
+    rows = []
+    for folder in (genomes / "meta", genomes / "host"):
+        for path in sorted(folder.iterdir()):
+            if not path.is_file() or not is_fasta_name(path.name, protein=False):
+                continue
+            for token, tax in iter_genome_truth_rows(path):
+                rows.append((f"{token}_0_0", "9606"))
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    _write_custom(reports / "1_dummy.custom_dummy.out", rows)
+    parse_dir = tmp_path / "parse"
+    table_dir = tmp_path / "table"
+    subprocess.check_call(
+        [str(combiner), "-i", str(reports), "-o", str(parse_dir), "-s", "1"]
+    )
+    subprocess.check_call(
+        [
+            str(combiner),
+            "-i",
+            str(reports),
+            "-o",
+            str(table_dir),
+            "-s",
+            "1",
+            "--truth-table",
+            str(truth),
+        ]
+    )
+    parsed = _true_series(parse_dir / "1.annotation.csv")
+    tabled = _true_series(table_dir / "1.annotation.csv")
+    assert not (parsed == "").any()
+    pd.testing.assert_series_equal(parsed, tabled, check_names=False)
+
+
+def test_combine_with_cpp_accepts_gzipped_truth_table(tmp_path):
+    import gzip as gzip_mod
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    _write_custom(reports / "s_dummy.custom_dummy.out", [("S0R0", "9606")])
+    raw = tmp_path / "map.tsv"
+    truth_gz = tmp_path / "map.tsv.gz"
+    raw.write_text(
+        "#anonymous_read_id\tgenome_id\ttax_id\tread_id\nS0R0/1\tg\t818\tr/1\n"
+    )
+    with raw.open("rb") as inn, gzip_mod.open(truth_gz, "wb") as out:
+        out.write(inn.read())
+    out_dir = tmp_path / "ann"
+    combine_with_cpp(str(reports), str(out_dir), 1, truth_table=str(truth_gz))
+    df = pd.read_csv(out_dir / "s.annotation.csv")
+    assert str(int(df.loc[0, "true"])) == "818"
 
 
 def test_sample_name_keeps_underscores(tmp_path, combiner):

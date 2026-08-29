@@ -258,6 +258,19 @@ def main():
             'Example: --startpoint abundance_tables --endpoint score_regenerated_tables'
         ),
     )
+    parser.add_argument(
+        '--initial-ground-truth-table',
+        '--initial-annotation-ground-truth-table',
+        dest='initial_ground_truth_table',
+        default=None,
+        help='CAMI-style seq→taxid table for initial combine (true column)',
+    )
+    parser.add_argument(
+        '--regenerated-metagenomes',
+        dest='regenerated_metagenomes',
+        default=None,
+        help='parse-genome (default: taxid: in headers) or ground-truth-table (grep FASTA >)',
+    )
 
     # Parse known args first to get output_dir
     from samovar.tool_spec import parse_known_with_custom
@@ -290,6 +303,8 @@ def main():
         "metagenome_generator", "metagenome-generator",
         "startpoint", "start-point", "endpoint", "end-point",
         "scoring", "reprofiler", "ml",
+        "initial-ground-truth-table", "initial-annotation-ground-truth-table",
+        "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
     }
     from samovar.tool_spec import load_custom_flags, _norm_flag
 

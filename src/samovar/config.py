@@ -40,6 +40,10 @@ from samovar.genome_fetcher import (
     parse_max_genome_mb,
 )
 from samovar.regenerate import UNLIMITED_MAX_GENOMES, parse_max_genomes
+from samovar.ground_truth import (
+    GROUND_TRUTH_TABLE,
+    normalize_regenerated_mode,
+)
 from samovar.main_config import (
     flags_target_matches,
     imported_flags_for_names,
@@ -280,6 +284,8 @@ class PipelineConfig:
     max_genome_mb: float = UNLIMITED_GENOME_MB
     genome_skip_list: Optional[List[str]] = None
     run_multiqc: Optional[bool] = None
+    initial_ground_truth_table: Optional[str] = None
+    regenerated_metagenomes: str = "parse-genome"
     scoring_flags: Optional[str] = None
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
@@ -468,6 +474,19 @@ class PipelineConfig:
                 )
                 if yaml_end:
                     config.endpoint = str(yaml_end)
+                yaml_gt = (
+                    input_config.get("initial_ground_truth_table")
+                    or input_config.get("initial-ground-truth-table")
+                    or input_config.get("ground_truth_table")
+                )
+                if yaml_gt:
+                    config.initial_ground_truth_table = str(yaml_gt)
+                yaml_regen = (
+                    input_config.get("regenerated_metagenomes")
+                    or input_config.get("regenerated-metagenomes")
+                )
+                if yaml_regen:
+                    config.regenerated_metagenomes = normalize_regenerated_mode(yaml_regen)
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -567,6 +586,19 @@ class PipelineConfig:
             config.reuse_genomes = bool(args.reuse_genomes)
         if getattr(args, "use_test_genomes", False):
             config.use_test_genomes = True
+        cli_gt = getattr(args, "initial_ground_truth_table", None)
+        if cli_gt:
+            config.initial_ground_truth_table = absolute_path(cli_gt)
+        cli_regen = getattr(args, "regenerated_metagenomes", None)
+        if cli_regen:
+            config.regenerated_metagenomes = normalize_regenerated_mode(cli_regen)
+        if config.initial_ground_truth_table:
+            config.initial_ground_truth_table = absolute_path(
+                config.initial_ground_truth_table
+            )
+        config.regenerated_metagenomes = normalize_regenerated_mode(
+            config.regenerated_metagenomes
+        )
         if getattr(args, "run_multiqc", None) is not None:
             config.run_multiqc = bool(args.run_multiqc)
         extra_dirs = getattr(args, "genome_dirs", None)
@@ -793,6 +825,7 @@ class PipelineConfig:
             'rescale_abundance': self.rescale_abundance,
             'gzip_genomes': self.gzip_genomes,
             'gzip_reads': self.gzip_reads,
+            'regenerated_metagenomes': normalize_regenerated_mode(self.regenerated_metagenomes),
             'max_genome_mb': float(getattr(self, "max_genome_mb", UNLIMITED_GENOME_MB)),
             'genome_skip_list': list(getattr(self, "genome_skip_list", None) or []),
             'reads_generator': self.reads_generator,
@@ -910,6 +943,26 @@ class PipelineConfig:
 
         env_snippet = shell_source_install_env_snippet()
         input_dir_export = self.input_dir or ""
+        regen_mode = normalize_regenerated_mode(self.regenerated_metagenomes)
+        inject_taxid = "0" if regen_mode == GROUND_TRUTH_TABLE else "1"
+        gt_initial = ""
+        if self.initial_ground_truth_table:
+            gt_path = absolute_path(self.initial_ground_truth_table)
+            gt_initial = f' \\\n    --truth-table "{gt_path}"'
+        regen_truth = Path(base_dir) / ".log" / "regenerated_ground_truth.tsv"
+        if regen_mode == GROUND_TRUTH_TABLE:
+            combine_regen_body = f"""$PYTHON_PATH -m samovar.ground_truth from-genomes \\
+    --genome-dir "$out_dir/genomes" --output "{regen_truth}" --overwrite
+$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
+    -i "$out_dir/regenerated_reports" \\
+    -o "$out_dir/regenerated_annotations" \\
+    -s 2 \\
+    --truth-table "{regen_truth}" """
+        else:
+            combine_regen_body = f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
+    -i "$out_dir/regenerated_reports" \\
+    -o "$out_dir/regenerated_annotations" \\
+    -s 2"""
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
@@ -968,6 +1021,8 @@ export SAMOVAR_ALLOW_TEST_GENOMES="${{SAMOVAR_ALLOW_TEST_GENOMES:-{test_flag}}}"
 export SAMOVAR_MULTIQC="${{SAMOVAR_MULTIQC:-{multiqc_flag}}}"
 export SAMOVAR_GENOME_DIRS="${{SAMOVAR_GENOME_DIRS:+$SAMOVAR_GENOME_DIRS:}}{extra_genome_dirs}"
 export SAMOVAR_RUN_DIR="$out_dir"
+export SAMOVAR_REGENERATED_METAGENOMES="{regen_mode}"
+export SAMOVAR_INJECT_TAXID="${{SAMOVAR_INJECT_TAXID:-{inject_taxid}}}"
 export SAMOVAR_RUN_GENOMES="$out_dir/genomes"
 # All bulky caches live under outdir — never default to ~/.cache (home quota).
 export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-$out_dir/.cache}}"
@@ -1001,7 +1056,7 @@ fi""",
             "combine_initial",
             f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -i "$out_dir/initial_reports" \\
-    -o "$out_dir/initial_annotations\"""",
+    -o "$out_dir/initial_annotations"{gt_initial}""",
         )
 
         viz_initial = _checkpoint_block(
@@ -1076,10 +1131,7 @@ fi
 
         combine_regenerated = _checkpoint_block(
             "combine_regenerated",
-            f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
-    -i "$out_dir/regenerated_reports" \\
-    -o "$out_dir/regenerated_annotations" \\
-    -s 2""",
+            combine_regen_body,
         )
 
         viz_regenerated = _checkpoint_block(

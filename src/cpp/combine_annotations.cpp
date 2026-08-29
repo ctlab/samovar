@@ -42,6 +42,7 @@ struct Options {
     size_t chunk_rows = kDefaultChunk;
     std::string tmp_dir;
     bool keep_tmp = false;
+    std::string truth_table;
 };
 
 std::string trim_cr(std::string s) {
@@ -224,6 +225,210 @@ std::string extract_true_taxid(const std::string& seq) {
         }
     }
     return "";
+}
+
+struct TruthIndex {
+    std::unordered_map<std::string, std::string> exact;
+    std::vector<std::string> prefixes;
+    std::unordered_map<std::string, std::string> prefix_tax;
+
+    void add(const std::string& key, std::string tax) {
+        tax = normalize_taxid(std::move(tax));
+        if (key.empty() || tax.empty() || tax == "0") {
+            return;
+        }
+        exact[key] = tax;
+        if (key.size() > 2 && key[key.size() - 2] == '/') {
+            exact[key.substr(0, key.size() - 2)] = tax;
+        }
+        if (key.find('/') == std::string::npos && key.size() >= 4) {
+            prefixes.push_back(key);
+            prefix_tax[key] = tax;
+        }
+    }
+
+    void freeze() {
+        std::sort(prefixes.begin(), prefixes.end());
+        prefixes.erase(std::unique(prefixes.begin(), prefixes.end()), prefixes.end());
+    }
+
+    std::string lookup(const std::string& seq) const {
+        auto hit = exact.find(seq);
+        if (hit != exact.end()) {
+            return hit->second;
+        }
+        std::string token = seq;
+        size_t sp = token.find_first_of(" \t");
+        if (sp != std::string::npos) {
+            token.resize(sp);
+            hit = exact.find(token);
+            if (hit != exact.end()) {
+                return hit->second;
+            }
+        }
+        if (token.size() > 2 && token[token.size() - 2] == '/') {
+            hit = exact.find(token.substr(0, token.size() - 2));
+            if (hit != exact.end()) {
+                return hit->second;
+            }
+        }
+        std::string best;
+        for (const auto& key : prefixes) {
+            if (key.size() > token.size() || key.size() <= best.size()) {
+                continue;
+            }
+            if (token.compare(0, key.size(), key) == 0) {
+                best = key;
+            }
+        }
+        if (!best.empty()) {
+            auto pt = prefix_tax.find(best);
+            if (pt != prefix_tax.end()) {
+                return pt->second;
+            }
+        }
+        return "";
+    }
+};
+
+std::string strip_meta_prefix(const std::string& s) {
+    if (!s.empty() && s[0] == '#') {
+        return s.substr(1);
+    }
+    if (s.size() >= 2 && s[0] == '@' && s[1] == '@') {
+        return s.substr(2);
+    }
+    return s;
+}
+
+std::vector<std::string> split_ws(const std::string& line) {
+    std::vector<std::string> fields;
+    std::string cur;
+    for (char c : line) {
+        if (c == ' ' || c == '\t') {
+            if (!cur.empty()) {
+                fields.push_back(cur);
+                cur.clear();
+            }
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) {
+        fields.push_back(cur);
+    }
+    return fields;
+}
+
+int col_index(const std::vector<std::string>& header, std::initializer_list<const char*> names) {
+    for (size_t i = 0; i < header.size(); ++i) {
+        std::string h = to_lower(header[i]);
+        while (!h.empty() && (h.front() == '@' || h.front() == '#')) {
+            h.erase(h.begin());
+        }
+        for (const char* n : names) {
+            if (h == n) {
+                return static_cast<int>(i);
+            }
+        }
+    }
+    return -1;
+}
+
+bool load_truth_table(const fs::path& path, TruthIndex* idx) {
+    std::ifstream in(path, std::ios::in | std::ios::binary);
+    if (!in) {
+        std::cerr << "Truth table not found: " << path << "\n";
+        return false;
+    }
+    std::string line;
+    int seq_cols[6];
+    int n_seq = 0;
+    int tax_col = -1;
+    bool header_done = false;
+    auto remember_seq = [&](int c) {
+        if (c < 0) {
+            return;
+        }
+        for (int i = 0; i < n_seq; ++i) {
+            if (seq_cols[i] == c) {
+                return;
+            }
+        }
+        if (n_seq < 4) {
+            seq_cols[n_seq++] = c;
+        }
+    };
+    while (std::getline(in, line)) {
+        line = trim_cr(line);
+        if (line.empty() || (line[0] == '@' && (line.size() < 2 || line[1] != '@'))) {
+            continue;
+        }
+        if (!header_done) {
+            std::string low = to_lower(line);
+            bool looks_header = line[0] == '#' || (line.size() >= 2 && line[0] == '@' && line[1] == '@') ||
+                                low.find("tax_id") != std::string::npos || low.find("taxid") != std::string::npos ||
+                                low.find("anonymous_read") != std::string::npos || low.find("sequenceid") != std::string::npos;
+            if (looks_header) {
+                auto header = split_tab(strip_meta_prefix(line));
+                if (header.size() < 2) {
+                    header = split_ws(strip_meta_prefix(line));
+                }
+                remember_seq(col_index(header, {"anonymous_read_id", "sequenceid", "seq"}));
+                remember_seq(col_index(header, {"read_id"}));
+                remember_seq(col_index(header, {"contig_id"}));
+                tax_col = col_index(header, {"tax_id", "taxid", "true"});
+                if (tax_col < 0) {
+                    for (size_t i = 0; i < header.size(); ++i) {
+                        if (to_lower(header[i]).find("tax") != std::string::npos) {
+                            tax_col = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                }
+                header_done = true;
+                if (tax_col >= 0 && n_seq > 0) {
+                    continue;
+                }
+            }
+            if (!header_done) {
+                header_done = true;
+                tax_col = 1;
+                seq_cols[0] = 0;
+                n_seq = 1;
+            }
+        }
+        auto fields = split_tab(line);
+        if (tax_col >= 0 && static_cast<int>(fields.size()) <= tax_col) {
+            fields = split_ws(line);
+        }
+        if (tax_col < 0 || tax_col >= static_cast<int>(fields.size())) {
+            continue;
+        }
+        std::string tax = fields[static_cast<size_t>(tax_col)];
+        if (n_seq == 0) {
+            idx->add(fields[0], tax);
+            continue;
+        }
+        for (int i = 0; i < n_seq; ++i) {
+            int c = seq_cols[i];
+            if (c >= 0 && c < static_cast<int>(fields.size())) {
+                idx->add(fields[static_cast<size_t>(c)], tax);
+            }
+        }
+    }
+    idx->freeze();
+    return true;
+}
+
+std::string true_taxid_for(const std::string& seq, const TruthIndex* truth) {
+    if (truth != nullptr) {
+        std::string hit = truth->lookup(seq);
+        if (!hit.empty()) {
+            return hit;
+        }
+    }
+    return extract_true_taxid(seq);
 }
 
 std::string match_tool(const std::string& filename) {
@@ -493,7 +698,7 @@ struct JoinStream {
 };
 
 void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::string>& tools,
-                  const fs::path& csv_path) {
+                  const fs::path& csv_path, const TruthIndex* truth) {
     std::vector<JoinStream> streams;
     streams.reserve(sorted.size());
     for (const auto& p : sorted) {
@@ -545,7 +750,7 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
         for (const auto& t : tax) {
             out << ',' << csv_escape(t);
         }
-        out << ',' << csv_escape(length) << ',' << csv_escape(extract_true_taxid(min_seq))
+        out << ',' << csv_escape(length) << ',' << csv_escape(true_taxid_for(min_seq, truth))
             << ',' << csv_escape(extract_read_type(min_seq)) << '\n';
         ++n;
     }
@@ -554,7 +759,8 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
 
 void usage() {
     std::cerr
-        << "Usage: samovar_combine_annotations -i DIR -o DIR [-s N] [--chunk-rows N] [--tmp DIR]\n";
+        << "Usage: samovar_combine_annotations -i DIR -o DIR [-s N] [--chunk-rows N] [--tmp DIR] [--truth-table FILE]\n"
+        << "  --truth-table  CAMI-style or seq\\ttaxid map used for the true column (else parse genome headers)\n";
 }
 
 bool parse_args(int argc, char** argv, Options* opt) {
@@ -580,6 +786,8 @@ bool parse_args(int argc, char** argv, Options* opt) {
             }
         } else if (a == "--tmp") {
             opt->tmp_dir = need(a.c_str());
+        } else if (a == "--truth-table" || a == "--truth_table" || a == "-t") {
+            opt->truth_table = need(a.c_str());
         } else if (a == "--keep-tmp") {
             opt->keep_tmp = true;
         } else if (a == "-h" || a == "--help") {
@@ -653,6 +861,17 @@ int main(int argc, char** argv) {
     }
     std::sort(samples.begin(), samples.end());
 
+    TruthIndex truth;
+    const TruthIndex* truth_ptr = nullptr;
+    if (!opt.truth_table.empty()) {
+        if (!load_truth_table(opt.truth_table, &truth)) {
+            return 1;
+        }
+        truth_ptr = &truth;
+        std::cerr << "Loaded ground-truth table " << opt.truth_table << " (" << truth.exact.size()
+                  << " keys)\n";
+    }
+
     int rc = 0;
     try {
         for (const auto& sample : samples) {
@@ -667,7 +886,7 @@ int main(int argc, char** argv) {
                                                 opt.chunk_rows, i));
                 tools.push_back(group[i].tool);
             }
-            merge_sample(sorted, tools, out_dir / (sample + ".annotation.csv"));
+            merge_sample(sorted, tools, out_dir / (sample + ".annotation.csv"), truth_ptr);
         }
         std::cerr << "True annotations extracted\n";
     } catch (const std::exception& ex) {

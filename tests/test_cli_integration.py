@@ -47,6 +47,8 @@ def test_cli_help_lists_prepare_build_exec():
     assert "camisim" in out.lower()
     assert "--redo" in out
     assert "--cleanup-tmp" in out
+    assert "--initial-ground-truth-table" in out
+    assert "--regenerated-metagenomes" in out
 
 
 def test_prepare_writes_pipeline_and_configs(tmp_path):
@@ -81,6 +83,59 @@ def test_prepare_writes_pipeline_and_configs(tmp_path):
     for run in init_cfg["run_config"]:
         assert Path(run["db_path"]).is_absolute()
     assert Path(init_cfg["r1_dir"]).is_absolute()
+
+
+def test_prepare_wires_ground_truth_table_and_parse_genome(tmp_path):
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    mapping = tmp_path / "reads_mapping.tsv"
+    mapping.write_text("#anonymous_read_id\tgenome_id\ttax_id\tread_id\nS0R0/1\tg\t818\tr0/1\n")
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(reads),
+            "output_dir": str(tmp_path / "out"),
+            "dummy": [["dummy ."]],
+            "initial_ground_truth_table": str(mapping),
+            "regenerated_metagenomes": "parse-genome",
+        },
+    )()
+    result = setup_pipeline(args)
+    text = Path(result["pipeline"]).read_text()
+    assert f'--truth-table "{mapping.resolve()}"' in text
+    assert 'SAMOVAR_REGENERATED_METAGENOMES="parse-genome"' in text
+    assert "from-genomes" not in text
+    assert "SAMOVAR_INJECT_TAXID=" in text
+    assert "${SAMOVAR_INJECT_TAXID:-1}" in text
+
+
+def test_prepare_wires_regenerated_ground_truth_table(tmp_path):
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(reads),
+            "output_dir": str(tmp_path / "out"),
+            "dummy": [["dummy ."]],
+            "regenerated_metagenomes": "ground-truth-table",
+        },
+    )()
+    result = setup_pipeline(args)
+    text = Path(result["pipeline"]).read_text()
+    assert "from-genomes" in text
+    assert "regenerated_ground_truth.tsv" in text
+    assert "--overwrite" in text
+    assert 'SAMOVAR_REGENERATED_METAGENOMES="ground-truth-table"' in text
+    assert "${SAMOVAR_INJECT_TAXID:-0}" in text
+    initial = text.split("ckpt_skip combine_initial")[1].split("ckpt_skip viz_initial")[0]
+    assert "--truth-table" not in initial
+    regen = text.split("ckpt_skip combine_regenerated")[1].split("ckpt_skip viz_regenerated")[0]
+    assert "--truth-table" in regen
 
 
 def test_build_from_config_invokes_kaiju_indexers(tmp_path):

@@ -29,7 +29,20 @@ def main(argv=None) -> int:
         default="(?<=taxid:)[0-9]+",
         help="Kept for CLI compatibility; true taxIDs are taken from taxid:<digits> in seq IDs.",
     )
-    parser.add_argument("--split_sample_name", "-s", type=int, required=False, default=1)
+    parser.add_argument(
+        "--split_sample_name",
+        "-s",
+        type=int,
+        default=1,
+        help="How many underscore-separated tokens form the sample name (regenerated ISS uses 2).",
+    )
+    parser.add_argument(
+        "--truth-table",
+        "--ground-truth-table",
+        dest="truth_table",
+        default=None,
+        help="CAMI-style or seq\\ttaxid table for the true column (initial annotation).",
+    )
     parser.add_argument(
         "--chunk-rows",
         type=int,
@@ -54,7 +67,13 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
 
-    combine_with_cpp(args.input_dir, args.output_dir, args.split_sample_name, args.chunk_rows)
+    combine_with_cpp(
+        args.input_dir,
+        args.output_dir,
+        args.split_sample_name,
+        args.chunk_rows,
+        truth_table=args.truth_table,
+    )
     from samovar.annotation_qc import EmptyAnnotatorsError, filter_classified_abundance_tables
     from samovar.abundance import input_to_abundance_tables, load_table_input
 
