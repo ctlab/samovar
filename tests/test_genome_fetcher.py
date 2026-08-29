@@ -232,6 +232,102 @@ def test_fetch_genome_default_max_mb_is_unlimited(tmp_path, monkeypatch):
     head.assert_not_called()
 
 
+def test_fetch_genome_downloads_into_raw(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from samovar.genome_fetcher import fetch_genome
+
+    monkeypatch.delenv("SAMOVAR_MAX_GENOME_MB", raising=False)
+    monkeypatch.delenv("SAMOVAR_GENOME_SKIP_LIST", raising=False)
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    (tmp_path / "config.json").write_text("{}\n")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("SAMOVAR_REUSE_GENOMES", "0")
+    monkeypatch.delenv("SAMOVAR_ALLOW_TEST_GENOMES", raising=False)
+
+    dests = []
+
+    def fake_download(url, dest, timeout=45):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"\x1f\x8b")
+        dests.append(Path(dest))
+
+    with patch(
+        "samovar.genome_fetcher._assembly_ftp_path",
+        return_value="https://example.invalid/GCF_fake",
+    ):
+        with patch("samovar.genome_fetcher._download_url", side_effect=fake_download):
+            with patch(
+                "samovar.genome_fetcher._assembly_doc_for_taxid",
+                return_value=None,
+            ):
+                with patch(
+                    "samovar.genome_fetcher.preprocess_fasta",
+                    side_effect=lambda **kw: Path(kw["output_file"]).write_text(">x\nACGT\n"),
+                ):
+                    fetch_genome("1280", str(tmp_path / "run"), "test@example.com")
+    assert dests
+    assert dests[0].parent.name == "raw"
+    assert dests[0].name == "1280.fna.gz"
+
+
+def test_cached_ncbi_gzip_size_mismatch_warns(tmp_path, monkeypatch, caplog):
+    import logging
+    from unittest.mock import patch
+
+    from samovar.genome_cache import genome_download_dir
+    from samovar.genome_fetcher import fetch_genome
+
+    monkeypatch.delenv("SAMOVAR_MAX_GENOME_MB", raising=False)
+    monkeypatch.delenv("SAMOVAR_GENOME_SKIP_LIST", raising=False)
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    (tmp_path / "config.json").write_text("{}\n")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("SAMOVAR_REUSE_GENOMES", "0")
+    monkeypatch.delenv("SAMOVAR_ALLOW_TEST_GENOMES", raising=False)
+
+    raw = genome_download_dir() / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    cached = raw / "1280.fna.gz"
+    cached.write_bytes(b"\x1f\x8b")
+
+    caplog.set_level(logging.WARNING)
+    with patch(
+        "samovar.genome_fetcher._assembly_ftp_path",
+        return_value="https://example.invalid/GCF_fake",
+    ):
+        with patch(
+            "samovar.genome_fetcher._remote_fasta_size_bytes",
+            return_value=5_000_000,
+        ):
+            with patch("samovar.genome_fetcher._download_url") as download:
+                with patch(
+                    "samovar.genome_fetcher.preprocess_fasta",
+                    side_effect=lambda **kw: Path(kw["output_file"]).write_text(">x\nACGT\n"),
+                ):
+                    fetch_genome("1280", str(tmp_path / "run"), "test@example.com")
+    download.assert_not_called()
+    assert "NCBI reports 5000000 bytes" in caplog.text
+
+
+def test_gzip_sizes_disagree_tolerance():
+    from samovar.genome_fetcher import gzip_sizes_disagree
+
+    assert not gzip_sizes_disagree(1_000_000, 1_000_000)
+    assert not gzip_sizes_disagree(1_000, 1_050)
+    assert gzip_sizes_disagree(2, 5_000_000)
+
+
+def test_raw_parent_is_sibling_of_processed(tmp_path):
+    from samovar.genome_fetcher import _raw_parent_for_dest
+
+    processed = tmp_path / ".genomes" / "processed"
+    processed.mkdir(parents=True)
+    raw = _raw_parent_for_dest(processed)
+    assert raw == tmp_path / ".genomes" / "raw"
+    assert raw.is_dir()
+
+
 def test_generate_random_taxids(test_output_dir):
     """Test generating random taxids"""
     from samovar.genome_fetcher import generate_random_taxids

@@ -138,12 +138,21 @@ def _download_url(url: str, dest: Path, timeout: int = 45) -> None:
     """Fetch ``url`` to ``dest`` with a socket timeout (urlretrieve has none)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url)
+    expected: Optional[int] = None
     with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
+        cl = resp.headers.get("Content-Length")
+        if cl:
+            try:
+                expected = int(cl)
+            except (TypeError, ValueError):
+                expected = None
         while True:
             chunk = resp.read(1024 * 1024)
             if not chunk:
                 break
             out.write(chunk)
+    if expected is not None:
+        warn_gzip_size_vs_ncbi(dest, identity=dest.name, expected_bytes=expected)
 
 
 def _normalize_taxid(taxid: str | int) -> str:
@@ -233,21 +242,131 @@ def genome_id_in_skip_list(identity: str, skip: Collection[str]) -> bool:
     return bool(candidates & set(skip))
 
 
-def _remote_fasta_size_mb(ftp_path: str, timeout: int = 30) -> Optional[float]:
-    """HTTP HEAD Content-Length of ``{asm}_genomic.fna.gz``, or None if unknown."""
-    if not ftp_path:
+def _genomic_fna_gz_url(ftp_path: str) -> str:
+    asm_name = os.path.basename(str(ftp_path).rstrip("/"))
+    return f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
+
+
+def _remote_content_length_bytes(url: str, timeout: int = 30) -> Optional[int]:
+    if not url:
         return None
     try:
-        asm_name = os.path.basename(str(ftp_path).rstrip("/"))
-        url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
         req = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             cl = resp.headers.get("Content-Length")
             if cl:
-                return int(cl) / (1024 * 1024)
+                return int(cl)
     except Exception:
         return None
     return None
+
+
+def _remote_fasta_size_bytes(ftp_path: str, timeout: int = 30) -> Optional[int]:
+    """HTTP HEAD Content-Length of ``{asm}_genomic.fna.gz``, or None if unknown."""
+    if not ftp_path:
+        return None
+    return _remote_content_length_bytes(_genomic_fna_gz_url(ftp_path), timeout=timeout)
+
+
+def _remote_fasta_size_mb(ftp_path: str, timeout: int = 30) -> Optional[float]:
+    nbytes = _remote_fasta_size_bytes(ftp_path, timeout=timeout)
+    if nbytes is None:
+        return None
+    return nbytes / (1024 * 1024)
+
+
+_GZIP_SIZE_REL_TOL = 0.01
+_GZIP_SIZE_ABS_TOL = 64
+
+
+def gzip_sizes_disagree(local_bytes: int, expected_bytes: int) -> bool:
+    """True when on-disk gzip size is not close to NCBI Content-Length."""
+    if expected_bytes <= 0:
+        return local_bytes != expected_bytes
+    delta = abs(int(local_bytes) - int(expected_bytes))
+    return delta > max(_GZIP_SIZE_ABS_TOL, int(expected_bytes * _GZIP_SIZE_REL_TOL))
+
+
+def warn_gzip_size_vs_ncbi(
+    path: Path,
+    *,
+    identity: str = "",
+    ftp_path: Optional[str] = None,
+    url: Optional[str] = None,
+    expected_bytes: Optional[int] = None,
+    timeout: int = 30,
+) -> None:
+    """Warn if a saved ``.gz`` is much smaller/larger than NCBI Content-Length.
+
+    Existing cache files are still reused; this is integrity signal only.
+    """
+    target = Path(path)
+    if not target.is_file():
+        return
+    local = target.stat().st_size
+    expected = expected_bytes
+    if expected is None and ftp_path:
+        expected = _remote_fasta_size_bytes(ftp_path, timeout=timeout)
+    if expected is None and url:
+        expected = _remote_content_length_bytes(url, timeout=timeout)
+    if expected is None:
+        return
+    if gzip_sizes_disagree(local, expected):
+        logger.warning(
+            "Cached gzip for %s is %s bytes on disk but NCBI reports %s bytes "
+            "(%s); the file may be truncated, incomplete, or stale",
+            identity or target.name,
+            local,
+            expected,
+            target,
+        )
+
+
+def _warn_existing_ncbi_gzip(path: Path, taxid: str, email: str) -> None:
+    if not is_gzip_path(path):
+        return
+    name = path.name.lower()
+    if not (name.endswith(".fna.gz") or name.endswith(".fasta.gz")):
+        return
+    try:
+        ftp_path = _assembly_ftp_path(taxid, email, silent=True)
+    except Exception:
+        return
+    if not ftp_path:
+        return
+    warn_gzip_size_vs_ncbi(path, identity=str(taxid), ftp_path=ftp_path)
+
+
+def _raw_parent_for_dest(dest: Path, raw_dir: Optional[str] = None) -> Path:
+    """Directory for NCBI ``*_genomic.fna.gz`` (sibling ``raw/``, not processed)."""
+    if raw_dir:
+        parent = Path(raw_dir)
+        parent.mkdir(parents=True, exist_ok=True)
+        return parent
+    dest = Path(dest)
+    if dest.name == "processed":
+        parent = dest.parent / "raw"
+    else:
+        parent = dest / "raw"
+    parent.mkdir(parents=True, exist_ok=True)
+    return parent
+
+
+def _ncbi_raw_cache_dir(output_path: Path) -> Tuple[Path, Path]:
+    """Return ``(search_root, raw_dir)`` for taxid NCBI gzip downloads."""
+    cache = genome_download_dir()
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        raw_dir = cache / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        return cache, raw_dir
+    except OSError:
+        raw_dir = Path(output_path) / "raw"
+        try:
+            raw_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            raw_dir = Path(output_path)
+        return Path(output_path), raw_dir
 
 
 def skip_new_ncbi_download(
@@ -420,13 +539,17 @@ def fetch_assembly_processed(
         return None
     asm_name = os.path.basename(ftp_path)
     url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
-    raw_parent = Path(raw_dir) if raw_dir else dest
-    raw_parent.mkdir(parents=True, exist_ok=True)
+    raw_parent = _raw_parent_for_dest(dest, raw_dir)
     raw_path = raw_parent / raw_filename(accession)
     try:
-        if not silent:
-            logger.info("Downloading genome from %s", url)
-        _download_url(url, raw_path)
+        if raw_path.is_file():
+            warn_gzip_size_vs_ncbi(raw_path, identity=accession, ftp_path=ftp_path)
+            if not silent:
+                logger.info("Reusing cached NCBI gzip %s", raw_path)
+        else:
+            if not silent:
+                logger.info("Downloading genome from %s", url)
+            _download_url(url, raw_path)
     except Exception as exc:
         if not silent:
             logger.error("Failed to download %s: %s", accession, exc)
@@ -501,11 +624,11 @@ def materialize_accessions(
     run_dest = run_processed_dir(out)
     if mode == 1:
         dest = processed_storage_dir()
-        raw_dest = raw_storage_dir() if keep_raw else dest
+        raw_dest = raw_storage_dir()
         do_index = True
     else:
         dest = run_dest
-        raw_dest = run_raw_dir(out) if keep_raw else dest
+        raw_dest = run_raw_dir(out)
         do_index = mode == 2
     dest.mkdir(parents=True, exist_ok=True)
     run_dest.mkdir(parents=True, exist_ok=True)
@@ -540,7 +663,7 @@ def materialize_accessions(
             email,
             silent=silent,
             keep_raw=keep_raw,
-            raw_dir=str(raw_dest) if keep_raw else None,
+            raw_dir=str(raw_dest),
             index=do_index,
             max_genome_mb=max_genome_mb,
             genome_skip_list=genome_skip_list,
@@ -669,8 +792,8 @@ def fetch_genome_raw(
     """Fetch a genome for ``taxid``: run dir, NCBI library cache, then NCBI.
 
     Bundled ``data/test_genomes`` stubs are not used unless explicitly allowed.
-    New downloads go to the install ``genomes`` cache and are linked into
-    ``output_folder``.
+    New downloads land in the install ``genomes/raw`` cache; processed FASTA
+    is written later by ``fetch_genome``.
     """
     taxid = _normalize_taxid(taxid)
     Entrez.email = email
@@ -682,6 +805,7 @@ def fetch_genome_raw(
     for ext in possible_exts:
         candidate = output_path / f"{taxid}{ext}"
         if candidate.exists():
+            _warn_existing_ncbi_gzip(candidate, taxid, email)
             if not silent:
                 logger.info(f"Genome for taxid {taxid} already exists at {candidate}")
             return str(candidate)
@@ -707,22 +831,20 @@ def fetch_genome_raw(
                 )
             return bundled
 
-    cache = genome_download_dir()
-    try:
-        cache.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        # Fall back to the run genomes dir / caller folder — never $HOME.
-        cache = output_path
-        try:
-            cache.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-    genome_path = cache / f"{taxid}.fna.gz"
-    for ext in possible_exts:
-        existing_cache = cache / f"{taxid}{ext}"
-        if existing_cache.exists():
-            genome_path = existing_cache
+    cache, raw_dir = _ncbi_raw_cache_dir(output_path)
+    genome_path = raw_dir / f"{taxid}.fna.gz"
+    existing_cache = None
+    for folder in (raw_dir, cache):
+        for ext in possible_exts:
+            candidate = folder / f"{taxid}{ext}"
+            if candidate.exists():
+                existing_cache = candidate
+                break
+        if existing_cache is not None:
             break
+    if existing_cache is not None:
+        genome_path = existing_cache
+        _warn_existing_ncbi_gzip(genome_path, taxid, email)
     else:
         old_timeout = socket.getdefaulttimeout()
         socket.setdefaulttimeout(45)
@@ -752,8 +874,7 @@ def fetch_genome_raw(
                 silent=silent,
             ):
                 return None
-            asm_name = os.path.basename(ftp_path)
-            http_url = f"{ftp_path}/{asm_name}_genomic.fna.gz".replace("ftp://", "https://")
+            http_url = _genomic_fna_gz_url(ftp_path)
             if not silent:
                 logger.info(f"Downloading genome from {http_url}")
             _download_url(http_url, genome_path)
@@ -765,9 +886,8 @@ def fetch_genome_raw(
             socket.setdefaulttimeout(old_timeout)
 
     ensure_genome_config()
-    register_genome_dir(cache)
-    placed = place_genome(genome_path, output_path, taxid)
-    return str(placed)
+    register_genome_dir(genome_path.parent)
+    return str(genome_path)
 
 def fetch_genome(
     taxid: str|int,
