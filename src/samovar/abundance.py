@@ -382,6 +382,54 @@ def materialize_observed_abundance(output_dir: PathLike) -> Dict[str, pd.DataFra
     return tables
 
 
+def convert_to_abundance_dir(
+    source: PathLike,
+    dest: PathLike,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, pd.DataFrame]:
+    """Write annotator CSVs (``taxid`` + ``N_<sample>``) from annotations or OTU tables.
+
+    If ``dest`` already has abundance CSVs, they are reused. Generative table
+    regenerators run only when ``config`` asks for a mode other than ``direct``.
+    """
+    dest_p = Path(dest)
+    if has_abundance_tables(dest_p):
+        return load_abundance_dir(dest_p)
+    src = Path(source)
+    if not src.exists():
+        raise FileNotFoundError(f"No annotation or abundance source at {source}")
+    cfg = dict(config or {})
+    from samovar.regenerate import regenerate_annotation_tables, resolve_regeneration_mode
+
+    raw_mode = (
+        cfg.get("table_reads_generators")
+        or cfg.get("table_reads_generator")
+        or cfg.get("regeneration_mode")
+        or "direct"
+    )
+    if isinstance(raw_mode, (list, tuple)):
+        first = raw_mode[0] if raw_mode else "direct"
+    else:
+        first = raw_mode
+    kind, canon = resolve_regeneration_mode(first)
+    generative = not (kind == "builtin" and canon == "direct") or (
+        isinstance(raw_mode, (list, tuple)) and len(raw_mode) > 1
+    )
+    if generative:
+        return regenerate_annotation_tables(src, dest_p, cfg, select_best=False)
+    tables = load_abundance_dir(src) if src.is_dir() else {}
+    if not tables:
+        loaded = load_table_input(src)
+        tables = input_to_abundance_tables(loaded)
+    if not tables:
+        raise FileNotFoundError(
+            f"No abundance or annotation tables under {source}. "
+            "Need OTU CSVs (taxid + N_*) or long *.annotation.csv with taxID_*."
+        )
+    write_abundance_dir(dest_p, tables)
+    return tables
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     import argparse
 
@@ -389,10 +437,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     mat = sub.add_parser("materialize", help="Write outdir/initial_abundance from annotations or OTU CSVs")
     mat.add_argument("--output_dir", "--outdir", dest="output_dir", required=True)
+    conv = sub.add_parser(
+        "convert",
+        help="annotation/OTU directory → abundance CSVs (annotation2abundance)",
+    )
+    conv.add_argument("--source", "--annotation_dir", dest="source", required=True)
+    conv.add_argument("--dest", "--abundance_dir", dest="dest", required=True)
+    conv.add_argument("--config", default="", help="Optional YAML (table regenerator settings)")
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "materialize":
         tables = materialize_observed_abundance(args.output_dir)
         print(f"Wrote {len(tables)} abundance table(s) under {observed_abundance_dir(args.output_dir)}")
+        return 0
+    if args.command == "convert":
+        cfg: Dict[str, Any] = {}
+        if args.config:
+            import yaml
+
+            cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
+        tables = convert_to_abundance_dir(args.source, args.dest, cfg)
+        print(f"Wrote {len(tables)} abundance table(s) under {args.dest}")
         return 0
     return 2
 

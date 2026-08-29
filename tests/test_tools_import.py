@@ -235,3 +235,54 @@ def test_prepare_merges_import_and_launch_annotator_flags(tmp_path, monkeypatch)
     yaml_text = Path(config.generate_configs(str(tmp_path / "out"))["init_annotator"]).read_text()
     assert "--confidence 0.1" in yaml_text
     assert "--keep-tmp" in yaml_text
+
+
+def test_import_pytest_blocks_bad_table_tool(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    monkeypatch.setattr(
+        "samovar.tools_import.update_config",
+        lambda updates, also_repo_build=True: update_config(updates, also_repo_build=False),
+    )
+    bad = tmp_path / "nope.py"
+    bad.write_text("def regenerate(data, metadata, config):\n    return 1\n")
+    rc = import_main(
+        [
+            "-n",
+            "nope",
+            "--type",
+            "table",
+            "--exec-path",
+            str(bad),
+            "--pytest",
+        ]
+    )
+    assert rc != 0
+    loaded = json.loads(cfg.read_text())
+    assert "nope" not in (loaded.get("tools") or {})
+
+
+def test_import_pytest_accepts_identity_table(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    monkeypatch.setattr(
+        "samovar.tools_import.update_config",
+        lambda updates, also_repo_build=True: update_config(updates, also_repo_build=False),
+    )
+    good = Path(__file__).resolve().parent / "tools" / "identity_table.py"
+    rc = import_main(
+        [
+            "-n",
+            "echo_tab",
+            "--type",
+            "table",
+            "--exec-path",
+            str(good),
+            "--pytest",
+        ]
+    )
+    assert rc == 0
+    spec = parse_tool_entry(json.loads(cfg.read_text())["tools"]["echo_tab"], "echo_tab")
+    assert spec[3] == "table_reads_generator"

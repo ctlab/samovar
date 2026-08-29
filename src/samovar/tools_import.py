@@ -18,6 +18,7 @@ from samovar.main_config import (
     set_tool,
 )
 from samovar.paths import load_config, update_config
+from samovar.tool_contracts import format_contract, run_contract_pytest
 
 
 def resolve_import_path(
@@ -154,18 +155,47 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples: *annotations, *annotations/combined_annotation_table.csv, *_plots"
         ),
     )
+    parser.add_argument(
+        "--pytest",
+        action="store_true",
+        help=(
+            "Run the in→out contract pytest for --type on --exec-path before "
+            "writing the config. Import only if the test passes."
+        ),
+    )
     return parser
 
 
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        dest = resolve_import_path(
+            name=args.name,
+            exec_name=str(args.exec_name or "").strip() or args.name,
+            exec_path=args.exec_path,
+            env=str(args.env or ""),
+        )
+        group = normalize_tool_group(args.type)
+        if args.pytest:
+            print(f"Running contract pytest for {group} on {dest} …")
+            try:
+                code, output = run_contract_pytest(dest, group)
+            except ValueError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                print(format_contract(group), file=sys.stderr)
+                return 1
+            if code != 0:
+                print(output, file=sys.stderr)
+                print("Import blocked: contract pytest failed.", file=sys.stderr)
+                print(format_contract(group), file=sys.stderr)
+                return 1
+            print(output.rstrip() or "contract pytest passed")
         spec = import_tool(
             name=args.name,
             tool_type=args.type,
             env=args.env,
             exec_name=args.exec_name,
-            exec_path=args.exec_path,
+            exec_path=dest,
             flags=args.flags,
             inputs=args.inputs,
         )

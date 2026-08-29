@@ -374,6 +374,7 @@ def test_discover_nodes_path_from_env(tmp_path, monkeypatch):
     nodes.write_text("1\t|\t1\t|\tno rank\t|\n")
     monkeypatch.delenv("SAMOVAR_NODES_DMP", raising=False)
     monkeypatch.delenv("SAMOVAR_NODES_SEARCH", raising=False)
+    monkeypatch.setattr("samovar.taxdump.nodes_dmp", lambda cfg=None: None)
     assert _discover_nodes_path() is None
     monkeypatch.setenv("SAMOVAR_NODES_DMP", str(nodes))
     assert _discover_nodes_path() == str(nodes)

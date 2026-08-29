@@ -243,7 +243,7 @@ def test_generate_pipeline():
         # Check snakemake commands
         assert "snakemake -s " in pipeline_content
         assert "workflow/annotators/Snakefile" in pipeline_content
-        assert "workflow/annotation2iss/Snakefile" in pipeline_content
+        assert "workflow/abundance2iss/Snakefile" in pipeline_content
         
         # Check Python and R commands
         assert "workflow/combine_annotation_tables.py" in pipeline_content

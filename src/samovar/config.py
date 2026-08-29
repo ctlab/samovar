@@ -650,6 +650,8 @@ class PipelineConfig:
         # Generate annotation2iss config
         annotation2iss_config = {
             'annotation_dir': str(base_path / 'initial_annotations'),
+            'observed_abundance_dir': str(base_path / 'initial_abundance'),
+            'abundance_dir': str(base_path / 'regenerated' / '.regenerated_abundance'),
             'genome_dir': str(base_path / 'genomes'),
             'output_dir': str(base_path / 'regenerated'),
             'email': self.email,
@@ -690,6 +692,7 @@ class PipelineConfig:
         with open(annotation2iss_path, 'w') as f:
             yaml.dump(annotation2iss_config, f)
         configs['annotation2iss'] = str(annotation2iss_path)
+        configs['abundance2iss'] = str(annotation2iss_path)
 
         scoring_config = {
             'output_dir': str(base_path),
@@ -913,8 +916,8 @@ mkdir -p "$out_dir/genomes"
 
         regenerate_reads = _checkpoint_block(
             "regenerate_reads",
-            f"""snakemake -s {wf / 'annotation2iss' / 'Snakefile'} \\
-    --configfile {configs['annotation2iss']} \\
+            f"""snakemake -s {wf / 'abundance2iss' / 'Snakefile'} \\
+    --configfile {configs['abundance2iss']} \\
     --cores {self.cores}
 "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )

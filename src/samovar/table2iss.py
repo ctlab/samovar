@@ -161,49 +161,40 @@ def _run_iss(cmd: Sequence[str]) -> None:
 
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
-    """
-    Parse annotation table and return DataFrame with taxid and counts for each annotation method.
-    
-    Args:
-        table_path: Path to taxonomy table
-        
-    Returns:
-        DataFrame with columns: taxid, N_k1, N_k2, ... where each N_k column contains
-        the count of occurrences for that annotation method
-    """
-    # Read the input table
-    df = pd.read_csv(table_path, sep=",")
-    
-    # Get all taxid columns (they contain 'taxid' in their name)
-    taxid_cols = [col for col in df.columns if 'taxid' in col.lower()]
-    
-    # Create a new DataFrame to store results
-    result = pd.DataFrame()
-    
-    # For each taxid column, calculate counts
-    for col in taxid_cols:
-        # Get the annotation name from the column name (e.g., 'k1' from 'taxID_k1')
-        ann_name = col.split('_')[-2]
-        
-        # Count occurrences of each taxid
-        taxid_counts = df.groupby(col).size().reset_index()
-        taxid_counts.columns = ["taxid", f"N_{ann_name}"]
-        
-        # Merge with result DataFrame
-        if result.empty:
-            result = taxid_counts
-        else:
-            result = result.merge(taxid_counts, on='taxid', how='outer')
-    
-    # Fill NaN values with 0
-    result = result.fillna(0)
+    """Parse a long annotation CSV or an OTU/abundance CSV into ``taxid`` + ``N_*``.
 
-    if result.empty or "taxid" not in result.columns:
+    Long tables (``taxID_*``) are counted per annotator. Phyloseq-style OTU
+    tables are rewritten to ``N_<sample>``.
+    """
+    from samovar.abundance import (
+        annotator_name,
+        input_to_abundance_tables,
+        load_table_input,
+        normalize_abundance_table,
+        n_sample_columns,
+    )
+
+    loaded = load_table_input(table_path)
+    tables = input_to_abundance_tables(loaded)
+    if not tables:
         return pd.DataFrame(columns=["taxid"])
-
-    # Convert taxid to string
-    result['taxid'] = result['taxid'].astype(str)
-    
+    if len(tables) == 1:
+        return normalize_abundance_table(next(iter(tables.values())))
+    result = pd.DataFrame()
+    for name, table in tables.items():
+        n_cols = n_sample_columns(table)
+        if not n_cols:
+            continue
+        counts = table[["taxid"]].copy()
+        counts[f"N_{annotator_name(name)}"] = table[n_cols].sum(axis=1)
+        if result.empty:
+            result = counts
+        else:
+            result = result.merge(counts, on="taxid", how="outer")
+    if result.empty:
+        return pd.DataFrame(columns=["taxid"])
+    result = result.fillna(0)
+    result["taxid"] = result["taxid"].astype(str)
     return result
 
 def get_genome_file(genome_dir: str, taxid: str) -> str:
@@ -215,7 +206,12 @@ def get_genome_file(genome_dir: str, taxid: str) -> str:
 
 
 def _n_columns(df: pd.DataFrame) -> List[str]:
-    return [col for col in df.columns if col != "taxid" and "n" in col.lower()]
+    from samovar.abundance import n_sample_columns
+
+    cols = n_sample_columns(df)
+    if cols:
+        return cols
+    return [col for col in df.columns if col != "taxid" and str(col).startswith("N_")]
 
 
 def _annotator_from_n_col(column: str) -> str:
@@ -961,24 +957,23 @@ def process_annotation_tables(
     seed: Optional[int] = None,
     max_genomes: Optional[int] = None,
     annotation_dir: Optional[str] = None,
+    abundance_dir: Optional[str] = None,
     regeneration_config: Optional[dict] = None,
     gzip_genomes: bool = True,
     gzip_reads: bool = False,
     reannotation_level: str = "taxid",
 ) -> None:
-    """
-    Generate one full metagenome per annotator, then split reads into samples.
+    """Simulate FASTQ from abundance tables (abundance2iss).
 
-    This is much faster than calling ISS once per sample (and per genome).
-
-    Args:
-        max_genomes: If set, only resolve/fetch the top-N taxids by total
-            abundance across samples (critical for large public DBs).
-        annotation_dir: Directory of per-sample ``*.annotation.csv`` files.
-            Required when ``regeneration_config`` selects a generative mode.
-        regeneration_config: SamovaR-style regeneration settings (``regeneration_mode``,
-            ``N``, ``N_reads``, ``seed``, etc.).
+    ``annotation2iss`` is annotation2abundance then this function. Long
+    ``*.annotation.csv`` / OTU tables are converted to ``taxid`` + ``N_*``
+    CSVs first; generative table regen belongs to the ``regenerate_tables``
+    checkpoint (or a non-direct mode in ``regeneration_config`` when dest is empty).
     """
+    from samovar.abundance import (
+        convert_to_abundance_dir,
+        has_abundance_tables,
+    )
     from samovar.regenerate import (
         coerce_seed,
         write_samovar_config_defaults,
@@ -1008,31 +1003,28 @@ def process_annotation_tables(
 
     sample_tables: Dict[str, pd.DataFrame] = {}
     regen_dir = os.path.join(output_dir, ".regenerated_abundance")
-    existing = _sample_tables_from_abundance_dir(regen_dir, sample_names)
+    abund = str(
+        abundance_dir
+        or regen_cfg.get("abundance_dir")
+        or regen_dir
+    )
+    observed = regen_cfg.get("observed_abundance_dir") or ""
+    source = ""
+    if observed and has_abundance_tables(observed):
+        source = observed
+    elif annotation_dir:
+        source = annotation_dir
+    elif regen_cfg.get("annotation_dir"):
+        source = str(regen_cfg.get("annotation_dir"))
+    elif table_paths:
+        source = os.path.dirname(os.path.abspath(table_paths[0]))
+    if not has_abundance_tables(abund) and source:
+        convert_to_abundance_dir(source, abund, regen_cfg)
+    existing = _sample_tables_from_abundance_dir(abund, sample_names)
     if existing:
         sample_tables = existing
         sample_names = list(sample_tables.keys())
-    elif annotation_dir:
-        cfg_out = dict(regen_cfg)
-        cfg_out["output_dir"] = regen_dir
-        cfg_out["seed"] = seed
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
-            yaml.dump(cfg_out, tmp)
-            tmp_config = tmp.name
-        try:
-            samovar_annotation_regenerate(
-                annotation_dir=str(annotation_dir),
-                config_samovar=tmp_config,
-                output_dir=regen_dir,
-            )
-        finally:
-            os.unlink(tmp_config)
-        selection = os.path.join(regen_dir, "table_selection.json")
-        if os.path.isfile(selection):
-            shutil.copy2(selection, os.path.join(output_dir, "table_selection.json"))
-        sample_tables = _sample_tables_from_abundance_dir(regen_dir, sample_names)
-        sample_names = list(sample_tables.keys())
-    else:
+    elif table_paths:
         for path, sample_name in zip(table_paths, sample_names):
             table = parse_annotation_table(path)
             if not table.empty and "taxid" in table.columns:
