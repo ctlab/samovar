@@ -13,6 +13,7 @@ from samovar.main_config import (
     DEFAULT_SCORING_INPUTS,
     TOOL_GROUPS,
     iter_tools,
+    lookup_tool_record,
     normalize_tool_group,
     parse_tool_entry,
     set_tool,
@@ -70,9 +71,12 @@ def import_tool(
     exec_path: str = "",
     flags: str = "",
     inputs: str = "",
+    lazy_install: str = "",
+    flags_translate: str = "",
+    version: str = "",
     also_repo_build: bool = True,
 ) -> list:
-    """Write ``tools.<name> = [env, workflow, path, group, flags?, inputs?]``."""
+    """Write ``tools.<name:version>`` object record; return list spec for callers."""
     name = str(name or "").strip()
     if not name:
         raise ValueError("--name is required")
@@ -91,12 +95,25 @@ def import_tool(
         workflow=workflow,
         group=group,
         flags=str(flags or "").strip(),
+        lazy_install=str(lazy_install or "").strip() or None,
+        flags_translate=flags_translate or None,
+        version=str(version or "").strip() or None,
     )
     if glob:
         kwargs["inputs"] = glob
     set_tool(cfg, name, **kwargs)
-    spec = parse_tool_entry(iter_tools(cfg).get(name), name)
-    update_config({"tools": {name: spec}}, also_repo_build=also_repo_build)
+    from samovar.tool_spec import bare_tool_name
+
+    stored = dict.get(cfg, "tools") or {}
+    disk_key = name
+    for key in stored:
+        if bare_tool_name(key) == name:
+            disk_key = key
+            break
+    rec = stored.get(disk_key)
+    if not isinstance(rec, dict):
+        rec = lookup_tool_record(cfg, name) or {}
+    update_config({"tools": {disk_key: rec}}, also_repo_build=also_repo_build)
     return parse_tool_entry(iter_tools(load_config()).get(name), name)
 
 
@@ -140,7 +157,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--flags",
         default="",
-        help="Optional extra CLI flags stored as the 5th tools.* slot (omitted when empty)",
+        help="Optional extra CLI flags stored on the tool record",
+    )
+    parser.add_argument(
+        "--flags-translate",
+        dest="flags_translate",
+        default="",
+        help='Map SamovaR flags to the tool CLI, e.g. "--threads:--threads --cores:-t"',
+    )
+    parser.add_argument(
+        "--lazy-install",
+        dest="lazy_install",
+        default="",
+        help='Install recipe stored on the tool, e.g. "conda install bioconda::kraken2"',
+    )
+    parser.add_argument(
+        "--tool-version",
+        dest="version",
+        default="",
+        help="Version stored in the tools key (name:version). Default: probe --version.",
     )
     parser.add_argument(
         "--inputs",
@@ -198,20 +233,18 @@ def main(argv: Optional[list] = None) -> int:
             exec_path=dest,
             flags=args.flags,
             inputs=args.inputs,
+            lazy_install=args.lazy_install,
+            flags_translate=args.flags_translate,
+            version=args.version,
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    env, workflow, path, group = spec[:4]
-    extra = spec[4] if len(spec) > 4 else ""
-    inputs = spec[5] if len(spec) > 5 else ""
-    row = f"[{env!r}, {workflow!r}, {path}, {group}"
-    if extra or inputs:
-        row += f", {extra!r}"
-    if inputs:
-        row += f", {inputs!r}"
-    row += "]"
-    print(f"Imported tools.{args.name} = {row}")
+    from samovar.main_config import lookup_tool_record
+    from samovar.paths import load_config
+
+    rec = lookup_tool_record(load_config(), args.name) or {}
+    print(f"Imported tools.{args.name} = {rec}")
     return 0
 
 

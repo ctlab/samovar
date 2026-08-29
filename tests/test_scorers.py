@@ -161,6 +161,7 @@ def test_prepare_scoring_flags_and_pipeline(tmp_path, monkeypatch):
     script = Path(config.generate_pipeline(str(tmp_path / "out"))).read_text()
     assert "samovar.scorers run" in script
     assert "viz_initial" in script
-    raw = json.loads(cfg.read_text())["tools"]["counts"]
+    tools = json.loads(cfg.read_text())["tools"]
+    raw = tools.get("counts") or next(v for k, v in tools.items() if k == "counts" or str(k).startswith("counts:"))
     spec = parse_tool_entry(raw, "counts")
     assert spec[5] == DEFAULT_SCORING_INPUTS

@@ -42,9 +42,18 @@ def test_migrate_drops_duplicate_flat_keys():
     assert payload["compilers"]["python"] == "/opt/conda/bin/python"
     assert payload["API"]["ncbi_email"] == "a@b.c"
     assert payload["genomes"]["raw"]["default"] == "/scratch/genomes"
-    kraken = parse_tool_entry(payload["tools"]["kraken2"], "kraken2")
+    kraken_key = next(
+        k for k in payload["tools"] if k == "kraken2" or str(k).startswith("kraken2:")
+    )
+    rec = payload["tools"][kraken_key]
+    assert isinstance(rec, dict)
+    assert rec["type"] == "annotator"
+    assert rec.get("lazy-install")
+    assert "--threads" in (rec.get("flags-translate") or {})
+    kraken = parse_tool_entry(rec, "kraken2")
     assert kraken[2].endswith("kraken2")
     assert kraken[3] == "annotator"
+    assert payload.get("custom-flags")
 
 
 def test_parse_tool_entry_keeps_empty_flags_when_inputs_set():
@@ -110,6 +119,7 @@ def test_build_install_config_nested(tmp_path):
         "databases",
         "workflows",
         "tools",
+        "custom-flags",
     }
     assert payload["version"] == get_version()
     assert payload["compilers"]["python"] == str(py)

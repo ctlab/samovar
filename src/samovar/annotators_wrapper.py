@@ -421,6 +421,12 @@ class CustomAnnotator(BaseAnnotator):
     ) -> str:
         out_file = outputs[0]
         extra = self.extra or ""
+        from samovar.tool_spec import threads_cli_token
+        from samovar.main_config import lookup_tool_record
+        from samovar.paths import load_config
+
+        rec = lookup_tool_record(load_config(), self.tool_name)
+        tflag = threads_cli_token(self.tool_name, self.threads, rec)
         use_router = _cmd_is_custom_wrapper(self.cmd) or (
             str(self.tool_name).lower() in CUSTOM_SH_ROUTER_TOOLS
         )
@@ -433,7 +439,7 @@ class CustomAnnotator(BaseAnnotator):
                 f"-d {self.db_path} "
                 f"-o {out_file} "
                 f"-p {self.tool_name} "
-                f"-t {self.threads} "
+                f"{tflag} "
                 f"{extra}"
             )
         first = str(self.cmd or "").split()[0]
@@ -448,7 +454,7 @@ class CustomAnnotator(BaseAnnotator):
                 f"-I {input_r2} "
                 f"-d {self.db_path} "
                 f"-o {out_file} "
-                f"-t {self.threads} "
+                f"{tflag} "
                 f"{extra}"
             )
         cmd = self.default_cmd
@@ -459,7 +465,7 @@ class CustomAnnotator(BaseAnnotator):
             f"-d {self.db_path} "
             f"-o {out_file} "
             f"-p {self.tool_name} "
-            f"-t {self.threads} "
+            f"{tflag} "
             f"{extra}"
         )
 

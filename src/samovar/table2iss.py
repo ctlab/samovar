@@ -136,12 +136,31 @@ CONTIG_SPACER = "N" * 500
 _ISS_EXTRA_FLAGS: List[str] = []
 
 
+def _normalize_iss_extra(extra: Optional[Sequence[str]]) -> List[str]:
+    from samovar.table_regenerators import extra_flags_argv
+
+    if extra is None:
+        return []
+    if isinstance(extra, str):
+        return extra_flags_argv(extra)
+    items = [str(x) for x in extra]
+    if items and all(len(x) <= 1 for x in items):
+        return extra_flags_argv("".join(items))
+    out: List[str] = []
+    for item in items:
+        if " " in item.strip():
+            out.extend(extra_flags_argv(item))
+        elif item.strip():
+            out.append(item)
+    return out
+
+
 @contextmanager
 def iss_cli_extra_flags(extra: Optional[Sequence[str]] = None) -> Iterator[None]:
     """Append import/prepare extra flags to every ISS CLI invocation."""
     global _ISS_EXTRA_FLAGS
     prev = list(_ISS_EXTRA_FLAGS)
-    _ISS_EXTRA_FLAGS = [str(x) for x in (extra or []) if str(x).strip()]
+    _ISS_EXTRA_FLAGS = _normalize_iss_extra(extra)
     try:
         yield
     finally:

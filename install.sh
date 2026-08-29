@@ -940,6 +940,32 @@ payload = build_install_config(
 )
 write_config(payload)
 try:
+    from samovar.tool_spec import TESTED_TOOL_VERSIONS, version_mismatch_rows
+    ci = os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}
+    noninteractive = os.environ.get("SAMOVAR_UPDATE_SHELL", "1") == "0" or ci
+    rows = version_mismatch_rows(payload)
+    for name, found, tested, lazy in rows:
+        print(
+            f"WARNING: {name} version {found} != tested/previous {tested}."
+        )
+        if lazy:
+            print(f"  lazy-install: {lazy}")
+        if noninteractive:
+            print("  Continuing without reinstall (CI / non-interactive).")
+            continue
+        try:
+            ans = input(
+                f"Install exact {name} {tested}? [y/N] (n = keep {found}): "
+            ).strip().lower()
+        except EOFError:
+            ans = "n"
+        if ans in {"y", "yes"} and lazy:
+            print(f"  run: {lazy}")
+            import subprocess
+            subprocess.call(lazy, shell=True)
+except Exception as exc:
+    print("Tool version check skip:", exc)
+try:
     from samovar.sparsedossa2 import register_sparsedossa2_tools, sparsedossa2_available
     if sparsedossa2_available():
         register_sparsedossa2_tools()

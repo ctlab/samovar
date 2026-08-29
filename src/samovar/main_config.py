@@ -23,6 +23,7 @@ CANONICAL_TOP = (
     "databases",
     "workflows",
     "tools",
+    "custom-flags",
 )
 
 LEGACY_TOP = (
@@ -229,49 +230,12 @@ def normalize_tool_group(value: str) -> str:
 def parse_tool_entry(value: Any, name: str = "") -> List[str]:
     """Normalize a tools.* value to ``[env, workflow, path, group]``.
 
-    Optional 5th slot: extra CLI flags. Optional 6th: input glob (scoring/viz).
-    Empty trailing slots are omitted so existing 4-element JSON rows stay 4-element.
-    An empty flags slot is kept when the 6th (inputs) slot is set.
+    On disk the preferred form is an object with ``exec`` / ``type`` /
+    ``lazy-install`` / ``flags-translate``. List rows and path strings still parse.
     """
-    group = tool_group_for(name)
-    flags = ""
-    inputs = ""
-    if value is None or value is False:
-        return _trim_tool_spec(["", "bash", "", group, "", ""])
-    if isinstance(value, dict):
-        env = str(value.get("env") or "").strip()
-        workflow = str(value.get("workflow") or value.get("workflow_name") or "").strip()
-        path = str(value.get("path") or "").strip()
-        grp = str(value.get("group") or value.get("tool_group") or group).strip() or group
-        flags = str(value.get("flags") or value.get("extra") or "").strip()
-        inputs = str(
-            value.get("inputs")
-            or value.get("input")
-            or value.get("glob")
-            or value.get("input_glob")
-            or ""
-        ).strip()
-        if not workflow:
-            workflow = env if env else "bash"
-        return _trim_tool_spec([env, workflow, path, grp, flags, inputs])
-    if isinstance(value, (list, tuple)):
-        parts = [str(x).strip() if x is not None else "" for x in value]
-        while len(parts) < 4:
-            parts.append("")
-        env, workflow, path, grp = parts[0], parts[1], parts[2], parts[3]
-        if len(parts) > 4:
-            flags = parts[4]
-        if len(parts) > 5:
-            inputs = parts[5]
-        if not path and len(parts) == 1:
-            path = parts[0]
-        if not grp:
-            grp = group
-        if not workflow:
-            workflow = env if env else "bash"
-        return _trim_tool_spec([env, workflow, path, grp, flags, inputs])
-    path = str(value).strip()
-    return _trim_tool_spec(["", "bash", path, group, "", ""])
+    from samovar.tool_spec import record_to_spec
+
+    return record_to_spec(value, name)
 
 
 def _trim_tool_spec(spec: List[str]) -> List[str]:
@@ -334,15 +298,17 @@ def flags_target_matches(
 
 def imported_flags_for_names(tools: Dict[str, List[str]], *names: str) -> str:
     """Return ``tools.<name>[4]`` for the first matching key (case-insensitive)."""
+    from samovar.tool_spec import bare_tool_name
+
     for name in names:
         key = str(name or "").strip()
         if not key:
             continue
         if key in tools:
             return tool_flags(tools[key], key)
-        low = key.lower()
+        want = bare_tool_name(key).lower()
         for stored, spec in tools.items():
-            if stored.lower() == low:
+            if stored.lower() == key.lower() or bare_tool_name(stored).lower() == want:
                 return tool_flags(spec, stored)
     return ""
 
@@ -395,11 +361,49 @@ def tool_env_prefix(entry: Any, name: str = "") -> str:
 def iter_tools(cfg: Dict[str, Any]) -> Dict[str, List[str]]:
     raw = _raw_get(cfg, "tools") if isinstance(_raw_get(cfg, "tools"), dict) else {}
     out: Dict[str, List[str]] = {}
+    from samovar.tool_spec import bare_tool_name, parse_tool_record, record_to_spec
+
+    by_bare: Dict[str, str] = {}
     for name, value in raw.items():
         if str(name).startswith("_"):
             continue
-        out[str(name)] = parse_tool_entry(value, str(name))
+        spec = record_to_spec(value, str(name))
+        out[str(name)] = spec
+        bare = bare_tool_name(name)
+        if bare and bare not in out:
+            out[bare] = spec
+            by_bare[bare] = str(name)
+        elif bare:
+            # Prefer versioned key as the canonical bare mapping.
+            if ":" in str(name) and ":" not in by_bare.get(bare, ""):
+                out[bare] = spec
+                by_bare[bare] = str(name)
     return out
+
+
+def iter_tool_records(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    raw = _raw_get(cfg, "tools") if isinstance(_raw_get(cfg, "tools"), dict) else {}
+    from samovar.tool_spec import parse_tool_record
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for name, value in raw.items():
+        if str(name).startswith("_"):
+            continue
+        out[str(name)] = parse_tool_record(value, str(name))
+    return out
+
+
+def lookup_tool_record(cfg: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
+    from samovar.tool_spec import bare_tool_name
+
+    records = iter_tool_records(cfg)
+    if name in records:
+        return records[name]
+    want = bare_tool_name(name).lower()
+    for key, rec in records.items():
+        if bare_tool_name(key).lower() == want:
+            return rec
+    return None
 
 
 def set_tool(
@@ -412,30 +416,77 @@ def set_tool(
     group: str = "",
     flags: Optional[str] = None,
     inputs: Optional[str] = None,
+    lazy_install: Optional[str] = None,
+    flags_translate: Any = None,
+    version: Optional[str] = None,
 ) -> Dict[str, Any]:
+    from samovar.tool_spec import (
+        bare_tool_name,
+        join_tool_key,
+        parse_flags_translate,
+        parse_tool_record,
+        probe_tool_version,
+        split_tool_key,
+    )
+
     tools = dict(_raw_get(cfg, "tools") or {})
-    spec = parse_tool_entry(tools.get(name), name)
-    while len(spec) < 6:
-        spec.append("")
+    bare, key_ver = split_tool_key(name)
+    existing_key = name if name in tools else ""
+    if not existing_key:
+        for stored in list(tools):
+            if bare_tool_name(stored) == bare:
+                existing_key = stored
+                break
+    previous = parse_tool_record(tools.get(existing_key or name), bare or name)
+    exe = dict(previous.get("exec") or {})
     if env:
-        spec[0] = env
+        exe["env"] = env
     if workflow:
-        spec[1] = workflow
-    elif env and spec[1] in {"", "bash"}:
-        spec[1] = env
+        exe["parser"] = workflow
+    elif env and str(exe.get("parser") or "") in {"", "bash"}:
+        exe["parser"] = env
     if path:
-        spec[2] = path
-    if group:
-        spec[3] = group
-    if flags is not None:
-        spec[4] = str(flags).strip()
-    if inputs is not None:
-        spec[5] = str(inputs).strip()
-    if not spec[1]:
-        spec[1] = spec[0] if spec[0] else "bash"
-    if not spec[3]:
-        spec[3] = tool_group_for(name)
-    tools[name] = _trim_tool_spec(spec)
+        exe["path"] = path
+    if not exe.get("parser"):
+        exe["parser"] = exe.get("env") or "bash"
+    rec = {
+        "exec": {
+            "env": str(exe.get("env") or ""),
+            "parser": str(exe.get("parser") or "bash"),
+            "path": str(exe.get("path") or ""),
+        },
+        "type": group or previous.get("type") or tool_group_for(bare or name),
+        "lazy-install": (
+            str(lazy_install).strip()
+            if lazy_install is not None
+            else str(previous.get("lazy-install") or "")
+        ),
+        "flags": str(flags).strip() if flags is not None else str(previous.get("flags") or ""),
+        "flags-translate": (
+            parse_flags_translate(flags_translate)
+            if flags_translate is not None
+            else dict(previous.get("flags-translate") or {})
+        ),
+    }
+    in_val = inputs if inputs is not None else previous.get("inputs")
+    if in_val:
+        rec["inputs"] = str(in_val).strip()
+    if not rec["lazy-install"]:
+        from samovar.tool_spec import lazy_install_for
+
+        rec["lazy-install"] = lazy_install_for(bare or name, version or key_ver)
+    if not rec["flags-translate"]:
+        from samovar.tool_spec import DEFAULT_FLAGS_TRANSLATE
+
+        rec["flags-translate"] = dict(DEFAULT_FLAGS_TRANSLATE.get(bare) or {})
+    ver = str(version or key_ver or previous.get("_version") or "").strip()
+    if not ver and rec["exec"]["path"]:
+        ver = probe_tool_version(rec["exec"]["path"], bare)
+    disk_key = join_tool_key(bare or name, ver)
+    for stored in list(tools):
+        if bare_tool_name(stored) == bare:
+            tools.pop(stored, None)
+    tools[disk_key] = rec
     dict.__setitem__(cfg, "tools", tools)
     return cfg
 
@@ -763,6 +814,7 @@ def empty_canonical(*, version: str = "", root: str = "") -> Dict[str, Any]:
         "databases": {},
         "workflows": {k: list(v) for k, v in DEFAULT_WORKFLOWS.items()},
         "tools": {},
+        "custom-flags": ["--threads", "--cores"],
     }
 
 
@@ -775,7 +827,7 @@ def _merge_folder_map(existing: Any, extra: Dict[str, str]) -> Dict[str, str]:
 def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
     """Write either canonical or legacy keys into ``cfg`` (mutates, returns cfg)."""
     for key, value in updates.items():
-        if key in CANONICAL_TOP and key not in {"tools", "genomes"}:
+        if key in CANONICAL_TOP and key not in {"tools", "genomes", "custom-flags"}:
             cfg[key] = value
             continue
         if key == "compilers" and isinstance(value, dict):
@@ -891,21 +943,32 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
             compilers["python_libs"] = _split_dirs(value)
             cfg["compilers"] = compilers
             continue
+        if key == "custom-flags" or key == "custom_flags":
+            from samovar.tool_spec import custom_flags_from_cfg
+
+            cfg["custom-flags"] = custom_flags_from_cfg({"custom-flags": value})
+            continue
         if key == "tools":
             if isinstance(value, dict):
                 for name, entry in value.items():
                     if str(name).startswith("_"):
                         continue
-                    spec = parse_tool_entry(entry, str(name))
+                    from samovar.tool_spec import parse_tool_record
+
+                    rec = parse_tool_record(entry, str(name))
+                    exe = rec.get("exec") or {}
                     set_tool(
                         cfg,
                         str(name),
-                        env=spec[0],
-                        workflow=spec[1],
-                        path=spec[2],
-                        group=spec[3],
-                        flags=spec[4] if len(spec) > 4 else "",
-                        inputs=spec[5] if len(spec) > 5 else None,
+                        env=str(exe.get("env") or ""),
+                        workflow=str(exe.get("parser") or ""),
+                        path=str(exe.get("path") or ""),
+                        group=str(rec.get("type") or ""),
+                        flags=str(rec.get("flags") or ""),
+                        inputs=rec.get("inputs"),
+                        lazy_install=rec.get("lazy-install"),
+                        flags_translate=rec.get("flags-translate"),
+                        version=str(rec.get("_version") or ""),
                     )
             continue
         if key == "tool_envs":
@@ -913,7 +976,8 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
                 for name, prefix in value.items():
                     if str(name).startswith("_") or not prefix:
                         continue
-                    existing = parse_tool_entry((cfg.get("tools") or {}).get(name), str(name))
+                    existing_rec = lookup_tool_record(cfg, str(name))
+                    existing = parse_tool_entry(existing_rec, str(name)) if existing_rec else ["", "", "", ""]
                     path = existing[2] or str(prefix)
                     set_tool(
                         cfg,
@@ -961,11 +1025,16 @@ def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
         wf.update(raw["workflows"])
         cfg["workflows"] = wf
     if isinstance(raw.get("tools"), dict):
+        from samovar.tool_spec import parse_tool_record
+
         for name, entry in raw["tools"].items():
             if str(name).startswith("_"):
                 continue
-            spec = parse_tool_entry(entry, str(name))
-            cfg["tools"][str(name)] = spec
+            cfg["tools"][str(name)] = parse_tool_record(entry, str(name))
+    if raw.get("custom-flags") or raw.get("custom_flags"):
+        from samovar.tool_spec import custom_flags_from_cfg
+
+        cfg["custom-flags"] = custom_flags_from_cfg(raw)
 
     # Overlay leftover flat keys
     leftovers = {k: v for k, v in raw.items() if k not in CANONICAL_TOP}
@@ -1259,7 +1328,10 @@ def build_install_config(
     discovered = dict(discovered_tools or {})
     # Keep previously configured tools, overlay discovery when missing path
     for name, path in discovered.items():
-        existing_spec = parse_tool_entry((cfg.get("tools") or {}).get(name), name)
+        existing_spec = parse_tool_entry(
+            lookup_tool_record(cfg, name) or (cfg.get("tools") or {}).get(name),
+            name,
+        )
         if existing_spec[2]:
             continue
         env, workflow = infer_tool_env(path, conda_prefix=conda_prefix)
@@ -1287,6 +1359,23 @@ def build_install_config(
     if compilers.get("cpp"):
         set_tool(cfg, "g++", path=str(compilers["cpp"]), workflow="bash", group="compiler")
 
+    from samovar.version import get_version as _pkg_ver
+
+    set_tool(
+        cfg,
+        "samovar",
+        path=str(compilers.get("python") or ""),
+        workflow="bash",
+        group="runtime",
+        lazy_install="pip install -e .",
+        version=_pkg_ver(),
+    )
+
+    if not cfg.get("custom-flags"):
+        from samovar.tool_spec import DEFAULT_CUSTOM_FLAGS
+
+        cfg["custom-flags"] = list(DEFAULT_CUSTOM_FLAGS)
+
     return dict(cfg)
 
 
@@ -1299,7 +1388,52 @@ def disk_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         genomes["raw"] = drop_home_paths(folder_map(genomes.get("raw")))
         genomes["processed"] = drop_home_paths(folder_map(genomes.get("processed")))
         payload["genomes"] = genomes
+    payload["tools"] = _tools_for_disk(canonical)
+    from samovar.tool_spec import custom_flags_from_cfg
+
+    payload["custom-flags"] = custom_flags_from_cfg(canonical)
     return payload
+
+
+def _tools_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    from samovar.tool_spec import (
+        DEFAULT_FLAGS_TRANSLATE,
+        bare_tool_name,
+        join_tool_key,
+        lazy_install_for,
+        parse_tool_record,
+        probe_tool_version,
+        split_tool_key,
+    )
+    from samovar.version import get_version
+
+    raw = _raw_get(cfg, "tools") if isinstance(_raw_get(cfg, "tools"), dict) else {}
+    out: Dict[str, Any] = {}
+    for name, value in raw.items():
+        if str(name).startswith("_"):
+            continue
+        rec = parse_tool_record(value, str(name))
+        exe = dict(rec.get("exec") or {})
+        bare, key_ver = split_tool_key(name)
+        ver = str(rec.pop("_version", None) or key_ver or "").strip()
+        if bare == "samovar" and not ver:
+            ver = get_version()
+        elif not ver and exe.get("path") and bare not in {"samovar"}:
+            ver = probe_tool_version(str(exe.get("path")), bare)
+        if not rec.get("lazy-install"):
+            rec["lazy-install"] = lazy_install_for(bare, ver)
+        if not rec.get("flags-translate"):
+            rec["flags-translate"] = dict(DEFAULT_FLAGS_TRANSLATE.get(bare) or {})
+        rec["exec"] = {
+            "env": str(exe.get("env") or ""),
+            "parser": str(exe.get("parser") or "bash"),
+            "path": str(exe.get("path") or ""),
+        }
+        rec["type"] = rec.get("type") or tool_group_for(bare)
+        rec["flags"] = str(rec.get("flags") or "")
+        key = join_tool_key(bare, ver)
+        out[key] = rec
+    return out
 
 
 def _fmt_install_value(value: Any) -> str:

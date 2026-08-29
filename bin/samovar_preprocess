@@ -18,6 +18,12 @@ def main():
     parser.add_argument('--output_dir', default=None, help='Output directory (default: samovar_out, or from --input_config)')
     parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
     parser.add_argument(
+        '--threads',
+        type=int,
+        default=None,
+        help='Alias of --cores; translated into each tool via flags-translate',
+    )
+    parser.add_argument(
         '--max_genomes', type=int, default=50,
         help='Max taxids to fetch for annotation2iss (top by abundance)')
     parser.add_argument(
@@ -229,7 +235,9 @@ def main():
     )
 
     # Parse known args first to get output_dir
-    args, remaining = parser.parse_known_args()
+    from samovar.tool_spec import parse_known_with_custom
+
+    args, remaining = parse_known_with_custom(parser)
     
     # Check if .generate exists in output_dir
     out_dir = args.output_dir or DEFAULT_OUTPUT_DIR
@@ -243,7 +251,8 @@ def main():
     # (e.g. --kraken2-test "kraken2 /path/to/db"). Do not treat pipeline
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
-        "input_dir", "input_config", "output_dir", "cores", "max_genomes",
+        "input_dir", "input_config", "output_dir", "cores", "threads",
+        "max_genomes",
         "N_reads", "n_reads", "N",
         "genome-dirs", "genome_dirs", "index",
         "reannotation-level", "reannotation_level",
@@ -253,7 +262,12 @@ def main():
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",
         "startpoint", "start-point", "endpoint", "end-point",
+        "scoring", "reprofiler", "ml",
     }
+    from samovar.tool_spec import load_custom_flags, _norm_flag
+
+    for flag in load_custom_flags():
+        reserved_cmd.add(_norm_flag(flag).lstrip("-"))
     cmd_args = {}
     i = 0
     while i < len(remaining):

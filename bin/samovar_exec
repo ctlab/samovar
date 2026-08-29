@@ -2,6 +2,20 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${SAMOVAR_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PYTHON="${PYTHON_PATH:-python3}"
+
+_is_custom_flag() {
+    PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON" -c "
+from samovar.tool_spec import load_custom_flags, _norm_flag
+import sys
+flag = sys.argv[1].split('=', 1)[0]
+raise SystemExit(0 if _norm_flag(flag) in load_custom_flags() else 1)
+" "$1" 2>/dev/null
+}
+
 # Parse arguments
 OUTPUT_DIR="."
 export SAMOVAR_REDO="${SAMOVAR_REDO:-0}"
@@ -40,19 +54,27 @@ while [[ $# -gt 0 ]]; do
             echo "  --endpoint      Last checkpoint to run (e.g. combine_initial / tables)"
             echo "  --cleanup-tmp   After a successful run, remove .tmp / ISS scratch dirs"
             echo "  --no-cleanup-tmp  Keep temporary directories (default)"
+            echo "  Custom-flags from the install config (e.g. --threads) are accepted and ignored here;"
+            echo "  they are applied at prepare/generate via flags-translate."
             exit 0
             ;;
         *)
+            if _is_custom_flag "$1"; then
+                if [[ "$1" == *=* ]]; then
+                    shift
+                elif [[ $# -gt 1 && "$2" != -* ]]; then
+                    shift 2
+                else
+                    shift
+                fi
+                continue
+            fi
             echo "Unknown option: $1"
             echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
             exit 1
             ;;
     esac
 done
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="${SAMOVAR_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-PYTHON="${PYTHON_PATH:-python3}"
 
 _cli_start="${SAMOVAR_START:-}"
 _cli_end="${SAMOVAR_END:-}"

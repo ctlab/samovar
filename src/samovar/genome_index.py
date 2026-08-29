@@ -819,7 +819,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help="Processed storage (default: genomes.samovar_database/processed)",
     )
-    return parser.parse_args(argv)
+    from samovar.tool_spec import parse_known_with_custom
+
+    args, leftover = parse_known_with_custom(parser, argv)
+    if leftover:
+        parser.error("unrecognized arguments: " + " ".join(leftover))
+    return args
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

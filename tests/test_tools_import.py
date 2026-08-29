@@ -6,6 +6,16 @@ from samovar.annotators_wrapper import CustomAnnotator, get_annotator_instance
 from samovar.main_config import parse_tool_entry
 from samovar.paths import write_config, update_config
 from samovar.tools_import import import_tool, main as import_main
+from samovar.tool_spec import bare_tool_name
+
+
+def _tool_row(tools: dict, name: str):
+    if name in tools:
+        return tools[name]
+    for key, value in tools.items():
+        if bare_tool_name(key) == name:
+            return value
+    raise KeyError(name)
 
 
 def test_import_tool_writes_config(tmp_path, monkeypatch):
@@ -26,7 +36,8 @@ def test_import_tool_writes_config(tmp_path, monkeypatch):
     assert spec[2] == str(binary.resolve())
     assert spec[3] == "annotator"
     assert spec[1] == "bash"
-    loaded = parse_tool_entry(json.loads(cfg.read_text())["tools"]["kaiju"], "kaiju")
+    tools = json.loads(cfg.read_text())["tools"]
+    loaded = parse_tool_entry(_tool_row(tools, "kaiju"), "kaiju")
     assert loaded[2] == spec[2]
     assert loaded[3] == "annotator"
 
@@ -59,7 +70,7 @@ def test_import_cli_conda_prefix(tmp_path, monkeypatch):
         ]
     )
     assert rc == 0
-    row = json.loads(cfg.read_text())["tools"]["nanosim"]
+    row = _tool_row(json.loads(cfg.read_text())["tools"], "nanosim")
     spec = parse_tool_entry(row, "nanosim")
     assert spec[0] == "conda"
     assert spec[3] == "metagenome_generator"
@@ -81,9 +92,10 @@ def test_import_flags_fifth_slot(tmp_path, monkeypatch):
     )
     assert spec[3] == "table_reads_generator"
     assert spec[4] == "--log-mu 1 --foo bar"
-    raw = json.loads(cfg.read_text())["tools"]["myboil"]
-    assert len(raw) == 5
-    assert raw[4] == "--log-mu 1 --foo bar"
+    raw = _tool_row(json.loads(cfg.read_text())["tools"], "myboil")
+    assert isinstance(raw, dict)
+    assert raw["flags"] == "--log-mu 1 --foo bar"
+    assert "exec" in raw
     spec4 = import_tool(
         name="plain",
         tool_type="table",
@@ -91,8 +103,8 @@ def test_import_flags_fifth_slot(tmp_path, monkeypatch):
         also_repo_build=False,
     )
     assert len(spec4) == 4
-    raw4 = json.loads(cfg.read_text())["tools"]["plain"]
-    assert len(raw4) == 4
+    raw4 = _tool_row(json.loads(cfg.read_text())["tools"], "plain")
+    assert raw4["flags"] == ""
 
 
 def test_import_scoring_writes_inputs_slot(tmp_path, monkeypatch):
@@ -109,10 +121,9 @@ def test_import_scoring_writes_inputs_slot(tmp_path, monkeypatch):
     )
     assert spec[3] == "scoring"
     assert spec[5] == "*annotations"
-    raw = json.loads(cfg.read_text())["tools"]["counts"]
-    assert len(raw) == 6
-    assert raw[4] == ""
-    assert raw[5] == "*annotations"
+    raw = _tool_row(json.loads(cfg.read_text())["tools"], "counts")
+    assert raw["inputs"] == "*annotations"
+    assert raw.get("flags") == ""
     spec2 = import_tool(
         name="table_score",
         tool_type="scoring",
@@ -144,9 +155,8 @@ def test_import_table_scoring_group(tmp_path, monkeypatch):
         also_repo_build=False,
     )
     assert spec[3] == "table_scoring"
-    raw = json.loads(cfg.read_text())["tools"]["bray_plugin"]
-    assert raw[3] == "table_scoring"
-    assert len(raw) == 4
+    raw = _tool_row(json.loads(cfg.read_text())["tools"], "bray_plugin")
+    assert raw["type"] == "table_scoring"
 
 
 def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
@@ -237,6 +247,30 @@ def test_prepare_merges_import_and_launch_annotator_flags(tmp_path, monkeypatch)
     assert "--keep-tmp" in yaml_text
 
 
+def test_import_flags_translate_and_lazy_install(tmp_path, monkeypatch):
+    binary = tmp_path / "myboil.py"
+    binary.write_text("def regenerate(annotation, metadata, config):\n    return {}\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="myboil",
+        tool_type="table",
+        exec_path=str(binary),
+        flags="--log-mu 1",
+        flags_translate="--threads:--n-jobs --cores:--n-jobs",
+        lazy_install="pip install myboil",
+        version="1.2.3",
+        also_repo_build=False,
+    )
+    tools = json.loads(cfg.read_text())["tools"]
+    assert "myboil:1.2.3" in tools
+    rec = tools["myboil:1.2.3"]
+    assert rec["lazy-install"] == "pip install myboil"
+    assert rec["flags-translate"]["--threads"] == "--n-jobs"
+    assert rec["type"] == "table_reads_generator"
+
+
 def test_import_pytest_blocks_bad_table_tool(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
@@ -284,5 +318,5 @@ def test_import_pytest_accepts_identity_table(tmp_path, monkeypatch):
         ]
     )
     assert rc == 0
-    spec = parse_tool_entry(json.loads(cfg.read_text())["tools"]["echo_tab"], "echo_tab")
+    spec = parse_tool_entry(_tool_row(json.loads(cfg.read_text())["tools"], "echo_tab"), "echo_tab")
     assert spec[3] == "table_reads_generator"

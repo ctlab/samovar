@@ -179,6 +179,12 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument('--cores', type=int, default=1,
                        help='Number of cores for snakemake')
     parser.add_argument(
+        '--threads',
+        type=int,
+        default=None,
+        help='Alias of --cores; mapped to the generator via flags-translate (--cpus for ISS)',
+    )
+    parser.add_argument(
         '--simulator',
         default='iss',
         choices=['iss', 'camisim'],
@@ -236,8 +242,31 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         default=None,
         help='CAMISIM sample size in Gbp (default: derived from --total_reads)',
     )
-    
-    return parser.parse_args(argv)
+    from samovar.tool_spec import apply_translated_flags, parse_known_with_custom
+
+    args, leftover = parse_known_with_custom(parser, argv)
+    if leftover:
+        parser.error("unrecognized arguments: " + " ".join(leftover))
+    if getattr(args, "threads", None):
+        args.cores = int(args.threads)
+    custom = dict(getattr(args, "custom_cli_flags", None) or {})
+    if custom.get("--threads"):
+        try:
+            args.cores = int(custom["--threads"])
+        except (TypeError, ValueError):
+            pass
+    gen = str(getattr(args, "reads_generator", None) or args.simulator or "iss")
+    canon = {"--threads": args.cores, "--cores": args.cores, **custom}
+    if str(gen).lower() in {"iss", "insilicoseq"}:
+        canon.pop("--threads", None)
+        canon.pop("--cores", None)
+    extra = apply_translated_flags(
+        str(getattr(args, "extra_flags", None) or ""),
+        name=gen,
+        canonical=canon,
+    )
+    args.extra_flags = extra
+    return args
 
 def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     """Main function to set up the ISS or CAMISIM generate configuration"""

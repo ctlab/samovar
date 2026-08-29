@@ -183,4 +183,19 @@ def test_parse_args_reindex_and_raw_genomes():
     )
     assert args.accessions == ["GCF_000819615.1", "GCF_000840245.1"]
     assert args.reindex == 1
-    assert args.raw_genomes == 0 
+    assert args.raw_genomes == 0
+
+
+def test_parse_args_threads_maps_to_iss_cpus():
+    from samovar.iss_config import parse_args
+
+    args = parse_args(
+        [
+            "--output_dir",
+            "out",
+            "--threads",
+            "8",
+        ]
+    )
+    assert args.cores == 8
+    assert "- - c" not in (args.extra_flags or "") 

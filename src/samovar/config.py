@@ -78,6 +78,77 @@ def _merge_annotator_launch_flags(
         ann.extra = merged or None
 
 
+def _apply_translated_cli_flags(config: "PipelineConfig", args: argparse.Namespace) -> None:
+    """Push --threads/--cores (and custom-flags) through flags-translate into child extras."""
+    from samovar.main_config import lookup_tool_record
+    from samovar.paths import load_config
+    from samovar.tool_spec import apply_translated_flags
+
+    canonical = {
+        "--threads": config.cores,
+        "--cores": config.cores,
+    }
+    canonical.update(dict(getattr(args, "custom_cli_flags", None) or {}))
+    cfg = load_config()
+    native = {"kraken2", "kaiju", "kraken", "krakenuniq", "metaphlan", "metaphlan4"}
+    for ann in config.annotators or []:
+        name = ann.type or ann.run_name
+        rec = lookup_tool_record(cfg, name) or lookup_tool_record(cfg, ann.run_name)
+        extra_canon = dict(canonical)
+        if str(ann.type or "").lower() in native:
+            extra_canon.pop("--threads", None)
+            extra_canon.pop("--cores", None)
+        ann.extra = apply_translated_flags(
+            ann.extra or "",
+            name=name,
+            record=rec,
+            canonical=extra_canon,
+        ) or None
+    config.reads_generator_flags = apply_translated_flags(
+        config.reads_generator_flags or "",
+        name=config.reads_generator or "iss",
+        record=lookup_tool_record(cfg, config.reads_generator or "iss"),
+        canonical=(
+            {k: v for k, v in canonical.items() if k not in {"--threads", "--cores"}}
+            if str(config.reads_generator or "iss").lower() in {"iss", "insilicoseq"}
+            else canonical
+        ),
+    ) or None
+    if config.metagenome_generator:
+        config.metagenome_generator_flags = apply_translated_flags(
+            config.metagenome_generator_flags or "",
+            name=config.metagenome_generator,
+            record=lookup_tool_record(cfg, config.metagenome_generator),
+            canonical=canonical,
+        ) or None
+    config.regeneration_extra_flags = apply_translated_flags(
+        config.regeneration_extra_flags or "",
+        name=(config.regeneration_mode or "direct"),
+        record=lookup_tool_record(cfg, str(config.regeneration_mode or "")),
+        canonical=canonical,
+    ) or None
+    config.scoring_flags = apply_translated_flags(
+        config.scoring_flags or "",
+        name="scoring",
+        canonical=canonical,
+    ) or None
+    named_s = dict(config.scoring_tool_flags or {})
+    for sname in list(named_s) + list(config.scoring_tools or []):
+        named_s[sname] = apply_translated_flags(
+            named_s.get(sname) or "",
+            name=sname,
+            record=lookup_tool_record(cfg, sname),
+            canonical=canonical,
+        )
+    config.scoring_tool_flags = named_s or {}
+    config.reprofiler_flags = apply_translated_flags(
+        config.reprofiler_flags or "",
+        name=config.reprofiler or "ensemble",
+        record=lookup_tool_record(cfg, str(config.reprofiler or "")),
+        canonical=canonical,
+    ) or None
+
+
 def _indent_bash(text: str, spaces: int = 2) -> str:
     pad = " " * spaces
     lines = text.strip("\n").split("\n")
@@ -226,6 +297,20 @@ class PipelineConfig:
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
         config = cls()
         config.cores = getattr(args, 'cores', 1) or 1
+        threads = getattr(args, "threads", None)
+        if threads:
+            config.cores = int(threads)
+        custom_cli = dict(getattr(args, "custom_cli_flags", None) or {})
+        if custom_cli.get("--threads"):
+            try:
+                config.cores = int(custom_cli["--threads"])
+            except (TypeError, ValueError):
+                pass
+        if custom_cli.get("--cores"):
+            try:
+                config.cores = int(custom_cli["--cores"])
+            except (TypeError, ValueError):
+                pass
         config.max_genomes = getattr(args, 'max_genomes', 50)
         if config.max_genomes is None:
             config.max_genomes = 50
@@ -614,7 +699,7 @@ class PipelineConfig:
         config.startpoint, config.endpoint = resolve_window(
             config.startpoint, config.endpoint
         )
-
+        _apply_translated_cli_flags(config, args)
         return config
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
