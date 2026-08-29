@@ -1085,7 +1085,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m samovar.table_scorers")
     sub = parser.add_subparsers(dest="command", required=True)
     stage = sub.add_parser("stage", help="Score regenerated abundance tables for a run")
-    stage.add_argument("--output_dir", "--outdir", dest="output_dir", required=True)
+    from samovar.paths import add_output_dir_argument
+
+    add_output_dir_argument(stage, required=True)
     stage.add_argument("--config", default="")
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "stage":

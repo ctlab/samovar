@@ -17,7 +17,13 @@ def main():
     input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
     
     # Output
-    parser.add_argument('--output_dir', default=None, help='Output directory (default: samovar_out, or from --input_config)')
+    from samovar.paths import add_output_dir_argument
+
+    add_output_dir_argument(
+        parser,
+        default=None,
+        help='Output directory (default: samovar_out, or from --input_config)',
+    )
     parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
     parser.add_argument(
         '--threads',
@@ -270,7 +276,8 @@ def main():
     # (e.g. --kraken2-test "kraken2 /path/to/db"). Do not treat pipeline
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
-        "input_dir", "input_config", "output_dir", "cores", "threads",
+        "input_dir", "input_config", "output_dir", "output-dir", "outdir", "directory",
+        "cores", "threads",
         "max_genomes", "max-genomes", "max-genome-mb", "max_genome_mb",
         "genome-skip-list", "genome_skip_list",
         "N_reads", "n_reads", "N",

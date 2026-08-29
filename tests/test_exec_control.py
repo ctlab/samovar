@@ -283,6 +283,35 @@ def test_abundance_to_scored_tables_window(tmp_path):
 
 
 
+def test_exec_accepts_directory_flag(tmp_path):
+    log = tmp_path / ".log"
+    log.mkdir()
+    (log / "samovar.sh").write_text(
+        "#!/bin/bash\n"
+        'if [[ "$1" != "--directory" || -z "$2" ]]; then\n'
+        '  echo "expected --directory DIR" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        "echo ok\n"
+    )
+    (log / "samovar.sh").chmod(0o755)
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO / "bin" / "samovar_exec"),
+            "--directory",
+            str(tmp_path),
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "PYTHONPATH": str(REPO / "src")},
+    )
+    assert "Running main SamovaR pipeline" in result.stdout
+    assert "Pipeline execution completed" in result.stdout
+
+
 def test_generate_pipeline_window_file(tmp_path):
     from samovar.config import AnnotatorConfig, PipelineConfig
 

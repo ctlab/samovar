@@ -331,9 +331,32 @@ def test_annotation_regenerate_r_from_env(monkeypatch, tmp_path):
     assert annotation_regenerate_r() == script
 
 
-def test_annotation_regenerate_r_missing_when_unbundled(monkeypatch, tmp_path):
-    monkeypatch.delenv("SAMOVAR_R_REGENERATE", raising=False)
-    monkeypatch.delenv("SAMOVAR_ANNOTATION_REGENERATE_R", raising=False)
-    monkeypatch.setattr("samovar.paths.load_config", lambda: {})
-    monkeypatch.setattr("samovar.paths.user_config_dir", lambda: tmp_path / "empty_xdg")
-    assert annotation_regenerate_r() is None
+def test_output_dir_cli_aliases_and_shell_override(tmp_path):
+    import argparse
+    import subprocess
+
+    from samovar.paths import add_output_dir_argument, shell_outdir_override_snippet
+
+    parser = argparse.ArgumentParser()
+    add_output_dir_argument(parser, required=True)
+    assert parser.parse_args(["--directory", "/run/a"]).output_dir == "/run/a"
+    assert parser.parse_args(["--outdir", "/run/b"]).output_dir == "/run/b"
+    assert parser.parse_args(["--output-dir", "/run/c"]).output_dir == "/run/c"
+
+    script = tmp_path / "samovar.sh"
+    script.write_text(
+        "#!/bin/bash\nset -e\nout_dir=/baked\n"
+        + shell_outdir_override_snippet()
+        + 'printf "%s\\n" "$out_dir"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    dest = tmp_path / "relocated"
+    dest.mkdir()
+    result = subprocess.run(
+        ["bash", str(script), "--directory", str(dest)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == str(dest)

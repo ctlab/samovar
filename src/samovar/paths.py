@@ -18,7 +18,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from samovar.main_config import (
     as_install_config,
@@ -280,6 +280,69 @@ def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict
     if before != after or not user_config_path().is_file():
         write_config(cfg, also_repo_build=also_repo_build)
     return as_install_config(cfg)
+
+
+# CLI aliases for the pipeline run directory (snakemake ``--directory``).
+OUTPUT_DIR_FLAGS = (
+    "--output_dir",
+    "--output-dir",
+    "--outdir",
+    "--directory",
+)
+
+
+def add_output_dir_argument(parser: Any, **kwargs: Any) -> None:
+    """``--output_dir`` / ``--outdir`` / ``--directory`` → ``dest='output_dir'``."""
+    kwargs.setdefault("dest", "output_dir")
+    kwargs.setdefault(
+        "help",
+        "Pipeline run directory (aliases: --outdir, --directory)",
+    )
+    parser.add_argument(*OUTPUT_DIR_FLAGS, **kwargs)
+
+
+def token_is_output_dir_flag(tok: str) -> bool:
+    raw = str(tok or "")
+    head = raw.split("=", 1)[0]
+    return head in OUTPUT_DIR_FLAGS
+
+
+def argv_has_output_dir(argv: Sequence[str]) -> bool:
+    return any(token_is_output_dir_flag(tok) for tok in argv)
+
+
+def shell_outdir_override_snippet() -> str:
+    """Bash: honor ``--directory`` / ``--outdir`` / ``--output_dir`` after baked ``out_dir``."""
+    return r"""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --directory|--output_dir|--output-dir|--outdir)
+      if [[ $# -lt 2 ]]; then
+        echo "$0: $1 requires a path" >&2
+        exit 1
+      fi
+      out_dir="$2"
+      shift 2
+      ;;
+    --directory=*|--output_dir=*|--output-dir=*|--outdir=*)
+      out_dir="${1#*=}"
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--directory DIR]"
+      exit 0
+      ;;
+    *)
+      echo "$0: unknown option $1 (use --directory DIR)" >&2
+      exit 1
+      ;;
+  esac
+done
+case "$out_dir" in
+  /*) ;;
+  *) out_dir="$(pwd)/$out_dir" ;;
+esac
+"""
 
 
 def absolute_path(path: Optional[str]) -> str:

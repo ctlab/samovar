@@ -450,7 +450,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m samovar.abundance")
     sub = parser.add_subparsers(dest="command", required=True)
     mat = sub.add_parser("materialize", help="Write outdir/initial_abundance from annotations or OTU CSVs")
-    mat.add_argument("--output_dir", "--outdir", dest="output_dir", required=True)
+    from samovar.paths import add_output_dir_argument
+
+    add_output_dir_argument(mat, required=True)
     conv = sub.add_parser(
         "convert",
         help="annotation/OTU directory → abundance CSVs (annotation2abundance)",

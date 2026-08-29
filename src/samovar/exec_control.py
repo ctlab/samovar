@@ -487,7 +487,9 @@ def _parser() -> argparse.ArgumentParser:
         help="Print whether outdir has the inputs required for a startpoint",
     )
     check.add_argument("output_dir", nargs="?", default=None)
-    check.add_argument("--output_dir", "--outdir", dest="outdir_flag", default=None)
+    from samovar.paths import add_output_dir_argument
+
+    add_output_dir_argument(check, dest="outdir_flag", default=None, required=False)
     check.add_argument("--start", "--startpoint", "--start-point", dest="start", default=None)
     check.add_argument("--end", "--endpoint", "--end-point", dest="end", default=None)
     check.add_argument("--input-dir", "--input_dir", dest="input_dir", default=None)

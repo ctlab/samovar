@@ -67,6 +67,7 @@ def test_prepare_writes_pipeline_and_configs(tmp_path):
     assert pipeline.exists()
     text = pipeline.read_text()
     assert "snakemake -s " in text
+    assert '--directory "$out_dir"' in text
     assert "workflow/annotators/Snakefile" in text
     assert "workflow/combine_annotation_tables.py" in text
     assert "workflow/ML.py" in text

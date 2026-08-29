@@ -29,7 +29,15 @@ from samovar.main_config import (
     iter_tool_records,
     tool_group_for,
 )
-from samovar.paths import load_config, repo_root, sidecar_envs_dir, user_config_path
+from samovar.paths import (
+    add_output_dir_argument,
+    argv_has_output_dir,
+    load_config,
+    repo_root,
+    sidecar_envs_dir,
+    token_is_output_dir_flag,
+    user_config_path,
+)
 from samovar.tool_spec import (
     bare_tool_name,
     join_tool_key,
@@ -303,9 +311,7 @@ def record_stage(
     tools, imports, warnings = capture_tools(cfg)
     parsed = _ns_to_dict(args)
     argv_list = _argv_list(argv)
-    if parsed and not any(
-        tok.split("=", 1)[0] in {"--output_dir", "--output-dir"} for tok in argv_list
-    ):
+    if parsed and not argv_has_output_dir(argv_list):
         argv_list = _argv_from_args(stage, parsed)
     block = {"argv": argv_list, "args": parsed}
     OmegaConf.update(snap, stage, block, merge=True)
@@ -340,6 +346,7 @@ def record_stage(
             "runtime": {
                 "cwd": str(Path.cwd()),
                 "output_dir": str(out.resolve()),
+                "directory": str(out.resolve()),
                 "version": _hydra_version(),
             },
         }
@@ -498,7 +505,12 @@ def rewrite_output_dir_argv(argv: Sequence[str], output_dir: str) -> List[str]:
     tokens = list(argv)
     while i < len(tokens):
         tok = tokens[i]
-        if tok in {"--output_dir", "--output-dir"}:
+        if "=" in tok and token_is_output_dir_flag(tok):
+            out.extend(["--output_dir", output_dir])
+            i += 1
+            replaced = True
+            continue
+        if token_is_output_dir_flag(tok):
             out.extend(["--output_dir", output_dir])
             i += 2
             replaced = True
@@ -787,7 +799,7 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
     rec = sub.add_parser("record", help="Write .hydra snapshot for a stage")
     rec.add_argument("stage", choices=("generate", "prepare", "exec"))
-    rec.add_argument("--output_dir", required=True)
+    add_output_dir_argument(rec, required=True)
     rec.add_argument("argv", nargs=argparse.REMAINDER, help="Original CLI tokens after --")
     exp = sub.add_parser("export", help="Fold a run into a relocatable archive")
     exp.add_argument("source", nargs="?", default=".", help="Run dir, .hydra dir, or config.yaml")
@@ -796,7 +808,7 @@ def _parser() -> argparse.ArgumentParser:
     exp.add_argument("--include-genomes", action="store_true")
     rep = sub.add_parser("reproduce", help="Unfold snapshot/archive and re-run")
     rep.add_argument("source", help="Run dir, .hydra, config.yaml, or .tgz")
-    rep.add_argument("--output_dir", required=True)
+    add_output_dir_argument(rep, required=True)
     rep.add_argument("--dry-run", action="store_true")
     rep.add_argument("--no-install", action="store_true")
     rep.add_argument(

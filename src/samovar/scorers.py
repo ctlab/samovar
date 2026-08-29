@@ -27,7 +27,7 @@ from samovar.main_config import (
     tool_inputs,
     tool_path,
 )
-from samovar.paths import load_config
+from samovar.paths import add_output_dir_argument, load_config
 from samovar.table_regenerators import extra_flags_argv
 
 SCORING_GROUP = "scoring"
@@ -348,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="samovar.scorers")
     sub = parser.add_subparsers(dest="command")
     run = sub.add_parser("run", help="Run imported scoring/viz tools on a run directory")
-    run.add_argument("--output_dir", "--output-dir", dest="output_dir", required=True)
+    add_output_dir_argument(run, required=True)
     run.add_argument("--config", default="", help="config_scoring.yaml from prepare")
     run.add_argument("--stage", default="", help="Pipeline checkpoint name (viz_initial, …)")
     run.add_argument(

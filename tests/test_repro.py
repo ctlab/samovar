@@ -145,6 +145,10 @@ def test_export_full_packs_db_and_lazy_install(tmp_path, monkeypatch):
 def test_rewrite_output_dir_and_overrides():
     argv = rewrite_output_dir_argv(["--genome_dir", "g", "--output_dir", "old"], "/new")
     assert argv[-1] == "/new"
+    argv = rewrite_output_dir_argv(["--directory", "old"], "/relocated")
+    assert argv == ["--output_dir", "/relocated"]
+    argv = rewrite_output_dir_argv(["--outdir=/tmp/old"], "/new")
+    assert "--output_dir" in argv and "/new" in argv
     ov = args_to_overrides("generate", {"n_samples": 1, "threads": 4, "extra": None})
     assert "generate.threads=4" in ov
 

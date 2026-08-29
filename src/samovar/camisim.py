@@ -1071,6 +1071,7 @@ view=False
 
 def write_generate_pipeline(output_dir: str, cfg: Dict[str, Any]) -> str:
     from samovar.paths import python_path as py_path
+    from samovar.paths import shell_outdir_override_snippet, shell_source_install_env_snippet
 
     base = Path(absolute_path(output_dir))
     generate = generate_dir(str(base))
@@ -1079,8 +1080,6 @@ def write_generate_pipeline(output_dir: str, cfg: Dict[str, Any]) -> str:
     root = repo_root()
     py = py_path()
     tool_path = runtime_path_prefix()
-    from samovar.paths import shell_source_install_env_snippet
-
     env_snippet = shell_source_install_env_snippet()
     pipeline = generate / "generate.sh"
     pipeline.write_text(
@@ -1096,6 +1095,7 @@ fi
 PYTHON_PATH="${{PYTHON_PATH:-python3}}"
 
 out_dir="{base}"
+{shell_outdir_override_snippet()}
 mkdir -p "$out_dir"
 
 # CAMISIM community / reads (table mode continues with ISS)

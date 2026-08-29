@@ -23,9 +23,13 @@ export SAMOVAR_REDO="${SAMOVAR_REDO:-0}"
 export SAMOVAR_CLEANUP_TMP="${SAMOVAR_CLEANUP_TMP:-0}"
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --output_dir)
+        --output_dir|--output-dir|--outdir|--directory)
             OUTPUT_DIR="$2"
             shift 2
+            ;;
+        --output_dir=*|--output-dir=*|--outdir=*|--directory=*)
+            OUTPUT_DIR="${1#*=}"
+            shift
             ;;
         --redo)
             export SAMOVAR_REDO=1
@@ -48,8 +52,9 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
+            echo "Usage: samovar exec --directory /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
             echo ""
+            echo "  --directory / --output_dir / --outdir   Run directory (default: .)"
             echo "  --redo          Ignore completed checkpoints and rerun every exec step"
             echo "  --startpoint    First checkpoint to run (overrides prepare; aliases: tables, viz, ml, …)"
             echo "  --endpoint      Last checkpoint to run (e.g. combine_initial / tables)"
@@ -71,7 +76,7 @@ while [[ $# -gt 0 ]]; do
                 continue
             fi
             echo "Unknown option: $1"
-            echo "Usage: samovar exec --output_dir /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
+            echo "Usage: samovar exec --directory /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
             exit 1
             ;;
     esac
@@ -114,14 +119,14 @@ if [ -d "$OUTPUT_DIR/.generate" ] && [ -f "$OUTPUT_DIR/.generate/generate.sh" ];
         echo "Skipping generate: $OUTPUT_DIR/initial already has reads (use --redo to regenerate)"
     else
         echo "Running generate pipeline..."
-        bash "$OUTPUT_DIR/.generate/generate.sh"
+        bash "$OUTPUT_DIR/.generate/generate.sh" --directory "$OUTPUT_DIR"
     fi
 fi
 
 # Check for .log directory and run its pipeline if it exists
 if [ -d "$OUTPUT_DIR/.log" ] && [ -f "$OUTPUT_DIR/.log/samovar.sh" ]; then
     echo "Running main SamovaR pipeline..."
-    bash "$OUTPUT_DIR/.log/samovar.sh"
+    bash "$OUTPUT_DIR/.log/samovar.sh" --directory "$OUTPUT_DIR"
 else
     echo "Error: $OUTPUT_DIR/.log/samovar.sh is missing."
     echo "Generate only writes reads under $OUTPUT_DIR/initial/."

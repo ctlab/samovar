@@ -10,10 +10,12 @@ from pathlib import Path
 from samovar.exec_control import CHECKPOINT_STEPS, resolve_window
 from samovar.paths import (
     absolute_path,
+    add_output_dir_argument,
     ncbi_email,
     python_path,
     repo_root,
     runtime_path_prefix,
+    shell_outdir_override_snippet,
 )
 from samovar.table_regenerators import flags_apply_to_regenerator, canonical_regeneration_modes
 from samovar.table_scorers import flags_apply_to_table_scorer
@@ -930,6 +932,7 @@ fi
 PYTHON_PATH="${{PYTHON_PATH:-python3}}"
 
 out_dir="{base_dir}"
+{shell_outdir_override_snippet()}
 CKPT="$out_dir/.log/checkpoints"
 mkdir -p "$CKPT"
 # Checkpoint names: {step_names}
@@ -990,6 +993,7 @@ fi""",
             "annotate_initial",
             f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['init_annotator']} \\
+    --directory "$out_dir" \\
     --cores {self.cores}""",
         )
 
@@ -1043,6 +1047,7 @@ mkdir -p "$out_dir/genomes"
             "regenerate_reads",
             f"""snakemake -s {wf / 'abundance2iss' / 'Snakefile'} \\
     --configfile {configs['abundance2iss']} \\
+    --directory "$out_dir" \\
     --cores {self.cores}
 "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )
@@ -1065,6 +1070,7 @@ fi
             "annotate_regenerated",
             f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['reannotate']} \\
+    --directory "$out_dir" \\
     --cores {self.cores}""",
         )
 
@@ -1167,7 +1173,11 @@ def parse_args() -> argparse.Namespace:
     input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
     
     # Output
-    parser.add_argument('--output_dir', default=None, help='Output directory (default: samovar_out, or from --input_config)')
+    add_output_dir_argument(
+        parser,
+        default=None,
+        help='Output directory (default: samovar_out, or from --input_config)',
+    )
     
     # Add a dynamic command argument group
     cmd_group = parser.add_argument_group('Command Arguments')

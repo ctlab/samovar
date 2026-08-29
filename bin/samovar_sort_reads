@@ -51,7 +51,9 @@ def _r1_files(out_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Sort paired FASTQ files by read ID")
-    parser.add_argument("--output_dir", default=".", help="Directory with FASTQ files")
+    from samovar.paths import add_output_dir_argument
+
+    add_output_dir_argument(parser, default=".", help="Directory with FASTQ files")
     parser.add_argument("output_dir_pos", nargs="?", help="Optional positional output_dir")
     from samovar.tool_spec import parse_known_with_custom
 

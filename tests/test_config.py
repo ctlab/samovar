@@ -281,6 +281,7 @@ def test_generate_pipeline():
         
         # Check snakemake commands
         assert "snakemake -s " in pipeline_content
+        assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/annotators/Snakefile" in pipeline_content
         assert "workflow/abundance2iss/Snakefile" in pipeline_content
         
@@ -388,6 +389,7 @@ def test_setup_pipeline():
     with open(pipeline_path, 'r') as f:
         pipeline_content = f.read()
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
+        assert '--directory "$out_dir"' in pipeline_content
 
 
 def test_generate_pipeline_bakes_tool_env_bins(tmp_path, monkeypatch):

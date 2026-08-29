@@ -779,6 +779,7 @@ def write_custom_generate_script(base_dir: str, config_path: str, cores: int = 1
         repo_root,
         runtime_path_prefix,
         shell_source_install_env_snippet,
+        shell_outdir_override_snippet,
     )
 
     base = Path(base_dir)
@@ -799,6 +800,10 @@ if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
   PYTHON_PATH="$(command -v python3 || command -v python || true)"
 fi
 PYTHON_PATH="${{PYTHON_PATH:-python3}}"
+
+out_dir="{base}"
+{shell_outdir_override_snippet()}
+mkdir -p "$out_dir"
 
 "$PYTHON_PATH" -c "from samovar.reads_generators import run_generate_from_yaml; run_generate_from_yaml(r'{config_path}')"
 """

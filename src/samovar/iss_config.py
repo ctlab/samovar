@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from samovar.genome_fetcher import argparse_max_genome_mb
+from samovar.paths import add_output_dir_argument
 from samovar.regenerate import UNLIMITED_MAX_GENOMES, argparse_max_genomes, parse_max_genomes
 
 
@@ -153,6 +154,7 @@ class ISSTestConfig:
     def generate_pipeline(self, base_dir: str) -> str:
         """Generate the ISS test pipeline script and return its path"""
         from samovar.paths import absolute_path, python_path, repo_root, runtime_path_prefix
+        from samovar.paths import shell_outdir_override_snippet
 
         base_dir = absolute_path(base_dir)
         base_path = Path(base_dir)
@@ -184,11 +186,13 @@ fi
 PYTHON_PATH="${{PYTHON_PATH:-python3}}"
 
 out_dir="{base_dir}"
+{shell_outdir_override_snippet()}
 mkdir -p "$out_dir"
 
 # Generate reads with InSilicoSeq
 snakemake -s {snakefile} \\
     --configfile {config_path} \\
+    --directory "$out_dir" \\
     --cores {self.cores}
 """
         
@@ -203,8 +207,11 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     # Required arguments
     parser.add_argument('--genome_dir', required=False, default=None,
                        help='Directory containing reference genomes')
-    parser.add_argument('--output_dir', required=True,
-                       help='Output directory for generated files')
+    add_output_dir_argument(
+        parser,
+        required=True,
+        help='Output directory for generated files',
+    )
     parser.add_argument('--host_genome', required=False, default="",
                        help='Path to host genome file')
     parser.add_argument(

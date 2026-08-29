@@ -114,6 +114,7 @@ def test_generate_pipeline():
         assert "PYTHON_PATH=" in pipeline_content
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "snakemake -s " in pipeline_content
+        assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
         assert "samovar/env" in pipeline_content
         assert "SAMOVAR_PATH" in pipeline_content
@@ -163,7 +164,15 @@ def test_setup_iss_test():
         assert "PYTHON_PATH=" in pipeline_content
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "snakemake -s " in pipeline_content
+        assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
+
+
+def test_parse_args_directory_alias():
+    from samovar.iss_config import parse_args
+
+    args = parse_args(["--directory", "out", "--genome_dir", "g"])
+    assert args.output_dir == "out"
 
 
 def test_parse_args_reindex_and_raw_genomes():

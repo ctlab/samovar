@@ -1166,7 +1166,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m samovar.regenerate")
     sub = parser.add_subparsers(dest="command", required=True)
     tables = sub.add_parser("tables", help="Regenerate abundance tables for a run directory")
-    tables.add_argument("--output_dir", "--outdir", dest="output_dir", required=True)
+    from samovar.paths import add_output_dir_argument
+
+    add_output_dir_argument(tables, required=True)
     tables.add_argument("--config", default="", help="YAML (annotation2iss / table regen)")
     args = parser.parse_args(argv)
     if args.command == "tables":
