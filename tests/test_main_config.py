@@ -184,7 +184,8 @@ def test_install_migrates_legacy_genome_data_and_keeps_catalog(tmp_path):
         "GCF_000819615.1.fa.gz",
     ]
     assert "GCF_000819615.1" not in payload["genomes"]["data"]
-    assert payload["databases"]["kraken2"][0][0] == "phage_test"
+    assert "phage_test" in payload["databases"]["kraken2"]
+    assert payload["databases"]["kraken2"]["phage_test"]["path"] == "/k"
 
 
 def test_home_genome_dirs_are_dropped(tmp_path, monkeypatch):

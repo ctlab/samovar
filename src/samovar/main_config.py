@@ -716,38 +716,75 @@ def first_dir(values: Sequence[str]) -> str:
 
 
 def databases_of(cfg: Dict[str, Any]) -> Dict[str, List[List[str]]]:
-    raw = _raw_get(cfg, "databases")
-    if not isinstance(raw, dict):
-        return {}
-    out: Dict[str, List[List[str]]] = {}
-    for tool, value in raw.items():
-        if str(tool).startswith("_"):
-            continue
-        rows: List[List[str]] = []
-        if isinstance(value, dict):
-            rows.append(
-                [
-                    str(value.get("name") or value.get("database_name") or "").strip(),
-                    str(value.get("path") or value.get("database_path") or "").strip(),
-                    str(value.get("flags") or value.get("database_flags") or "").strip(),
-                ]
-            )
-        elif isinstance(value, (list, tuple)):
-            if value and isinstance(value[0], (list, tuple)):
-                for row in value:
-                    parts = [str(x).strip() if x is not None else "" for x in row]
-                    while len(parts) < 3:
-                        parts.append("")
-                    rows.append(parts[:3])
-            else:
-                parts = [str(x).strip() if x is not None else "" for x in value]
-                while len(parts) < 3:
-                    parts.append("")
-                rows.append(parts[:3])
-        elif value:
-            rows.append([str(value).strip(), "", ""])
-        out[str(tool)] = rows
-    return out
+    """Legacy view: ``{tool: [[name, path, flags], …]}``.
+
+    Preferred on-disk form is ``databases.<tool>.<name:version>`` objects
+    (``path`` / ``flags`` / ``lazy-download``). List rows still parse.
+    """
+    from samovar.db_spec import databases_to_rows
+
+    return databases_to_rows(cfg)
+
+
+def set_database(
+    cfg: Dict[str, Any],
+    tool: str,
+    name: str,
+    *,
+    path: str = "",
+    flags: Optional[str] = None,
+    lazy_download: Optional[str] = None,
+    version: Optional[str] = None,
+    url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upsert ``databases.<tool>.<name:version>`` and return the record."""
+    from samovar.db_spec import (
+        databases_for_disk,
+        iter_database_records,
+        join_db_key,
+        lazy_download_for,
+        parse_database_record,
+        split_db_key,
+    )
+
+    tool_name = str(tool or "").strip()
+    bare, key_ver = split_db_key(name)
+    if not tool_name:
+        raise ValueError("database annotator --tool is required")
+    if not bare:
+        raise ValueError("database --name is required")
+    grouped = iter_database_records(cfg)
+    tool_block = dict(grouped.get(tool_name) or {})
+    disk_key = join_db_key(bare, str(version or key_ver or "").strip())
+    previous = tool_block.get(disk_key) or {}
+    if not previous:
+        for stored, rec in tool_block.items():
+            if stored == name or (rec.get("name") == bare and not rec.get("_version") and not (version or key_ver)):
+                previous = rec
+                break
+    rec = parse_database_record(previous, tool=tool_name, name=bare)
+    rec["tool"] = tool_name
+    rec["name"] = bare
+    if path:
+        rec["path"] = str(path).strip()
+    if flags is not None:
+        rec["flags"] = str(flags).strip()
+    if lazy_download is not None:
+        rec["lazy-download"] = str(lazy_download).strip()
+    if url is not None:
+        rec["url"] = str(url).strip()
+    ver = str(version or key_ver or rec.get("_version") or "").strip()
+    rec["_version"] = ver
+    if not rec.get("lazy-download"):
+        rec["lazy-download"] = lazy_download_for(tool_name, bare, ver, rec.get("url") or "")
+    disk_key = join_db_key(bare, ver)
+    tool_block[disk_key] = rec
+    grouped[tool_name] = tool_block
+    cfg["databases"] = databases_for_disk({"databases": {
+        t: {k: v for k, v in block.items()}
+        for t, block in grouped.items()
+    }})
+    return rec
 
 
 def scan_test_genome_index(test_root: Path) -> Dict[str, List[str]]:
@@ -827,7 +864,7 @@ def _merge_folder_map(existing: Any, extra: Dict[str, str]) -> Dict[str, str]:
 def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
     """Write either canonical or legacy keys into ``cfg`` (mutates, returns cfg)."""
     for key, value in updates.items():
-        if key in CANONICAL_TOP and key not in {"tools", "genomes", "custom-flags"}:
+        if key in CANONICAL_TOP and key not in {"tools", "genomes", "custom-flags", "databases"}:
             cfg[key] = value
             continue
         if key == "compilers" and isinstance(value, dict):
@@ -947,6 +984,24 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
             from samovar.tool_spec import custom_flags_from_cfg
 
             cfg["custom-flags"] = custom_flags_from_cfg({"custom-flags": value})
+            continue
+        if key == "databases":
+            if isinstance(value, dict):
+                from samovar.db_spec import iter_database_records
+
+                incoming = iter_database_records({"databases": value})
+                for tool, grouped in incoming.items():
+                    for key_name, rec in grouped.items():
+                        set_database(
+                            cfg,
+                            rec.get("tool") or tool,
+                            rec.get("name") or key_name,
+                            path=str(rec.get("path") or ""),
+                            flags=rec.get("flags"),
+                            lazy_download=rec.get("lazy-download"),
+                            version=str(rec.get("_version") or rec.get("version") or ""),
+                            url=rec.get("url"),
+                        )
             continue
         if key == "tools":
             if isinstance(value, dict):
@@ -1389,6 +1444,7 @@ def disk_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         genomes["processed"] = drop_home_paths(folder_map(genomes.get("processed")))
         payload["genomes"] = genomes
     payload["tools"] = _tools_for_disk(canonical)
+    payload["databases"] = _databases_for_disk(canonical)
     from samovar.tool_spec import custom_flags_from_cfg
 
     payload["custom-flags"] = custom_flags_from_cfg(canonical)
@@ -1434,6 +1490,12 @@ def _tools_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
         key = join_tool_key(bare, ver)
         out[key] = rec
     return out
+
+
+def _databases_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    from samovar.db_spec import databases_for_disk
+
+    return databases_for_disk(cfg)
 
 
 def _fmt_install_value(value: Any) -> str:
@@ -1490,8 +1552,14 @@ def install_option_rows(cfg: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
     if isinstance(data, dict) and data:
         add("genomes.data", f"{len(data)} catalog entries")
     databases = payload.get("databases") if isinstance(payload.get("databases"), dict) else {}
+    from samovar.db_spec import looks_like_db_map
+
     for name, spec in databases.items():
-        add(f"databases.{name}", spec if spec not in (None, "", {}, []) else "(named, empty)")
+        if isinstance(spec, dict) and looks_like_db_map(spec):
+            for dbname, rec in spec.items():
+                add(f"databases.{name}.{dbname}", rec)
+        else:
+            add(f"databases.{name}", spec if spec not in (None, "", {}, []) else "(named, empty)")
     skip_tools = {"python", "python3", "g++", "c++", "clang++", "R", "Rscript", "bash"}
     for name, spec in iter_tools(payload).items():
         if name in skip_tools:

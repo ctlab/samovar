@@ -219,7 +219,8 @@ def _portable_annotator_cmd(cmd: str) -> str:
 
 def _expand_indexed_database(cmd: str, db_path: str, extra: Optional[str]) -> tuple:
     """If ``db_path`` is a registered database name, substitute path and stored flags."""
-    from samovar.genome_index import lookup_database
+    from samovar.db_spec import annotator_flags_for_db, lookup_database_record
+    from samovar.paths import load_config
 
     token = (db_path or "").strip()
     if not token or token == ".":
@@ -228,12 +229,12 @@ def _expand_indexed_database(cmd: str, db_path: str, extra: Optional[str]) -> tu
     if as_path.exists():
         return db_path, extra
     tool = Path(cmd).name.split(".")[0]
-    rec = lookup_database(tool, token)
+    rec = lookup_database_record(load_config(), tool, token)
     if rec is None:
         return db_path, extra
-    resolved = rec[1]
-    stored_flags = (rec[2] if len(rec) > 2 else "") or ""
-    merged = " ".join(p for p in (stored_flags, extra or "") if p).strip() or None
+    resolved = str(rec.get("path") or "").strip() or db_path
+    stored = annotator_flags_for_db(tool, resolved, str(rec.get("flags") or ""))
+    merged = " ".join(p for p in (stored, extra or "") if p).strip() or None
     return resolved, merged
 
 

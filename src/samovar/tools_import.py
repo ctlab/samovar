@@ -120,6 +120,74 @@ def import_tool(
     return parse_tool_entry(iter_tools(load_config()).get(name), name)
 
 
+DATABASE_TYPES = {"database", "db", "databases"}
+
+
+def is_database_type(value: str) -> bool:
+    return str(value or "").strip().lower().replace("-", "_") in DATABASE_TYPES
+
+
+def resolve_database_path(exec_path: str) -> str:
+    raw = str(exec_path or "").strip()
+    if not raw:
+        raise FileNotFoundError("--exec-path is required for --type database")
+    candidate = Path(raw).expanduser()
+    if candidate.exists():
+        return str(candidate.resolve())
+    prefix = Path(str(candidate) + ".1.cf")
+    if prefix.is_file():
+        return str(candidate)
+    parent = candidate.parent
+    stem = candidate.name
+    if parent.is_dir():
+        try:
+            for child in parent.iterdir():
+                if child.name == stem or child.name.startswith(stem + "."):
+                    return str(candidate)
+        except OSError:
+            pass
+    raise FileNotFoundError(f"--exec-path not found: {raw}")
+
+
+def import_database(
+    *,
+    name: str,
+    tool: str = "",
+    exec_path: str = "",
+    flags: str = "",
+    lazy_download: str = "",
+    version: str = "",
+    url: str = "",
+    also_repo_build: bool = True,
+) -> dict:
+    """Write ``databases.<tool>.<name:version>``; return the object record."""
+    from samovar.db_spec import lookup_database_record, parse_tool_and_name
+    from samovar.main_config import set_database
+    from samovar.repro import load_lazy_install_text
+
+    annotator, db_name = parse_tool_and_name(name, tool)
+    if not annotator:
+        raise ValueError("--tool is required for --type database (or pass -n kraken2:dbname)")
+    if not db_name:
+        raise ValueError("--name is required")
+    path = resolve_database_path(exec_path)
+    lazy = load_lazy_install_text(str(lazy_download or ""))
+    cfg = load_config()
+    rec = set_database(
+        cfg,
+        annotator,
+        db_name,
+        path=path,
+        flags=str(flags or "").strip(),
+        lazy_download=lazy or None,
+        version=str(version or "").strip() or None,
+        url=str(url or "").strip() or None,
+    )
+    update_config({"databases": cfg.get("databases") or {}}, also_repo_build=also_repo_build)
+    stored = lookup_database_record(load_config(), annotator, rec.get("name") or db_name) or rec
+    return stored
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="samovar tools import",
@@ -154,13 +222,28 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             f"Tool group: {', '.join(TOOL_GROUPS)} "
-            "(aliases: a, reads, meta, table, table-scoring, score, viz, ml)"
+            "(aliases: a, reads, meta, table, table-scoring, score, viz, ml); "
+            "or 'database' / 'db' to register an annotator index under databases.*"
         ),
+    )
+    parser.add_argument(
+        "--tool",
+        default="",
+        help="Annotator that uses this DB (required with --type database). "
+        "Also accepted as -n tool:dbname.",
+    )
+    parser.add_argument(
+        "--url",
+        default="",
+        help="Official archive URL stored on the database record (feeds lazy-download).",
     )
     parser.add_argument(
         "--flags",
         default="",
-        help="Optional extra CLI flags stored on the tool record",
+        help=(
+            "Native CLI flags stored on the record. For --type database they are "
+            "merged into the annotator's extra at prepare (e.g. --memory-mapping)."
+        )
     )
     parser.add_argument(
         "--flags-translate",
@@ -182,6 +265,18 @@ def build_parser() -> argparse.ArgumentParser:
         dest="lazy_install_file",
         default="",
         help="Read a bash file into lazy-install (same as --lazy-install @FILE).",
+    )
+    parser.add_argument(
+        "--lazy-download",
+        dest="lazy_download",
+        default="",
+        help="Database rebuild recipe (same syntax as --lazy-install). Used with --type database.",
+    )
+    parser.add_argument(
+        "--lazy-download-file",
+        dest="lazy_download_file",
+        default="",
+        help="Read a bash file into lazy-download (same as --lazy-download @FILE).",
     )
     parser.add_argument(
         "--tool-version",
@@ -216,6 +311,26 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if is_database_type(args.type):
+            lazy = args.lazy_download or args.lazy_install
+            extra_file = str(
+                getattr(args, "lazy_download_file", "")
+                or getattr(args, "lazy_install_file", "")
+                or ""
+            ).strip()
+            if extra_file:
+                lazy = "@" + extra_file
+            rec = import_database(
+                name=args.name,
+                tool=str(getattr(args, "tool", "") or ""),
+                exec_path=args.exec_path,
+                flags=args.flags,
+                lazy_download=lazy,
+                version=args.version,
+                url=str(getattr(args, "url", "") or ""),
+            )
+            print(f"Imported databases.{rec.get('tool')}.{rec.get('name')} = {rec}")
+            return 0
         dest = resolve_import_path(
             name=args.name,
             exec_name=str(args.exec_name or "").strip() or args.name,

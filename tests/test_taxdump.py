@@ -53,6 +53,22 @@ def test_taxdump_dir_defaults_under_samovar_database(tmp_path, monkeypatch):
     assert taxdump_dir(cfg) == store / "taxdump"
 
 
+def test_taxdump_dir_falls_back_to_indexed_database(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_TAXDUMP", raising=False)
+    dump = tmp_path / "ncbi_taxdump"
+    dump.mkdir()
+    (dump / "nodes.dmp").write_text("1\t|\n")
+    cfg = {
+        "genomes": {"samovar_database": str(tmp_path / "store"), "taxdump": ""},
+        "databases": {
+            "taxdump": {
+                "ncbi": {"path": str(dump), "type": "database"},
+            }
+        },
+    }
+    assert taxdump_dir(cfg) == dump
+
+
 def test_find_dmp_nested_taxonomy(tmp_path):
     nested = tmp_path / "taxonomy"
     nested.mkdir()

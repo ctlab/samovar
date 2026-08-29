@@ -109,7 +109,16 @@ def test_export_full_packs_db_and_lazy_install(tmp_path, monkeypatch):
                     "flags-translate": {"--threads": "--threads"},
                 }
             },
-            "databases": {"myclf": [["testdb", str(db), "--threads 1"]]},
+            "databases": {
+                "myclf": {
+                    "testdb": {
+                        "path": str(db),
+                        "flags": "--threads 1",
+                        "lazy-download": "#!/bin/bash\necho fetch\n",
+                        "url": "https://example.invalid/db.tgz",
+                    }
+                }
+            },
             "custom-flags": ["--threads"],
         },
         also_repo_build=False,
@@ -129,6 +138,8 @@ def test_export_full_packs_db_and_lazy_install(tmp_path, monkeypatch):
     assert any(n.endswith("payload/tools/myclf/lazy-install.sh") for n in names)
     assert any(n.endswith("payload/tools/myclf/meta.json") for n in names)
     assert any("payload/databases/myclf/testdb" in n for n in names)
+    assert any(n.endswith("payload/db-meta/myclf/testdb/lazy-download.sh") for n in names)
+    assert any(n.endswith("payload/db-meta/myclf/testdb/meta.json") for n in names)
     assert any(n.endswith("install.sh") for n in names)
     extract = tmp_path / "unfold"
     extract.mkdir()
@@ -140,6 +151,8 @@ def test_export_full_packs_db_and_lazy_install(tmp_path, monkeypatch):
     script = (extract / "samovar-run" / "install.sh").read_text()
     assert "--type" in script
     assert "lazy-install-file" in script
+    assert "--type database" in script
+    assert "--lazy-download-file" in script
 
 
 def test_rewrite_output_dir_and_overrides():

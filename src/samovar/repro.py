@@ -25,7 +25,6 @@ from omegaconf import DictConfig, OmegaConf
 
 from samovar.main_config import (
     TOOL_GROUP_BY_NAME,
-    databases_of,
     iter_tool_records,
     tool_group_for,
 )
@@ -226,13 +225,26 @@ def capture_tools(cfg: Optional[Mapping[str, Any]] = None) -> Tuple[Dict[str, An
 
 
 def capture_databases(cfg: Optional[Mapping[str, Any]] = None) -> Dict[str, List[Dict[str, str]]]:
+    from samovar.db_spec import iter_database_records, official_url_for
+
     data = cfg or load_config()
     out: Dict[str, List[Dict[str, str]]] = {}
-    for tool, rows in databases_of(data).items():
+    for tool, grouped in iter_database_records(data).items():
         packed = []
-        for row in rows:
-            name, path, flags = (row + ["", "", ""])[:3]
-            packed.append({"name": name, "path": path, "flags": flags})
+        for rec in grouped.values():
+            version = str(rec.get("_version") or rec.get("version") or "")
+            packed.append(
+                {
+                    "name": str(rec.get("name") or ""),
+                    "path": str(rec.get("path") or ""),
+                    "flags": str(rec.get("flags") or ""),
+                    "version": version,
+                    "lazy_download": str(rec.get("lazy-download") or ""),
+                    "url": official_url_for(
+                        tool, str(rec.get("name") or ""), version, str(rec.get("url") or "")
+                    ),
+                }
+            )
         if packed:
             out[tool] = packed
     return out
@@ -571,13 +583,29 @@ def _argv_from_args(stage: str, args: Mapping[str, Any]) -> List[str]:
     return out
 
 
+def database_src_exists(src: Path) -> bool:
+    """True for a directory, file, or centrifuge-style prefix (``stem.1.cf``)."""
+    if src.exists():
+        return True
+    return Path(str(src) + ".1.cf").is_file()
+
+
 def copy_database_tree(src: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
         shutil.copytree(src, dest, dirs_exist_ok=True)
-    elif src.is_file():
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        return
+    if src.is_file():
         shutil.copy2(src, dest)
+        return
+    parent = src.parent
+    stem = src.name
+    if not parent.is_dir():
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for child in parent.iterdir():
+        if child.name == stem or child.name.startswith(stem + "."):
+            shutil.copy2(child, dest / child.name)
 
 
 def export_run(
@@ -606,12 +634,32 @@ def export_run(
                 for row in rows or []:
                     path = Path(str(row.get("path") or "")).expanduser()
                     name = str(row.get("name") or path.name or "db")
-                    if not path.exists():
+                    if not database_src_exists(path):
                         warnings.append(f"database {tool}/{name} missing on disk: {path}")
                         continue
                     rel = Path("databases") / tool / name
                     copy_database_tree(path, payload / rel)
                     db_map.append(f"{tool}\t{name}\t{rel.as_posix()}\t{row.get('flags') or ''}")
+                    lazy = str(row.get("lazy_download") or row.get("lazy-download") or "").strip()
+                    meta_dir = payload / "db-meta" / tool / name
+                    meta_dir.mkdir(parents=True, exist_ok=True)
+                    meta = {
+                        "tool": tool,
+                        "name": name,
+                        "version": str(row.get("version") or ""),
+                        "flags": row.get("flags") or "",
+                        "url": str(row.get("url") or ""),
+                    }
+                    (meta_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+                    if lazy:
+                        (meta_dir / "lazy-download.sh").write_text(lazy.rstrip() + "\n", encoding="utf-8")
+                    elif not path.exists():
+                        pass
+                    else:
+                        warnings.append(
+                            f"database {tool}/{name} has no lazy-download; "
+                            "reproduce can copy the packed tree but cannot re-fetch it"
+                        )
             imports = _plain(snap.get("imports"), {}) or {}
             for name, rec in imports.items():
                 rec = rec or {}
@@ -690,8 +738,18 @@ if [ -f "$ROOT/payload/databases.tsv" ]; then
     while IFS=$'\\t' read -r tool name rel flags; do
         [ -n "$tool" ] || continue
         dest="$ROOT/payload/$rel"
-        SAMOVAR_DB_TOOL="$tool" SAMOVAR_DB_NAME="$name" SAMOVAR_DB_PATH="$dest" SAMOVAR_DB_FLAGS="${flags:-}" \\
-            python3 -c 'import os; from samovar.genome_index import register_database; register_database(os.environ["SAMOVAR_DB_TOOL"], os.environ["SAMOVAR_DB_NAME"], os.environ["SAMOVAR_DB_PATH"], os.environ.get("SAMOVAR_DB_FLAGS",""))'
+        extra=()
+        [ -n "${flags:-}" ] && extra+=(--flags "$flags")
+        if [ -f "$ROOT/payload/db-meta/$tool/$name/lazy-download.sh" ]; then
+            extra+=(--lazy-download-file "$ROOT/payload/db-meta/$tool/$name/lazy-download.sh")
+        fi
+        if [ -f "$ROOT/payload/db-meta/$tool/$name/meta.json" ]; then
+            ver="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version") or "")' "$ROOT/payload/db-meta/$tool/$name/meta.json")"
+            url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("url") or "")' "$ROOT/payload/db-meta/$tool/$name/meta.json")"
+            [ -n "$ver" ] && extra+=(--tool-version "$ver")
+            [ -n "$url" ] && extra+=(--url "$url")
+        fi
+        "$SAMOVAR" tools import -n "$name" --type database --tool "$tool" --exec-path "$dest" "${extra[@]}" || true
     done < "$ROOT/payload/databases.tsv"
 fi
 echo "Unfold complete. Reproduce with:"

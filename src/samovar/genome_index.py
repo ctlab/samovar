@@ -690,36 +690,42 @@ def harvest_run_genomes(output_dir: PathLike) -> int:
     return counted
 
 
-def register_database(tool: str, name: str, path: str, flags: str = "") -> None:
-    from samovar.main_config import databases_of
+def register_database(
+    tool: str,
+    name: str,
+    path: str,
+    flags: str = "",
+    *,
+    lazy_download: str = "",
+    version: str = "",
+    url: str = "",
+) -> None:
+    from samovar.main_config import set_database
     from samovar.paths import load_config, update_config
 
     cfg = load_config()
-    dbs = databases_of(cfg)
-    rows = list(dbs.get(tool) or [])
-    entry = [str(name).strip(), str(path).strip(), str(flags or "").strip()]
-    replaced = False
-    for i, row in enumerate(rows):
-        if row and row[0] == entry[0]:
-            rows[i] = entry
-            replaced = True
-            break
-    if not replaced:
-        rows.append(entry)
-    dbs[str(tool)] = rows
-    update_config({"databases": dbs})
-    logger.info("Registered database %s/%s -> %s", tool, name, path)
+    rec = set_database(
+        cfg,
+        tool,
+        name,
+        path=path,
+        flags=flags,
+        lazy_download=lazy_download or None,
+        version=version or None,
+        url=url or None,
+    )
+    update_config({"databases": cfg.get("databases") or {}})
+    logger.info("Registered database %s/%s -> %s", tool, rec.get("name") or name, rec.get("path") or path)
 
 
 def lookup_database(tool: str, name: str) -> Optional[List[str]]:
-    from samovar.main_config import databases_of
+    from samovar.db_spec import lookup_database_record, record_to_row
     from samovar.paths import load_config
 
-    rows = databases_of(load_config()).get(tool) or []
-    for row in rows:
-        if row and row[0] == name:
-            return row
-    return None
+    rec = lookup_database_record(load_config(), tool, name)
+    if rec is None:
+        return None
+    return record_to_row(rec)
 
 
 def reindex(

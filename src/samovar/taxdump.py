@@ -53,6 +53,18 @@ def taxdump_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
     raw = str((block.get("taxdump") if isinstance(block, dict) else "") or "").strip()
     if raw:
         return _as_path(raw)
+    try:
+        from samovar.db_spec import iter_database_records, lookup_database_record
+
+        rec = lookup_database_record(cfg, "taxdump", "ncbi")
+        if rec and rec.get("path"):
+            return _as_path(rec["path"])
+        grouped = iter_database_records(cfg or {}).get("taxdump") or {}
+        for item in grouped.values():
+            if item.get("path"):
+                return _as_path(item["path"])
+    except Exception:
+        pass
     return samovar_database_dir(cfg) / "taxdump"
 
 

@@ -208,6 +208,21 @@ def test_expand_named_database(tmp_path, monkeypatch):
     assert extra2 == "x"
 
 
+def test_copy_centrifuge_prefix(tmp_path):
+    from samovar.repro import copy_database_tree, database_src_exists
+
+    parent = tmp_path / "centrifuge"
+    parent.mkdir()
+    prefix = parent / "p_compressed+h+v"
+    (parent / "p_compressed+h+v.1.cf").write_bytes(b"a")
+    (parent / "p_compressed+h+v.2.cf").write_bytes(b"b")
+    assert database_src_exists(prefix)
+    dest = tmp_path / "packed"
+    copy_database_tree(prefix, dest)
+    assert (dest / "p_compressed+h+v.1.cf").is_file()
+    assert (dest / "p_compressed+h+v.2.cf").is_file()
+
+
 def test_normalize_genome_data_legacy_and_current():
     from samovar.genome_index import normalize_genome_data
 
