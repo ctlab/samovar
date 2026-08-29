@@ -34,13 +34,23 @@ CUSTOM_SH_ROUTER_TOOLS = {
 
 
 def skip_empty_reads_cmd(input_r1: str, outputs: Sequence[str], run_cmd: str) -> str:
-    """If R1 is empty, touch expected outputs instead of running the classifier.
+    """If R1 has no FASTQ records, touch expected outputs instead of running.
 
-    Kraken2/Kaiju on a 0-byte FASTQ can exit 0 without writing ``--output``.
+    Kraken2/Kaiju on a 0-byte or 1-byte FASTQ can exit 0 without writing ``--output``.
     """
     r1 = shlex.quote(str(input_r1))
     outs = " ".join(shlex.quote(str(path)) for path in outputs)
-    return f"if [ ! -s {r1} ]; then touch {outs}; else {run_cmd.strip()}; fi"
+    py = shlex.quote(sys.executable)
+    src_root = str(Path(__file__).resolve().parent.parent)
+    code = (
+        "from samovar.seqio import fastq_has_reads; import sys; "
+        "raise SystemExit(0 if fastq_has_reads(sys.argv[1]) else 1)"
+    )
+    probe = (
+        f"PYTHONPATH={shlex.quote(src_root)}${{PYTHONPATH:+:$PYTHONPATH}} "
+        f"{py} -c {shlex.quote(code)} {r1}"
+    )
+    return f"if ! {probe}; then touch {outs}; else {run_cmd.strip()}; fi"
 
 
 def single_or_paired_reads_cmd(
@@ -55,9 +65,18 @@ def single_or_paired_reads_cmd(
     r1 = shlex.quote(str(input_r1))
     r2 = shlex.quote(str(input_r2))
     outs = " ".join(shlex.quote(str(path)) for path in outputs)
+    py = shlex.quote(sys.executable)
+    src_root = str(Path(__file__).resolve().parent.parent)
+    code = (
+        "from samovar.seqio import fastq_has_reads; import sys; "
+        "raise SystemExit(0 if fastq_has_reads(sys.argv[1]) else 1)"
+    )
+    prefix = f"PYTHONPATH={shlex.quote(src_root)}${{PYTHONPATH:+:$PYTHONPATH}} {py} -c {shlex.quote(code)}"
+    probe_r1 = f"{prefix} {r1}"
+    probe_r2 = f"{prefix} {r2}"
     return (
-        f"if [ ! -s {r1} ]; then touch {outs}; "
-        f"elif [ -s {r2} ]; then {paired_cmd.strip()}; "
+        f"if ! {probe_r1}; then touch {outs}; "
+        f"elif {probe_r2}; then {paired_cmd.strip()}; "
         f"else {single_cmd.strip()}; fi"
     )
 

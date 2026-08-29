@@ -86,6 +86,26 @@ def test_fastq_discovery(tmp_path):
     assert dest.read_text().count("@") == 2
 
 
+def test_has_r1_reads_rejects_empty_and_one_byte_stubs(tmp_path):
+    from samovar.seqio import fastq_has_reads
+
+    empty = tmp_path / "empty_R1.fastq"
+    empty.write_text("")
+    stub = tmp_path / "stub_R1.fastq"
+    stub.write_bytes(b"x")
+    gz = tmp_path / "empty_R1.fastq.gz"
+    with gzip.open(gz, "wb") as handle:
+        handle.write(b"")
+    assert not fastq_has_reads(empty)
+    assert not fastq_has_reads(stub)
+    assert not fastq_has_reads(gz)
+    assert not has_r1_reads(tmp_path)
+    good = tmp_path / "ok_R1.fastq"
+    good.write_text("@a\nA\n+\nI\n")
+    assert fastq_has_reads(good)
+    assert has_r1_reads(tmp_path)
+
+
 def test_fastq_illumina_numeric_mates(tmp_path):
     r1 = tmp_path / "sample_0_1.fastq"
     r2 = tmp_path / "sample_0_2.fastq"

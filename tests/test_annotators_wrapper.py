@@ -170,7 +170,7 @@ def test_kaiju_and_kraken2_commands_support_single_end_fastq(tmp_path):
     kaiju_cmd = kaiju.get_snakemake_shell_cmd(
         r1, r2, [str(tmp_path / "k.out")]
     )
-    assert f"elif [ -s {r2} ]" in kaiju_cmd
+    assert "fastq_has_reads" in kaiju_cmd
     assert f"-j {r2}" in kaiju_cmd
     assert f"else {kaiju.cmd}" in kaiju_cmd
 
@@ -180,7 +180,7 @@ def test_kaiju_and_kraken2_commands_support_single_end_fastq(tmp_path):
     )
     outputs = kraken.get_expected_outputs("ont", str(tmp_path))
     kraken_cmd = kraken.get_snakemake_shell_cmd(r1, r2, outputs)
-    assert f"elif [ -s {r2} ]" in kraken_cmd
+    assert "fastq_has_reads" in kraken_cmd
     assert f"--paired {r1} {r2}" in kraken_cmd
     assert f"else {kraken.cmd}" in kraken_cmd
 

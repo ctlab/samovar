@@ -317,15 +317,9 @@ def _first_existing_fastq(paths: Sequence[str]) -> Optional[str]:
 
 
 def _fastq_has_records(path: str) -> bool:
-    if not path or not os.path.exists(path):
-        return False
-    try:
-        next(iter_fastq_records(path))
-        return True
-    except StopIteration:
-        return False
-    except OSError:
-        return False
+    from samovar.seqio import fastq_has_reads
+
+    return fastq_has_reads(path)
 
 
 def ensure_uncompressed_iss_pair(prefix: str) -> Tuple[str, str]:

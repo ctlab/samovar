@@ -1132,16 +1132,27 @@ def stage_regenerate_tables(
     """Checkpoint ``regenerate_tables``: observed abundance → regenerated CSVs."""
     from samovar.abundance import (
         has_abundance_tables,
+        load_abundance_dir,
         materialize_observed_abundance,
         observed_abundance_dir,
         regenerated_abundance_dir,
+        write_abundance_dir,
     )
+    from samovar.annotation_qc import filter_classified_abundance_tables
 
     root = Path(output_dir)
     observed = observed_abundance_dir(root)
     if not has_abundance_tables(observed):
         materialize_observed_abundance(root)
     dest = regenerated_abundance_dir(root)
+    tables = load_abundance_dir(observed)
+    reports = root / "initial_reports"
+    tables = filter_classified_abundance_tables(
+        tables,
+        reports_dir=reports if reports.is_dir() else None,
+        fatal_if_none=True,
+    )
+    write_abundance_dir(observed, tables)
     return regenerate_annotation_tables(
         observed, dest, dict(config or {}), select_best=False
     )

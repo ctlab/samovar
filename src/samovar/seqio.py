@@ -405,6 +405,60 @@ def iter_fastq_records(path: PathLike) -> Iterator[Tuple[str, str, str, str]]:
             yield header, seq, plus, qual
 
 
+DEFAULT_MIN_FASTQ_BYTES = 1
+DEFAULT_MIN_FASTQ_READS = 1
+
+
+def fastq_has_reads(
+    path: PathLike,
+    *,
+    min_bytes: Optional[int] = None,
+    min_reads: Optional[int] = None,
+) -> bool:
+    """True when ``path`` is a FASTQ with enough bytes and complete records.
+
+    Empty or 1-byte stubs (and gzip files that decompress to no records) fail.
+    Tiny valid test records such as ``@a\\nA\\n+\\nI\\n`` still pass.
+    """
+    target = as_path(path)
+    try:
+        if not target.is_file():
+            return False
+        size = target.stat().st_size
+    except OSError:
+        return False
+    if size <= 0:
+        return False
+    need_bytes = DEFAULT_MIN_FASTQ_BYTES if min_bytes is None else int(min_bytes)
+    if need_bytes > 0 and size < need_bytes:
+        return False
+    need_reads = DEFAULT_MIN_FASTQ_READS if min_reads is None else int(min_reads)
+    if need_reads <= 0:
+        return True
+    try:
+        n = 0
+        for _ in iter_fastq_records(target):
+            n += 1
+            if n >= need_reads:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def has_r1_reads(
+    directory: PathLike,
+    *,
+    min_bytes: Optional[int] = None,
+    min_reads: Optional[int] = None,
+) -> bool:
+    """True when the directory has at least one R1 FASTQ with real records."""
+    for r1 in list_r1_files(directory):
+        if fastq_has_reads(r1, min_bytes=min_bytes, min_reads=min_reads):
+            return True
+    return False
+
+
 def write_text_lines(path: PathLike, chunks: Iterable[str]) -> None:
     dest = as_path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -456,10 +510,6 @@ def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike) -> int:
                 shutil.copy2(src_file, target)
             n += 1
     return n
-
-
-def has_r1_reads(directory: PathLike) -> bool:
-    return bool(list_fastq_samples(directory))
 
 
 @contextmanager

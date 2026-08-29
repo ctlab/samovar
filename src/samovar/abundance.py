@@ -372,13 +372,27 @@ def collect_observed_abundance(output_dir: PathLike) -> Dict[str, pd.DataFrame]:
 
 def materialize_observed_abundance(output_dir: PathLike) -> Dict[str, pd.DataFrame]:
     """Write canonical ``initial_abundance/*.csv`` from annotations or OTU tables."""
+    from samovar.annotation_qc import filter_classified_abundance_tables
+
     tables = collect_observed_abundance(output_dir)
     if not tables:
         raise FileNotFoundError(
             f"No abundance or annotation tables under {output_dir}. "
             "Put OTU/abundance CSVs in initial_abundance/ or annotation CSVs in initial_annotations/."
         )
-    write_abundance_dir(observed_abundance_dir(output_dir), tables)
+    reports = Path(output_dir) / "initial_reports"
+    tables = filter_classified_abundance_tables(
+        tables,
+        reports_dir=reports if reports.is_dir() else None,
+        fatal_if_none=True,
+    )
+    dest = observed_abundance_dir(output_dir)
+    write_abundance_dir(dest, tables)
+    keep = {f"{name}.csv" for name in tables}
+    if dest.is_dir():
+        for path in dest.glob("*.csv"):
+            if path.name not in keep:
+                path.unlink()
     return tables
 
 

@@ -55,6 +55,22 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     combine_with_cpp(args.input_dir, args.output_dir, args.split_sample_name, args.chunk_rows)
+    from samovar.annotation_qc import EmptyAnnotatorsError, filter_classified_abundance_tables
+    from samovar.abundance import input_to_abundance_tables, load_table_input
+
+    try:
+        loaded = load_table_input(args.output_dir)
+        tables = input_to_abundance_tables(loaded)
+        if tables:
+            filter_classified_abundance_tables(
+                tables,
+                reports_dir=args.input_dir,
+                fatal_if_none=False,
+            )
+    except EmptyAnnotatorsError:
+        raise
+    except Exception:
+        pass
     return 0
 
 
