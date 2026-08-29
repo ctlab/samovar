@@ -85,7 +85,7 @@ if [ -d "$TEST_GENOMES/host" ]; then
     cp "$TEST_GENOMES/host/"* tests_outs/benchmarking/genomes/ 2>/dev/null || true
 fi
 
-snakemake -s "$ROOT/workflow/annotation2iss/Snakefile" \
+snakemake -s "$ROOT/workflow/abundance2iss/Snakefile" \
     --configfile "$ROOT/workflow/annotation2iss/config.yaml" \
     --cores 1
 

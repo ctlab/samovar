@@ -1,0 +1,34 @@
+import logging
+import os
+
+from samovar.abundance import convert_to_abundance_dir
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+configfile: "config.yaml"
+
+SOURCE = (
+    config.get("observed_abundance_dir")
+    or config.get("annotation_dir")
+    or config.get("source")
+)
+DEST = config.get("abundance_dir") or config.get("dest")
+if not DEST:
+    DEST = os.path.join(config.get("output_dir", "."), ".regenerated_abundance")
+
+os.makedirs(DEST, exist_ok=True)
+DONE = os.path.join(DEST, ".annotation2abundance.done")
+
+rule all:
+    input:
+        DONE
+
+rule convert:
+    output:
+        DONE
+    run:
+        tables = convert_to_abundance_dir(SOURCE, DEST, dict(config))
+        logger.info("annotation2abundance: %s tables -> %s", len(tables), DEST)
+        with open(str(output[0]), "w", encoding="utf-8") as handle:
+            handle.write("ok\n")
