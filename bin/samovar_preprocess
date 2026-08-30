@@ -129,6 +129,37 @@ def main():
         ),
     )
     parser.add_argument(
+        '--qc',
+        dest='qc',
+        default=None,
+        help=(
+            'Imported read QC for both initial and generated FASTQ '
+            '(identity when omitted). Import with `samovar tools import --type QC`.'
+        ),
+    )
+    parser.add_argument(
+        '--qc-initial',
+        dest='qc_initial',
+        default=None,
+        help='QC tool for initial reads only (overrides --qc)',
+    )
+    parser.add_argument(
+        '--qc-generated',
+        dest='qc_generated',
+        default=None,
+        help='QC tool for generated/regenerated reads only (overrides --qc)',
+    )
+    parser.add_argument(
+        '--qc-postfix',
+        dest='qc_postfix',
+        action='append',
+        default=None,
+        help=(
+            'Hybrid postfix QC, e.g. --qc-postfix illumina:gc_filter '
+            '--qc-postfix ont:identity (repeatable)'
+        ),
+    )
+    parser.add_argument(
         '--reprofiler',
         '--ml',
         dest='reprofiler',
@@ -152,7 +183,8 @@ def main():
             '--flags reads_generator "--gc_bias" or '
             '--flags metagenome_generator "--model hiseq" or '
             '--flags scoring "--min-files 1" or '
-            '--flags ml "--C 1"'
+            '--flags ml "--C 1" or '
+            '--flags qc "--min-gc 0.3 --max-gc 0.7"'
         ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
@@ -351,6 +383,8 @@ def main():
         "metagenome_generator", "metagenome-generator",
         "startpoint", "start-point", "endpoint", "end-point",
         "scoring", "reprofiler", "ml",
+        "qc", "qc-initial", "qc_initial", "qc-generated", "qc_generated",
+        "qc-postfix", "qc_postfix",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
         "to", "to-mpa", "to-cami", "to-kraken2", "to-kreport", "to-abundance",

@@ -151,8 +151,8 @@ def test_generate_configs():
     assert os.path.exists(configs['scoring'])
     with open(configs['init_annotator'], 'r') as f:
         init_config = yaml.safe_load(f)
-        assert init_config['r1_dir'] == str((Path(test_output_dir) / 'initial').resolve())
-        assert init_config['r2_dir'] == str((Path(test_output_dir) / 'initial').resolve())
+        assert init_config['r1_dir'] == str((Path(test_output_dir) / 'initial_trimmed').resolve())
+        assert init_config['r2_dir'] == str((Path(test_output_dir) / 'initial_trimmed').resolve())
         assert init_config['output_dir'] == str((Path(test_output_dir) / 'initial_reports').resolve())
         assert len(init_config['run_config']) == 2
         k2_config = next(c for c in init_config['run_config'] if c['type'] == 'kraken2')
@@ -308,6 +308,7 @@ def test_generate_pipeline():
         assert "SAMOVAR_MULTIQC" in pipeline_content
         for step in (
             "setup_reads",
+            "qc_initial",
             "annotate_initial",
             "combine_initial",
             "viz_initial",
@@ -317,6 +318,7 @@ def test_generate_pipeline():
             "seed_genomes",
             "regenerate_reads",
             "sort_reads",
+            "qc_generated",
             "annotate_regenerated",
             "combine_regenerated",
             "viz_regenerated",

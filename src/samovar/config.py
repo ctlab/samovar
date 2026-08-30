@@ -44,6 +44,11 @@ from samovar.ground_truth import (
     GROUND_TRUTH_TABLE,
     normalize_regenerated_mode,
 )
+from samovar.qc import (
+    flags_apply_to_qc,
+    parse_qc_postfix,
+    require_known_qc,
+)
 from samovar.main_config import (
     flags_target_matches,
     imported_flags_for_names,
@@ -293,6 +298,12 @@ class PipelineConfig:
     reprofiler: str = "ensemble"
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
+    qc: str = ""
+    qc_initial: str = ""
+    qc_generated: str = ""
+    qc_postfix: Optional[Dict[str, str]] = None
+    qc_flags: Optional[str] = None
+    qc_tool_flags: Optional[Dict[str, str]] = None
     startpoint: str = "setup_reads"
     endpoint: str = "viz_reprofiled"
     export_formats: Optional[List[str]] = None
@@ -310,6 +321,10 @@ class PipelineConfig:
             self.scoring_tool_flags = {}
         if self.reprofiler_tool_flags is None:
             self.reprofiler_tool_flags = {}
+        if self.qc_postfix is None:
+            self.qc_postfix = {}
+        if self.qc_tool_flags is None:
+            self.qc_tool_flags = {}
         if not self.regeneration_modes:
             self.regeneration_modes = [self.regeneration_mode]
         if self.export_formats is None:
@@ -433,6 +448,38 @@ class PipelineConfig:
                     config.reprofiler_tool_flags = {
                         str(k): str(v) for k, v in yaml_rtf.items()
                     }
+                yaml_qc = input_config.get("qc")
+                yaml_qc_i = input_config.get("qc_initial") or input_config.get("qc-initial")
+                yaml_qc_g = (
+                    input_config.get("qc_generated") or input_config.get("qc-generated")
+                )
+                if yaml_qc not in (None, "", False):
+                    config.qc = require_known_qc(yaml_qc)
+                if yaml_qc_i not in (None, "", False):
+                    config.qc_initial = require_known_qc(yaml_qc_i)
+                elif config.qc:
+                    config.qc_initial = config.qc
+                if yaml_qc_g not in (None, "", False):
+                    config.qc_generated = require_known_qc(yaml_qc_g)
+                elif config.qc:
+                    config.qc_generated = config.qc
+                yaml_qc_pf = (
+                    input_config.get("qc_postfix")
+                    or input_config.get("qc-postfix")
+                    or input_config.get("qc_by_postfix")
+                )
+                if yaml_qc_pf not in (None, "", False):
+                    parsed_pf = parse_qc_postfix(yaml_qc_pf)
+                    config.qc_postfix = {
+                        key: require_known_qc(val) if val else ""
+                        for key, val in parsed_pf.items()
+                    }
+                yaml_qc_flags = input_config.get("qc_flags")
+                if yaml_qc_flags:
+                    config.qc_flags = str(yaml_qc_flags)
+                yaml_qtf = input_config.get("qc_tool_flags")
+                if isinstance(yaml_qtf, dict):
+                    config.qc_tool_flags = {str(k): str(v) for k, v in yaml_qtf.items()}
                 config.reannotation_level = normalize_reannotation_level(
                     input_config.get(
                         "reannotation_level",
@@ -791,6 +838,49 @@ class PipelineConfig:
         config.reprofiler_flags = merge_flag_strings(*rprof_parts) or None
         config.reprofiler_tool_flags = named_rprof or {}
 
+        shared_qc = getattr(args, "qc", None)
+        cli_qc_i = getattr(args, "qc_initial", None)
+        cli_qc_g = getattr(args, "qc_generated", None)
+        if shared_qc not in (None, "", False):
+            config.qc = require_known_qc(shared_qc)
+        if cli_qc_i not in (None, "", False):
+            config.qc_initial = require_known_qc(cli_qc_i)
+        elif config.qc and not config.qc_initial:
+            config.qc_initial = config.qc
+        if cli_qc_g not in (None, "", False):
+            config.qc_generated = require_known_qc(cli_qc_g)
+        elif config.qc and not config.qc_generated:
+            config.qc_generated = config.qc
+        cli_qc_pf = getattr(args, "qc_postfix", None)
+        if cli_qc_pf:
+            parsed_pf = parse_qc_postfix(cli_qc_pf)
+            config.qc_postfix = {
+                key: require_known_qc(val) if val else ""
+                for key, val in parsed_pf.items()
+            }
+        qflag_parts = [config.qc_flags]
+        named_qflags = dict(config.qc_tool_flags or {})
+        qc_names = [
+            config.qc,
+            config.qc_initial,
+            config.qc_generated,
+            *list((config.qc_postfix or {}).values()),
+        ]
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if not flags_apply_to_qc(str(target), *qc_names):
+                continue
+            if flags_target_matches(str(target), groups=("qc", "quality", "trim", "trimming")):
+                qflag_parts.append(flags)
+            else:
+                named_qflags[str(target)] = merge_flag_strings(
+                    named_qflags.get(str(target)), flags
+                )
+        config.qc_flags = merge_flag_strings(*qflag_parts) or None
+        config.qc_tool_flags = named_qflags or {}
+
         cli_start = getattr(args, "startpoint", None)
         if cli_start:
             config.startpoint = str(cli_start)
@@ -827,10 +917,13 @@ class PipelineConfig:
         configs_dir.mkdir(parents=True, exist_ok=True)
         configs = {}
 
+        init_trimmed = str(base_path / "initial_trimmed")
+        regen_trimmed = str(base_path / "regenerated_trimmed")
+
         # Generate initial annotator config
         init_annotator_config = {
-            'r1_dir': str(base_path / 'initial'),
-            'r2_dir': str(base_path / 'initial'),
+            'r1_dir': init_trimmed,
+            'r2_dir': init_trimmed,
             'output_dir': str(base_path / 'initial_reports'),
             'run_config': [
                 {
@@ -912,6 +1005,20 @@ class PipelineConfig:
             yaml.dump(scoring_config, f)
         configs['scoring'] = str(scoring_path)
 
+        qc_config = {
+            "output_dir": str(base_path),
+            "qc": self.qc or "",
+            "qc_initial": self.qc_initial or self.qc or "",
+            "qc_generated": self.qc_generated or self.qc or "",
+            "qc_postfix": dict(self.qc_postfix or {}),
+            "qc_flags": self.qc_flags or "",
+            "qc_tool_flags": self.qc_tool_flags or {},
+        }
+        qc_path = configs_dir / "config_qc.yaml"
+        with open(qc_path, "w") as f:
+            yaml.dump(qc_config, f)
+        configs["qc"] = str(qc_path)
+
         reprofiling_config = {
             'output_dir': str(base_path / 'reprofiled_annotations'),
             'initial_dir': str(base_path / 'initial_annotations'),
@@ -931,8 +1038,8 @@ class PipelineConfig:
 
         # Generate reannotate config
         reannotate_config = {
-            'r1_dir': str(base_path / 'regenerated'),
-            'r2_dir': str(base_path / 'regenerated'),
+            'r1_dir': regen_trimmed,
+            'r2_dir': regen_trimmed,
             'output_dir': str(base_path / 'regenerated_reports'),
             'run_config': [
                 {
@@ -1081,7 +1188,7 @@ cleanup_tmp_if_requested() {{
 }}
 
 mkdir -p "$out_dir"
-mkdir -p "$out_dir/initial" "$out_dir/initial_reports" "$out_dir/initial_abundance" "$out_dir/regenerated" "$out_dir/regenerated_reports"
+mkdir -p "$out_dir/initial" "$out_dir/initial_trimmed" "$out_dir/initial_reports" "$out_dir/initial_abundance" "$out_dir/regenerated" "$out_dir/regenerated_trimmed" "$out_dir/regenerated_reports"
 "$PYTHON_PATH" -m samovar.exec_control require "$out_dir"
 # NCBI genome cache reuse (truncated data/test_genomes is not a library).
 export SAMOVAR_REUSE_GENOMES="${{SAMOVAR_REUSE_GENOMES:-{reuse_flag}}}"
@@ -1110,6 +1217,12 @@ if [ -n "{self.input_dir or ''}" ] && [ -d "{self.input_dir or ''}" ]; then
         $PYTHON_PATH -c "from samovar.seqio import link_or_copy_reads; link_or_copy_reads('$src_dir', '$dst_dir')"
     fi
 fi""",
+        )
+
+        qc_initial = _checkpoint_block(
+            "qc_initial",
+            f""""$PYTHON_PATH" -m samovar.qc trim --output_dir "$out_dir" --stage initial \\
+    --config {configs["qc"]}""",
         )
 
         annotate_initial = _checkpoint_block(
@@ -1190,6 +1303,12 @@ fi
             f"""{root / 'bin' / 'samovar'} tools --sort --output_dir "$out_dir\"""",
         )
 
+        qc_generated = _checkpoint_block(
+            "qc_generated",
+            f""""$PYTHON_PATH" -m samovar.qc trim --output_dir "$out_dir" --stage generated \\
+    --config {configs["qc"]}""",
+        )
+
         annotate_regenerated = _checkpoint_block(
             "annotate_regenerated",
             f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
@@ -1218,7 +1337,7 @@ fi
             "reprofile",
             f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
-    $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial', '$out_dir/combined_temporary_R1.fastq')"
+    $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial_trimmed', '$out_dir/combined_temporary_R1.fastq')"
     $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} "$out_dir/combined_temporary_R1.fastq" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}
     rm -f "$out_dir/combined_temporary_R1.fastq"
     FEATURE_ARG="--features $out_dir/features.tsv"
@@ -1261,6 +1380,7 @@ cleanup_tmp_if_requested
             [
                 header,
                 setup_reads,
+                qc_initial,
                 annotate_initial,
                 combine_initial,
                 viz_initial,
@@ -1271,6 +1391,7 @@ cleanup_tmp_if_requested
                 regenerate_reads,
                 early_exit,
                 sort_reads,
+                qc_generated,
                 annotate_regenerated,
                 combine_regenerated,
                 viz_regenerated,

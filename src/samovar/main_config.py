@@ -60,6 +60,7 @@ TOOL_GROUPS = (
     "scoring",
     "reprofiler",
     "annotation_converter",
+    "qc",
     "workflow",
 )
 
@@ -99,6 +100,12 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "convert": "annotation_converter",
     "annotation_converter": "annotation_converter",
     "annotation-converter": "annotation_converter",
+    "qc": "qc",
+    "quality": "qc",
+    "trim": "qc",
+    "trimming": "qc",
+    "read_qc": "qc",
+    "read-qc": "qc",
     "workflow": "workflow",
     "wf": "workflow",
 }

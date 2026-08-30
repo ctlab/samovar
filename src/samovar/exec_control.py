@@ -20,6 +20,7 @@ PathLike = Union[str, os.PathLike]
 
 CHECKPOINT_STEPS = (
     "setup_reads",
+    "qc_initial",
     "annotate_initial",
     "combine_initial",
     "viz_initial",
@@ -29,6 +30,7 @@ CHECKPOINT_STEPS = (
     "seed_genomes",
     "regenerate_reads",
     "sort_reads",
+    "qc_generated",
     "annotate_regenerated",
     "combine_regenerated",
     "viz_regenerated",
@@ -42,6 +44,9 @@ STEP_ALIASES = {
     "setup": "setup_reads",
     "reads": "setup_reads",
     "initial": "setup_reads",
+    "qc": "qc_initial",
+    "qc_initial": "qc_initial",
+    "trim": "qc_initial",
     "annotate": "annotate_initial",
     "annotation": "annotate_initial",
     "combine": "combine_initial",
@@ -71,6 +76,8 @@ STEP_ALIASES = {
     "iss": "regenerate_reads",
     "simulation": "regenerate_reads",
     "sort": "sort_reads",
+    "qc_generated": "qc_generated",
+    "qc_regen": "qc_generated",
     "reannotate": "annotate_regenerated",
     "tables_regen": "combine_regenerated",
     "combine_regen": "combine_regenerated",
@@ -251,9 +258,15 @@ def startpoint_gaps(
                 "FASTQ under outdir/initial or --input_dir, or .generate/generate.sh"
             )
         return gaps
-    if start_s == "annotate_initial":
+    if start_s == "qc_initial":
         if not has_r1_reads(root / "initial"):
             gaps.append("FASTQ samples under outdir/initial")
+        return gaps
+    if start_s == "annotate_initial":
+        if not (
+            has_r1_reads(root / "initial_trimmed") or has_r1_reads(root / "initial")
+        ):
+            gaps.append("FASTQ samples under outdir/initial_trimmed (or outdir/initial)")
         return gaps
     if start_s == "combine_initial":
         if not _has_out_reports(root / "initial_reports"):
@@ -316,9 +329,22 @@ def startpoint_gaps(
                 "(run regenerate_tables, or start earlier)"
             )
         return gaps
-    if start_s == "sort_reads" or start_s == "annotate_regenerated":
+    if start_s == "sort_reads":
         if not has_r1_reads(root / "regenerated"):
             gaps.append("regenerated FASTQ under outdir/regenerated")
+        return gaps
+    if start_s == "qc_generated":
+        if not has_r1_reads(root / "regenerated"):
+            gaps.append("regenerated FASTQ under outdir/regenerated")
+        return gaps
+    if start_s == "annotate_regenerated":
+        if not (
+            has_r1_reads(root / "regenerated_trimmed")
+            or has_r1_reads(root / "regenerated")
+        ):
+            gaps.append(
+                "regenerated FASTQ under outdir/regenerated_trimmed (or outdir/regenerated)"
+            )
         return gaps
     if start_s == "combine_regenerated":
         if not _has_out_reports(root / "regenerated_reports"):

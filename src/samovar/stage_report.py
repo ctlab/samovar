@@ -41,11 +41,21 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
             "see these reads. Docs: https://github.com/ctlab/samovar/wiki"
         ),
     },
+    "qc_initial": {
+        "title": "QC initial reads",
+        "description": (
+            "Optional imported ``--type QC`` tool trims ``initial/`` into "
+            "``initial_trimmed/``. When no QC is configured this step is identity "
+            "(reads are already treated as trimmed). Hybrid files may use a "
+            "different tool per postfix (``illumina``, ``ont``, …)."
+        ),
+    },
     "annotate_initial": {
         "title": "Initial annotation",
         "description": (
             "Each configured classifier (Kraken2, Kaiju, and any tools you imported) "
-            "is run on the same ``initial/`` FASTQ. The raw per-tool reports "
+            "is run on the same ``initial_trimmed/`` FASTQ (identity of ``initial/`` "
+            "when no QC tool is set). The raw per-tool reports "
             "(``.kreport``, Kaiju ``.out``, and so on) land in ``initial_reports/``. "
             "This is the “what did each database/tool call?” step before anything is merged."
         ),
@@ -117,6 +127,14 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
             "stable read order across tools."
         ),
     },
+    "qc_generated": {
+        "title": "QC generated reads",
+        "description": (
+            "Same QC contract as ``qc_initial``, applied to regenerated FASTQ "
+            "(``regenerated_trimmed/``). ``--qc-generated`` may differ from "
+            "``--qc-initial``; hybrid postfix maps still apply."
+        ),
+    },
     "annotate_regenerated": {
         "title": "Re-annotation",
         "description": (
@@ -162,6 +180,7 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
 
 STAGE_DIRS = {
     "setup_reads": ("initial",),
+    "qc_initial": ("initial_trimmed",),
     "annotate_initial": ("initial_reports",),
     "combine_initial": ("initial_annotations",),
     "viz_initial": ("initial_annotations_plots",),
@@ -171,6 +190,7 @@ STAGE_DIRS = {
     "seed_genomes": ("genomes",),
     "regenerate_reads": ("regenerated",),
     "sort_reads": ("regenerated",),
+    "qc_generated": ("regenerated_trimmed",),
     "annotate_regenerated": ("regenerated_reports",),
     "combine_regenerated": ("regenerated_annotations",),
     "viz_regenerated": ("regenerated_annotations_plots",),

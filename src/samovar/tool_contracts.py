@@ -68,6 +68,11 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "(from/to, extra_argv). dump(annotation, dest, config) and/or load(path, config).",
         "out": "Files at dest (dump) or an Annotation (load). convert(src, dest, config) is also accepted.",
     },
+    "qc": {
+        "in": "FASTQ R1 (and optional R2) plus dest paths and config "
+        "(min_gc/max_gc, extra_argv). trim(r1, r2, dest_r1, dest_r2, config).",
+        "out": "Trimmed FASTQ at dest_r1/dest_r2 (same layout as input; empty files allowed).",
+    },
 }
 
 GROUP_TO_TESTNODE = {
@@ -79,6 +84,7 @@ GROUP_TO_TESTNODE = {
     "metagenome_generator": "tests/test_tool_contracts.py::test_metagenome_generator_contract",
     "reprofiler": "tests/test_tool_contracts.py::test_reprofiler_contract",
     "annotation_converter": "tests/test_tool_contracts.py::test_annotation_converter_contract",
+    "qc": "tests/test_tool_contracts.py::test_qc_contract",
 }
 
 DEFAULT_TOOLS = {
@@ -90,6 +96,7 @@ DEFAULT_TOOLS = {
     "metagenome_generator": "tests/tools/echo_reads.py",
     "reprofiler": "tests/tools/linear_wrapper.py",
     "annotation_converter": "tests/tools/echo_annotation_converter.py",
+    "qc": "tests/tools/gc_filter.py",
 }
 
 
