@@ -848,6 +848,7 @@ def empty_canonical(*, version: str = "", root: str = "") -> Dict[str, Any]:
         "genomes": {
             "samovar_database": str(Path(root) / "genomes") if root else "",
             "taxdump": "",
+            "gtdb": "",
             "test": [],
             "raw": {},
             "processed": {},
@@ -895,7 +896,7 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
         if key == "genomes":
             if isinstance(value, dict) and any(
                 k in value
-                for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump")
+                for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb")
             ):
                 block = genomes_block(cfg) or empty_canonical()["genomes"]
                 for sub, val in value.items():
@@ -947,6 +948,11 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
         if key in {"taxdump", "taxdump_path", "ncbi_taxdump"}:
             block = genomes_block(cfg) or empty_canonical()["genomes"]
             block["taxdump"] = str(value or "").strip()
+            cfg["genomes"] = block
+            continue
+        if key in {"gtdb", "gtdb_taxdump", "taxdump_gtdb"}:
+            block = genomes_block(cfg) or empty_canonical()["genomes"]
+            block["gtdb"] = str(value or "").strip()
             cfg["genomes"] = block
             continue
         if key == "ncbi_email":
@@ -1073,9 +1079,9 @@ def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
         cfg["API"].update(raw["api"])
     if isinstance(raw.get("genomes"), dict) and any(
         k in raw["genomes"]
-        for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump")
+        for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb")
     ):
-        for key in ("test", "raw", "processed", "data", "samovar_database", "taxdump"):
+        for key in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb"):
             if key in raw["genomes"]:
                 cfg["genomes"][key] = raw["genomes"][key]
     if isinstance(raw.get("databases"), dict):
@@ -1185,6 +1191,7 @@ def legacy_view(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not view["samovar_database"] and view["processed_genomes"]:
         view["samovar_database"] = view["processed_genomes"]
     view["taxdump"] = str((genomes_block(cfg) or {}).get("taxdump") or "")
+    view["gtdb"] = str((genomes_block(cfg) or {}).get("gtdb") or "")
     view["genome_dirs"] = extra_genome_dirs(cfg)
     view["path"] = compiler_python_libs(cfg)
     regen = tools.get("annotation_regenerate.R")
@@ -1549,6 +1556,7 @@ def install_option_rows(cfg: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
     genomes = payload.get("genomes") if isinstance(payload.get("genomes"), dict) else {}
     add("genomes.samovar_database", genomes.get("samovar_database"))
     add("genomes.taxdump", genomes.get("taxdump"))
+    add("genomes.gtdb", genomes.get("gtdb"))
     for name, path in folder_map(genomes.get("raw")).items():
         add(f"genomes.raw.{name}", path)
     for name, path in folder_map(genomes.get("processed")).items():

@@ -311,7 +311,13 @@ def main():
         '--taxdump',
         dest='export_taxdump',
         default=None,
-        help='NCBI taxdump dir for --to kraken2 / mpa / cami (default: genomes.taxdump)',
+        help='Taxdump dir for --to kraken2 / mpa / cami (NCBI or GTDB; default: genomes.taxdump / genomes.gtdb)',
+    )
+    parser.add_argument(
+        '--taxonomy',
+        dest='export_taxonomy',
+        default=None,
+        help='Taxonomy for --to kraken2 / mpa / cami: ncbi (default) or gtdb',
     )
 
     # Parse known args first to get output_dir
@@ -348,7 +354,7 @@ def main():
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
         "to", "to-mpa", "to-cami", "to-kraken2", "to-kreport", "to-abundance",
-        "taxdump",
+        "taxdump", "taxonomy",
     }
     from samovar.tool_spec import load_custom_flags, _norm_flag
 

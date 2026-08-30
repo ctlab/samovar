@@ -4,7 +4,8 @@ https://github.com/bioboxes/rfc/blob/master/data-format/profiling.mkd
 
 Direct counts come from abundance tables (``Annotation.to_abundance()``).
 When NCBI taxdump is available, clade percentages and ``TAXPATH`` / ``TAXPATHSN``
-are filled by walking ``nodes.dmp`` / ``names.dmp``.
+are filled by walking ``nodes.dmp`` / ``names.dmp``. With ``--taxonomy gtdb``
+the same walk uses GTDB (``@TaxonomyID:gtdb``, rank ``domain``).
 """
 
 from __future__ import annotations
@@ -20,32 +21,25 @@ from samovar.kreport import (
     rollup_clade_counts,
     sample_from_n_column,
 )
+from samovar.taxonomy import (
+    NCBI_CAMI_RANKS,
+    cami_rank_for,
+    cami_ranks_for,
+    normalize_taxonomy,
+)
 
 PathLike = Union[str, Path]
 ProfileMap = Dict[str, Dict[str, str]]
 
 CAMI_FORMAT_VERSION = "0.10.0"
-CAMI_RANKS = (
-    "superkingdom",
-    "phylum",
-    "class",
-    "order",
-    "family",
-    "genus",
-    "species",
-)
+CAMI_RANKS = NCBI_CAMI_RANKS
 CAMI_SUFFIXES = {".profile", ".cami", ".txt"}
 _SAMPLE_ID_RE = re.compile(r"[A-Za-z0-9._]+")
 
 
-def cami_rank_name(ncbi_rank: str) -> Optional[str]:
-    """Map an NCBI rank string onto a CAMI ``RANKS`` token, or None."""
-    rank = str(ncbi_rank or "").strip().lower()
-    if rank in {"superkingdom", "domain"}:
-        return "superkingdom"
-    if rank in CAMI_RANKS:
-        return rank
-    return None
+def cami_rank_name(ncbi_rank: str, system: str = "ncbi") -> Optional[str]:
+    """Map a dump rank string onto a CAMI ``RANKS`` token, or None."""
+    return cami_rank_for(system, ncbi_rank)
 
 
 def cami_sample_id(raw: Any) -> str:
@@ -72,8 +66,9 @@ def _fmt_pct(value: float) -> str:
 
 def _lineage_slots(taxid: int, taxonomy: KReportTaxonomy) -> Dict[str, int]:
     slots: Dict[str, int] = {}
+    system = getattr(taxonomy, "system", "ncbi")
     for node in taxonomy.ancestors_inclusive(taxid):
-        mapped = cami_rank_name(taxonomy.rank_of(node))
+        mapped = cami_rank_name(taxonomy.rank_of(node), system)
         if mapped:
             slots[mapped] = node
     return slots
@@ -86,14 +81,15 @@ def _taxpath_pair(
     stop_rank: Optional[str],
     extra_leaf: bool,
 ) -> Tuple[str, str]:
+    ranks = cami_ranks_for(getattr(taxonomy, "system", "ncbi"))
     slots = _lineage_slots(taxid, taxonomy)
     ids: List[str] = []
     names: List[str] = []
     if extra_leaf or not stop_rank:
-        end = len(CAMI_RANKS)
+        end = len(ranks)
     else:
-        end = CAMI_RANKS.index(stop_rank) + 1
-    for rank in CAMI_RANKS[:end]:
+        end = ranks.index(stop_rank) + 1
+    for rank in ranks[:end]:
         node = slots.get(rank)
         ids.append(str(node) if node else "")
         names.append(_cami_field(taxonomy.name_of(node)) if node else "")
@@ -109,7 +105,14 @@ def _taxpath_pair(
     return "|".join(ids), "|".join(names)
 
 
-def _header(sample_id: str, *, with_names: bool = True) -> List[str]:
+def _header(
+    sample_id: str,
+    *,
+    with_names: bool = True,
+    taxonomy: str = "ncbi",
+) -> List[str]:
+    system = normalize_taxonomy(taxonomy)
+    ranks = cami_ranks_for(system)
     cols = (
         "TAXID\tRANK\tTAXPATH\tTAXPATHSN\tPERCENTAGE"
         if with_names
@@ -118,8 +121,8 @@ def _header(sample_id: str, *, with_names: bool = True) -> List[str]:
     return [
         f"@SampleID:{cami_sample_id(sample_id)}",
         f"@Version:{CAMI_FORMAT_VERSION}",
-        f"@Ranks:{'|'.join(CAMI_RANKS)}",
-        "@TaxonomyID:ncbi",
+        f"@Ranks:{'|'.join(ranks)}",
+        f"@TaxonomyID:{system}",
         f"@@{cols}",
     ]
 
@@ -142,12 +145,13 @@ def counts_to_cami_profile(
     if denom <= 0:
         denom = float(unclassified + classified)
     clade = rollup_clade_counts(direct, taxonomy)
+    ranks = cami_ranks_for(getattr(taxonomy, "system", "ncbi"))
     rows: List[Tuple[int, str, int, float, str, str]] = []
     seen = set()
     for taxid, n_clade in clade.items():
         if taxid in {0, 1} or n_clade <= 0:
             continue
-        mapped = cami_rank_name(taxonomy.rank_of(taxid))
+        mapped = cami_rank_name(taxonomy.rank_of(taxid), taxonomy.system)
         extra = mapped is None
         if mapped is None and int(direct.get(taxid, 0)) <= 0:
             continue
@@ -159,10 +163,10 @@ def counts_to_cami_profile(
         )
         rank = mapped or ""
         pct = 0.0 if denom <= 0 else 100.0 * float(n_clade) / denom
-        order = CAMI_RANKS.index(mapped) if mapped else len(CAMI_RANKS)
+        order = ranks.index(mapped) if mapped else len(ranks)
         rows.append((order, rank, taxid, pct, path, names))
     rows.sort(key=lambda item: (item[0], -item[3], item[2]))
-    lines = _header(sample_id, with_names=True)
+    lines = _header(sample_id, with_names=True, taxonomy=taxonomy.system)
     for _order, rank, taxid, pct, path, names in rows:
         lines.append(f"{taxid}\t{rank}\t{path}\t{names}\t{_fmt_pct(pct)}")
     return "\n".join(lines) + "\n"
@@ -174,28 +178,33 @@ def counts_to_cami_flat(
     rank: str = "genus",
     *,
     total: Optional[float] = None,
+    taxonomy: str = "ncbi",
 ) -> str:
     """RFC-shaped profile without taxdump (TAXPATH is the taxid itself)."""
     from samovar.kreport import _as_taxid
     from samovar.parse_annotators import taxid_ncbi_rank
     from samovar.viz_annotation import is_special_taxon, normalize_taxon_token
 
-    requested = rank if rank in CAMI_RANKS else "genus"
+    system = normalize_taxonomy(taxonomy)
+    ranks = cami_ranks_for(system)
+    requested = rank if rank in ranks else "genus"
     classified = 0.0
     rows_raw: List[Tuple[str, float]] = []
     for taxid, n in counts.items():
         token = normalize_taxon_token(taxid)
         if is_special_taxon(token) or float(n) <= 0:
             continue
-        if _as_taxid(token) == 0:
+        if _as_taxid(token) == 0 and not str(token).strip():
+            continue
+        if str(token).strip().lower() in {"0", "unclassified"}:
             continue
         classified += float(n)
         rows_raw.append((token, float(n)))
     denom = float(total) if total is not None and float(total) > 0 else classified
-    lines = _header(sample_id, with_names=False)
+    lines = _header(sample_id, with_names=False, taxonomy=system)
     for token, n in sorted(rows_raw, key=lambda kv: (-kv[1], kv[0])):
-        actual = taxid_ncbi_rank(token)
-        mapped = cami_rank_name(actual or "") if actual else None
+        actual = taxid_ncbi_rank(token) if str(token).replace(".", "", 1).isdigit() else None
+        mapped = cami_rank_name(actual or "", system) if actual else None
         row_rank = mapped if mapped else ("" if actual else requested)
         pct = 0.0 if denom <= 0 else 100.0 * n / denom
         lines.append(f"{token}\t{row_rank}\t{token}\t{_fmt_pct(pct)}")
@@ -208,9 +217,12 @@ def join_cami_sections(sections: Sequence[str]) -> str:
     return "\n\n".join(parts) + ("\n" if parts else "")
 
 
-def try_taxonomy(taxdump: Optional[PathLike] = None) -> Optional[KReportTaxonomy]:
+def try_taxonomy(
+    taxdump: Optional[PathLike] = None,
+    taxonomy: str = "ncbi",
+) -> Optional[KReportTaxonomy]:
     try:
-        return KReportTaxonomy.from_taxdump(taxdump)
+        return KReportTaxonomy.from_taxdump(taxdump, taxonomy=taxonomy)
     except FileNotFoundError:
         return None
 
@@ -223,21 +235,27 @@ def write_cami_profile(
     total: Optional[float] = None,
     taxdump: Optional[PathLike] = None,
     taxonomy: Optional[KReportTaxonomy] = None,
+    taxonomy_id: str = "ncbi",
 ) -> Path:
     """Write a single-sample CAMI bioboxes ``.profile``."""
     dest_path = Path(dest)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    system = normalize_taxonomy(taxonomy_id)
     if taxonomy is not None:
         tax = taxonomy
     elif taxdump is not None:
-        tax = try_taxonomy(taxdump)
+        tax = try_taxonomy(taxdump, taxonomy=system)
     else:
         tax = None
     if tax is not None:
-        direct = direct_counts_from_series(list(counts.keys()), counts.values())
+        direct = direct_counts_from_series(
+            list(counts.keys()), counts.values(), tax
+        )
         text = counts_to_cami_profile(direct, tax, sample_id, total=total)
     else:
-        text = counts_to_cami_flat(counts, sample_id, rank, total=total)
+        text = counts_to_cami_flat(
+            counts, sample_id, rank, total=total, taxonomy=system
+        )
     dest_path.write_text(text, encoding="utf-8")
     return dest_path
 
@@ -256,16 +274,23 @@ def abundance_tables_to_cami(
             continue
         sample_map: Dict[str, str] = {}
         for col in cols:
-            direct = direct_counts_from_series(table["taxid"], table[col])
             total = float(table[col].sum())
             sid = sample_from_n_column(col)
             if taxonomy is not None:
                 sample_map[sid] = counts_to_cami_profile(
-                    direct, taxonomy, sid, total=total
+                    direct_counts_from_series(
+                        table["taxid"], table[col], taxonomy
+                    ),
+                    taxonomy,
+                    sid,
+                    total=total,
                 )
             else:
                 sample_map[sid] = counts_to_cami_flat(
-                    dict(zip(table["taxid"], table[col])), sid, total=total
+                    dict(zip(table["taxid"], table[col])),
+                    sid,
+                    total=total,
+                    taxonomy=getattr(taxonomy, "system", "ncbi"),
                 )
         if sample_map:
             reports[str(annotator)] = sample_map
@@ -307,7 +332,8 @@ def dump_cami(
     dest: PathLike,
     *,
     taxdump: Optional[PathLike] = None,
+    taxonomy: str = "ncbi",
 ) -> Path:
-    taxonomy = try_taxonomy(taxdump)
-    reports = abundance_tables_to_cami(tables, taxonomy)
+    tax = try_taxonomy(taxdump, taxonomy=taxonomy)
+    reports = abundance_tables_to_cami(tables, tax)
     return write_cami_profiles(dest, reports)

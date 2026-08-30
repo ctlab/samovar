@@ -1184,17 +1184,19 @@ class Annotation:
         mpa: bool = False,
         taxdump: Optional[Union[str, Path]] = None,
         n_reads: Optional[int] = None,
+        taxonomy: str = "ncbi",
     ):
         """Kraken 2 ``--report`` (kreport) or ``--use-mpa-style`` from abundance + taxdump.
 
-        Direct counts come from :meth:`to_abundance`; clade totals walk ``nodes.dmp``.
+        Direct counts come from :meth:`to_abundance`; clade totals walk taxdump
+        (``--taxonomy ncbi`` or ``gtdb``).
         Without ``dest``, returns ``{annotator: {sample: report_text}}``.
         """
         from samovar.annotation_convert import annotation_to_kreport_map, dump_builtin
 
         if dest is None:
             return annotation_to_kreport_map(
-                self, n_reads=n_reads, taxdump=taxdump, mpa=mpa
+                self, n_reads=n_reads, taxdump=taxdump, mpa=mpa, taxonomy=taxonomy
             )
         return dump_builtin(
             self,
@@ -1203,6 +1205,7 @@ class Annotation:
             n_reads=n_reads,
             taxdump=taxdump,
             mpa=mpa,
+            taxonomy=taxonomy,
         )
 
     def to_cami(
@@ -1211,21 +1214,33 @@ class Annotation:
         *,
         taxdump: Optional[Union[str, Path]] = None,
         n_reads: Optional[int] = None,
+        taxonomy: str = "ncbi",
     ):
         """CAMI bioboxes taxonomic profile (RFC 0.10.0).
 
         Direct counts come from :meth:`to_abundance`; ``TAXPATH`` walks taxdump.
+        ``taxonomy`` is ``ncbi`` (default, ``@TaxonomyID:ncbi``) or ``gtdb``.
         Without ``dest``, returns ``{annotator: {sample: profile_text}}``.
         """
         from samovar.annotation_convert import annotation_to_cami_map, dump_builtin
 
         if dest is None:
-            return annotation_to_cami_map(self, n_reads=n_reads, taxdump=taxdump)
+            return annotation_to_cami_map(
+                self, n_reads=n_reads, taxdump=taxdump, taxonomy=taxonomy
+            )
         return dump_builtin(
-            self, dest, "cami", n_reads=n_reads, taxdump=taxdump
+            self, dest, "cami", n_reads=n_reads, taxdump=taxdump, taxonomy=taxonomy
         )
 
     to_CAMI = to_cami
+
+    def to_gtdb(self, dest: Optional[Union[str, Path]] = None, **kwargs):
+        """Export using GTDB taxonomy (default format: CAMI)."""
+        kwargs.setdefault("taxonomy", "gtdb")
+        fmt = kwargs.pop("fmt", None) or kwargs.pop("format", None) or "cami"
+        return self.to(fmt, dest, **kwargs)
+
+    to_GTDB = to_gtdb
 
     def to(self, fmt: str, dest: Optional[Union[str, Path]] = None, **kwargs):
         """Export to a named format (builtin ``abundance`` / ``annotation`` / ``kraken2`` / ``cami``, or a converter).
@@ -1251,11 +1266,13 @@ class Annotation:
                     mpa=name == "kraken2_mpa" or bool(kwargs.get("mpa")),
                     taxdump=kwargs.get("taxdump"),
                     n_reads=kwargs.get("n_reads"),
+                    taxonomy=kwargs.get("taxonomy") or "ncbi",
                 )
             if name == "cami":
                 return self.to_cami(
                     taxdump=kwargs.get("taxdump"),
                     n_reads=kwargs.get("n_reads"),
+                    taxonomy=kwargs.get("taxonomy") or "ncbi",
                 )
             raise ValueError(
                 f"Annotation.to({fmt!r}) needs dest= for a custom converter "

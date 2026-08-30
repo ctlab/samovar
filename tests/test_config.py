@@ -443,6 +443,7 @@ def test_prepare_to_flags_embed_convert(tmp_path):
         to_cami=True,
         export_to=["kraken2"],
         export_taxdump="/tmp/taxdump",
+        export_taxonomy="gtdb",
     )
     result = setup_pipeline(args)
     text = Path(result["pipeline"]).read_text()
@@ -454,6 +455,7 @@ def test_prepare_to_flags_embed_convert(tmp_path):
     assert "exports/regenerated" in text
     assert "exports/reprofiled" in text
     assert "--taxdump /tmp/taxdump" in text
+    assert "--taxonomy gtdb" in text
     cfg = PipelineConfig.from_args(args)
     assert cfg.export_formats == ["kraken2", "kraken2_mpa", "cami"]
 
@@ -475,7 +477,7 @@ def test_prepare_without_to_flags_skips_convert(tmp_path):
 def test_prepare_yaml_export_formats(tmp_path):
     cfg = tmp_path / "p.yaml"
     cfg.write_text(
-        "input_dir: /in\nexport_formats: [cami, mpa]\nannotators: []\n",
+        "input_dir: /in\nexport_formats: [cami, mpa]\ntaxonomy: gtdb\nannotators: []\n",
         encoding="utf-8",
     )
     args = argparse.Namespace(
@@ -487,3 +489,4 @@ def test_prepare_yaml_export_formats(tmp_path):
     )
     config = PipelineConfig.from_args(args)
     assert config.export_formats == ["cami", "kraken2_mpa"]
+    assert config.export_taxonomy == "gtdb"

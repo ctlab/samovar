@@ -13,9 +13,9 @@ A converter is the hub around ``Annotation``:
 
 ``samovar convert -i IN -o OUT --to abundance`` uses the builtin export.
 ``samovar convert -i IN -o reports --to kraken2`` writes Kraken 2 kreport files
-(needs NCBI taxdump).
+(needs taxdump; ``--taxonomy ncbi`` or ``gtdb``).
 ``samovar convert -i IN -o profiles --to cami`` writes CAMI bioboxes ``.profile``
-files (RFC 0.10.0).
+files (RFC 0.10.0; ``@TaxonomyID`` follows ``--taxonomy``).
 """
 
 from __future__ import annotations
@@ -168,6 +168,7 @@ def annotation_to_cami_map(
     *,
     n_reads: Optional[int] = None,
     taxdump: Optional[PathLike] = None,
+    taxonomy: str = "ncbi",
 ) -> Dict[str, Dict[str, str]]:
     """``{annotator: {sample: profile_text}}`` via abundance tables + taxdump."""
     from samovar.cami_profile import abundance_tables_to_cami, try_taxonomy
@@ -175,7 +176,7 @@ def annotation_to_cami_map(
     tables = annotation_to_abundance(annotation, n_reads=n_reads)
     if not tables:
         return {}
-    return abundance_tables_to_cami(tables, try_taxonomy(taxdump))
+    return abundance_tables_to_cami(tables, try_taxonomy(taxdump, taxonomy=taxonomy))
 
 
 def annotation_to_kreport_map(
@@ -184,6 +185,7 @@ def annotation_to_kreport_map(
     n_reads: Optional[int] = None,
     taxdump: Optional[PathLike] = None,
     mpa: bool = False,
+    taxonomy: str = "ncbi",
 ) -> Dict[str, Dict[str, str]]:
     """``{annotator: {sample: report_text}}`` via abundance tables + taxdump."""
     from samovar.kreport import KReportTaxonomy, abundance_tables_to_reports
@@ -191,14 +193,17 @@ def annotation_to_kreport_map(
     tables = annotation_to_abundance(annotation, n_reads=n_reads)
     if not tables:
         return {}
-    taxonomy = KReportTaxonomy.from_taxdump(taxdump)
-    return abundance_tables_to_reports(tables, taxonomy, mpa=mpa)
+    tax = KReportTaxonomy.from_taxdump(taxdump, taxonomy=taxonomy)
+    return abundance_tables_to_reports(tables, tax, mpa=mpa)
 
 
 def _kreport_options(fmt: str, kwargs: Dict[str, Any]) -> tuple:
-    """``(mpa, taxdump)`` from format name, kwargs, and ``--flags``."""
+    """``(mpa, taxdump, taxonomy)`` from format name, kwargs, and ``--flags``."""
+    from samovar.taxonomy import normalize_taxonomy
+
     mpa = bool(kwargs.get("mpa")) or normalize_format(fmt) == "kraken2_mpa"
     taxdump = kwargs.get("taxdump") or kwargs.get("taxdump_dir")
+    taxonomy = kwargs.get("taxonomy") or kwargs.get("taxonomy_id") or "ncbi"
     argv = list(kwargs.get("extra_argv") or extra_flags_argv(kwargs.get("extra_flags")))
     i = 0
     while i < len(argv):
@@ -210,8 +215,13 @@ def _kreport_options(fmt: str, kwargs: Dict[str, Any]) -> tuple:
         elif tok == "--taxdump" and i + 1 < len(argv):
             taxdump = argv[i + 1]
             i += 1
+        elif tok.startswith("--taxonomy="):
+            taxonomy = tok.split("=", 1)[1]
+        elif tok == "--taxonomy" and i + 1 < len(argv):
+            taxonomy = argv[i + 1]
+            i += 1
         i += 1
-    return mpa, taxdump or None
+    return mpa, taxdump or None, normalize_taxonomy(taxonomy)
 
 
 def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> Path:
@@ -234,16 +244,18 @@ def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> 
         tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
         if not tables:
             raise ValueError("no abundance tables to write (empty annotation)")
-        mpa, taxdump = _kreport_options(name, kwargs)
-        return dump_kreport(tables, dest, taxdump=taxdump, mpa=mpa)
+        mpa, taxdump, taxonomy = _kreport_options(name, kwargs)
+        return dump_kreport(
+            tables, dest, taxdump=taxdump, mpa=mpa, taxonomy=taxonomy
+        )
     if name == "cami":
         from samovar.cami_profile import dump_cami
 
         tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
         if not tables:
             raise ValueError("no abundance tables to write (empty annotation)")
-        _mpa, taxdump = _kreport_options(name, kwargs)
-        return dump_cami(tables, dest, taxdump=taxdump)
+        _mpa, taxdump, taxonomy = _kreport_options(name, kwargs)
+        return dump_cami(tables, dest, taxdump=taxdump, taxonomy=taxonomy)
     raise UnknownFormatError(fmt)
 
 
@@ -493,6 +505,7 @@ def export_annotation_formats(
     taxdump: str = "",
     n_reads: Optional[int] = None,
     extra_flags: str = "",
+    taxonomy: str = "ncbi",
 ) -> Dict[str, Path]:
     """Write each format under ``dest_root/<format>/`` (or ``dest_root`` if one format)."""
     names = parse_export_formats(*list(formats))
@@ -509,6 +522,7 @@ def export_annotation_formats(
             taxdump=taxdump,
             n_reads=n_reads,
             extra_flags=extra_flags,
+            taxonomy=taxonomy,
         )
         return written
     dest_path.mkdir(parents=True, exist_ok=True)
@@ -521,6 +535,7 @@ def export_annotation_formats(
             taxdump=taxdump,
             n_reads=n_reads,
             extra_flags=extra_flags,
+            taxonomy=taxonomy,
         )
     return written
 
@@ -536,6 +551,7 @@ def convert_annotation(
     extra_flags: str = "",
     taxdump: str = "",
     mpa: bool = False,
+    taxonomy: str = "ncbi",
 ) -> Path:
     src_fmt = normalize_format(source_format) or detect_format(source)
     dst_fmt = normalize_format(dest_format)
@@ -555,6 +571,7 @@ def convert_annotation(
         "extra_argv": extra_flags_argv(extra_flags),
         "taxdump": taxdump or "",
         "mpa": mpa,
+        "taxonomy": taxonomy or "ncbi",
     }
     if is_builtin_format(src_fmt):
         annotation = load_builtin(source, src_fmt)
@@ -574,6 +591,7 @@ def convert_annotation(
             n_reads=n_reads,
             taxdump=taxdump or None,
             mpa=mpa,
+            taxonomy=taxonomy or "ncbi",
             extra_flags=extra_flags,
             extra_argv=extra_flags_argv(extra_flags),
         )
@@ -604,6 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Convert an Annotation between formats. Built-ins: annotation, "
             "abundance, kraken2 (kreport), kraken2-mpa, cami. "
+            "Lineage formats use --taxonomy ncbi (default) or gtdb. "
             "Other --to/--from names are annotation-converter tools from "
             "`samovar tools import --type annotation-converter`."
         ),
@@ -647,7 +666,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--taxdump",
         default="",
-        help="NCBI taxdump directory (nodes.dmp + names.dmp) for --to kraken2 / cami",
+        help="Taxonomy dump directory for --to kraken2 / cami (NCBI or GTDB)",
+    )
+    parser.add_argument(
+        "--taxonomy",
+        default="ncbi",
+        help="Taxonomy system: ncbi (default) or gtdb",
     )
     parser.add_argument(
         "--mpa",
@@ -670,6 +694,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 taxdump=args.taxdump,
                 n_reads=args.n_reads,
                 extra_flags=args.flags,
+                taxonomy=args.taxonomy,
             )
             dest = Path(args.output)
             print(" ".join(str(p) for p in written.values()))
@@ -684,6 +709,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             extra_flags=args.flags,
             taxdump=args.taxdump,
             mpa=args.mpa,
+            taxonomy=args.taxonomy,
         )
     except (UnknownFormatError, ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

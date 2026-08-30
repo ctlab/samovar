@@ -297,6 +297,7 @@ class PipelineConfig:
     endpoint: str = "viz_reprofiled"
     export_formats: Optional[List[str]] = None
     export_taxdump: Optional[str] = None
+    export_taxonomy: Optional[str] = None
 
     def __post_init__(self):
         if self.annotators is None:
@@ -507,6 +508,14 @@ class PipelineConfig:
                 )
                 if yaml_taxdump:
                     config.export_taxdump = str(yaml_taxdump)
+                yaml_taxonomy = (
+                    input_config.get("export_taxonomy")
+                    or input_config.get("taxonomy")
+                )
+                if yaml_taxonomy:
+                    from samovar.taxonomy import normalize_taxonomy
+
+                    config.export_taxonomy = normalize_taxonomy(yaml_taxonomy)
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -801,6 +810,13 @@ class PipelineConfig:
         cli_taxdump = getattr(args, "export_taxdump", None) or getattr(args, "taxdump", None)
         if cli_taxdump:
             config.export_taxdump = str(cli_taxdump)
+        cli_taxonomy = getattr(args, "export_taxonomy", None) or getattr(
+            args, "taxonomy", None
+        )
+        if cli_taxonomy:
+            from samovar.taxonomy import normalize_taxonomy
+
+            config.export_taxonomy = normalize_taxonomy(cli_taxonomy)
         _apply_translated_cli_flags(config, args)
         return config
 
@@ -949,6 +965,8 @@ class PipelineConfig:
         tax = ""
         if self.export_taxdump:
             tax = " --taxdump " + shlex.quote(str(self.export_taxdump))
+        if self.export_taxonomy:
+            tax += " --taxonomy " + shlex.quote(str(self.export_taxonomy))
         return (
             f"\n$PYTHON_PATH -m samovar.annotation_convert \\\n"
             f'    -i "$out_dir/{src_rel}" -o "$out_dir/exports/{stage}"{tax} \\\n'

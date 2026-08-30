@@ -3,7 +3,8 @@
 Kraken 2 writes this during classification; the same layout is produced by
 KrakenTools ``make_kreport.py`` from a per-read table plus taxonomy. SamovaR
 reuses ``Annotation.to_abundance()`` for the direct (leaf) counts, then rolls
-them up the NCBI tree from taxdump (``nodes.dmp`` + ``names.dmp``).
+them up NCBI or GTDB (``--taxonomy``) from taxdump (``nodes.dmp`` +
+``names.dmp``, or GTDB taxonomy TSV).
 
 Standard report columns (tab-separated):
 
@@ -12,7 +13,7 @@ Standard report columns (tab-separated):
 3. Fragments assigned *directly* to this taxon
 4. Rank code (``U``/``R``/``D``/``K``/``P``/``C``/``O``/``F``/``G``/``S``,
    or closest ancestor + distance, e.g. ``G2``)
-5. NCBI taxID
+5. NCBI or GTDB taxID
 6. Scientific name, indented by two spaces per tree level
 """
 
@@ -53,6 +54,23 @@ _TAXDUMP_HINT = (
     "Kraken2-style reports need NCBI taxdump (nodes.dmp, names.dmp). "
     "Set genomes.taxdump, SAMOVAR_TAXDUMP, or pass --taxdump DIR."
 )
+_GTDB_HINT = (
+    "GTDB taxonomy needs gtdb-taxdump (nodes.dmp + names.dmp) or "
+    "bac120_taxonomy.tsv / ar53_taxonomy.tsv. "
+    "Set genomes.gtdb, SAMOVAR_GTDB, or pass --taxdump DIR --taxonomy gtdb."
+)
+
+
+def _taxonomy_hint(system: str) -> str:
+    from samovar.taxonomy import normalize_taxonomy
+
+    return _GTDB_HINT if normalize_taxonomy(system) == "gtdb" else _TAXDUMP_HINT
+
+
+def _try_dmp_pair(root: Path) -> Tuple[Optional[Path], Optional[Path]]:
+    nodes = find_dmp("nodes.dmp", root)
+    names = find_dmp("names.dmp", root)
+    return nodes, names
 
 
 class KReportTaxonomy:
@@ -62,23 +80,101 @@ class KReportTaxonomy:
         self,
         tree: TaxTree,
         names: Optional[Mapping[int, str]] = None,
+        *,
+        system: str = "ncbi",
+        aliases: Optional[Mapping[str, int]] = None,
     ):
+        from samovar.taxonomy import normalize_taxonomy
+
+        self.system = normalize_taxonomy(system)
         self.tree = dict(tree)
         self.tree.setdefault(1, (1, "no rank"))
         self.names = {1: "root", **dict(names or {})}
         if 1 not in self.names:
             self.names[1] = "root"
+        self.aliases: Dict[str, int] = {}
+        self.add_aliases(aliases or {})
+
+    def add_aliases(self, aliases: Mapping[str, int]) -> None:
+        for key, taxid in aliases.items():
+            text = str(key).strip()
+            if not text:
+                continue
+            self.aliases[text] = int(taxid)
+            self.aliases[text.lower()] = int(taxid)
+
+    def resolve(self, value: Any) -> int:
+        """Map a table token (taxid, GTDB name, accession) onto a node id."""
+        text = str(value).strip()
+        if text.lower() in _UNCLASSIFIED:
+            return 0
+        if text in self.aliases:
+            return int(self.aliases[text])
+        lower = text.lower()
+        if lower in self.aliases:
+            return int(self.aliases[lower])
+        try:
+            return int(float(text))
+        except (TypeError, ValueError):
+            return 0
 
     @classmethod
-    def from_taxdump(cls, taxdump: Optional[PathLike] = None) -> "KReportTaxonomy":
-        nodes_path, names_path = resolve_taxdump_files(taxdump)
+    def from_taxdump(
+        cls,
+        taxdump: Optional[PathLike] = None,
+        taxonomy: str = "ncbi",
+    ) -> "KReportTaxonomy":
+        from samovar.taxonomy import (
+            gtdb_taxonomy_tables,
+            normalize_taxonomy,
+            parse_gtdb_taxonomy_files,
+            parse_taxid_map,
+            taxonomy_root,
+        )
+
+        system = normalize_taxonomy(taxonomy)
+        if taxdump is not None:
+            root = Path(taxdump).expanduser()
+            if root.is_file() and root.name.endswith(".dmp"):
+                nodes_path, names_path = resolve_taxdump_files(taxdump)
+                return cls._from_dmp(nodes_path, names_path, system=system)
+            if root.is_file() and root.suffix.lower() in {".tsv", ".txt", ".csv"}:
+                if system != "gtdb":
+                    raise FileNotFoundError(_taxonomy_hint(system))
+                tree, names, aliases = parse_gtdb_taxonomy_files([root])
+                return cls(tree, names, system=system, aliases=aliases)
+            nodes_path, names_path = _try_dmp_pair(root)
+            if nodes_path is not None:
+                loaded = cls._from_dmp(nodes_path, names_path, system=system)
+                map_path = root / "taxid.map"
+                if map_path.is_file():
+                    loaded.add_aliases(parse_taxid_map(map_path))
+                return loaded
+            tables = gtdb_taxonomy_tables(root)
+            if tables and system == "gtdb":
+                tree, names, aliases = parse_gtdb_taxonomy_files(tables)
+                return cls(tree, names, system=system, aliases=aliases)
+            raise FileNotFoundError(_taxonomy_hint(system))
+        if system == "gtdb":
+            return cls.from_taxdump(taxonomy_root("gtdb"), taxonomy="gtdb")
+        nodes_path, names_path = resolve_taxdump_files(None)
+        return cls._from_dmp(nodes_path, names_path, system=system)
+
+    @classmethod
+    def _from_dmp(
+        cls,
+        nodes_path: Path,
+        names_path: Optional[Path],
+        *,
+        system: str,
+    ) -> "KReportTaxonomy":
         from samovar.parse_annotators import _load_nodes_cache
 
         tree = _load_nodes_cache(str(nodes_path))
         names: Dict[int, str] = {}
         if names_path is not None:
             names = load_scientific_names(names_path)
-        return cls(tree, names)
+        return cls(tree, names, system=system)
 
     def parent_of(self, taxid: int) -> int:
         if taxid in self.tree:
@@ -209,9 +305,11 @@ def sample_from_n_column(column: str) -> str:
 def direct_counts_from_series(
     taxids: Iterable[Any],
     values: Iterable[Any],
+    taxonomy: Optional["KReportTaxonomy"] = None,
 ) -> Dict[int, int]:
     """Aggregate a taxa×count column into integer direct assignments."""
     counts: Dict[int, int] = defaultdict(int)
+    resolve = taxonomy.resolve if taxonomy is not None else _as_taxid
     for taxid, raw in zip(taxids, values):
         try:
             n = int(round(float(raw)))
@@ -219,7 +317,7 @@ def direct_counts_from_series(
             continue
         if n == 0:
             continue
-        counts[_as_taxid(taxid)] += n
+        counts[int(resolve(taxid))] += n
     return dict(counts)
 
 
@@ -361,7 +459,9 @@ def abundance_tables_to_reports(
             continue
         sample_map: Dict[str, str] = {}
         for col in cols:
-            direct = direct_counts_from_series(table["taxid"], table[col])
+            direct = direct_counts_from_series(
+                table["taxid"], table[col], taxonomy
+            )
             sample_map[sample_from_n_column(col)] = writer(direct, taxonomy)
         if sample_map:
             reports[str(annotator)] = sample_map
@@ -412,7 +512,8 @@ def dump_kreport(
     *,
     taxdump: Optional[PathLike] = None,
     mpa: bool = False,
+    taxonomy: str = "ncbi",
 ) -> Path:
-    taxonomy = KReportTaxonomy.from_taxdump(taxdump)
-    reports = abundance_tables_to_reports(tables, taxonomy, mpa=mpa)
+    tax = KReportTaxonomy.from_taxdump(taxdump, taxonomy=taxonomy)
+    reports = abundance_tables_to_reports(tables, tax, mpa=mpa)
     return write_reports(dest, reports, mpa=mpa)

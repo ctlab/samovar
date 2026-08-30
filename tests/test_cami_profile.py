@@ -15,6 +15,7 @@ from samovar.cami_profile import (
 )
 from samovar.kreport import KReportTaxonomy
 from samovar.parse_annotators import Annotation
+from samovar.taxonomy import GTDB_CAMI_RANKS
 from tests.test_kreport import write_mini_taxdump
 
 _HEADER_KV = re.compile(
@@ -63,7 +64,10 @@ def assert_rfc(text: str):
         assert _SAMPLEID.match(header["sampleid"])
         sample_ids.append(header["sampleid"])
         assert header["version"] == CAMI_FORMAT_VERSION
-        assert header["ranks"] == "|".join(CAMI_RANKS)
+        tax_sys = header.get("taxonomyid", "ncbi").lower()
+        assert tax_sys in {"ncbi", "gtdb"}
+        expected_ranks = GTDB_CAMI_RANKS if tax_sys == "gtdb" else CAMI_RANKS
+        assert header["ranks"] == "|".join(expected_ranks)
         assert columns[:4] == ["TAXID", "RANK", "TAXPATH", "PERCENTAGE"] or columns[
             :5
         ] == ["TAXID", "RANK", "TAXPATH", "TAXPATHSN", "PERCENTAGE"]
@@ -79,7 +83,7 @@ def assert_rfc(text: str):
             path = row["TAXPATH"]
             pct = row["PERCENTAGE"]
             assert taxid and taxid != "0"
-            assert rank in CAMI_RANKS or rank == ""
+            assert rank in expected_ranks or rank == ""
             assert _PCT.match(pct), pct
             assert path.split("|")[-1] == str(taxid)
             if "TAXPATHSN" in row:

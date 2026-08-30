@@ -63,7 +63,10 @@ def taxdump_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
         if rec and rec.get("path"):
             return _as_path(rec["path"])
         grouped = iter_database_records(cfg or {}).get("taxdump") or {}
-        for item in grouped.values():
+        for key, item in grouped.items():
+            bare = str(key).split(":", 1)[0].lower()
+            if bare in {"gtdb", "gtdb_taxdump"}:
+                continue
             if item.get("path"):
                 return _as_path(item["path"])
     except Exception:

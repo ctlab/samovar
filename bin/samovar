@@ -83,7 +83,7 @@ show_usage() {
     echo "  samovar generate --accessions GCF_... --reindex 1 --output_dir [...]"
     echo "  samovar convert -i initial_annotations -o counts --to abundance"
     echo "  samovar convert -i initial_annotations -o reports --to kraken2"
-    echo "  samovar convert -i initial_annotations -o profiles --to cami"
+    echo "  samovar convert -i initial_annotations -o profiles --to cami --taxonomy gtdb"
     echo "  samovar convert -i table.csv --from abundance --to annotation -o long.csv"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
