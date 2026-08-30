@@ -1,8 +1,9 @@
 """Convert ``Annotation`` between named formats.
 
-Built-ins today: ``annotation`` (per-read long table) and ``abundance``
-(``taxid`` × ``N_<sample>``). Other names are ``annotation_converter`` tools
-imported with ``samovar tools import --type annotation-converter``.
+Built-ins: ``annotation`` (per-read long table), ``abundance``
+(``taxid`` × ``N_<sample>``), ``kraken2`` (kreport), and ``cami`` (bioboxes
+``.profile``). Other names are ``annotation_converter`` tools imported with
+``samovar tools import --type annotation-converter``.
 
 A converter is the hub around ``Annotation``:
 
@@ -13,6 +14,8 @@ A converter is the hub around ``Annotation``:
 ``samovar convert -i IN -o OUT --to abundance`` uses the builtin export.
 ``samovar convert -i IN -o reports --to kraken2`` writes Kraken 2 kreport files
 (needs NCBI taxdump).
+``samovar convert -i IN -o profiles --to cami`` writes CAMI bioboxes ``.profile``
+files (RFC 0.10.0).
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ from samovar.table_regenerators import extra_flags_argv
 
 PathLike = Union[str, Path]
 
-BUILTIN_FORMATS = ("annotation", "abundance", "kraken2", "kraken2_mpa")
+BUILTIN_FORMATS = ("annotation", "abundance", "kraken2", "kraken2_mpa", "cami")
 FORMAT_ALIASES = {
     "annotation": "annotation",
     "annot": "annotation",
@@ -64,6 +67,11 @@ FORMAT_ALIASES = {
     "kraken2style": "kraken2",
     "kraken2_mpa": "kraken2_mpa",
     "kreport_mpa": "kraken2_mpa",
+    "cami": "cami",
+    "cami_profile": "cami",
+    "camiprofile": "cami",
+    "bioboxes": "cami",
+    "profiling": "cami",
 }
 CONVERTER_GROUP = "annotation_converter"
 
@@ -154,6 +162,21 @@ def write_annotation_table(dest: PathLike, frame: pd.DataFrame) -> Path:
     return out
 
 
+def annotation_to_cami_map(
+    annotation: Annotation,
+    *,
+    n_reads: Optional[int] = None,
+    taxdump: Optional[PathLike] = None,
+) -> Dict[str, Dict[str, str]]:
+    """``{annotator: {sample: profile_text}}`` via abundance tables + taxdump."""
+    from samovar.cami_profile import abundance_tables_to_cami, try_taxonomy
+
+    tables = annotation_to_abundance(annotation, n_reads=n_reads)
+    if not tables:
+        return {}
+    return abundance_tables_to_cami(tables, try_taxonomy(taxdump))
+
+
 def annotation_to_kreport_map(
     annotation: Annotation,
     *,
@@ -212,6 +235,14 @@ def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> 
             raise ValueError("no abundance tables to write (empty annotation)")
         mpa, taxdump = _kreport_options(name, kwargs)
         return dump_kreport(tables, dest, taxdump=taxdump, mpa=mpa)
+    if name == "cami":
+        from samovar.cami_profile import dump_cami
+
+        tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
+        if not tables:
+            raise ValueError("no abundance tables to write (empty annotation)")
+        _mpa, taxdump = _kreport_options(name, kwargs)
+        return dump_cami(tables, dest, taxdump=taxdump)
     raise UnknownFormatError(fmt)
 
 
@@ -234,9 +265,9 @@ def detect_format(path: PathLike) -> str:
 
 def load_builtin(path: PathLike, fmt: str = "") -> Annotation:
     name = normalize_format(fmt) or detect_format(path)
-    if name in {"kraken2", "kraken2_mpa"}:
+    if name in {"kraken2", "kraken2_mpa", "cami"}:
         raise ValueError(
-            "kraken2-style reports are export-only; use --from annotation or abundance"
+            f"{name}-style reports are export-only; use --from annotation or abundance"
         )
     data = load_table_input(path)
     if name == "abundance" and not getattr(data, "abundance_tables", None):
@@ -486,7 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="samovar convert",
         description=(
             "Convert an Annotation between formats. Built-ins: annotation, "
-            "abundance, kraken2 (kreport), kraken2-mpa. "
+            "abundance, kraken2 (kreport), kraken2-mpa, cami. "
             "Other --to/--from names are annotation-converter tools from "
             "`samovar tools import --type annotation-converter`."
         ),
@@ -504,7 +535,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="dest_format",
         required=True,
         help=(
-            "Output format (abundance, annotation, kraken2, kraken2-mpa, "
+            "Output format (abundance, annotation, kraken2, kraken2-mpa, cami, "
             "or an imported converter name)"
         ),
     )
@@ -528,7 +559,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--taxdump",
         default="",
-        help="NCBI taxdump directory (nodes.dmp + names.dmp) for --to kraken2",
+        help="NCBI taxdump directory (nodes.dmp + names.dmp) for --to kraken2 / cami",
     )
     parser.add_argument(
         "--mpa",

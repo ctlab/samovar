@@ -56,7 +56,7 @@ show_usage() {
     echo "  export      Pack a Hydra run snapshot (+ optional databases) into an archive"
     echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
-    echo "  convert     Convert Annotation (abundance, kraken2 kreport, or a custom converter)"
+    echo "  convert     Convert Annotation (abundance, kraken2, CAMI, or a custom converter)"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
@@ -82,6 +82,7 @@ show_usage() {
     echo "  samovar generate --accessions GCF_... --reindex 1 --output_dir [...]"
     echo "  samovar convert -i initial_annotations -o counts --to abundance"
     echo "  samovar convert -i initial_annotations -o reports --to kraken2"
+    echo "  samovar convert -i initial_annotations -o profiles --to cami"
     echo "  samovar convert -i table.csv --from abundance --to annotation -o long.csv"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }

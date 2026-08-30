@@ -121,3 +121,44 @@ def test_convert_to_kraken2_mpa(tmp_path, monkeypatch):
     assert mpa_files
     assert "d__Bacteria" in mpa_files[0].read_text()
     assert "s__Escherichia_coli" in mpa_files[0].read_text()
+
+
+def test_convert_cli_annotation_to_cami(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    dump = write_mini_taxdump(tmp_path / "taxdump")
+    ann = _ann_dir(tmp_path)
+    dest = tmp_path / "profiles"
+    rc = convert_main(
+        ["-i", str(ann), "-o", str(dest), "--to", "cami", "--taxdump", str(dump)]
+    )
+    assert rc == 0
+    from tests.test_cami_profile import assert_rfc
+
+    profiles = list(dest.glob("*.profile"))
+    assert profiles
+    for path in profiles:
+        text = path.read_text()
+        assert_rfc(text)
+        assert "@Version:0.10.0" in text
+        assert "@@TAXID\tRANK\tTAXPATH\tTAXPATHSN\tPERCENTAGE" in text
+        assert "2|||||561|562" in text
+
+
+def test_convert_abundance_to_cami(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    dump = write_mini_taxdump(tmp_path / "taxdump")
+    table = tmp_path / "kaiju.csv"
+    pd.DataFrame({"taxid": [562, 0], "N_1": [4, 1]}).to_csv(table, index=False)
+    dest = tmp_path / "sample.profile"
+    written = convert_annotation(
+        table,
+        dest,
+        source_format="abundance",
+        dest_format="bioboxes",
+        taxdump=str(dump),
+    )
+    text = Path(written).read_text()
+    from tests.test_cami_profile import assert_rfc
+
+    assert_rfc(text)
+    assert "@SampleID:1" in text

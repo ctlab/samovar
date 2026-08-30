@@ -113,44 +113,10 @@ def write_cami_profile(
     rank: str = "genus",
     total: Optional[float] = None,
 ) -> Path:
-    """Write a single-sample CAMI bioboxes taxonomic profile."""
-    is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    from samovar.parse_annotators import taxid_ncbi_rank
+    """Write a single-sample CAMI bioboxes taxonomic profile (RFC 0.10.0)."""
+    from samovar.cami_profile import write_cami_profile as _write
 
-    requested = cami_rank(rank)
-    classified = float(sum(max(float(v), 0.0) for v in counts.values()))
-    denom = float(total) if total is not None and float(total) > 0 else classified
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    sid = "".join(ch if ch.isalnum() or ch in "._" else "_" for ch in str(sample_id)) or "1"
-    rows = []
-    ranks_used = []
-    for taxid, n in sorted(counts.items(), key=lambda kv: (-float(kv[1]), str(kv[0]))):
-        token = normalize_taxon_token(taxid)
-        if is_special_taxon(token) or float(n) <= 0:
-            continue
-        actual = taxid_ncbi_rank(token)
-        row_rank = actual if actual in OPAL_RANKS else requested
-        ranks_used.append(row_rank)
-        pct = 0.0 if denom <= 0 else 100.0 * float(n) / denom
-        rows.append(f"{token}\t{row_rank}\t{token}\t{pct:.6f}")
-    unique_ranks = []
-    for item in ranks_used:
-        if item not in unique_ranks:
-            unique_ranks.append(item)
-    if requested not in unique_ranks:
-        unique_ranks.insert(0, requested)
-    rank_header = "|".join(unique_ranks) if unique_ranks else requested
-    lines = [
-        f"@SampleID:{sid}",
-        "@Version:0.9.1",
-        f"@Ranks:{rank_header}",
-        "@TaxonomyID:ncbi",
-        "@@TAXID\tRANK\tTAXPATH\tPERCENTAGE",
-        *rows,
-    ]
-    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return dest
+    return _write(counts, dest, sample_id=sample_id, rank=rank, total=total)
 
 
 def series_to_counts(values: Iterable) -> Dict[str, float]:

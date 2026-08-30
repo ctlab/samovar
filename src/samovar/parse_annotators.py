@@ -1205,8 +1205,30 @@ class Annotation:
             mpa=mpa,
         )
 
+    def to_cami(
+        self,
+        dest: Optional[Union[str, Path]] = None,
+        *,
+        taxdump: Optional[Union[str, Path]] = None,
+        n_reads: Optional[int] = None,
+    ):
+        """CAMI bioboxes taxonomic profile (RFC 0.10.0).
+
+        Direct counts come from :meth:`to_abundance`; ``TAXPATH`` walks taxdump.
+        Without ``dest``, returns ``{annotator: {sample: profile_text}}``.
+        """
+        from samovar.annotation_convert import annotation_to_cami_map, dump_builtin
+
+        if dest is None:
+            return annotation_to_cami_map(self, n_reads=n_reads, taxdump=taxdump)
+        return dump_builtin(
+            self, dest, "cami", n_reads=n_reads, taxdump=taxdump
+        )
+
+    to_CAMI = to_cami
+
     def to(self, fmt: str, dest: Optional[Union[str, Path]] = None, **kwargs):
-        """Export to a named format (builtin ``abundance`` / ``annotation`` / ``kraken2``, or a converter).
+        """Export to a named format (builtin ``abundance`` / ``annotation`` / ``kraken2`` / ``cami``, or a converter).
 
         Custom formats: ``samovar tools import --type annotation-converter``.
         """
@@ -1230,9 +1252,14 @@ class Annotation:
                     taxdump=kwargs.get("taxdump"),
                     n_reads=kwargs.get("n_reads"),
                 )
+            if name == "cami":
+                return self.to_cami(
+                    taxdump=kwargs.get("taxdump"),
+                    n_reads=kwargs.get("n_reads"),
+                )
             raise ValueError(
                 f"Annotation.to({fmt!r}) needs dest= for a custom converter "
-                "(or use builtin 'abundance' / 'annotation' / 'kraken2')"
+                "(or use builtin 'abundance' / 'annotation' / 'kraken2' / 'cami')"
             )
         if is_builtin_format(name):
             return dump_builtin(self, dest, name, **kwargs)
@@ -1240,7 +1267,7 @@ class Annotation:
         if spec is None:
             raise ValueError(
                 f"unknown format {fmt!r}; import an annotation-converter or use "
-                "abundance / annotation / kraken2"
+                "abundance / annotation / kraken2 / cami"
             )
         return dump_custom(self, dest, spec, name, kwargs)
 

@@ -48,6 +48,7 @@ def test_write_cami_profile(tmp_path):
     path = write_cami_profile({"562": 3, "9606": 1, "0": 2}, tmp_path / "gold.profile", "s1", "genus")
     text = path.read_text()
     assert "@SampleID:s1" in text
+    assert "@Version:0.10.0" in text
     assert "562" in text and "9606" in text
     assert "\t0\t" not in text
     assert "PERCENTAGE" in text
