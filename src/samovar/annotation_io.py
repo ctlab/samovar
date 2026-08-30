@@ -14,13 +14,24 @@ import pandas as pd
 
 
 def _normalize_colnames(columns: Iterable) -> list:
-    out = []
+    """Canonicalize taxID spelling; keep ``taxID_<tool>_<n>`` when several DBs share a tool."""
+    prepared = []
     for col in columns:
         name = str(col)
-        name = re.sub(r"_[0-9]+$", "", name)
         name = name.replace("taxid", "taxID")
         name = re.sub(r"\.\.\.[0-9]+$", "", name)
-        out.append(name)
+        stripped = re.sub(r"_[0-9]+$", "", name)
+        prepared.append((name, stripped))
+    tax_stripped = [s for name, s in prepared if name.startswith("taxID_")]
+    collisions = {s for s in tax_stripped if tax_stripped.count(s) > 1}
+    out = []
+    for name, stripped in prepared:
+        if name.startswith("taxID_") and stripped in collisions:
+            out.append(name)
+        elif name.startswith("taxID_") or name.startswith("N_"):
+            out.append(stripped if name.startswith("taxID_") else name)
+        else:
+            out.append(stripped)
     return out
 
 
@@ -35,7 +46,8 @@ def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
         df.iloc[:, first] = df.iloc[:, first].combine_first(df.iloc[:, i])
         drop.append(i)
     if drop:
-        df = df.drop(df.columns[drop], axis=1)
+        keep = [i for i in range(df.shape[1]) if i not in set(drop)]
+        df = df.iloc[:, keep]
     return df
 
 

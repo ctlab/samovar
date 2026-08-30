@@ -98,7 +98,18 @@ def preprocess_fasta(
                 
                 # Write to output file
                 if inject_taxid:
-                    new_header = f">{input_filename}|taxid:{input_filename}|{i+1}|{j//include_length + 1}"
+                    taxid_token = input_filename
+                    try:
+                        from samovar.genome_index import numeric_taxid_for
+
+                        resolved = str(numeric_taxid_for(input_filename) or "").split(".")[0]
+                        if resolved.isdigit():
+                            taxid_token = resolved
+                    except Exception:
+                        pass
+                    new_header = (
+                        f">{input_filename}|taxid:{taxid_token}|{i+1}|{j//include_length + 1}"
+                    )
                 else:
                     token = header.split()[0] if header else input_filename
                     new_header = f">{token}"

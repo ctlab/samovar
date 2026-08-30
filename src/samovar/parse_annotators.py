@@ -66,6 +66,17 @@ def extract_true_taxid(seq_id: str, pattern: Optional[str] = None) -> str:
     if match:
         return match.group(1)
 
+    acc = re.search(r"(GC[AF]_\d+\.\d+)", seq_id, flags=re.IGNORECASE)
+    if acc:
+        try:
+            from samovar.genome_index import numeric_taxid_for
+
+            num = str(numeric_taxid_for(acc.group(1)) or "").split(".")[0]
+            if num.isdigit():
+                return num
+        except Exception:
+            pass
+
     lower = seq_id.lower()
     for prefix, taxid in _TRUE_TAXID_PREFIXES.items():
         if lower.startswith(prefix) or f"|{prefix}" in lower:

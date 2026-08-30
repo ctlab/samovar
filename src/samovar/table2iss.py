@@ -244,7 +244,16 @@ def _safe_fasta_id(value: str) -> str:
 
 
 def _genome_id_from_path(path: str) -> str:
-    return _safe_fasta_id(sequence_stem(path))
+    stem = sequence_stem(path)
+    try:
+        from samovar.genome_index import numeric_taxid_for
+
+        num = str(numeric_taxid_for(stem) or "").split(".")[0]
+        if num.isdigit():
+            return num
+    except Exception:
+        pass
+    return _safe_fasta_id(stem)
 
 
 def _open_text(path: str):

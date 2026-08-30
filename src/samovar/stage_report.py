@@ -34,96 +34,128 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
     "setup_reads": {
         "title": "Read setup",
         "description": (
-            "Source FASTQ is linked or copied into ``initial/``. "
-            "ISS generate writes paired reads here when the run starts from genomes."
+            "This is the first checkpoint: SAMOVAR puts the metagenome it will "
+            "annotate into ``initial/`` as paired FASTQ. That may be real sequencing "
+            "data you already had, or InSilicoSeq output from ``samovar generate``. "
+            "Later stages never go back to the original genome folder; they only "
+            "see these reads. Docs: https://github.com/ctlab/samovar/wiki"
         ),
     },
     "annotate_initial": {
         "title": "Initial annotation",
         "description": (
-            "Each configured classifier (Kraken2, Kaiju, …) labels the real or "
-            "ISS reads. Per-tool reports land in ``initial_reports/``."
+            "Each configured classifier (Kraken2, Kaiju, and any tools you imported) "
+            "is run on the same ``initial/`` FASTQ. The raw per-tool reports "
+            "(``.kreport``, Kaiju ``.out``, and so on) land in ``initial_reports/``. "
+            "This is the “what did each database/tool call?” step before anything is merged."
         ),
     },
     "combine_initial": {
         "title": "Combine initial calls",
         "description": (
-            "Tool outputs are merged into one table (``initial_annotations/``) "
-            "with a column per annotator and optional ``true`` taxIDs from ISS headers."
+            "Tool outputs are joined into one long table per sample in "
+            "``initial_annotations/``. Columns are ``taxID_<tool>``; when ISS or CAMISIM "
+            "headers contain ``taxid:<digits>`` (or a known assembly accession), a "
+            "``true`` column is filled so F1 and scores can be computed."
         ),
     },
     "viz_initial": {
         "title": "Raw",
         "description": (
-            "Classifier labels on the input metagenome (real or simulated reads)."
+            "Quality of the original community: F1, completeness, and related scores "
+            "comparing each annotator (and later SAMOVAR) to the ``true`` taxIDs when "
+            "those exist. This is the baseline before regeneration. If ``true`` is "
+            "missing, heatmaps of calls remain but F1 is undefined."
         ),
     },
     "abundance_tables": {
         "title": "Observed abundance",
         "description": (
-            "Per-annotator OTU / abundance tables (``taxid`` + ``N_<sample>``) "
-            "in ``initial_abundance/``, converted from annotations or ingested as CSVs."
+            "Per-read annotations are counted into OTU-style tables "
+            "(``taxid`` + ``N_<sample>``) in ``initial_abundance/``. Table regenerators "
+            "and ISS community rebuild start from these counts, not from the FASTQ."
         ),
     },
     "regenerate_tables": {
         "title": "Regenerated abundance",
         "description": (
-            "``table_reads_generator`` writes synthetic communities to "
-            "``regenerated/.regenerated_abundance/`` (candidates kept when several methods run)."
+            "One or more ``table_reads_generator`` methods (direct copy, bootstrap, "
+            "GLM, SparseDOSSA2, …) write candidate synthetic communities under "
+            "``regenerated/.regenerated_abundance/``. The goal is a table that is "
+            "statistically close to the observed mix so re-annotation has known labels."
         ),
     },
     "score_regenerated_tables": {
         "title": "Table scoring",
         "description": (
-            "``--table-score`` ranks regenerated abundance tables against the observed "
-            "community and writes ``table_selection.json`` plus MultiQC plots."
+            "When several candidate tables exist, ``--table-score`` (for example "
+            "SparseDOSSA2 CV) ranks them against the observed community. The winner is "
+            "stored in ``table_selection.json`` and is the only table used for ISS "
+            "regeneration. This matters for custom annotators that emit tables rather than reads."
         ),
     },
     "seed_genomes": {
         "title": "Genome library",
         "description": (
-            "NCBI / cache assemblies needed to re-simulate the community are "
-            "seeded into ``genomes/``. Bundled ``data/test_genomes`` stubs are not used "
-            "unless this is an ISS toy run."
+            "Assemblies needed to simulate the regenerated community are resolved "
+            "(NCBI, the SamovaR catalog, or ``--test-genomes``) into ``genomes/``. "
+            "Without this step ISS has nothing to draw reads from."
         ),
     },
     "regenerate_reads": {
         "title": "Community regeneration",
         "description": (
-            "annotation2iss simulates FASTQ from regenerated abundance tables "
-            "(``regenerated/``) so the ensemble can be trained against a known mix."
+            "ISS (or another configured generator) draws FASTQ from the chosen "
+            "abundance table and the seeded genomes. Those reads have known composition, "
+            "so the ensemble can train on labels that are not circular with the original sample."
         ),
     },
     "sort_reads": {
         "title": "Sort regenerated reads",
-        "description": "Regenerated FASTQ is sorted so re-annotation and ML see a stable read order.",
+        "description": (
+            "Regenerated FASTQ is ordered so re-annotation and the ML step see a "
+            "stable read order across tools."
+        ),
     },
     "annotate_regenerated": {
         "title": "Re-annotation",
-        "description": "The same classifiers are run on regenerated reads (``regenerated_reports/``).",
+        "description": (
+            "The same classifiers run on the regenerated FASTQ (``regenerated_reports/``). "
+            "These calls, together with the known simulated mix, are the training set "
+            "for reprofiling."
+        ),
     },
     "combine_regenerated": {
         "title": "Combine re-annotation",
-        "description": "Regenerated tool calls are merged (``regenerated_annotations/``) for training labels.",
+        "description": (
+            "Regenerated tool calls are merged like the initial tables "
+            "(``regenerated_annotations/``) so each read has a vote from every annotator "
+            "plus a true taxID from the simulator."
+        ),
     },
     "viz_regenerated": {
         "title": "Regenerated",
         "description": (
-            "The same classifiers on in-silico reads rebuilt from those calls, "
-            "with known community composition."
+            "The same metrics as Raw, but on the in-silico community. Composition is "
+            "known, so F1 here measures how the tools behave when the mix is controlled. "
+            "Compare this section to Raw to see domain shift between real/ISS input and "
+            "the rebuilt community."
         ),
     },
     "reprofile": {
         "title": "SAMOVAR re-profiling",
         "description": (
-            "Supervised ensemble (``workflow/ML.py``) maps tool votes to a corrected "
-            "taxID column ``taxid_SAMOVAR`` in ``reprofiled_annotations/``."
+            "A supervised model (default ensemble, or an imported ``--type ml`` tool) "
+            "is trained on regenerated labels and applied to the original samples. "
+            "The corrected column is ``taxid_SAMOVAR`` in ``reprofiled_annotations/``."
         ),
     },
     "viz_reprofiled": {
         "title": "Reprofiled",
         "description": (
-            "SAMOVAR ensemble labels after training on the regenerated community."
+            "F1 and scores after the ensemble (or custom reprofiler) has updated the "
+            "original samples. This is the main “did SAMOVAR help?” comparison against "
+            "the single tools in Raw."
         ),
     },
 }
@@ -154,22 +186,19 @@ REPORT_SECTION = {
     "viz_initial": {
         "id": "samovar_raw",
         "title": "Raw",
-        "description": "Classifier labels on the input metagenome (real or simulated reads).",
+        "description": STAGE_INFO["viz_initial"]["description"],
         "folder": "initial_annotations_plots",
     },
     "viz_regenerated": {
         "id": "samovar_regenerated",
         "title": "Regenerated",
-        "description": (
-            "The same classifiers on in-silico reads rebuilt from those calls, "
-            "with known community composition."
-        ),
+        "description": STAGE_INFO["viz_regenerated"]["description"],
         "folder": "regenerated_annotations_plots",
     },
     "viz_reprofiled": {
         "id": "samovar_reprofiled",
         "title": "Reprofiled",
-        "description": "SAMOVAR ensemble labels after training on the regenerated community.",
+        "description": STAGE_INFO["viz_reprofiled"]["description"],
         "folder": "reprofiled_annotations_plots",
     },
 }
@@ -1057,8 +1086,18 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
 
 
 def _run_options_html(output_dir: PathLike, hidden_ids: Sequence[str]) -> str:
+    wiki = "https://github.com/ctlab/samovar/wiki"
     rows = collect_run_options(output_dir)
-    parts = ["<p>Options used for this SAMOVAR run.</p>"]
+    parts = [
+        "<p>SAMOVAR takes a metagenome (simulated or real), annotates it with "
+        "the tools you configured, rebuilds a community from those calls, and "
+        "trains a reprofiler on the known mix. The sections below follow that "
+        "order: <strong>Raw</strong> (input), <strong>Regenerated</strong> "
+        "(simulated community), <strong>Reprofiled</strong> (ensemble on the original samples).</p>",
+        f'<p>Documentation: <a href="{wiki}">{wiki}</a> '
+        f'(pipeline overview, <a href="{wiki}/Home">Home</a>).</p>',
+        "<p>Options used for this SAMOVAR run:</p>",
+    ]
     if rows:
         parts.append('<dl class="dl-horizontal" style="margin-top:0.75em">')
         for label, value in rows:
@@ -1222,7 +1261,7 @@ def _write_multiqc_config(dest: Path, hidden_ids: Sequence[str]) -> Path:
     lines = [
         f'title: "SAMOVAR"',
         f'subtitle: "Ensemble annotation report (v{PACKAGE_VERSION})"',
-        "intro_text: SAMOVAR report",
+        'intro_text: "SAMOVAR report. Wiki: https://github.com/ctlab/samovar/wiki"',
         f'custom_css_files:',
         f'  - {json.dumps(str(css_path))}',
         "custom_content:",
@@ -1263,7 +1302,24 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
                 break
 
     for i, stage in enumerate(REPORT_STAGES, start=1):
-        folder = root / REPORT_SECTION[stage]["folder"]
+        spec = REPORT_SECTION[stage]
+        intro = dest / f"{i:02d}_{_slug(spec['title'])}_intro_mqc.html"
+        intro.write_text(
+            _html_comment(
+                {
+                    "id": f"{spec['id']}_intro",
+                    "section_name": spec["title"],
+                    "description": spec["description"],
+                    "parent_id": spec["id"],
+                    "parent_name": spec["title"],
+                    "parent_description": spec["description"],
+                    "plot_type": "html",
+                }
+            )
+            + f"<p>{html.escape(spec['description'])}</p>\n",
+            encoding="utf-8",
+        )
+        folder = root / spec["folder"]
         _copy_plot_assets(folder, dest, stage, i)
 
     hidden_ids = _hidden_parent_ids(dest)
