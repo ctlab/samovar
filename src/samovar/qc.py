@@ -37,7 +37,14 @@ from samovar.table_regenerators import extra_flags_argv
 
 QC_GROUP = "qc"
 IDENTITY_NAMES = frozenset({"", "none", "off", "false", "0", "identity", "trim"})
-QC_FLAG_GROUPS = ("qc", "quality", "trim", "trimming")
+QC_FLAG_GROUPS = ("qc", "quality", "trim", "trimming", "fastp")
+QC_NAME_ALIASES = {
+    "illumina": "fastp",
+    "bgi": "fastp",
+    "mgi": "fastp",
+}
+FASTP_NAMES = frozenset({"fastp", "illumina", "bgi", "mgi"})
+FASTP_POSTFIXES = ("illumina", "bgi", "mgi")
 
 
 class MissingQCError(ValueError):
@@ -53,6 +60,20 @@ def normalize_qc_name(name: Optional[str]) -> str:
     if is_identity_qc(token):
         return ""
     return token
+
+
+def canonical_qc_name(name: Optional[str]) -> str:
+    token = normalize_qc_name(name)
+    if not token:
+        return ""
+    return QC_NAME_ALIASES.get(token.lower(), token)
+
+
+def default_postfix_for_qc(name: Optional[str]) -> Dict[str, str]:
+    """Illumina/BGI short reads use fastp when that QC is selected."""
+    if canonical_qc_name(name) != "fastp":
+        return {}
+    return {postfix: "fastp" for postfix in FASTP_POSTFIXES}
 
 
 def parse_qc_postfix(raw: Any) -> Dict[str, str]:
@@ -89,9 +110,17 @@ def parse_qc_postfix(raw: Any) -> Dict[str, str]:
 
 
 def flags_apply_to_qc(target: str, *names: Optional[str]) -> bool:
+    extra = []
+    for name in names:
+        if not name:
+            continue
+        extra.append(str(name))
+        extra.append(QC_NAME_ALIASES.get(str(name).lower(), ""))
+        if canonical_qc_name(name) == "fastp":
+            extra.extend(FASTP_NAMES)
     return flags_target_matches(
         target,
-        *[str(n) for n in names if n],
+        *[n for n in extra if n],
         groups=QC_FLAG_GROUPS,
     )
 
@@ -103,16 +132,24 @@ def lookup_qc(name: str) -> list:
             "Empty QC name. Import a tool with "
             "`samovar tools import -n NAME --type QC`."
         )
+    wanted = [key, QC_NAME_ALIASES.get(key.lower(), "")]
     tools = iter_tools(load_config())
-    spec = tools.get(key)
+    spec = None
     matched = key
-    if spec is None:
-        low = key.lower()
-        for stored, value in tools.items():
-            if stored.lower() == low:
-                spec = value
-                matched = stored
-                break
+    for candidate in wanted:
+        if not candidate:
+            continue
+        spec = tools.get(candidate)
+        matched = candidate
+        if spec is None:
+            low = candidate.lower()
+            for stored, value in tools.items():
+                if stored.lower() == low:
+                    spec = value
+                    matched = stored
+                    break
+        if spec is not None:
+            break
     if spec is None:
         raise MissingQCError(
             f"QC {key!r} is not in the main install config. "
@@ -140,23 +177,38 @@ def require_known_qc(name: Optional[str]) -> str:
     if not token:
         return ""
     lookup_qc(token)
-    return token
+    return canonical_qc_name(token) or token
 
 
 def attach_qc_flags(name: Optional[str], config: Dict[str, Any]) -> Dict[str, Any]:
     cfg = dict(config or {})
-    token = normalize_qc_name(name or cfg.get("qc"))
+    token = canonical_qc_name(name or cfg.get("qc"))
     tools = iter_tools(load_config())
-    imported = imported_flags_for_names(tools, token) if token else ""
+    imported = imported_flags_for_names(tools, token, name) if token else ""
     named = ""
     if token:
-        named = str((cfg.get("qc_tool_flags") or {}).get(token) or "")
-    cfg["extra_flags"] = merge_flag_strings(
+        named_map = cfg.get("qc_tool_flags") or {}
+        named = str(named_map.get(token) or named_map.get(str(name or "")) or "")
+    extra = merge_flag_strings(
         imported,
         cfg.get("qc_flags"),
         cfg.get("extra_flags"),
         named,
     )
+    try:
+        from samovar.tool_spec import apply_translated_flags
+
+        extra = apply_translated_flags(
+            extra,
+            name=token or "fastp",
+            canonical={
+                "--threads": cfg.get("threads") or cfg.get("cores"),
+                "--cores": cfg.get("cores") or cfg.get("threads"),
+            },
+        )
+    except Exception:
+        pass
+    cfg["extra_flags"] = extra
     cfg["extra_argv"] = extra_flags_argv(cfg.get("extra_flags"))
     _apply_gc_flag_tokens(cfg)
     cfg["qc"] = token
@@ -286,6 +338,87 @@ def identity_pair(r1: Path, r2: Optional[Path], dest_r1: Path, dest_r2: Optional
     return [str(dest_r1)]
 
 
+def is_fastp_executable(path: Path, name: str = "") -> bool:
+    bare = Path(path).name.lower()
+    token = str(name or "").strip().lower()
+    return bare == "fastp" or token in FASTP_NAMES
+
+
+def run_fastp(
+    exe: Path,
+    r1: Path,
+    r2: Optional[Path],
+    dest_r1: Path,
+    dest_r2: Optional[Path],
+    config: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Native fastp: ``-i/-I`` in, ``-o/-O`` trimmed FASTQ (Illumina/BGI)."""
+    cfg = dict(config or {})
+    dest_r1.parent.mkdir(parents=True, exist_ok=True)
+    html = dest_r1.with_name(dest_r1.stem + ".fastp.html")
+    json_path = dest_r1.with_name(dest_r1.stem + ".fastp.json")
+    cmd = [
+        str(exe),
+        "-i",
+        str(r1),
+        "-o",
+        str(dest_r1),
+        "-h",
+        str(html),
+        "-j",
+        str(json_path),
+    ]
+    if r2 is not None and r2.exists() and dest_r2 is not None:
+        cmd.extend(["-I", str(r2), "-O", str(dest_r2)])
+    argv = list(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
+    if not any(str(t) in {"-w", "--thread", "--threads"} for t in argv):
+        threads = cfg.get("threads") or cfg.get("cores")
+        if threads:
+            cmd.extend(["--thread", str(int(threads))])
+    cmd.extend(str(t) for t in argv)
+    subprocess.check_call(cmd)
+    out = [str(dest_r1)]
+    if dest_r2 is not None and dest_r2.exists():
+        out.append(str(dest_r2))
+    return out
+
+
+def apply_qc_executable(
+    path: Path,
+    r1: Path,
+    r2: Optional[Path],
+    dest_r1: Path,
+    dest_r2: Optional[Path],
+    config: Optional[Dict[str, Any]] = None,
+    *,
+    name: str = "",
+) -> List[str]:
+    """Run a QC dest without install-config lookup (import --pytest / binaries)."""
+    cfg = dict(config or {})
+    dest_r1.parent.mkdir(parents=True, exist_ok=True)
+    exe = Path(path).expanduser()
+    py_fn = _try_python_trim(exe, name or exe.stem)
+    if py_fn is not None:
+        result = py_fn(
+            str(r1),
+            str(r2) if r2 is not None and r2.exists() else None,
+            str(dest_r1),
+            str(dest_r2) if dest_r2 is not None else None,
+            cfg,
+        )
+        if result:
+            return [str(p) for p in result]
+        return [str(dest_r1)] + ([str(dest_r2)] if dest_r2 is not None else [])
+    if is_fastp_executable(exe, name):
+        return run_fastp(exe, r1, r2, dest_r1, dest_r2, cfg)
+    cmd = [str(exe), "-i", str(r1), "-o", str(dest_r1.parent)]
+    if r2 is not None and r2.exists():
+        cmd.extend(["-I", str(r2)])
+    cmd.extend(list(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags"))))
+    subprocess.check_call(cmd)
+    return [str(dest_r1)] + ([str(dest_r2)] if dest_r2 is not None and dest_r2.exists() else [])
+
+
 def run_qc_pair(
     name: str,
     r1: Path,
@@ -300,25 +433,9 @@ def run_qc_pair(
     spec = lookup_qc(token)
     path = Path(tool_path(spec, token)).expanduser()
     cfg = attach_qc_flags(token, config)
-    py_fn = _try_python_trim(path, token)
-    dest_r1.parent.mkdir(parents=True, exist_ok=True)
-    if py_fn is not None:
-        result = py_fn(
-            str(r1),
-            str(r2) if r2 is not None and r2.exists() else None,
-            str(dest_r1),
-            str(dest_r2) if dest_r2 is not None else None,
-            cfg,
-        )
-        if result:
-            return [str(p) for p in result]
-        return [str(dest_r1)] + ([str(dest_r2)] if dest_r2 is not None else [])
-    cmd = [str(path), "-i", str(r1), "-o", str(dest_r1.parent)]
-    if r2 is not None and r2.exists():
-        cmd.extend(["-I", str(r2)])
-    cmd.extend(list(cfg.get("extra_argv") or []))
-    subprocess.check_call(cmd)
-    return [str(dest_r1)] + ([str(dest_r2)] if dest_r2 is not None and dest_r2.exists() else [])
+    return apply_qc_executable(
+        path, r1, r2, dest_r1, dest_r2, cfg, name=canonical_qc_name(token)
+    )
 
 
 def trim_directory(

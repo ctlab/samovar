@@ -55,6 +55,7 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "camisim": "pip install CAMISIM",
     "nanosim": "conda install -y bioconda::nanosim",
     "nanosim3": "conda install -y bioconda::nanosim",
+    "fastp": "conda install -y bioconda::fastp",
 }
 
 DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
@@ -70,6 +71,7 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "art_illumina": {"--threads": "--p", "--cores": "--p"},
     "wgsim": {"--threads": "--threads", "--cores": "--threads"},
     "custom": {"--threads": "-t", "--cores": "-t"},
+    "fastp": {"--threads": "--thread", "--cores": "--thread"},
 }
 
 _VERSION_TOKEN = re.compile(r"(\d+\.\d+(?:\.\d+)?)")

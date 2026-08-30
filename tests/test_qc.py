@@ -12,7 +12,9 @@ import yaml
 from samovar.config import PipelineConfig, setup_pipeline
 from samovar.paths import write_config
 from samovar.qc import (
+    canonical_qc_name,
     count_fastq_records,
+    default_postfix_for_qc,
     gc_fraction,
     parse_qc_postfix,
     qc_name_for_sample,
@@ -195,6 +197,44 @@ def test_prepare_same_and_split_qc(tmp_path, monkeypatch):
     assert split.qc_initial == "gc_filter"
     assert split.qc_generated == ""
     assert split.qc_postfix["illumina"] == "gc_filter"
+
+
+def test_fastp_aliases_and_postfix(tmp_path, monkeypatch):
+    """Illumina/BGI names resolve to imported ``fastp``; postfix map is filled."""
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="fastp",
+        tool_type="QC",
+        exec_path=str(GC_FILTER),
+        lazy_install="conda install -y bioconda::fastp",
+        also_repo_build=False,
+    )
+    assert canonical_qc_name("illumina") == "fastp"
+    assert canonical_qc_name("bgi") == "fastp"
+    assert canonical_qc_name("mgi") == "fastp"
+    assert require_known_qc("illumina") == "fastp"
+    assert require_known_qc("bgi") == "fastp"
+    assert default_postfix_for_qc("fastp")["illumina"] == "fastp"
+    args = argparse.Namespace(
+        input_config=None,
+        input_dir=str(tmp_path),
+        output_dir=str(tmp_path / "out"),
+        kraken2=[["kraken2 /tmp/k2"]],
+        kaiju=None,
+        qc="illumina",
+        qc_initial=None,
+        qc_generated=None,
+        qc_postfix=None,
+        tool_flags=None,
+    )
+    pipe = PipelineConfig.from_args(args)
+    assert pipe.qc_initial == "fastp"
+    assert pipe.qc_generated == "fastp"
+    assert pipe.qc_postfix["illumina"] == "fastp"
+    assert pipe.qc_postfix["bgi"] == "fastp"
+    assert pipe.qc_postfix["mgi"] == "fastp"
 
 
 def test_import_qc_pytest(tmp_path, monkeypatch):

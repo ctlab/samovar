@@ -77,6 +77,8 @@ _READ_TYPE_FOR = {
 # Tokens allowed between sample id and ``_R1`` / ``_full``.
 FILENAME_EXTRA_IDS = (
     "illumina",
+    "bgi",
+    "mgi",
     "ont",
     "wgsim",
     "nanosim3",

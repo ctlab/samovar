@@ -147,6 +147,7 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "opal": "scoring",
     "opal.py": "scoring",
     "multiqc": "scoring",
+    "fastp": "qc",
     "random_forest": "reprofiler",
     "adaboost": "reprofiler",
     "snakemake": "workflow",

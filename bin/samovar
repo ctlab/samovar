@@ -123,6 +123,9 @@ elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
     # shellcheck disable=SC1090
     . "$XDG_CONFIG_HOME/samovar/env"
 fi
+# env files often export SAMOVAR_CONFIG to the XDG install; the path
+# _find_cfg already chose (including an explicit override) must win.
+export SAMOVAR_CONFIG="$CFG"
 
 PYTHON="${PYTHON_PATH:-}"
 if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
