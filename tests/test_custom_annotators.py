@@ -91,6 +91,42 @@ def test_custom_annotator_extra_on_router():
     assert cmd.rstrip().endswith("--foo 1")
 
 
+def test_custom_sh_accepts_threads_long_option(tmp_path):
+    """flags-translate emits --threads; getopts treated that as illegal --."""
+    r1 = tmp_path / "a_1.fastq"
+    r2 = tmp_path / "a_2.fastq"
+    _tiny_fastq(r1)
+    _tiny_fastq(r2)
+    out = tmp_path / "dummy.out"
+    script = ANNOTATORS / "custom.sh"
+    proc = subprocess.run(
+        [
+            "bash",
+            str(script),
+            "-i",
+            str(r1),
+            "-I",
+            str(r2),
+            "-d",
+            "/db",
+            "-o",
+            str(out),
+            "-p",
+            "dummy",
+            "--threads",
+            "2",
+            "--threads",
+            "2",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "illegal option" not in (proc.stderr + proc.stdout).lower()
+    assert out.is_file()
+
+
 def test_match_annotation_custom_tools():
     assert match_annotation("s.custom_centrifuge.out") == "centrifuge"
     assert match_annotation("s.custom_metauto.out") == "metauto"

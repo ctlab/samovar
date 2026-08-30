@@ -7,23 +7,38 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # Default threads
 THREADS=4
 
-# Parse command line arguments
-while getopts "i:I:d:o:p:t:" opt; do
-  case $opt in
-    i) R1="$OPTARG" ;;
-    I) R2="$OPTARG" ;;
-    d) DB="$OPTARG" ;;
-    o) OUT="$OPTARG" ;;
-    p) TOOL="$OPTARG" ;; # Used as tool selector (e.g., "metauto", "centrifuge")
-    t) THREADS="$OPTARG" ;;
-    \?) echo "Invalid option -$OPTARG" >&2; exit 1 ;;
+# Short flags plus GNU --threads (Snakemake / flags-translate). Duplicate
+# thread flags keep the last value. getopts cannot parse --threads.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -i) R1="$2"; shift 2 ;;
+    -I) R2="$2"; shift 2 ;;
+    -d) DB="$2"; shift 2 ;;
+    -o) OUT="$2"; shift 2 ;;
+    -p) TOOL="$2"; shift 2 ;;
+    -t|--threads)
+      THREADS="$2"; shift 2 ;;
+    --threads=*)
+      THREADS="${1#*=}"; shift ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Invalid option $1" >&2
+      exit 1
+      ;;
+    *)
+      echo "Invalid option $1" >&2
+      exit 1
+      ;;
   esac
 done
 
 # Validate required arguments
 if [ -z "$R1" ] || [ -z "$R2" ] || [ -z "$OUT" ] || [ -z "$TOOL" ]; then
   echo "[ERROR] Missing required arguments: -i, -I, -o, or -p"
-  echo "Usage: ./custom.sh -i R1 -I R2 -d DB -o OUT -p TOOL_NAME [-t THREADS]"
+  echo "Usage: ./custom.sh -i R1 -I R2 -d DB -o OUT -p TOOL_NAME [-t|--threads THREADS]"
   exit 1
 fi
 
