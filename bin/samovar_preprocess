@@ -134,8 +134,9 @@ def main():
         default=None,
         help=(
             'Imported read QC for both initial and generated FASTQ '
-            '(identity when omitted). `fastp` (aliases illumina/bgi/mgi) trims '
-            'Illumina/BGI short reads. Import with `samovar tools import --type QC`.'
+            '(identity when omitted). Native short-read trimmers: '
+            '`fastp` (aliases illumina/bgi/mgi), `trimmomatic`, `cutadapt`. '
+            'Import with `samovar tools import --type QC`.'
         ),
     )
     parser.add_argument(
@@ -157,8 +158,8 @@ def main():
         default=None,
         help=(
             'Hybrid postfix QC, e.g. --qc-postfix illumina:fastp '
-            '--qc-postfix ont:identity (repeatable). --qc fastp fills '
-            'illumina/bgi/mgi unless overridden.'
+            '--qc-postfix ont:identity (repeatable). --qc fastp|trimmomatic|cutadapt '
+            'fills illumina/bgi/mgi unless overridden.'
         ),
     )
     parser.add_argument(

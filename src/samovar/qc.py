@@ -37,14 +37,36 @@ from samovar.table_regenerators import extra_flags_argv
 
 QC_GROUP = "qc"
 IDENTITY_NAMES = frozenset({"", "none", "off", "false", "0", "identity", "trim"})
-QC_FLAG_GROUPS = ("qc", "quality", "trim", "trimming", "fastp")
+QC_FLAG_GROUPS = (
+    "qc",
+    "quality",
+    "trim",
+    "trimming",
+    "fastp",
+    "cutadapt",
+    "trimmomatic",
+)
 QC_NAME_ALIASES = {
     "illumina": "fastp",
     "bgi": "fastp",
     "mgi": "fastp",
 }
 FASTP_NAMES = frozenset({"fastp", "illumina", "bgi", "mgi"})
-FASTP_POSTFIXES = ("illumina", "bgi", "mgi")
+SHORT_READ_POSTFIXES = ("illumina", "bgi", "mgi")
+SHORT_READ_QC = frozenset({"fastp", "trimmomatic", "cutadapt"})
+TRIMMOMATIC_STEPS = (
+    "illuminaclip",
+    "slidingwindow",
+    "leading",
+    "trailing",
+    "crop",
+    "headcrop",
+    "minlen",
+    "maxinfo",
+    "avgqual",
+    "tophred33",
+    "tophred64",
+)
 
 
 class MissingQCError(ValueError):
@@ -70,10 +92,11 @@ def canonical_qc_name(name: Optional[str]) -> str:
 
 
 def default_postfix_for_qc(name: Optional[str]) -> Dict[str, str]:
-    """Illumina/BGI short reads use fastp when that QC is selected."""
-    if canonical_qc_name(name) != "fastp":
+    """Illumina/BGI short reads follow fastp / Trimmomatic / Cutadapt."""
+    token = canonical_qc_name(name)
+    if token not in SHORT_READ_QC:
         return {}
-    return {postfix: "fastp" for postfix in FASTP_POSTFIXES}
+    return {postfix: token for postfix in SHORT_READ_POSTFIXES}
 
 
 def parse_qc_postfix(raw: Any) -> Dict[str, str]:
@@ -116,8 +139,11 @@ def flags_apply_to_qc(target: str, *names: Optional[str]) -> bool:
             continue
         extra.append(str(name))
         extra.append(QC_NAME_ALIASES.get(str(name).lower(), ""))
-        if canonical_qc_name(name) == "fastp":
+        canon = canonical_qc_name(name)
+        if canon == "fastp":
             extra.extend(FASTP_NAMES)
+        elif canon in SHORT_READ_QC:
+            extra.append(canon)
     return flags_target_matches(
         target,
         *[n for n in extra if n],
@@ -200,7 +226,7 @@ def attach_qc_flags(name: Optional[str], config: Dict[str, Any]) -> Dict[str, An
 
         extra = apply_translated_flags(
             extra,
-            name=token or "fastp",
+            name=token or "qc",
             canonical={
                 "--threads": cfg.get("threads") or cfg.get("cores"),
                 "--cores": cfg.get("cores") or cfg.get("threads"),
@@ -338,10 +364,24 @@ def identity_pair(r1: Path, r2: Optional[Path], dest_r1: Path, dest_r2: Optional
     return [str(dest_r1)]
 
 
-def is_fastp_executable(path: Path, name: str = "") -> bool:
+def qc_native_kind(path: Path, name: str = "") -> str:
+    """``fastp`` / ``trimmomatic`` / ``cutadapt`` from dest filename or import name."""
     bare = Path(path).name.lower()
     token = str(name or "").strip().lower()
-    return bare == "fastp" or token in FASTP_NAMES
+    stem = Path(bare).stem
+    blob = f"{bare} {stem} {token}"
+    if "trimmomatic" in blob:
+        return "trimmomatic"
+    if "cutadapt" in blob:
+        return "cutadapt"
+    if bare == "fastp" or stem == "fastp" or token == "fastp" or token in FASTP_NAMES:
+        return "fastp"
+    return ""
+
+
+def _flag_in_argv(argv: Sequence[str], *names: str) -> bool:
+    wanted = set(names)
+    return any(str(t).split("=", 1)[0] in wanted for t in argv)
 
 
 def run_fastp(
@@ -355,27 +395,144 @@ def run_fastp(
     """Native fastp: ``-i/-I`` in, ``-o/-O`` trimmed FASTQ (Illumina/BGI)."""
     cfg = dict(config or {})
     dest_r1.parent.mkdir(parents=True, exist_ok=True)
-    html = dest_r1.with_name(dest_r1.stem + ".fastp.html")
-    json_path = dest_r1.with_name(dest_r1.stem + ".fastp.json")
-    cmd = [
-        str(exe),
-        "-i",
-        str(r1),
-        "-o",
-        str(dest_r1),
-        "-h",
-        str(html),
-        "-j",
-        str(json_path),
-    ]
+    argv = list(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
+    cmd = [str(exe), "-i", str(r1), "-o", str(dest_r1)]
     if r2 is not None and r2.exists() and dest_r2 is not None:
         cmd.extend(["-I", str(r2), "-O", str(dest_r2)])
-    argv = list(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
-    if not any(str(t) in {"-w", "--thread", "--threads"} for t in argv):
+    if not _flag_in_argv(argv, "-h", "--html"):
+        cmd.extend(["-h", str(dest_r1.with_name(dest_r1.stem + ".fastp.html"))])
+    if not _flag_in_argv(argv, "-j", "--json"):
+        cmd.extend(["-j", str(dest_r1.with_name(dest_r1.stem + ".fastp.json"))])
+    if not _flag_in_argv(argv, "-w", "--thread", "--threads"):
         threads = cfg.get("threads") or cfg.get("cores")
         if threads:
             cmd.extend(["--thread", str(int(threads))])
     cmd.extend(str(t) for t in argv)
+    subprocess.check_call(cmd)
+    out = [str(dest_r1)]
+    if dest_r2 is not None and dest_r2.exists():
+        out.append(str(dest_r2))
+    return out
+
+
+def _trimmomatic_prefix(exe: Path, paired: bool) -> List[str]:
+    name = Path(exe).name.lower()
+    if name in {"trimmomaticpe", "trimmomaticse"}:
+        return [str(exe)]
+    prefix = ["java", "-jar", str(exe)] if Path(exe).suffix.lower() == ".jar" else [str(exe)]
+    prefix.append("PE" if paired else "SE")
+    return prefix
+
+
+def _split_trimmomatic_argv(argv: Sequence[str]) -> Tuple[List[str], List[str]]:
+    options: List[str] = []
+    steps: List[str] = []
+    i = 0
+    tokens = [str(t) for t in argv]
+    while i < len(tokens):
+        tok = tokens[i]
+        head = tok.split(":", 1)[0].lower()
+        if tok.startswith("-"):
+            options.append(tok)
+            if tok not in {"-phred33", "-phred64"} and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                nxt = tokens[i + 1]
+                if nxt.split(":", 1)[0].lower() not in TRIMMOMATIC_STEPS:
+                    options.append(nxt)
+                    i += 1
+        elif head in TRIMMOMATIC_STEPS:
+            steps.append(tok)
+        else:
+            steps.append(tok)
+        i += 1
+    return options, steps
+
+
+def run_trimmomatic(
+    exe: Path,
+    r1: Path,
+    r2: Optional[Path],
+    dest_r1: Path,
+    dest_r2: Optional[Path],
+    config: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Native Trimmomatic PE/SE; paired outputs are dest_r1/dest_r2."""
+    cfg = dict(config or {})
+    dest_r1.parent.mkdir(parents=True, exist_ok=True)
+    paired = r2 is not None and r2.exists() and dest_r2 is not None
+    argv = list(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
+    options, steps = _split_trimmomatic_argv(argv)
+    if not any(str(t) in {"-threads", "--threads"} for t in options):
+        threads = cfg.get("threads") or cfg.get("cores")
+        if threads:
+            options.extend(["-threads", str(int(threads))])
+    if not any(str(t) in {"-trimlog", "--trimlog"} for t in options):
+        options.extend(["-trimlog", str(dest_r1.with_name(dest_r1.stem + ".trimlog"))])
+    if not steps:
+        steps = ["MINLEN:1"]
+    cmd = _trimmomatic_prefix(exe, paired)
+    cmd.extend(options)
+    if paired:
+        unpaired1 = dest_r1.with_name(dest_r1.stem + ".unpaired.fastq")
+        unpaired2 = dest_r2.with_name(dest_r2.stem + ".unpaired.fastq")
+        cmd.extend(
+            [str(r1), str(r2), str(dest_r1), str(unpaired1), str(dest_r2), str(unpaired2)]
+        )
+    else:
+        cmd.extend([str(r1), str(dest_r1)])
+    cmd.extend(steps)
+    subprocess.check_call(cmd)
+    out = [str(dest_r1)]
+    if dest_r2 is not None and dest_r2.exists():
+        out.append(str(dest_r2))
+    return out
+
+
+def _cutadapt_has_adapter(argv: Sequence[str]) -> bool:
+    flags = {
+        "-a",
+        "-A",
+        "-g",
+        "-G",
+        "-b",
+        "-B",
+        "--adapter",
+        "--front",
+        "--anywhere",
+    }
+    return any(str(t).split("=", 1)[0] in flags for t in argv)
+
+
+def run_cutadapt(
+    exe: Path,
+    r1: Path,
+    r2: Optional[Path],
+    dest_r1: Path,
+    dest_r2: Optional[Path],
+    config: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Native Cutadapt: ``-o/-p`` dest FASTQ; dummy adapter if none given."""
+    cfg = dict(config or {})
+    dest_r1.parent.mkdir(parents=True, exist_ok=True)
+    argv = list(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
+    cmd = [str(exe)]
+    if not _flag_in_argv(argv, "-j", "--cores", "--threads"):
+        threads = cfg.get("threads") or cfg.get("cores")
+        if threads:
+            cmd.extend(["--cores", str(int(threads))])
+    if not _cutadapt_has_adapter(argv):
+        # Poly-G is absent from typical ACGT-repeat contract reads.
+        cmd.extend(["-a", "G" * 16])
+        if r2 is not None and r2.exists() and dest_r2 is not None:
+            cmd.extend(["-A", "G" * 16])
+    if not _flag_in_argv(argv, "--json"):
+        cmd.extend(["--json", str(dest_r1.with_name(dest_r1.stem + ".cutadapt.json"))])
+    cmd.extend(["-o", str(dest_r1)])
+    if r2 is not None and r2.exists() and dest_r2 is not None:
+        cmd.extend(["-p", str(dest_r2)])
+    cmd.extend(str(t) for t in argv)
+    cmd.append(str(r1))
+    if r2 is not None and r2.exists() and dest_r2 is not None:
+        cmd.append(str(r2))
     subprocess.check_call(cmd)
     out = [str(dest_r1)]
     if dest_r2 is not None and dest_r2.exists():
@@ -409,8 +566,13 @@ def apply_qc_executable(
         if result:
             return [str(p) for p in result]
         return [str(dest_r1)] + ([str(dest_r2)] if dest_r2 is not None else [])
-    if is_fastp_executable(exe, name):
+    kind = qc_native_kind(exe, name)
+    if kind == "fastp":
         return run_fastp(exe, r1, r2, dest_r1, dest_r2, cfg)
+    if kind == "trimmomatic":
+        return run_trimmomatic(exe, r1, r2, dest_r1, dest_r2, cfg)
+    if kind == "cutadapt":
+        return run_cutadapt(exe, r1, r2, dest_r1, dest_r2, cfg)
     cmd = [str(exe), "-i", str(r1), "-o", str(dest_r1.parent)]
     if r2 is not None and r2.exists():
         cmd.extend(["-I", str(r2)])

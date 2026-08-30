@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""CLI stub matching SamovaR's native Cutadapt invocation (``-o``/``-p``)."""
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+from pathlib import Path
+
+
+def main(argv: list[str]) -> int:
+    args = list(argv)
+    dest_r1 = ""
+    dest_r2 = ""
+    json_path = ""
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        key, _, attached = tok.partition("=")
+        if key in {"-o", "-p", "-a", "-A", "-g", "-G", "-b", "-B", "-j", "--cores",
+                   "--threads", "-m", "--minimum-length", "--json", "-q", "--quality-cutoff"}:
+            val = attached
+            if not val:
+                i += 1
+                if i >= len(args):
+                    break
+                val = args[i]
+            if key == "-o":
+                dest_r1 = val
+            elif key == "-p":
+                dest_r2 = val
+            elif key == "--json":
+                json_path = val
+            i += 1
+            continue
+        if tok.startswith("-"):
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+        positional.append(tok)
+        i += 1
+    if not dest_r1 or not positional:
+        print("cutadapt stub: expected -o DEST [ -p DEST2 ] IN1 [IN2]", file=sys.stderr)
+        return 2
+    shutil.copy2(positional[0], dest_r1)
+    if dest_r2 and len(positional) > 1:
+        shutil.copy2(positional[1], dest_r2)
+    if json_path:
+        Path(json_path).write_text(json.dumps({"stub": True, "read_counts": {"input": 1}}) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

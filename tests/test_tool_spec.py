@@ -36,6 +36,9 @@ def test_apply_translated_flags_kaiju():
         canonical={"--threads": 8, "--cores": 8},
     )
     assert "-z 8" in extra
+    # 1 is not True: boolean-flag form must not swallow integer thread counts
+    one = apply_translated_flags("", name="kaiju", canonical={"--threads": 1})
+    assert "-z 1" in one
 
 
 def test_parse_known_with_custom_accepts_threads():

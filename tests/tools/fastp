@@ -1,42 +1,61 @@
 #!/usr/bin/env python3
-"""Native fastp CLI stub for QC contract tests (copy reads; no filtering)."""
-
+"""CLI stub matching SamovaR's native fastp invocation (``-i/-I`` in, ``-o/-O`` out)."""
 from __future__ import annotations
 
+import json
+import shutil
 import sys
 from pathlib import Path
-import shutil
 
 
-def _value(argv: list, *flags: str) -> str:
-    for i, tok in enumerate(argv):
-        if tok in flags and i + 1 < len(argv):
-            return argv[i + 1]
-    return ""
-
-
-def main(argv: list | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    r1 = _value(args, "-i")
-    r2 = _value(args, "-I")
-    o1 = _value(args, "-o")
-    o2 = _value(args, "-O")
-    html = _value(args, "-h")
-    json_path = _value(args, "-j")
-    if not r1 or not o1:
-        print("fastp stub needs -i and -o", file=sys.stderr)
+def main(argv: list[str]) -> int:
+    args = list(argv)
+    dest_r1 = dest_r2 = src_r1 = src_r2 = json_path = html_path = ""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        key, _, attached = tok.partition("=")
+        if key in {"-i", "-I", "-o", "-O", "-h", "-j", "-w", "--thread", "--threads",
+                   "--html", "--json", "--length_required", "--qualified_quality_phred"}:
+            val = attached
+            if not val:
+                i += 1
+                if i >= len(args):
+                    break
+                val = args[i]
+            if key == "-i":
+                src_r1 = val
+            elif key == "-I":
+                src_r2 = val
+            elif key == "-o":
+                dest_r1 = val
+            elif key == "-O":
+                dest_r2 = val
+            elif key in {"-j", "--json"}:
+                json_path = val
+            elif key in {"-h", "--html"}:
+                html_path = val
+            i += 1
+            continue
+        if tok.startswith("-"):
+            if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+        i += 1
+    if not src_r1 or not dest_r1:
+        print("fastp stub: expected -i R1 -o DEST [-I R2 -O DEST2]", file=sys.stderr)
         return 2
-    Path(o1).parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(r1, o1)
-    if r2 and o2:
-        Path(o2).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(r2, o2)
-    if html:
-        Path(html).write_text("<html>fastp</html>\n", encoding="utf-8")
+    shutil.copy2(src_r1, dest_r1)
+    if src_r2 and dest_r2:
+        shutil.copy2(src_r2, dest_r2)
     if json_path:
-        Path(json_path).write_text("{}\n", encoding="utf-8")
+        Path(json_path).write_text(json.dumps({"stub": True, "summary": {}}) + "\n")
+    if html_path:
+        Path(html_path).write_text("<html></html>\n")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

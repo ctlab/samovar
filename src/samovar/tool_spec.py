@@ -56,6 +56,8 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "nanosim": "conda install -y bioconda::nanosim",
     "nanosim3": "conda install -y bioconda::nanosim",
     "fastp": "conda install -y bioconda::fastp",
+    "cutadapt": "conda install -y bioconda::cutadapt",
+    "trimmomatic": "conda install -y bioconda::trimmomatic",
 }
 
 DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
@@ -72,6 +74,8 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "wgsim": {"--threads": "--threads", "--cores": "--threads"},
     "custom": {"--threads": "-t", "--cores": "-t"},
     "fastp": {"--threads": "--thread", "--cores": "--thread"},
+    "cutadapt": {"--threads": "--cores", "--cores": "--cores"},
+    "trimmomatic": {"--threads": "-threads", "--cores": "-threads"},
 }
 
 _VERSION_TOKEN = re.compile(r"(\d+\.\d+(?:\.\d+)?)")
@@ -322,7 +326,7 @@ def translated_argv(canonical_flag: str, value: Any, mapping: Mapping[str, str])
     dest = mapping.get(_norm_flag(canonical_flag)) or mapping.get(str(canonical_flag).strip())
     if not dest:
         return ""
-    if value in (None, True, ""):
+    if value is True or value in (None, ""):
         return str(dest)
     if value is False:
         return ""

@@ -300,9 +300,16 @@ def test_qc_contract(request, tmp_path, tiny_fastq):
             {"min_gc": 0.0, "max_gc": 1.0, "extra_argv": ["--length_required", "1"]},
         )
     else:
-        from samovar.qc import apply_qc_executable
+        from samovar.qc import apply_qc_executable, qc_native_kind
 
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
+        kind = qc_native_kind(path, path.name)
+        if kind == "cutadapt":
+            extra = ["-m", "1"]
+        elif kind == "trimmomatic":
+            extra = ["MINLEN:1"]
+        else:
+            extra = ["--length_required", "1"]
         paths = apply_qc_executable(
             path,
             r1,
@@ -310,7 +317,7 @@ def test_qc_contract(request, tmp_path, tiny_fastq):
             dest_r1,
             dest_r2,
             {
-                "extra_argv": ["--length_required", "1"],
+                "extra_argv": extra,
                 "threads": 1,
             },
             name=path.name,

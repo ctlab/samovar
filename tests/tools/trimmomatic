@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""CLI stub matching SamovaR's native Trimmomatic PE/SE invocation."""
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+
+STEPS = {
+    "illuminaclip",
+    "slidingwindow",
+    "leading",
+    "trailing",
+    "crop",
+    "headcrop",
+    "minlen",
+    "maxinfo",
+    "avgqual",
+    "tophred33",
+    "tophred64",
+}
+
+
+def main(argv: list[str]) -> int:
+    args = list(argv)
+    i = 0
+    if args and args[0] in {"PE", "SE"}:
+        mode = args[0]
+        i = 1
+    else:
+        mode = "SE"
+    while i < len(args) and args[i].startswith("-"):
+        if args[i] in {"-phred33", "-phred64"}:
+            i += 1
+        elif args[i] in {"-trimlog", "--trimlog"} and i + 1 < len(args):
+            Path(args[i + 1]).write_text("")
+            i += 2
+        elif i + 1 < len(args):
+            i += 2
+        else:
+            i += 1
+    rest = args[i:]
+    files: list[str] = []
+    for tok in rest:
+        head = tok.split(":", 1)[0].lower()
+        if head in STEPS:
+            break
+        files.append(tok)
+    if mode == "PE":
+        if len(files) < 6:
+            print("trimmomatic stub: expected PE in1 in2 p1 u1 p2 u2", file=sys.stderr)
+            return 2
+        r1, r2, p1, u1, p2, u2 = files[:6]
+        shutil.copy2(r1, p1)
+        shutil.copy2(r2, p2)
+        Path(u1).write_text("")
+        Path(u2).write_text("")
+    else:
+        if len(files) < 2:
+            print("trimmomatic stub: expected SE in out", file=sys.stderr)
+            return 2
+        shutil.copy2(files[0], files[1])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
