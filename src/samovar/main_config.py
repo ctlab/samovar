@@ -59,6 +59,7 @@ TOOL_GROUPS = (
     "table_scoring",
     "scoring",
     "reprofiler",
+    "annotation_converter",
     "workflow",
 )
 
@@ -94,6 +95,10 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "reprofile": "reprofiler",
     "reprofiler": "reprofiler",
     "reprofiling": "reprofiler",
+    "converter": "annotation_converter",
+    "convert": "annotation_converter",
+    "annotation_converter": "annotation_converter",
+    "annotation-converter": "annotation_converter",
     "workflow": "workflow",
     "wf": "workflow",
 }

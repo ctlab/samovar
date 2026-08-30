@@ -56,6 +56,7 @@ show_usage() {
     echo "  export      Pack a Hydra run snapshot (+ optional databases) into an archive"
     echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
+    echo "  convert     Convert Annotation between formats (abundance, or a custom converter)"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
@@ -79,7 +80,8 @@ show_usage() {
   echo "  samovar reproduce run.tgz --output_dir /path/to/rerun --stages generate generate.n_samples=2"
     echo "  samovar tools --sort --output_dir [...]"
     echo "  samovar generate --accessions GCF_... --reindex 1 --output_dir [...]"
-    echo "  samovar reindex [FOLDER ...]"
+    echo "  samovar convert -i initial_annotations -o counts --to abundance"
+    echo "  samovar convert -i table.csv --from abundance --to annotation -o long.csv"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
 
@@ -226,6 +228,11 @@ case "${1:-}" in
     "build"|"build_database")
         shift
         "$ROOT/workflow/database_prep/samovar_build_database.sh" "$@"
+        ;;
+    "convert")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.annotation_convert "$@"
         ;;
     "reindex")
         shift

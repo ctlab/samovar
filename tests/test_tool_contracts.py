@@ -242,3 +242,37 @@ def test_reprofiler_contract(request, tmp_path):
     first = next(iter(tables.values())) if isinstance(tables, dict) else tables
     assert isinstance(first, pd.DataFrame)
     assert not first.empty
+
+
+def test_annotation_converter_contract(request, tmp_path):
+    _skip_if_other_type(request, "annotation_converter")
+    path = _tool_path(request, "annotation_converter")
+    module = load_python_module(path, "contract_annconv")
+    dump = getattr(module, "dump", None)
+    convert = getattr(module, "convert", None)
+    assert callable(dump) or callable(convert), (
+        f"{path} must define dump(annotation, dest, config) or convert(src, dest, config)"
+    )
+    from samovar.parse_annotators import Annotation
+
+    ann = Annotation.from_long_table(
+        pd.DataFrame(
+            {
+                "seq": ["a", "b", "c"],
+                "taxID_kaiju_0": ["562", "562", "9606"],
+                "sample": ["1", "1", "1"],
+            }
+        )
+    )
+    dest = tmp_path / "converted"
+    if callable(dump):
+        written = dump(ann, dest, {"from": "annotation", "to": "abundance"})
+    else:
+        written = convert(ann, dest, {"from": "annotation", "to": "abundance"})
+    written = Path(written) if written else dest
+    assert Path(written).exists() or dest.exists()
+    load = getattr(module, "load", None)
+    if callable(load):
+        roundtrip = load(written if Path(written).exists() else dest, {})
+        assert roundtrip is not None
+

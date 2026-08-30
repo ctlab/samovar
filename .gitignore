@@ -61,3 +61,6 @@ examples/metagenome_generator/
 examples/generate_mock_community.sh
 examples/generate_mock_community.md
 examples/_harvest_example.py
+
+# ignore rules & cursorgitignore
+.cursor*

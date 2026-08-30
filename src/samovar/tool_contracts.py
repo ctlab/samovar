@@ -63,6 +63,11 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "in": "reprofile(regenerated_df, ground_truth_tables, initial_tables, config).",
         "out": "ReprofileResult or dict with tables keyed by sample.",
     },
+    "annotation_converter": {
+        "in": "Annotation (or Path when --from is custom) plus dest path and config "
+        "(from/to, extra_argv). dump(annotation, dest, config) and/or load(path, config).",
+        "out": "Files at dest (dump) or an Annotation (load). convert(src, dest, config) is also accepted.",
+    },
 }
 
 GROUP_TO_TESTNODE = {
@@ -73,6 +78,7 @@ GROUP_TO_TESTNODE = {
     "reads_generator": "tests/test_tool_contracts.py::test_reads_generator_contract",
     "metagenome_generator": "tests/test_tool_contracts.py::test_metagenome_generator_contract",
     "reprofiler": "tests/test_tool_contracts.py::test_reprofiler_contract",
+    "annotation_converter": "tests/test_tool_contracts.py::test_annotation_converter_contract",
 }
 
 DEFAULT_TOOLS = {
@@ -83,6 +89,7 @@ DEFAULT_TOOLS = {
     "reads_generator": "tests/tools/echo_reads.py",
     "metagenome_generator": "tests/tools/echo_reads.py",
     "reprofiler": "tests/tools/linear_wrapper.py",
+    "annotation_converter": "tests/tools/echo_annotation_converter.py",
 }
 
 

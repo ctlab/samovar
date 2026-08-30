@@ -1165,6 +1165,58 @@ class Annotation:
             df_return.to_csv(file)
         return df_return
 
+    def to_abundance(self, n_reads: Optional[int] = None) -> Dict[str, pd.DataFrame]:
+        """Export per-annotator count tables (``taxid`` × ``N_<sample>``)."""
+        from samovar.annotation_convert import annotation_to_abundance
+
+        return annotation_to_abundance(self, n_reads=n_reads)
+
+    def to_annotation(self) -> pd.DataFrame:
+        """Per-read long table (``taxID_*`` plus ``seq`` / ``sample`` / ``true``)."""
+        from samovar.annotation_convert import annotation_long_table
+
+        return annotation_long_table(self)
+
+    def to(self, fmt: str, dest: Optional[Union[str, Path]] = None, **kwargs):
+        """Export to a named format (builtin ``abundance`` / ``annotation``, or a converter).
+
+        Custom formats: ``samovar tools import --type annotation-converter``.
+        """
+        from samovar.annotation_convert import (
+            dump_builtin,
+            dump_custom,
+            is_builtin_format,
+            lookup_converter,
+            normalize_format,
+        )
+
+        name = normalize_format(fmt)
+        if dest is None:
+            if name == "abundance":
+                return self.to_abundance(n_reads=kwargs.get("n_reads"))
+            if name == "annotation":
+                return self.to_annotation()
+            raise ValueError(
+                f"Annotation.to({fmt!r}) needs dest= for a custom converter "
+                "(or use builtin 'abundance' / 'annotation')"
+            )
+        if is_builtin_format(name):
+            return dump_builtin(self, dest, name, **kwargs)
+        spec = lookup_converter(name) or lookup_converter(str(kwargs.get("converter") or ""))
+        if spec is None:
+            raise ValueError(
+                f"unknown format {fmt!r}; import an annotation-converter or use "
+                "abundance / annotation"
+            )
+        return dump_custom(self, dest, spec, name, kwargs)
+
+    def write(self, dest: Union[str, Path], fmt: str = "annotation", **kwargs) -> Path:
+        """Write this annotation to ``dest`` in ``fmt`` (see ``to``)."""
+        from pathlib import Path as _Path
+
+        written = self.to(fmt, dest=dest, **kwargs)
+        return _Path(written)
+
 
 class RankAnnotation:
     """Class for handling annotations at a specific taxonomic rank."""
