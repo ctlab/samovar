@@ -10,6 +10,8 @@ from samovar.parse_annotators import Annotation
 from samovar.paths import write_config
 from samovar.tools_import import import_tool
 
+from tests.test_kreport import write_mini_taxdump
+
 
 def _ann_dir(tmp_path: Path) -> Path:
     ann = tmp_path / "ann"
@@ -88,3 +90,34 @@ def test_convert_custom_converter(tmp_path, monkeypatch):
     written = convert_annotation(ann, dest, dest_format="toyfmt")
     assert Path(written).read_text().strip()
     assert "kaiju" in Path(written).read_text()
+
+
+def test_convert_cli_annotation_to_kraken2(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    dump = write_mini_taxdump(tmp_path / "taxdump")
+    ann = _ann_dir(tmp_path)
+    dest = tmp_path / "kreports"
+    rc = convert_main(
+        ["-i", str(ann), "-o", str(dest), "--to", "kraken2", "--taxdump", str(dump)]
+    )
+    assert rc == 0
+    reports = list(dest.rglob("*.kreport"))
+    assert reports
+    text = reports[0].read_text()
+    parts = text.strip().splitlines()[0].split("\t")
+    assert len(parts) == 6
+    assert any("Escherichia" in p.read_text() for p in reports)
+
+
+def test_convert_to_kraken2_mpa(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    dump = write_mini_taxdump(tmp_path / "taxdump")
+    ann = _ann_dir(tmp_path)
+    dest = tmp_path / "mpa"
+    written = convert_annotation(
+        ann, dest, dest_format="kraken2-mpa", taxdump=str(dump)
+    )
+    mpa_files = list(Path(written).rglob("*.mpa"))
+    assert mpa_files
+    assert "d__Bacteria" in mpa_files[0].read_text()
+    assert "s__Escherichia_coli" in mpa_files[0].read_text()

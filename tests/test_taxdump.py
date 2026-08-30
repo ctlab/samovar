@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from samovar.taxdump import TAXDUMP_DMP_FILES, find_dmp, link_taxdump_into, taxdump_dir
+from samovar.taxdump import (
+    TAXDUMP_DMP_FILES,
+    find_dmp,
+    link_taxdump_into,
+    load_scientific_names,
+    parse_names_dmp,
+    taxdump_dir,
+)
 from samovar.build_database import get_taxonomy_db
 from samovar.main_config import build_install_config, disk_payload
 from samovar.version import get_version
@@ -75,3 +82,19 @@ def test_find_dmp_nested_taxonomy(tmp_path):
     (nested / "nodes.dmp").write_text("1\t|\n")
     assert find_dmp("nodes.dmp", tmp_path) == nested / "nodes.dmp"
     assert "nodes.dmp" in TAXDUMP_DMP_FILES
+
+
+def test_parse_and_cache_scientific_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    names = tmp_path / "names.dmp"
+    names.write_text(
+        "1\t|\troot\t|\t\t|\tscientific name\t|\n"
+        "1\t|\tall\t|\t\t|\tsynonym\t|\n"
+        "562\t|\tEscherichia coli\t|\t\t|\tscientific name\t|\n",
+        encoding="utf-8",
+    )
+    parsed = parse_names_dmp(names)
+    assert parsed[1] == "root"
+    assert parsed[562] == "Escherichia coli"
+    assert 1 in load_scientific_names(names)
+    assert load_scientific_names(names)[562] == "Escherichia coli"

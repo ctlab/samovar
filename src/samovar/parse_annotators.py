@@ -1177,8 +1177,36 @@ class Annotation:
 
         return annotation_long_table(self)
 
+    def to_kraken2(
+        self,
+        dest: Optional[Union[str, Path]] = None,
+        *,
+        mpa: bool = False,
+        taxdump: Optional[Union[str, Path]] = None,
+        n_reads: Optional[int] = None,
+    ):
+        """Kraken 2 ``--report`` (kreport) or ``--use-mpa-style`` from abundance + taxdump.
+
+        Direct counts come from :meth:`to_abundance`; clade totals walk ``nodes.dmp``.
+        Without ``dest``, returns ``{annotator: {sample: report_text}}``.
+        """
+        from samovar.annotation_convert import annotation_to_kreport_map, dump_builtin
+
+        if dest is None:
+            return annotation_to_kreport_map(
+                self, n_reads=n_reads, taxdump=taxdump, mpa=mpa
+            )
+        return dump_builtin(
+            self,
+            dest,
+            "kraken2_mpa" if mpa else "kraken2",
+            n_reads=n_reads,
+            taxdump=taxdump,
+            mpa=mpa,
+        )
+
     def to(self, fmt: str, dest: Optional[Union[str, Path]] = None, **kwargs):
-        """Export to a named format (builtin ``abundance`` / ``annotation``, or a converter).
+        """Export to a named format (builtin ``abundance`` / ``annotation`` / ``kraken2``, or a converter).
 
         Custom formats: ``samovar tools import --type annotation-converter``.
         """
@@ -1196,9 +1224,15 @@ class Annotation:
                 return self.to_abundance(n_reads=kwargs.get("n_reads"))
             if name == "annotation":
                 return self.to_annotation()
+            if name in {"kraken2", "kraken2_mpa"}:
+                return self.to_kraken2(
+                    mpa=name == "kraken2_mpa" or bool(kwargs.get("mpa")),
+                    taxdump=kwargs.get("taxdump"),
+                    n_reads=kwargs.get("n_reads"),
+                )
             raise ValueError(
                 f"Annotation.to({fmt!r}) needs dest= for a custom converter "
-                "(or use builtin 'abundance' / 'annotation')"
+                "(or use builtin 'abundance' / 'annotation' / 'kraken2')"
             )
         if is_builtin_format(name):
             return dump_builtin(self, dest, name, **kwargs)
@@ -1206,7 +1240,7 @@ class Annotation:
         if spec is None:
             raise ValueError(
                 f"unknown format {fmt!r}; import an annotation-converter or use "
-                "abundance / annotation"
+                "abundance / annotation / kraken2"
             )
         return dump_custom(self, dest, spec, name, kwargs)
 

@@ -11,6 +11,8 @@ A converter is the hub around ``Annotation``:
 * or a single ``convert(src, dest, config)`` (``src`` is ``Annotation`` or Path)
 
 ``samovar convert -i IN -o OUT --to abundance`` uses the builtin export.
+``samovar convert -i IN -o reports --to kraken2`` writes Kraken 2 kreport files
+(needs NCBI taxdump).
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ from samovar.table_regenerators import extra_flags_argv
 
 PathLike = Union[str, Path]
 
-BUILTIN_FORMATS = ("annotation", "abundance")
+BUILTIN_FORMATS = ("annotation", "abundance", "kraken2", "kraken2_mpa")
 FORMAT_ALIASES = {
     "annotation": "annotation",
     "annot": "annotation",
@@ -54,6 +56,14 @@ FORMAT_ALIASES = {
     "table": "abundance",
     "otu": "abundance",
     "counts": "abundance",
+    "kraken2": "kraken2",
+    "kreport": "kraken2",
+    "k2report": "kraken2",
+    "kraken2_report": "kraken2",
+    "kraken2_style": "kraken2",
+    "kraken2style": "kraken2",
+    "kraken2_mpa": "kraken2_mpa",
+    "kreport_mpa": "kraken2_mpa",
 }
 CONVERTER_GROUP = "annotation_converter"
 
@@ -144,6 +154,42 @@ def write_annotation_table(dest: PathLike, frame: pd.DataFrame) -> Path:
     return out
 
 
+def annotation_to_kreport_map(
+    annotation: Annotation,
+    *,
+    n_reads: Optional[int] = None,
+    taxdump: Optional[PathLike] = None,
+    mpa: bool = False,
+) -> Dict[str, Dict[str, str]]:
+    """``{annotator: {sample: report_text}}`` via abundance tables + taxdump."""
+    from samovar.kreport import KReportTaxonomy, abundance_tables_to_reports
+
+    tables = annotation_to_abundance(annotation, n_reads=n_reads)
+    if not tables:
+        return {}
+    taxonomy = KReportTaxonomy.from_taxdump(taxdump)
+    return abundance_tables_to_reports(tables, taxonomy, mpa=mpa)
+
+
+def _kreport_options(fmt: str, kwargs: Dict[str, Any]) -> tuple:
+    """``(mpa, taxdump)`` from format name, kwargs, and ``--flags``."""
+    mpa = bool(kwargs.get("mpa")) or normalize_format(fmt) == "kraken2_mpa"
+    taxdump = kwargs.get("taxdump") or kwargs.get("taxdump_dir")
+    argv = list(kwargs.get("extra_argv") or extra_flags_argv(kwargs.get("extra_flags")))
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in {"--mpa", "--use-mpa-style"}:
+            mpa = True
+        elif tok.startswith("--taxdump="):
+            taxdump = tok.split("=", 1)[1]
+        elif tok == "--taxdump" and i + 1 < len(argv):
+            taxdump = argv[i + 1]
+            i += 1
+        i += 1
+    return mpa, taxdump or None
+
+
 def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> Path:
     name = normalize_format(fmt)
     if name == "abundance":
@@ -158,6 +204,14 @@ def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> 
                 "no per-read annotation table to write; use --to abundance"
             )
         return write_annotation_table(dest, frame)
+    if name in {"kraken2", "kraken2_mpa"}:
+        from samovar.kreport import dump_kreport
+
+        tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
+        if not tables:
+            raise ValueError("no abundance tables to write (empty annotation)")
+        mpa, taxdump = _kreport_options(name, kwargs)
+        return dump_kreport(tables, dest, taxdump=taxdump, mpa=mpa)
     raise UnknownFormatError(fmt)
 
 
@@ -180,6 +234,10 @@ def detect_format(path: PathLike) -> str:
 
 def load_builtin(path: PathLike, fmt: str = "") -> Annotation:
     name = normalize_format(fmt) or detect_format(path)
+    if name in {"kraken2", "kraken2_mpa"}:
+        raise ValueError(
+            "kraken2-style reports are export-only; use --from annotation or abundance"
+        )
     data = load_table_input(path)
     if name == "abundance" and not getattr(data, "abundance_tables", None):
         tables = input_to_abundance_tables(data)
@@ -359,6 +417,8 @@ def convert_annotation(
     converter: str = "",
     n_reads: Optional[int] = None,
     extra_flags: str = "",
+    taxdump: str = "",
+    mpa: bool = False,
 ) -> Path:
     src_fmt = normalize_format(source_format) or detect_format(source)
     dst_fmt = normalize_format(dest_format)
@@ -376,6 +436,8 @@ def convert_annotation(
         "n_reads": n_reads,
         "extra_flags": extra_flags,
         "extra_argv": extra_flags_argv(extra_flags),
+        "taxdump": taxdump or "",
+        "mpa": mpa,
     }
     if is_builtin_format(src_fmt):
         annotation = load_builtin(source, src_fmt)
@@ -388,7 +450,16 @@ def convert_annotation(
             f"Imported converters: {', '.join(sorted(imported_converters()) or ['(none)'])}"
         )
     if is_builtin_format(dst_fmt) and (not conv_name or is_builtin_format(conv_name)):
-        return dump_builtin(annotation, dest, dst_fmt, n_reads=n_reads)
+        return dump_builtin(
+            annotation,
+            dest,
+            dst_fmt,
+            n_reads=n_reads,
+            taxdump=taxdump or None,
+            mpa=mpa,
+            extra_flags=extra_flags,
+            extra_argv=extra_flags_argv(extra_flags),
+        )
     if spec is None:
         spec = lookup_converter(dst_fmt)
         conv_name = dst_fmt
@@ -414,7 +485,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="samovar convert",
         description=(
-            "Convert an Annotation between formats. Built-ins: annotation, abundance. "
+            "Convert an Annotation between formats. Built-ins: annotation, "
+            "abundance, kraken2 (kreport), kraken2-mpa. "
             "Other --to/--from names are annotation-converter tools from "
             "`samovar tools import --type annotation-converter`."
         ),
@@ -431,7 +503,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--to",
         dest="dest_format",
         required=True,
-        help="Output format (abundance, annotation, or an imported converter name)",
+        help=(
+            "Output format (abundance, annotation, kraken2, kraken2-mpa, "
+            "or an imported converter name)"
+        ),
     )
     parser.add_argument(
         "--converter",
@@ -448,7 +523,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--flags",
         default="",
-        help="Extra CLI flags forwarded to a custom converter",
+        help="Extra CLI flags forwarded to a custom converter (or --use-mpa-style / --taxdump)",
+    )
+    parser.add_argument(
+        "--taxdump",
+        default="",
+        help="NCBI taxdump directory (nodes.dmp + names.dmp) for --to kraken2",
+    )
+    parser.add_argument(
+        "--mpa",
+        action="store_true",
+        help="With --to kraken2, write Kraken 2 --use-mpa-style reports",
     )
     return parser
 
@@ -464,6 +549,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             converter=args.converter,
             n_reads=args.n_reads,
             extra_flags=args.flags,
+            taxdump=args.taxdump,
+            mpa=args.mpa,
         )
     except (UnknownFormatError, ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

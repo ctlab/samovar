@@ -7,9 +7,12 @@ get symlinks to the ``.dmp`` files instead of a fresh NCBI fetch.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import pickle
 import tarfile
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Union
 
@@ -91,6 +94,82 @@ def nodes_dmp(cfg: Optional[Dict[str, Any]] = None) -> Optional[Path]:
 
 def names_dmp(cfg: Optional[Dict[str, Any]] = None) -> Optional[Path]:
     return find_dmp("names.dmp", taxdump_dir(cfg))
+
+
+def parse_names_dmp(path: PathLike) -> Dict[int, str]:
+    """``taxid → scientific name`` from ``names.dmp`` (scientific name rows only)."""
+    names: Dict[int, str] = {}
+    with open(path, encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            parts = line.split("\t|\t")
+            if len(parts) < 4:
+                continue
+            klass = parts[3].strip().rstrip("|").strip()
+            if klass != "scientific name":
+                continue
+            try:
+                taxid = int(parts[0].strip())
+            except ValueError:
+                continue
+            names[taxid] = parts[1].strip()
+    return names
+
+
+def load_scientific_names(path: PathLike) -> Dict[int, str]:
+    """Load scientific names with an atomic pickle cache (same idea as nodes.dmp)."""
+    names_path = _as_path(path)
+    if not names_path.is_file():
+        raise FileNotFoundError(f"names.dmp not found: {names_path}")
+    try:
+        from samovar.parse_annotators import _cache_dir
+
+        cache_dir = _cache_dir()
+    except Exception:
+        cache_dir = Path(tempfile.gettempdir()) / "samovar_taxdump"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    stat = names_path.stat()
+    digest = hashlib.sha256(
+        f"{names_path.resolve()}:{int(stat.st_mtime)}:{stat.st_size}".encode()
+    ).hexdigest()[:16]
+    cache_file = cache_dir / f"names_{digest}.pkl"
+
+    def _try_load():
+        try:
+            with open(cache_file, "rb") as handle:
+                return pickle.load(handle)
+        except FileNotFoundError:
+            return None
+        except (OSError, pickle.UnpicklingError, EOFError, AttributeError):
+            try:
+                cache_file.unlink()
+            except OSError:
+                pass
+            return None
+
+    loaded = _try_load()
+    if loaded is not None:
+        return loaded
+    names = parse_names_dmp(names_path)
+    loaded = _try_load()
+    if loaded is not None:
+        return loaded
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=cache_file.name + ".", suffix=".tmp", dir=str(cache_dir)
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            pickle.dump(names, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, cache_file)
+    except OSError:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        return names
+    return names
 
 
 _MERGED_CACHE: Optional[Dict[str, str]] = None
