@@ -45,6 +45,7 @@ from samovar.ground_truth import (
     normalize_regenerated_mode,
 )
 from samovar.qc import (
+    default_postfix_for_qc,
     flags_apply_to_qc,
     parse_qc_postfix,
     require_known_qc,
@@ -880,6 +881,12 @@ class PipelineConfig:
                 )
         config.qc_flags = merge_flag_strings(*qflag_parts) or None
         config.qc_tool_flags = named_qflags or {}
+        merged_pf: dict = {}
+        for qc_name in (config.qc, config.qc_initial, config.qc_generated):
+            for key, val in default_postfix_for_qc(qc_name).items():
+                merged_pf.setdefault(key, val)
+        merged_pf.update(config.qc_postfix or {})
+        config.qc_postfix = merged_pf
 
         cli_start = getattr(args, "startpoint", None)
         if cli_start:

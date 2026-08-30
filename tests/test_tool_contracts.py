@@ -280,16 +280,46 @@ def test_annotation_converter_contract(request, tmp_path):
 def test_qc_contract(request, tmp_path, tiny_fastq):
     _skip_if_other_type(request, "qc")
     path = _tool_path(request, "qc")
-    module = load_python_module(path, "contract_qc")
-    fn = getattr(module, "trim", None)
-    assert callable(fn), f"{path} must define trim(r1, r2, dest_r1, dest_r2, config)"
-    r1, r2 = tiny_fastq
+    assert path.is_file(), f"QC dest not found: {path}"
+    seq = "ACGT" * 20
+    rec = f"@r0\n{seq}\n+\n{'I' * len(seq)}\n"
+    r1 = tmp_path / "s_R1.fastq"
+    r2 = tmp_path / "s_R2.fastq"
+    r1.write_text(rec)
+    r2.write_text(rec)
     dest_r1 = tmp_path / "out_R1.fastq"
     dest_r2 = tmp_path / "out_R2.fastq"
-    paths = fn(str(r1), str(r2), str(dest_r1), str(dest_r2), {"min_gc": 0.0, "max_gc": 1.0})
+    if path.suffix.lower() == ".py":
+        module = load_python_module(path, "contract_qc")
+        fn = getattr(module, "trim", None)
+        assert callable(fn), f"{path} must define trim(r1, r2, dest_r1, dest_r2, config)"
+        paths = fn(
+            str(r1),
+            str(r2),
+            str(dest_r1),
+            str(dest_r2),
+            {"min_gc": 0.0, "max_gc": 1.0, "extra_argv": ["--length_required", "1"]},
+        )
+    else:
+        from samovar.qc import apply_qc_executable
+
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+        paths = apply_qc_executable(
+            path,
+            r1,
+            r2,
+            dest_r1,
+            dest_r2,
+            {
+                "extra_argv": ["--length_required", "1"],
+                "threads": 1,
+            },
+            name=path.name,
+        )
     assert dest_r1.is_file()
     assert dest_r2.is_file()
     assert Path(paths[0]).is_file()
     text = dest_r1.read_text()
     assert "@" in text
+    assert "ACGT" in text
 

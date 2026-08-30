@@ -327,11 +327,11 @@ def find_fastq_mate(directory: PathLike, sample: str, mate: str = "R1") -> Optio
 # CAMISIM harvest writes ``{n}_{tech}_R1.fastq`` then copies to ``{n}_full_``.
 # Annotators must only see the ISS-style ``*_full`` names.
 _CAMISIM_TECH_TAIL = re.compile(
-    r"_(illumina|ont|wgsim|nanosim3|art|sequence_type|read_type)$",
+    r"_(illumina|bgi|mgi|ont|wgsim|nanosim3|art|sequence_type|read_type)$",
     re.IGNORECASE,
 )
 _CAMISIM_TECH_SAMPLE = re.compile(
-    r"^(?P<n>\d+)_(illumina|ont|wgsim|nanosim3|art|sequence_type|read_type)$",
+    r"^(?P<n>\d+)_(illumina|bgi|mgi|ont|wgsim|nanosim3|art|sequence_type|read_type)$",
     re.IGNORECASE,
 )
 _FULL_SAMPLE = re.compile(r"^(?P<n>\d+)_full$", re.IGNORECASE)
