@@ -427,3 +427,63 @@ def test_generate_pipeline_bakes_tool_env_bins(tmp_path, monkeypatch):
     assert str(extra) in script
     assert "samovar/env" in script
     assert "SAMOVAR_PATH" in script
+
+
+def test_prepare_to_flags_embed_convert(tmp_path):
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    out = tmp_path / "out"
+    args = argparse.Namespace(
+        input_config=None,
+        input_dir=str(reads),
+        output_dir=str(out),
+        kraken2=[["kraken2 /tmp/k2"]],
+        kaiju=None,
+        to_mpa=True,
+        to_cami=True,
+        export_to=["kraken2"],
+        export_taxdump="/tmp/taxdump",
+    )
+    result = setup_pipeline(args)
+    text = Path(result["pipeline"]).read_text()
+    assert "samovar.annotation_convert" in text
+    assert "--to cami" in text
+    assert "--to kraken2_mpa" in text
+    assert "--to kraken2" in text
+    assert "exports/initial" in text
+    assert "exports/regenerated" in text
+    assert "exports/reprofiled" in text
+    assert "--taxdump /tmp/taxdump" in text
+    cfg = PipelineConfig.from_args(args)
+    assert cfg.export_formats == ["kraken2", "kraken2_mpa", "cami"]
+
+
+def test_prepare_without_to_flags_skips_convert(tmp_path):
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    args = argparse.Namespace(
+        input_config=None,
+        input_dir=str(reads),
+        output_dir=str(tmp_path / "out"),
+        kraken2=[["kraken2 /tmp/k2"]],
+        kaiju=None,
+    )
+    text = Path(setup_pipeline(args)["pipeline"]).read_text()
+    assert "samovar.annotation_convert" not in text
+
+
+def test_prepare_yaml_export_formats(tmp_path):
+    cfg = tmp_path / "p.yaml"
+    cfg.write_text(
+        "input_dir: /in\nexport_formats: [cami, mpa]\nannotators: []\n",
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        input_config=str(cfg),
+        input_dir=None,
+        output_dir=str(tmp_path / "out"),
+        kraken2=None,
+        kaiju=None,
+    )
+    config = PipelineConfig.from_args(args)
+    assert config.export_formats == ["cami", "kraken2_mpa"]

@@ -63,6 +63,7 @@ show_usage() {
     echo "  samovar generate --genome_dir [...] --directory [...] --host_genome [...]"
     echo "  samovar generate --simulator camisim --camisim-mode table --outdir samovar/camisim-table ..."
     echo "  samovar prepare --input_dir [...] --directory [...]"
+    echo "  samovar prepare --to-mpa --to-cami --directory [...]"
     echo "  samovar checkup --start-point abundance_tables --outdir [...]"
     echo "  samovar prepare --startpoint abundance_tables --endpoint score_regenerated_tables --directory [...]"
     echo "  samovar prepare --initial-ground-truth-table mapping.tsv --regenerated-metagenomes parse-genome"

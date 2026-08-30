@@ -271,6 +271,48 @@ def main():
         default=None,
         help='parse-genome (default: taxid: in headers) or ground-truth-table (grep FASTA >)',
     )
+    parser.add_argument(
+        '--to',
+        dest='export_to',
+        action='append',
+        default=None,
+        help=(
+            'Convert every combined annotation table to this format after combine/reprofile '
+            '(repeatable, comma-separated). '
+            'Formats: cami, mpa (kraken2-style), kraken2/kreport, abundance, annotation'
+        ),
+    )
+    parser.add_argument(
+        '--to-mpa',
+        dest='to_mpa',
+        action='store_true',
+        help='Same as --to mpa (Kraken 2 --use-mpa-style reports)',
+    )
+    parser.add_argument(
+        '--to-cami',
+        dest='to_cami',
+        action='store_true',
+        help='Same as --to cami (bioboxes .profile)',
+    )
+    parser.add_argument(
+        '--to-kraken2',
+        '--to-kreport',
+        dest='to_kraken2',
+        action='store_true',
+        help='Same as --to kraken2 (kreport)',
+    )
+    parser.add_argument(
+        '--to-abundance',
+        dest='to_abundance',
+        action='store_true',
+        help='Same as --to abundance (taxid × N_sample tables)',
+    )
+    parser.add_argument(
+        '--taxdump',
+        dest='export_taxdump',
+        default=None,
+        help='NCBI taxdump dir for --to kraken2 / mpa / cami (default: genomes.taxdump)',
+    )
 
     # Parse known args first to get output_dir
     from samovar.tool_spec import parse_known_with_custom
@@ -305,6 +347,8 @@ def main():
         "scoring", "reprofiler", "ml",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
+        "to", "to-mpa", "to-cami", "to-kraken2", "to-kreport", "to-abundance",
+        "taxdump",
     }
     from samovar.tool_spec import load_custom_flags, _norm_flag
 

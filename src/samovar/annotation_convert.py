@@ -67,6 +67,7 @@ FORMAT_ALIASES = {
     "kraken2style": "kraken2",
     "kraken2_mpa": "kraken2_mpa",
     "kreport_mpa": "kraken2_mpa",
+    "mpa": "kraken2_mpa",
     "cami": "cami",
     "cami_profile": "cami",
     "camiprofile": "cami",
@@ -439,6 +440,91 @@ def resolve_converter_name(
     return ""
 
 
+def parse_export_formats(*values: Any) -> List[str]:
+    """Normalize a mix of ``--to`` tokens / lists / comma-separated names.
+
+    ``mpa`` is Kraken 2 ``--use-mpa-style``. Unknown names raise ``UnknownFormatError``.
+    """
+    out: List[str] = []
+    for raw in values:
+        if raw in (None, False, ""):
+            continue
+        if isinstance(raw, (list, tuple, set)):
+            out.extend(parse_export_formats(*raw))
+            continue
+        if isinstance(raw, bool):
+            continue
+        for piece in str(raw).replace(",", " ").split():
+            name = normalize_format(piece)
+            if not name:
+                continue
+            if not is_builtin_format(name) and not lookup_converter(name):
+                raise UnknownFormatError(
+                    f"unknown export format {piece!r}. "
+                    f"Builtins: {', '.join(BUILTIN_FORMATS)} (mpa → kraken2-mpa)"
+                )
+            if name not in out:
+                out.append(name)
+    return out
+
+
+def formats_from_prepare_args(args: Any) -> List[str]:
+    """Collect ``--to`` / ``--to-mpa`` / ``--to-cami`` / … from prepare argparse."""
+    pieces: List[Any] = list(getattr(args, "export_to", None) or [])
+    flag_map = (
+        ("to_mpa", "mpa"),
+        ("to_cami", "cami"),
+        ("to_kraken2", "kraken2"),
+        ("to_abundance", "abundance"),
+        ("to_annotation", "annotation"),
+    )
+    for attr, fmt in flag_map:
+        if getattr(args, attr, False):
+            pieces.append(fmt)
+    return parse_export_formats(*pieces)
+
+
+def export_annotation_formats(
+    source: PathLike,
+    dest_root: PathLike,
+    formats: Iterable[str],
+    *,
+    source_format: str = "",
+    taxdump: str = "",
+    n_reads: Optional[int] = None,
+    extra_flags: str = "",
+) -> Dict[str, Path]:
+    """Write each format under ``dest_root/<format>/`` (or ``dest_root`` if one format)."""
+    names = parse_export_formats(*list(formats))
+    if not names:
+        raise ValueError("--to is required")
+    dest_path = Path(dest_root)
+    written: Dict[str, Path] = {}
+    if len(names) == 1:
+        written[names[0]] = convert_annotation(
+            source,
+            dest_path,
+            source_format=source_format,
+            dest_format=names[0],
+            taxdump=taxdump,
+            n_reads=n_reads,
+            extra_flags=extra_flags,
+        )
+        return written
+    dest_path.mkdir(parents=True, exist_ok=True)
+    for fmt in names:
+        written[fmt] = convert_annotation(
+            source,
+            dest_path / fmt,
+            source_format=source_format,
+            dest_format=fmt,
+            taxdump=taxdump,
+            n_reads=n_reads,
+            extra_flags=extra_flags,
+        )
+    return written
+
+
 def convert_annotation(
     source: PathLike,
     dest: PathLike,
@@ -533,10 +619,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--to",
         dest="dest_format",
+        action="append",
         required=True,
         help=(
-            "Output format (abundance, annotation, kraken2, kraken2-mpa, cami, "
-            "or an imported converter name)"
+            "Output format (repeatable): abundance, annotation, kraken2, mpa "
+            "(kraken2 --use-mpa-style), cami, or an imported converter. "
+            "Several --to values write dest/<format>/"
         ),
     )
     parser.add_argument(
@@ -572,11 +660,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     try:
+        formats = parse_export_formats(*(args.dest_format or []))
+        if len(formats) > 1:
+            written = export_annotation_formats(
+                args.input,
+                args.output,
+                formats,
+                source_format=args.source_format,
+                taxdump=args.taxdump,
+                n_reads=args.n_reads,
+                extra_flags=args.flags,
+            )
+            dest = Path(args.output)
+            print(" ".join(str(p) for p in written.values()))
+            return 0
         dest = convert_annotation(
             args.input,
             args.output,
             source_format=args.source_format,
-            dest_format=args.dest_format,
+            dest_format=formats[0] if formats else "",
             converter=args.converter,
             n_reads=args.n_reads,
             extra_flags=args.flags,

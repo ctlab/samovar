@@ -295,6 +295,8 @@ class PipelineConfig:
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
     startpoint: str = "setup_reads"
     endpoint: str = "viz_reprofiled"
+    export_formats: Optional[List[str]] = None
+    export_taxdump: Optional[str] = None
 
     def __post_init__(self):
         if self.annotators is None:
@@ -309,6 +311,8 @@ class PipelineConfig:
             self.reprofiler_tool_flags = {}
         if not self.regeneration_modes:
             self.regeneration_modes = [self.regeneration_mode]
+        if self.export_formats is None:
+            self.export_formats = []
         if not self.email:
             self.email = _default_email()
 
@@ -488,6 +492,21 @@ class PipelineConfig:
                 )
                 if yaml_regen:
                     config.regenerated_metagenomes = normalize_regenerated_mode(yaml_regen)
+                yaml_export = (
+                    input_config.get("export_formats")
+                    or input_config.get("export-formats")
+                    or input_config.get("to")
+                )
+                if yaml_export:
+                    from samovar.annotation_convert import parse_export_formats
+
+                    config.export_formats = parse_export_formats(yaml_export)
+                yaml_taxdump = (
+                    input_config.get("export_taxdump")
+                    or input_config.get("taxdump")
+                )
+                if yaml_taxdump:
+                    config.export_taxdump = str(yaml_taxdump)
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -772,6 +791,16 @@ class PipelineConfig:
         config.startpoint, config.endpoint = resolve_window(
             config.startpoint, config.endpoint
         )
+        from samovar.annotation_convert import formats_from_prepare_args, parse_export_formats
+
+        cli_export = formats_from_prepare_args(args)
+        if cli_export:
+            config.export_formats = parse_export_formats(
+                config.export_formats, cli_export
+            )
+        cli_taxdump = getattr(args, "export_taxdump", None) or getattr(args, "taxdump", None)
+        if cli_taxdump:
+            config.export_taxdump = str(cli_taxdump)
         _apply_translated_cli_flags(config, args)
         return config
 
@@ -909,6 +938,23 @@ class PipelineConfig:
 
         return configs
 
+    def _annotation_export_bash(self, src_rel: str, stage: str) -> str:
+        """Convert combined annotation tables after a combine/reprofile step."""
+        formats = list(self.export_formats or [])
+        if not formats:
+            return ""
+        import shlex
+
+        tos = " ".join("--to " + shlex.quote(fmt) for fmt in formats)
+        tax = ""
+        if self.export_taxdump:
+            tax = " --taxdump " + shlex.quote(str(self.export_taxdump))
+        return (
+            f"\n$PYTHON_PATH -m samovar.annotation_convert \\\n"
+            f'    -i "$out_dir/{src_rel}" -o "$out_dir/exports/{stage}"{tax} \\\n'
+            f"    {tos}"
+        )
+
     def generate_pipeline(self, base_dir: str) -> str:
         """Generate the pipeline script and return its path"""
         base_dir = absolute_path(base_dir)
@@ -964,6 +1010,9 @@ $PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -i "$out_dir/regenerated_reports" \\
     -o "$out_dir/regenerated_annotations" \\
     -s 2"""
+        combine_regen_body = combine_regen_body + self._annotation_export_bash(
+            "regenerated_annotations", "regenerated"
+        )
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
@@ -1057,7 +1106,8 @@ fi""",
             "combine_initial",
             f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -i "$out_dir/initial_reports" \\
-    -o "$out_dir/initial_annotations"{gt_initial}""",
+    -o "$out_dir/initial_annotations"{gt_initial}"""
+            + self._annotation_export_bash("initial_annotations", "initial"),
         )
 
         viz_initial = _checkpoint_block(
@@ -1165,7 +1215,8 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --reprofiler {self.reprofiler} \\
     --config {configs['reprofiling']} \\
     --seed {self.regeneration_seed} \\
-    $FEATURE_ARG""",
+    $FEATURE_ARG"""
+            + self._annotation_export_bash("reprofiled_annotations", "reprofiled"),
         )
 
         viz_reprofiled = _checkpoint_block(

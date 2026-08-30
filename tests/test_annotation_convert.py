@@ -5,7 +5,12 @@ from pathlib import Path
 import pandas as pd
 
 from samovar.abundance import n_sample_columns
-from samovar.annotation_convert import convert_annotation, main as convert_main
+from samovar.annotation_convert import (
+    convert_annotation,
+    formats_from_prepare_args,
+    main as convert_main,
+    parse_export_formats,
+)
 from samovar.parse_annotators import Annotation
 from samovar.paths import write_config
 from samovar.tools_import import import_tool
@@ -162,3 +167,40 @@ def test_convert_abundance_to_cami(tmp_path, monkeypatch):
 
     assert_rfc(text)
     assert "@SampleID:1" in text
+
+
+def test_parse_export_formats_aliases():
+    assert parse_export_formats("mpa", "cami", "kreport") == [
+        "kraken2_mpa",
+        "cami",
+        "kraken2",
+    ]
+    assert parse_export_formats("cami,mpa", ["abundance"]) == ["cami", "kraken2_mpa", "abundance"]
+    import argparse
+
+    args = argparse.Namespace(to_mpa=True, to_cami=True, export_to=["kraken2"])
+    assert formats_from_prepare_args(args) == ["kraken2", "kraken2_mpa", "cami"]
+
+
+def test_convert_cli_multiple_to(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
+    dump = write_mini_taxdump(tmp_path / "taxdump")
+    ann = _ann_dir(tmp_path)
+    dest = tmp_path / "exports"
+    rc = convert_main(
+        [
+            "-i",
+            str(ann),
+            "-o",
+            str(dest),
+            "--to",
+            "cami",
+            "--to",
+            "mpa",
+            "--taxdump",
+            str(dump),
+        ]
+    )
+    assert rc == 0
+    assert list((dest / "cami").glob("*.profile"))
+    assert list((dest / "kraken2_mpa").rglob("*.mpa"))
