@@ -44,4 +44,20 @@ project/
 *.log
 genomes/
 taxdump.tar.gz
-examples/*
+
+# Example run trees and caches
+examples/**/run/
+examples/**/results/
+examples/**/__pycache__/
+examples/**/*.pyc
+examples/**/.snakemake/
+examples/**/.cache/
+examples/**/multiqc/multiqc_data/
+
+# Technical / non-canonical examples (not part of the published set)
+examples/all_annotators/
+examples/phage_test/
+examples/metagenome_generator/
+examples/generate_mock_community.sh
+examples/generate_mock_community.md
+examples/_harvest_example.py

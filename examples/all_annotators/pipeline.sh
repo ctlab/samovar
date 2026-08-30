@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-samovar_10bac}"
+output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
 mkdir -p "$output_dir/.database" "$output_dir/.genomes"
 
 # Get genomes from NCBI (not from a local store)

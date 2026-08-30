@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SAMOVAR}/samovar/metagenome_generator}"
+output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
 rm -rf "$output_dir/"
 mkdir -p "$output_dir/.database"
 
@@ -30,6 +30,8 @@ EOF
 
 if [[ -n "${SAMOVAR_KRAKEN2_DB:-}" && -d "$SAMOVAR_KRAKEN2_DB" ]]; then
   ln -sfn "$SAMOVAR_KRAKEN2_DB" "$output_dir/.database/kraken2_db"
+elif [[ -d "${SAMOVAR}/examples/toy/run/.database/kraken2_db" ]] && ls "${SAMOVAR}/examples/toy/run/.database/kraken2_db"/*.k2d >/dev/null 2>&1; then
+  ln -sfn "${SAMOVAR}/examples/toy/run/.database/kraken2_db" "$output_dir/.database/kraken2_db"
 elif [[ -d "${SAMOVAR}/samovar_toy/.database/kraken2_db" ]] && ls "${SAMOVAR}/samovar_toy/.database/kraken2_db"/*.k2d >/dev/null 2>&1; then
   ln -sfn "${SAMOVAR}/samovar_toy/.database/kraken2_db" "$output_dir/.database/kraken2_db"
 elif [[ ! -e "$output_dir/.database/kraken2_db/hash.k2d" && ! -e "$output_dir/.database/kraken2_db/taxo.k2d" ]]; then
@@ -37,6 +39,8 @@ elif [[ ! -e "$output_dir/.database/kraken2_db/hash.k2d" && ! -e "$output_dir/.d
 fi
 if [[ -n "${SAMOVAR_KAIJU_DB:-}" && -e "$SAMOVAR_KAIJU_DB" ]]; then
   ln -sfn "$SAMOVAR_KAIJU_DB" "$output_dir/.database/kaiju_db"
+elif [[ -f "${SAMOVAR}/examples/toy/run/.database/kaiju_db/kaiju_db.fmi" ]]; then
+  ln -sfn "${SAMOVAR}/examples/toy/run/.database/kaiju_db" "$output_dir/.database/kaiju_db"
 elif [[ -f "${SAMOVAR}/samovar_toy/.database/kaiju_db/kaiju_db.fmi" ]]; then
   ln -sfn "${SAMOVAR}/samovar_toy/.database/kaiju_db" "$output_dir/.database/kaiju_db"
 elif ! find "$output_dir/.database/kaiju_db" -name '*.fmi' 2>/dev/null | grep -q .; then
