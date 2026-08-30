@@ -1260,8 +1260,8 @@ def _write_multiqc_config(dest: Path, hidden_ids: Sequence[str]) -> Path:
     order.append("samovar_conclusion")
     lines = [
         f'title: "SAMOVAR"',
-        f'subtitle: "Ensemble annotation report (v{PACKAGE_VERSION})"',
-        'intro_text: "SAMOVAR report. Wiki: https://github.com/ctlab/samovar/wiki"',
+        f'subtitle: "Ensemble annotation report (v{PACKAGE_VERSION}). Wiki: https://github.com/ctlab/samovar/wiki"',
+        "intro_text: SAMOVAR report",
         f'custom_css_files:',
         f'  - {json.dumps(str(css_path))}',
         "custom_content:",
