@@ -1,35 +1,23 @@
-import os
-import glob
-
-from samovar.seqio import is_fasta_name
 from samovar.table2iss import generate_iss_test_samples
 
 configfile: "config.yaml"
 
 if not config.get("genomes"):
-    from pathlib import Path
-    genome_dir = Path(config["genome_dir"])
-    genome_files = []
-    seen = set()
-    for folder in (genome_dir / "processed", genome_dir):
-        if not folder.is_dir():
-            continue
-        for path in sorted(folder.iterdir()):
-            if not path.is_file():
-                continue
-            if not is_fasta_name(path.name, protein=False, nucleotide=True):
-                continue
-            key = str(path.resolve()) if path.exists() else str(path)
-            if key in seen:
-                continue
-            seen.add(key)
-            genome_files.append(str(path.resolve()))
-    config["genomes"] = genome_files
+    from samovar.iss_config import select_generate_genome_paths
+
+    config["genomes"] = [
+        str(path)
+        for path in select_generate_genome_paths(
+            config.get("genome_dir") or "",
+            config.get("max_genomes"),
+        )
+    ]
     print(f"Found genomes: {config['genomes']}")
 
 from samovar.regenerate import cap_sequence
 
-config["genomes"] = cap_sequence(config.get("genomes") or [], config.get("max_genomes"))
+if not config.get("genomes"):
+    config["genomes"] = cap_sequence(config.get("genomes") or [], config.get("max_genomes"))
 
 SAMPLES = [str(i) for i in range(1, config["n_samples"] + 1)]
 OUTPUT_FILES = []

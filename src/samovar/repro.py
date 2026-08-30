@@ -29,10 +29,10 @@ from samovar.main_config import (
     tool_group_for,
 )
 from samovar.paths import (
+    _code_repo_root,
     add_output_dir_argument,
     argv_has_output_dir,
     load_config,
-    repo_root,
     sidecar_envs_dir,
     token_is_output_dir_flag,
     user_config_path,
@@ -79,12 +79,20 @@ def snapshot_path(output_dir: Path) -> Path:
     return hydra_dir(output_dir) / "config.yaml"
 
 
+def _oc_escape_script(text: str) -> str:
+    """Keep bash ``${PREFIX}`` from being parsed as an OmegaConf resolver."""
+    return str(text).replace("${", "$${")
+
+
 def _plain(obj: Any, default: Any = None) -> Any:
     """OmegaConf.to_container that also accepts native list/dict (empty lists are falsy)."""
     if obj is None:
         return default
     if OmegaConf.is_config(obj):
-        value = OmegaConf.to_container(obj, resolve=True)
+        try:
+            value = OmegaConf.to_container(obj, resolve=True)
+        except Exception:
+            value = OmegaConf.to_container(obj, resolve=False)
         return default if value is None else value
     return obj
 
@@ -211,7 +219,7 @@ def capture_tools(cfg: Optional[Mapping[str, Any]] = None) -> Tuple[Dict[str, An
             "exec": exe,
             "flags": rec.get("flags") or "",
             "flags_translate": dict(rec.get("flags-translate") or {}),
-            "lazy_install": lazy,
+            "lazy_install": _oc_escape_script(lazy),
             "inputs": rec.get("inputs") or "",
         }
         tools[join_tool_key(bare, found) if found else bare] = row
@@ -239,7 +247,7 @@ def capture_databases(cfg: Optional[Mapping[str, Any]] = None) -> Dict[str, List
                     "path": str(rec.get("path") or ""),
                     "flags": str(rec.get("flags") or ""),
                     "version": version,
-                    "lazy_download": str(rec.get("lazy-download") or ""),
+                    "lazy_download": _oc_escape_script(str(rec.get("lazy-download") or "")),
                     "url": official_url_for(
                         tool, str(rec.get("name") or ""), version, str(rec.get("url") or "")
                     ),
@@ -263,6 +271,7 @@ def empty_snapshot() -> DictConfig:
             "tools": {},
             "imports": {},
             "databases": {},
+            "genomes": {},
             "custom_flags": [],
             "warnings": [],
         }
@@ -306,6 +315,7 @@ def record_stage(
     output_dir: Optional[str],
     args: Any = None,
     argv: Optional[Sequence[str]] = None,
+    extra: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Path]:
     """Merge this generate/prepare/exec invocation into ``$out/.hydra``."""
     if not output_dir:
@@ -343,6 +353,11 @@ def record_stage(
         if item not in existing_warn:
             existing_warn.append(item)
     snap.warnings = existing_warn
+    if extra:
+        for key, value in extra.items():
+            if value in (None, "", [], {}):
+                continue
+            OmegaConf.update(snap, str(key), value, merge=True)
 
     OmegaConf.save(snap, snap_file)
     overrides = args_to_overrides(stage, parsed)
@@ -546,8 +561,25 @@ def run_recorded_stage(
         args = dict(block.get("args") or {})
         argv = _argv_from_args(stage, args)
     argv = rewrite_output_dir_argv(argv, output_dir)
-    root = repo_root()
+    used = list(block.get("used_genomes") or [])
+    if stage == "generate" and used:
+        tokens = []
+        for rec in used:
+            if isinstance(rec, dict):
+                if rec.get("host"):
+                    continue
+                tokens.append(str(rec.get("taxid") or rec.get("file") or rec.get("path") or ""))
+            else:
+                tokens.append(str(rec))
+        tokens = [t for t in tokens if t]
+        if tokens and "--genomes" not in argv:
+            for tok in tokens:
+                argv.extend(["--genomes", tok])
+    root = _reproduce_code_root()
     samovar = root / "bin" / "samovar"
+    if not samovar.is_file():
+        which = shutil.which("samovar")
+        samovar = Path(which) if which else samovar
     cmd = [str(samovar), stage, *argv]
     if stage == "prepare":
         cmd = [str(samovar), "prepare", *argv]
@@ -563,10 +595,20 @@ def run_recorded_stage(
     return int(proc.returncode)
 
 
+def _reproduce_code_root() -> Path:
+    """Checkout that actually ships ``bin/samovar`` (not a config.json data root)."""
+    env = os.environ.get("SAMOVAR_ROOT", "").strip()
+    if env:
+        root = Path(env).expanduser()
+        if (root / "bin" / "samovar").is_file():
+            return root.resolve()
+    return _code_repo_root()
+
+
 def _argv_from_args(stage: str, args: Mapping[str, Any]) -> List[str]:
     out: List[str] = []
     for key, value in args.items():
-        if value in (None, "", False, [], {}) or key in {"custom_cli_flags"}:
+        if value in (None, "", False, [], {}) or key in {"custom_cli_flags", "tool_flags"}:
             continue
         flag = f"--{key}" if not str(key).startswith("-") else str(key)
         if value is True:
@@ -634,11 +676,10 @@ def export_run(
                 for row in rows or []:
                     path = Path(str(row.get("path") or "")).expanduser()
                     name = str(row.get("name") or path.name or "db")
-                    if not database_src_exists(path):
+                    if not database_src_exists(path) and not str(row.get("lazy_download") or row.get("lazy-download") or "").strip():
                         warnings.append(f"database {tool}/{name} missing on disk: {path}")
                         continue
                     rel = Path("databases") / tool / name
-                    copy_database_tree(path, payload / rel)
                     db_map.append(f"{tool}\t{name}\t{rel.as_posix()}\t{row.get('flags') or ''}")
                     lazy = str(row.get("lazy_download") or row.get("lazy-download") or "").strip()
                     meta_dir = payload / "db-meta" / tool / name
@@ -653,12 +694,10 @@ def export_run(
                     (meta_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
                     if lazy:
                         (meta_dir / "lazy-download.sh").write_text(lazy.rstrip() + "\n", encoding="utf-8")
-                    elif not path.exists():
-                        pass
                     else:
                         warnings.append(
                             f"database {tool}/{name} has no lazy-download; "
-                            "reproduce can copy the packed tree but cannot re-fetch it"
+                            "export does not pack database files — reproduce cannot re-fetch it"
                         )
             imports = _plain(snap.get("imports"), {}) or {}
             for name, rec in imports.items():
@@ -683,7 +722,10 @@ def export_run(
                     continue
                 (dest / "lazy-install.sh").write_text(lazy.rstrip() + "\n", encoding="utf-8")
             if include_genomes:
-                warnings.append("genome libraries are not packed (use SAMOVAR_DATABASE on the target)")
+                warnings.append(
+                    "genome FASTA libraries are not packed; Hydra lists used taxids "
+                    "and reproduce re-resolves them via --genomes / lazy catalog fetch"
+                )
         (root / "warnings.txt").write_text("\n".join(warnings) + ("\n" if warnings else ""), encoding="utf-8")
         (payload / "databases.tsv").write_text("\n".join(db_map) + ("\n" if db_map else ""), encoding="utf-8")
         (root / "install.sh").write_text(_bundle_install_script(), encoding="utf-8")
@@ -742,6 +784,10 @@ if [ -f "$ROOT/payload/databases.tsv" ]; then
         [ -n "${flags:-}" ] && extra+=(--flags "$flags")
         if [ -f "$ROOT/payload/db-meta/$tool/$name/lazy-download.sh" ]; then
             extra+=(--lazy-download-file "$ROOT/payload/db-meta/$tool/$name/lazy-download.sh")
+            if [ ! -e "$dest" ]; then
+                mkdir -p "$dest"
+                PREFIX="$dest" bash "$ROOT/payload/db-meta/$tool/$name/lazy-download.sh" || true
+            fi
         fi
         if [ -f "$ROOT/payload/db-meta/$tool/$name/meta.json" ]; then
             ver="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version") or "")' "$ROOT/payload/db-meta/$tool/$name/meta.json")"
@@ -762,7 +808,8 @@ def _bundle_readme(mode: str) -> str:
         "SamovaR Hydra run bundle\n"
         f"mode: {mode}\n\n"
         "Hydra saved the composed config in .hydra/ (config.yaml, overrides.yaml).\n"
-        "This is not enough to reproduce binaries or databases — install.sh does that.\n\n"
+        "Used genomes are listed under genomes.used (not packed as FASTA).\n"
+        "Databases are recorded as lazy-download recipes, not copied.\n\n"
         "  bash install.sh\n"
         "  samovar reproduce . --output_dir ./rerun\n"
     )
@@ -844,6 +891,9 @@ def reproduce(
         if extra:
             argv0 = list(block.get("argv") or _argv_from_args(stage, args))
             block["argv"] = patch_argv_overrides(argv0, stage, extra)
+        genomes = _plain(snap.get("genomes"), {}) or {}
+        if stage == "generate" and isinstance(genomes, dict):
+            block["used_genomes"] = genomes.get("used") or []
         code = run_recorded_stage(stage, block, output_dir, dry_run=dry_run)
         if code != 0:
             break

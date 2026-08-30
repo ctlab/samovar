@@ -32,11 +32,11 @@ def main():
         help='Alias of --cores; translated into each tool via flags-translate',
     )
     parser.add_argument(
-        '--max-genomes', '--max_genomes',
+        '--max-genomes', '--max_genomes', '--top',
         dest='max_genomes',
         type=argparse_max_genomes,
         default=None,
-        help='Max taxa for table regenerate and genomes for metagenome generate (default: inf)',
+        help='Max taxa for table regenerate and genomes for metagenome generate (default: inf). Alias: --top',
     )
     parser.add_argument(
         '--max-genome-mb',
@@ -339,7 +339,7 @@ def main():
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "output-dir", "outdir", "directory",
         "cores", "threads",
-        "max_genomes", "max-genomes", "max-genome-mb", "max_genome_mb",
+        "max_genomes", "max-genomes", "top", "max-genome-mb", "max_genome_mb",
         "genome-skip-list", "genome_skip_list",
         "N_reads", "n_reads", "N",
         "genome-dirs", "genome_dirs", "index",

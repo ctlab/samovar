@@ -1,7 +1,7 @@
 import os
 import yaml
 import argparse
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -11,15 +11,185 @@ from samovar.paths import add_output_dir_argument
 from samovar.regenerate import UNLIMITED_MAX_GENOMES, argparse_max_genomes, parse_max_genomes
 
 
+def parse_genome_tokens(values: Optional[Sequence[Any]]) -> List[str]:
+    tokens: List[str] = []
+    for raw in values or []:
+        if raw in (None, False, ""):
+            continue
+        if isinstance(raw, (list, tuple)):
+            tokens.extend(parse_genome_tokens(list(raw)))
+            continue
+        for piece in str(raw).replace(",", " ").split():
+            if piece.strip():
+                tokens.append(piece.strip())
+    return tokens
+
+
+def list_generate_genome_paths(genome_dir: str) -> List[Path]:
+    """FASTAs under ``genome_dir/processed`` then ``genome_dir`` (stable sort)."""
+    from samovar.seqio import is_fasta_name
+
+    root = Path(genome_dir).expanduser() if genome_dir else Path()
+    found: List[Path] = []
+    seen = set()
+    if not root.is_dir():
+        return found
+    for folder in (root / "processed", root):
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.iterdir()):
+            if not path.is_file():
+                continue
+            if not is_fasta_name(path.name, protein=False, nucleotide=True):
+                continue
+            try:
+                key = str(path.resolve())
+            except OSError:
+                key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(path)
+    return found
+
+
+def resolve_locked_genome_paths(genome_dir: str, tokens: Sequence[str]) -> List[Path]:
+    from samovar.seqio import taxid_from_fasta_name
+
+    listed = list_generate_genome_paths(genome_dir)
+    by_name = {p.name: p for p in listed}
+    by_stem: Dict[str, Path] = {}
+    for path in listed:
+        taxid = taxid_from_fasta_name(path) or path.stem.split(".")[0]
+        by_stem.setdefault(str(taxid), path)
+        by_stem.setdefault(path.stem, path)
+    out: List[Path] = []
+    seen = set()
+    for tok in tokens:
+        path = Path(tok).expanduser()
+        hit: Optional[Path] = None
+        if path.is_file():
+            hit = path
+        elif tok in by_name:
+            hit = by_name[tok]
+        elif tok in by_stem:
+            hit = by_stem[tok]
+        if hit is None:
+            continue
+        try:
+            key = str(hit.resolve())
+        except OSError:
+            key = str(hit)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(hit)
+    return out
+
+
+def select_generate_genome_paths(
+    genome_dir: str,
+    max_genomes: Any = None,
+    locked: Optional[Sequence[str]] = None,
+) -> List[Path]:
+    from samovar.regenerate import cap_sequence
+
+    tokens = parse_genome_tokens(locked)
+    if tokens:
+        paths = resolve_locked_genome_paths(genome_dir, tokens)
+        if paths:
+            return paths
+    return cap_sequence(list_generate_genome_paths(genome_dir), max_genomes)
+
+
+def genome_lock_records(
+    paths: Sequence[Any],
+    host_genome: str = "",
+) -> List[Dict[str, Any]]:
+    from samovar.seqio import taxid_from_fasta_name
+
+    host_key = ""
+    if host_genome:
+        try:
+            host_key = str(Path(host_genome).expanduser().resolve())
+        except OSError:
+            host_key = str(Path(host_genome).expanduser())
+    records: List[Dict[str, Any]] = []
+    seen = set()
+    for raw in paths:
+        path = Path(raw)
+        try:
+            key = str(path.resolve()) if path.exists() else str(path)
+        except OSError:
+            key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        taxid = taxid_from_fasta_name(path) or path.stem.split(".")[0]
+        records.append(
+            {
+                "taxid": str(taxid),
+                "file": path.name,
+                "path": key,
+                "host": bool(host_key and key == host_key),
+            }
+        )
+    if host_genome:
+        host_path = Path(host_genome).expanduser()
+        if host_path.is_file() and not any(rec.get("host") for rec in records):
+            taxid = taxid_from_fasta_name(host_path) or host_path.stem.split(".")[0]
+            records.append(
+                {
+                    "taxid": str(taxid),
+                    "file": host_path.name,
+                    "path": host_key or str(host_path),
+                    "host": True,
+                }
+            )
+    return records
+
+
+def _genomes_from_generate_yaml(config_path: Optional[str]) -> Dict[str, Any]:
+    if not config_path:
+        return {}
+    path = Path(config_path)
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    files = data.get("genomes") or []
+    used = genome_lock_records(files, str(data.get("host_genome") or ""))
+    payload: Dict[str, Any] = {"used": used}
+    if "max_genomes" in data:
+        payload["max_genomes"] = data.get("max_genomes")
+    return payload
+
+
 def _finish_generate(args, result):
     try:
-        from samovar.repro import record_stage
+        from samovar.repro import _argv_from_args, _ns_to_dict, record_stage
 
+        extra = {}
+        locked = _genomes_from_generate_yaml((result or {}).get("config"))
+        if locked.get("used"):
+            extra["genomes"] = locked
+        parsed = _ns_to_dict(args)
+        argv = sys.argv[1:]
+        generate_flags = ("--genome_dir", "--genome-dir", "--accessions", "--output_dir")
+        if parsed and not any(
+            str(tok).split("=", 1)[0] in generate_flags for tok in argv
+        ):
+            argv = _argv_from_args("generate", parsed)
         record_stage(
             "generate",
             getattr(args, "output_dir", None),
             args=args,
-            argv=sys.argv[1:],
+            argv=argv,
+            extra=extra or None,
         )
     except Exception as exc:
         print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)
@@ -67,6 +237,7 @@ class ISSTestConfig:
     max_genome_mb: float = float("inf")
     genome_skip_list: str = ""
     max_genomes: float = UNLIMITED_MAX_GENOMES
+    locked_genomes: Optional[List[str]] = None
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'ISSTestConfig':
@@ -107,6 +278,7 @@ class ISSTestConfig:
             max_genome_mb=max_mb,
             genome_skip_list=skip_text,
             max_genomes=max_g,
+            locked_genomes=parse_genome_tokens(getattr(args, "genomes", None)),
         )
 
     def generate_config(self, base_dir: str) -> str:
@@ -129,7 +301,14 @@ class ISSTestConfig:
             'seed': self.seed,
             'model': self.model,
             'cores': self.cores,
-            'genomes': [],  # Will be automatically populated
+            'genomes': [
+                str(path)
+                for path in select_generate_genome_paths(
+                    self.genome_dir,
+                    self.max_genomes,
+                    self.locked_genomes,
+                )
+            ],
             'reads_generator': self.reads_generator,
         }
         if self.metagenome_generator:
@@ -317,11 +496,17 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         help='CAMISIM sample size in Gbp (default: derived from --total_reads)',
     )
     parser.add_argument(
-        '--max-genomes', '--max_genomes',
+        '--max-genomes', '--max_genomes', '--top',
         dest='max_genomes',
         type=argparse_max_genomes,
         default=None,
-        help='Max taxa/genomes for generate (default: inf)',
+        help='Keep this many genomes from genome_dir (default: inf). The chosen files are written to Hydra.',
+    )
+    parser.add_argument(
+        '--genomes',
+        action='append',
+        default=None,
+        help='Lock this run to these FASTA paths/taxids (repeatable or comma-separated). Overrides --top scan order.',
     )
     parser.add_argument(
         '--max-genome-mb',

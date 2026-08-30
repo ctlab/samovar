@@ -137,7 +137,7 @@ def test_export_full_packs_db_and_lazy_install(tmp_path, monkeypatch):
     names = tarfile.open(archive, "r:gz").getnames()
     assert any(n.endswith("payload/tools/myclf/lazy-install.sh") for n in names)
     assert any(n.endswith("payload/tools/myclf/meta.json") for n in names)
-    assert any("payload/databases/myclf/testdb" in n for n in names)
+    assert not any("payload/databases/myclf/testdb/hash.k2d" in n for n in names)
     assert any(n.endswith("payload/db-meta/myclf/testdb/lazy-download.sh") for n in names)
     assert any(n.endswith("payload/db-meta/myclf/testdb/meta.json") for n in names)
     assert any(n.endswith("install.sh") for n in names)

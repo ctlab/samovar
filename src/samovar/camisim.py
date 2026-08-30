@@ -306,6 +306,47 @@ def collect_generate_genomes(
     return rows
 
 
+def select_camisim_genome_rows(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Use locked ``cfg['genomes']`` when present; else cap by ``max_genomes``."""
+    rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
+    locked = [str(x) for x in (cfg.get("genomes") or []) if str(x).strip()]
+    if locked:
+        from samovar.iss_config import resolve_locked_genome_paths
+
+        resolved = resolve_locked_genome_paths(cfg["genome_dir"], locked)
+        want = set()
+        for path in resolved:
+            try:
+                want.add(str(path.resolve()))
+            except OSError:
+                want.add(str(path))
+        if not want:
+            want = {str(Path(x).expanduser()) for x in locked}
+        ordered: List[Dict[str, str]] = []
+        seen = set()
+        for row in rows:
+            try:
+                key = str(Path(row["path"]).resolve())
+            except OSError:
+                key = str(row["path"])
+            if key in want and key not in seen:
+                ordered.append(row)
+                seen.add(key)
+        if ordered:
+            hosts = [r for r in rows if str(r.get("host") or "") == "1"]
+            meta = [r for r in ordered if str(r.get("host") or "") != "1"]
+            extra_hosts = []
+            for host in hosts:
+                try:
+                    key = str(Path(host["path"]).resolve())
+                except OSError:
+                    key = str(host["path"])
+                if key not in seen:
+                    extra_hosts.append(host)
+            return meta + extra_hosts
+    return cap_generate_genome_rows(rows, cfg.get("max_genomes"))
+
+
 def camisim_size_gbp(
     total_reads: int,
     read_length: int = 150,
@@ -832,8 +873,7 @@ def write_camisim_configs(cfg: Dict[str, Any], output_dir: str) -> Dict[str, str
     cfg_dir = generate_dir(str(base)) / "configs"
     cam_dir = cfg_dir / "camisim"
     cam_dir.mkdir(parents=True, exist_ok=True)
-    rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
-    rows = cap_generate_genome_rows(rows, cfg.get("max_genomes"))
+    rows = select_camisim_genome_rows(cfg)
     cfg = dict(cfg)
     if not cfg.get("camisim_root"):
         cfg["camisim_root"] = discover_camisim() or ""
@@ -845,6 +885,9 @@ def write_camisim_configs(cfg: Dict[str, Any], output_dir: str) -> Dict[str, str
     cfg["genome_locations_file"] = str(loc)
     cfg["metadata_file"] = str(meta)
     cfg["n_genomes"] = len(rows)
+    cfg["genomes"] = [
+        r["path"] for r in rows if str(r.get("host") or "") != "1"
+    ]
     yaml_path = cfg_dir / "camisim.yaml"
     yaml_path.write_text(
         "# SamovaR CAMISIM generate config. Edit and re-run .generate/generate.sh\n"
@@ -1130,6 +1173,18 @@ def setup_camisim_generate(args: argparse.Namespace) -> Dict[str, str]:
     )
     # CLI/defaults win for scalars; nested dicts from --camisim-config overlay.
     merged = _deep_overlay(base, cfg if isinstance(cfg, dict) else {})
+    locked = getattr(args, "genomes", None)
+    if locked:
+        from samovar.iss_config import parse_genome_tokens, select_generate_genome_paths
+
+        merged["genomes"] = [
+            str(path)
+            for path in select_generate_genome_paths(
+                merged.get("genome_dir") or "",
+                merged.get("max_genomes"),
+                parse_genome_tokens(locked),
+            )
+        ]
     if not merged.get("camisim_root"):
         merged["camisim_root"] = discover_camisim() or ""
     if not merged.get("ncbi_taxdump_file"):
@@ -1164,8 +1219,7 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     work = cfg_path.parent / "camisim"
     work.mkdir(parents=True, exist_ok=True)
-    rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
-    rows = cap_generate_genome_rows(rows, cfg.get("max_genomes"))
+    rows = select_camisim_genome_rows(cfg)
     if normalize_camisim_mode(cfg.get("mode")) != "table":
         rows = stage_genomes_for_camisim(rows, work)
     loc, meta = write_genome_tables(work, rows, taxdump=cfg.get("ncbi_taxdump_file"))
@@ -1327,8 +1381,7 @@ def _run_camisim_reads(
     run_cfg["output_dir"] = str(dest)
     if not run_cfg.get("ncbi_taxdump_file"):
         run_cfg["ncbi_taxdump_file"] = camisim_taxdump(root)
-    rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
-    rows = cap_generate_genome_rows(rows, cfg.get("max_genomes"))
+    rows = select_camisim_genome_rows(cfg)
     nf = write_nextflow_config(run_cfg, work, rows)
     kind = _camisim_kind(Path(root))
     log_path = dest / "camisim.nextflow.log"
