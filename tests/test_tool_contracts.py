@@ -308,6 +308,8 @@ def test_qc_contract(request, tmp_path, tiny_fastq):
             extra = ["-m", "1"]
         elif kind == "trimmomatic":
             extra = ["MINLEN:1"]
+        elif kind in {"chopper", "nanofilt"}:
+            extra = ["-q", "0", "-l", "1"]
         else:
             extra = ["--length_required", "1"]
         paths = apply_qc_executable(

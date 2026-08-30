@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""CLI stub matching SamovaR's native NanoFilt invocation (stdin → stdout)."""
+from __future__ import annotations
+
+import sys
+
+
+def main(argv: list[str]) -> int:
+    _ = argv
+    data = sys.stdin.buffer.read()
+    if not data:
+        return 0
+    sys.stdout.buffer.write(data)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

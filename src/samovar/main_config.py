@@ -150,6 +150,8 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "fastp": "qc",
     "cutadapt": "qc",
     "trimmomatic": "qc",
+    "chopper": "qc",
+    "nanofilt": "qc",
     "random_forest": "reprofiler",
     "adaboost": "reprofiler",
     "snakemake": "workflow",

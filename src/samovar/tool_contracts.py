@@ -72,7 +72,7 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "in": "FASTQ R1 (and optional R2) plus dest paths and config "
         "(min_gc/max_gc, extra_argv). Python trim(r1, r2, dest_r1, dest_r2, config) "
         "or a native binary (fastp -i/-I/-o/-O, cutadapt -o/-p, "
-        "trimmomatic PE/SE).",
+        "trimmomatic PE/SE, chopper/nanofilt stdin→stdout).",
         "out": "Trimmed FASTQ at dest_r1/dest_r2 (same layout as input; empty files allowed).",
     },
 }

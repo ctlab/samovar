@@ -45,15 +45,23 @@ QC_FLAG_GROUPS = (
     "fastp",
     "cutadapt",
     "trimmomatic",
+    "chopper",
+    "nanofilt",
 )
 QC_NAME_ALIASES = {
     "illumina": "fastp",
     "bgi": "fastp",
     "mgi": "fastp",
+    "ont": "chopper",
+    "nanopore": "chopper",
+    "nanosim": "chopper",
+    "nanosim3": "chopper",
 }
 FASTP_NAMES = frozenset({"fastp", "illumina", "bgi", "mgi"})
 SHORT_READ_POSTFIXES = ("illumina", "bgi", "mgi")
 SHORT_READ_QC = frozenset({"fastp", "trimmomatic", "cutadapt"})
+ONT_POSTFIXES = ("ont", "nanosim3")
+ONT_QC = frozenset({"chopper", "nanofilt"})
 TRIMMOMATIC_STEPS = (
     "illuminaclip",
     "slidingwindow",
@@ -92,11 +100,13 @@ def canonical_qc_name(name: Optional[str]) -> str:
 
 
 def default_postfix_for_qc(name: Optional[str]) -> Dict[str, str]:
-    """Illumina/BGI short reads follow fastp / Trimmomatic / Cutadapt."""
+    """Fill hybrid postfixes for native short-read or ONT QC tools."""
     token = canonical_qc_name(name)
-    if token not in SHORT_READ_QC:
-        return {}
-    return {postfix: token for postfix in SHORT_READ_POSTFIXES}
+    if token in SHORT_READ_QC:
+        return {postfix: token for postfix in SHORT_READ_POSTFIXES}
+    if token in ONT_QC:
+        return {postfix: token for postfix in ONT_POSTFIXES}
+    return {}
 
 
 def parse_qc_postfix(raw: Any) -> Dict[str, str]:
@@ -144,6 +154,8 @@ def flags_apply_to_qc(target: str, *names: Optional[str]) -> bool:
             extra.extend(FASTP_NAMES)
         elif canon in SHORT_READ_QC:
             extra.append(canon)
+        elif canon in ONT_QC:
+            extra.extend(("chopper", "nanofilt", "ont", "nanopore"))
     return flags_target_matches(
         target,
         *[n for n in extra if n],
@@ -374,6 +386,10 @@ def qc_native_kind(path: Path, name: str = "") -> str:
         return "trimmomatic"
     if "cutadapt" in blob:
         return "cutadapt"
+    if "chopper" in blob:
+        return "chopper"
+    if "nanofilt" in blob:
+        return "nanofilt"
     if bare == "fastp" or stem == "fastp" or token == "fastp" or token in FASTP_NAMES:
         return "fastp"
     return ""
@@ -540,6 +556,67 @@ def run_cutadapt(
     return out
 
 
+def _ont_keep_all_argv(argv: Sequence[str]) -> List[str]:
+    extra = [str(t) for t in argv]
+    if not _flag_in_argv(argv, "-q", "--quality"):
+        extra = ["-q", "0", *extra]
+    if not _flag_in_argv(argv, "-l", "--minlength", "--length"):
+        extra = ["-l", "1", *extra]
+    return extra
+
+
+def _usable_fastq(path: Optional[Path]) -> bool:
+    return path is not None and path.is_file() and path.stat().st_size > 0
+
+
+def _stdio_filter(exe: Path, src: Path, dest: Path, argv: Sequence[str]) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with src.open("rb") as inf, dest.open("wb") as out:
+        subprocess.check_call([str(exe), *[str(t) for t in argv]], stdin=inf, stdout=out)
+
+
+def run_chopper(
+    exe: Path,
+    r1: Path,
+    r2: Optional[Path],
+    dest_r1: Path,
+    dest_r2: Optional[Path],
+    config: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Native Chopper (ONT): stdin FASTQ → stdout FASTQ (``-q``/``-l``/``--threads``)."""
+    cfg = dict(config or {})
+    argv = _ont_keep_all_argv(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
+    if not _flag_in_argv(argv, "-t", "--threads"):
+        threads = cfg.get("threads") or cfg.get("cores")
+        if threads:
+            argv = [*argv, "--threads", str(int(threads))]
+    _stdio_filter(exe, r1, dest_r1, argv)
+    out = [str(dest_r1)]
+    if _usable_fastq(r2) and dest_r2 is not None:
+        _stdio_filter(exe, r2, dest_r2, argv)
+        out.append(str(dest_r2))
+    return out
+
+
+def run_nanofilt(
+    exe: Path,
+    r1: Path,
+    r2: Optional[Path],
+    dest_r1: Path,
+    dest_r2: Optional[Path],
+    config: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Native NanoFilt (ONT): stdin FASTQ → stdout FASTQ (``-q``/``-l``)."""
+    cfg = dict(config or {})
+    argv = _ont_keep_all_argv(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
+    _stdio_filter(exe, r1, dest_r1, argv)
+    out = [str(dest_r1)]
+    if _usable_fastq(r2) and dest_r2 is not None:
+        _stdio_filter(exe, r2, dest_r2, argv)
+        out.append(str(dest_r2))
+    return out
+
+
 def apply_qc_executable(
     path: Path,
     r1: Path,
@@ -573,6 +650,10 @@ def apply_qc_executable(
         return run_trimmomatic(exe, r1, r2, dest_r1, dest_r2, cfg)
     if kind == "cutadapt":
         return run_cutadapt(exe, r1, r2, dest_r1, dest_r2, cfg)
+    if kind == "chopper":
+        return run_chopper(exe, r1, r2, dest_r1, dest_r2, cfg)
+    if kind == "nanofilt":
+        return run_nanofilt(exe, r1, r2, dest_r1, dest_r2, cfg)
     cmd = [str(exe), "-i", str(r1), "-o", str(dest_r1.parent)]
     if r2 is not None and r2.exists():
         cmd.extend(["-I", str(r2)])

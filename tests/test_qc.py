@@ -12,6 +12,7 @@ import yaml
 from samovar.config import PipelineConfig, setup_pipeline
 from samovar.paths import write_config
 from samovar.qc import (
+    ONT_QC,
     SHORT_READ_QC,
     canonical_qc_name,
     count_fastq_records,
@@ -200,8 +201,8 @@ def test_prepare_same_and_split_qc(tmp_path, monkeypatch):
     assert split.qc_postfix["illumina"] == "gc_filter"
 
 
-def test_short_read_qc_postfix(tmp_path, monkeypatch):
-    """fastp / Trimmomatic / Cutadapt fill Illumina/BGI postfix; illumina aliases fastp."""
+def test_native_qc_postfix(tmp_path, monkeypatch):
+    """fastp/Trimmomatic/Cutadapt fill Illumina/BGI; Chopper/NanoFilt fill ont."""
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
@@ -231,9 +232,34 @@ def test_short_read_qc_postfix(tmp_path, monkeypatch):
         assert pipe.qc_postfix["illumina"] == name
         assert pipe.qc_postfix["bgi"] == name
         assert pipe.qc_postfix["mgi"] == name
+    for name in ONT_QC:
+        import_tool(
+            name=name,
+            tool_type="QC",
+            exec_path=str(GC_FILTER),
+            also_repo_build=False,
+        )
+        assert default_postfix_for_qc(name)["ont"] == name
+        args = argparse.Namespace(
+            input_config=None,
+            input_dir=str(tmp_path),
+            output_dir=str(tmp_path / f"out_{name}"),
+            kraken2=[["kraken2 /tmp/k2"]],
+            kaiju=None,
+            qc=name,
+            qc_initial=None,
+            qc_generated=None,
+            qc_postfix=None,
+            tool_flags=None,
+        )
+        pipe = PipelineConfig.from_args(args)
+        assert pipe.qc_initial == name
+        assert pipe.qc_postfix["ont"] == name
+        assert pipe.qc_postfix["nanosim3"] == name
     assert canonical_qc_name("illumina") == "fastp"
-    assert canonical_qc_name("bgi") == "fastp"
+    assert canonical_qc_name("ont") == "chopper"
     assert require_known_qc("illumina") == "fastp"
+    assert require_known_qc("ont") == "chopper"
 
 
 def test_import_qc_pytest(tmp_path, monkeypatch):

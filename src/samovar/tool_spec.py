@@ -58,6 +58,8 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "fastp": "conda install -y bioconda::fastp",
     "cutadapt": "conda install -y bioconda::cutadapt",
     "trimmomatic": "conda install -y bioconda::trimmomatic",
+    "chopper": "conda install -y bioconda::chopper",
+    "nanofilt": "conda install -y bioconda::nanofilt",
 }
 
 DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
@@ -76,6 +78,7 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "fastp": {"--threads": "--thread", "--cores": "--thread"},
     "cutadapt": {"--threads": "--cores", "--cores": "--cores"},
     "trimmomatic": {"--threads": "-threads", "--cores": "-threads"},
+    "chopper": {"--threads": "--threads", "--cores": "--threads"},
 }
 
 _VERSION_TOKEN = re.compile(r"(\d+\.\d+(?:\.\d+)?)")

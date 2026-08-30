@@ -616,7 +616,8 @@ def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=2) + "\n"
     dest.write_text(text, encoding="utf-8")
-    if also_repo_build:
+    override = os.environ.get("SAMOVAR_CONFIG", "").strip()
+    if also_repo_build and not override:
         write_install_config_pointer(dest, root=repo_root())
         try:
             build = repo_root() / "build"
