@@ -209,7 +209,17 @@ def main():
             '--flags export "--min-efficiency 0.05 --C 1"'
         ),
     )
-    parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
+    parser.add_argument(
+        '--add-annotator',
+        dest='add_annotator',
+        action='store_true',
+        help=(
+            'Add classifier(s) to an existing run: keep Hydra prepare parameters, '
+            'write .log/samovar_vN.sh, and re-run from annotate_initial. '
+            'Pass the new tool as usual, e.g. --kraken2-test "kraken2 toy".'
+        ),
+    )
+    parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True, add_annotator=False)
     gzip_group = parser.add_mutually_exclusive_group()
     gzip_group.add_argument(
         '--gzip-genomes',
@@ -408,6 +418,7 @@ def main():
         "export", "abundance-corrector", "corrector", "no-export",
         "qc", "qc-initial", "qc_initial", "qc-generated", "qc_generated",
         "qc-postfix", "qc_postfix",
+        "add-annotator", "add_annotator",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
         "to", "to-mpa", "to-cami", "to-kraken2", "to-kreport", "to-abundance",

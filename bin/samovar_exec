@@ -124,9 +124,25 @@ if [ -d "$OUTPUT_DIR/.generate" ] && [ -f "$OUTPUT_DIR/.generate/generate.sh" ];
 fi
 
 # Check for .log directory and run its pipeline if it exists
-if [ -d "$OUTPUT_DIR/.log" ] && [ -f "$OUTPUT_DIR/.log/samovar.sh" ]; then
-    echo "Running main SamovaR pipeline..."
-    bash "$OUTPUT_DIR/.log/samovar.sh" --directory "$OUTPUT_DIR"
+if [ -d "$OUTPUT_DIR/.log" ]; then
+    PIPELINE=$(PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON" -m samovar.exec_control pipeline "$OUTPUT_DIR" 2>/dev/null || true)
+    if [ -z "$PIPELINE" ] || [ ! -f "$PIPELINE" ]; then
+        PIPELINE="$OUTPUT_DIR/.log/samovar.sh"
+    fi
+    if [ -f "$PIPELINE" ]; then
+        echo "Running main SamovaR pipeline ($PIPELINE)..."
+        bash "$PIPELINE" --directory "$OUTPUT_DIR"
+    else
+        echo "Error: $OUTPUT_DIR/.log/samovar.sh is missing."
+        echo "Generate only writes reads under $OUTPUT_DIR/initial/."
+        echo "Continue with prepare, then exec, for example:"
+        echo "  samovar prepare --output_dir $OUTPUT_DIR --test-genomes \\"
+        echo "    --kraken2-test 'kraken2 /path/to/kraken2_db' \\"
+        echo "    --kaiju-test 'kaiju /path/to/kaiju_db'"
+        echo "  samovar exec --output_dir $OUTPUT_DIR"
+        exit 1
+    fi
 else
     echo "Error: $OUTPUT_DIR/.log/samovar.sh is missing."
     echo "Generate only writes reads under $OUTPUT_DIR/initial/."

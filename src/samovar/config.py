@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import sys
 import yaml
@@ -1164,14 +1165,16 @@ class PipelineConfig:
             f"    {tos}"
         )
 
-    def generate_pipeline(self, base_dir: str) -> str:
+    def generate_pipeline(self, base_dir: str, script_name: str = "samovar.sh") -> str:
         """Generate the pipeline script and return its path"""
         base_dir = absolute_path(base_dir)
         base_path = Path(base_dir)
         log_dir = base_path / '.log'
         log_dir.mkdir(parents=True, exist_ok=True)
-        
-        pipeline_path = log_dir / 'samovar.sh'
+        name = Path(script_name or "samovar.sh").name
+        if name != "samovar.sh" and not re.match(r"^samovar_v\d+\.sh$", name):
+            raise ValueError(f"pipeline script must be samovar.sh or samovar_vN.sh, not {name}")
+        pipeline_path = log_dir / name
         start_s, end_s = resolve_window(self.startpoint, self.endpoint)
         (log_dir / "window.env").write_text(
             f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\n",
@@ -1535,6 +1538,22 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     """Main function to set up the pipeline configuration"""
     if args is None:
         args = parse_args()
+    script_name = "samovar.sh"
+    added: List[str] = []
+    if getattr(args, "add_annotator", False):
+        from samovar.add_annotator import (
+            invalidate_add_annotator,
+            merge_add_annotator_namespace,
+            next_pipeline_version,
+            write_active_pipeline,
+        )
+
+        try:
+            args, added = merge_add_annotator_namespace(args)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        script_name = f"samovar_v{next_pipeline_version(args.output_dir)}.sh"
     
     try:
         config = PipelineConfig.from_args(args)
@@ -1548,15 +1567,31 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     except OSError as exc:
         print(f"Warning: could not update genome cache config: {exc}", file=sys.stderr)
     configs = config.generate_configs(config.output_dir)
-    pipeline_path = config.generate_pipeline(config.output_dir)
-    try:
-        from samovar.repro import record_stage
+    pipeline_path = config.generate_pipeline(config.output_dir, script_name=script_name)
+    if added:
+        from samovar.add_annotator import invalidate_add_annotator, write_active_pipeline
 
+        write_active_pipeline(config.output_dir, script_name)
+        invalidate_add_annotator(config.output_dir)
+        print(
+            f"add-annotator: {', '.join(added)}; pipeline {pipeline_path}; "
+            "cleared annotate_initial…viz_reprofiled (kept setup_reads, qc_initial, seed_genomes)"
+        )
+    elif script_name == "samovar.sh":
+        from samovar.add_annotator import write_active_pipeline
+
+        write_active_pipeline(config.output_dir, "samovar.sh")
+    try:
+        from samovar.repro import record_stage, _argv_from_args, _ns_to_dict
+
+        record_argv = sys.argv[1:]
+        if added:
+            record_argv = _argv_from_args("prepare", _ns_to_dict(args))
         record_stage(
             "prepare",
             config.output_dir,
             args=args,
-            argv=sys.argv[1:],
+            argv=record_argv,
         )
     except Exception as exc:
         print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)

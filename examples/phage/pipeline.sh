@@ -5,7 +5,7 @@
 #   database1  download generate genomes, build kaiju/kraken2 as phage_test,
 #               samovar generate --reindex 1, prepare, exec
 #   database2   samovar generate --reindex 0 with phage_test DBs
-#   reindex     samovar reindex on database2
+#   add-annotator  reuse database1 reads; kaiju phage_test then --add-annotator kraken2 toy
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,6 +88,86 @@ EOF
     --exec-path "$root/.database/kaiju_db" --lazy-download "$kaiju_lazy"
   samovar tools import -n phage_test --type database --tool kraken2 \
     --exec-path "$root/.database/kraken2_db" --lazy-download "$kraken_lazy"
+}
+
+phase_add_annotator() {
+  # Same community as database1, but start with kaiju phage_test only, then
+  # add kraken2 toy via prepare --add-annotator (does not touch database1).
+  local dest="${SAMOVAR_OUTDIR_ADD:-${SCRIPT_DIR}/run/add_annotator}"
+  local src_reads="${out1}/initial"
+  mkdir -p "$dest"
+  if [[ -s "${src_reads}/1_full_R1.fastq" ]]; then
+    echo "==> reuse database1 reads in ${dest}/reads"
+    mkdir -p "${dest}/reads"
+    cp -a "${src_reads}/"* "${dest}/reads/"
+  else
+    echo "==> generate reads for add-annotator into ${dest}"
+    samovar generate \
+      --accessions "${GEN1[@]}" \
+      --reindex 1 \
+      --raw-genomes 0 \
+      --host_genome "$host" \
+      --output_dir "$dest" \
+      --n_samples "$n_samples" \
+      --total_reads "$total_reads" \
+      --host_fraction "$host_fraction" \
+      --cores 1
+    mkdir -p "${dest}/reads"
+    cp -a "${dest}/initial/"* "${dest}/reads/" 2>/dev/null || true
+  fi
+
+  rm -rf "${dest}/.log/checkpoints" "${dest}/.log/samovar_v"*.sh
+  echo "==> prepare kaiju phage_test only"
+  samovar prepare \
+    --input_dir "${dest}/reads" \
+    --output_dir "$dest" \
+    --kaiju-test "kaiju phage_test" \
+    --N_reads "${total_reads}" \
+    --cores 1 \
+    --no-multiqc
+
+  samovar_run_exec "$dest"
+
+  echo "==> add-annotator kraken2 toy"
+  samovar prepare \
+    --add-annotator \
+    --output_dir "$dest" \
+    --kraken2-test "kraken2 toy"
+
+  samovar_run_exec "$dest"
+
+  python - <<PY
+from pathlib import Path
+import pandas as pd
+root = Path("$dest")
+init = list((root / "initial_annotations").glob("*.annotation.csv"))
+assert init, "no initial annotation tables"
+df = pd.read_csv(init[0])
+cols = [c for c in df.columns if str(c).lower().startswith("taxid_")]
+print("initial taxid columns", cols)
+assert any("kaiju" in c.lower() for c in cols), cols
+assert any("kraken2" in c.lower() for c in cols), cols
+assert (root / ".log" / "samovar.sh").is_file()
+assert (root / ".log" / "samovar_v1.sh").is_file()
+  regen = list((root / "regenerated_annotations").glob("*.annotation.csv"))
+  if regen:
+      rdf = pd.read_csv(regen[0])
+      rcols = [c for c in rdf.columns if str(c).lower().startswith("taxid_")]
+      print("regenerated taxid columns", rcols)
+      assert any("kraken2" in c.lower() for c in rcols), rcols
+  for stage in ("regenerated_annotations", "reprofiled_annotations"):
+      comb = root / stage / "combined_annotation_table.csv"
+      if comb.is_file():
+          ccols = [
+              c
+              for c in pd.read_csv(comb, nrows=0).columns
+              if str(c).lower().startswith("taxid_")
+          ]
+          print(stage, "combined", ccols)
+          assert any("kaiju" in c.lower() for c in ccols), ccols
+          assert any("kraken2" in c.lower() for c in ccols), ccols
+  print("add-annotator ok", root)
+PY
 }
 
 phase_database1() {
@@ -235,13 +315,14 @@ case "$PHASE" in
   database1) phase_database1 ;;
   database2) phase_database2 ;;
   reindex) phase_reindex ;;
+  add-annotator) phase_add_annotator ;;
   all)
     phase_database1
     phase_database2
     phase_reindex
     ;;
   *)
-    echo "Unknown SAMOVAR_PHASE=$PHASE (database1|database2|reindex|all)"
+    echo "Unknown SAMOVAR_PHASE=$PHASE (database1|database2|reindex|add-annotator|all)"
     exit 1
     ;;
 esac

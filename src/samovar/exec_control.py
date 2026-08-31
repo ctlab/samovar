@@ -494,6 +494,8 @@ def _parser() -> argparse.ArgumentParser:
     cleanup.add_argument("output_dir")
     listing = sub.add_parser("list", help="Print completed checkpoint names")
     listing.add_argument("output_dir")
+    pipe = sub.add_parser("pipeline", help="Print the exec script path (samovar.sh or samovar_vN.sh)")
+    pipe.add_argument("output_dir")
     active = sub.add_parser(
         "active", help="Exit 0 if the named step is inside SAMOVAR_START/END"
     )
@@ -547,6 +549,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "list":
         for name in listed_done(args.output_dir):
             print(name)
+        return 0
+    if args.command == "pipeline":
+        from samovar.add_annotator import active_pipeline_script
+
+        print(active_pipeline_script(args.output_dir))
         return 0
     if args.command == "active":
         try:

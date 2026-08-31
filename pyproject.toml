@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "samovar"
-version = "0.10.70"
-description = "Automated re-profiling and benchmarking with SamovaR"
+version = "0.10.71"
+description = "Automated re-profiling and benchmarking with SAMOVAR"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = {file = "LICENSE.md"}

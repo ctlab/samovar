@@ -951,10 +951,14 @@ def _sample_tables_from_abundance_dir(
     if not n_cols:
         return {}
 
-    sample_names = sample_names_from_abundance_columns(
-        n_cols,
-        list(sample_names_hint) if sample_names_hint else None,
-    )
+    # Abundance CSVs are named after annotators (kaiju.csv). If those stems
+    # are passed as sample_names_hint they collide with N_* column count and
+    # would label FASTQs kaiju_kaiju instead of 1_full_kaiju.
+    hint = list(sample_names_hint) if sample_names_hint else None
+    stems = set(by_annotator)
+    if hint and set(hint) <= stems:
+        hint = None
+    sample_names = sample_names_from_abundance_columns(n_cols, hint)
     sample_tables: Dict[str, pd.DataFrame] = {}
     for idx, n_col in enumerate(n_cols):
         sample_name = sample_names[idx]

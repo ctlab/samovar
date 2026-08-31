@@ -10,7 +10,7 @@ and ``{sample}_{annotator}_R*`` on prepare; extra ids (``sequence_type``,
 
 from __future__ import annotations
 
-import importlib.util
+import logging
 import shlex
 import shutil
 import subprocess
@@ -86,6 +86,9 @@ FILENAME_EXTRA_IDS = (
     "sequence_type",
     "read_type",
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class MissingReadsGeneratorError(ValueError):
@@ -676,6 +679,17 @@ def simulate_from_sample_tables(
             if not genome_ids:
                 _emit_empty_for_annotators(
                     output_dir, sample_names, [annotator_name], gzip_reads=gzip_reads
+                )
+                continue
+
+            from samovar.add_annotator import annotator_fastqs_complete
+
+            if annotator_fastqs_complete(
+                output_dir, sample_names, annotator_name, gzip_reads=gzip_reads
+            ):
+                logger.info(
+                    "Skipping ISS for %s: regenerated FASTQs already present",
+                    annotator_name,
                 )
                 continue
 
