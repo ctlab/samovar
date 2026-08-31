@@ -1,7 +1,7 @@
 # exec
 # snakemake -s workflow/annotators/Snakefile --configfile tests/configs/annotation.yaml --cores 1
 #
-# Point db_path at databases you built or downloaded (see examples/).
+# Point db_path at databases you built or downloaded.
 # Override by copying this file; nothing here should be a cluster-specific path.
 
 # Input directories

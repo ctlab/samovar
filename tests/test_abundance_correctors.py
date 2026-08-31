@@ -170,41 +170,6 @@ def test_custom_export_import(tmp_path, monkeypatch):
     assert Path(written).exists() or dest.exists()
 
 
-def test_compare_script_writes_figure(tmp_path):
-    from samovar.tool_contracts import load_python_module
-
-    compare_mod = load_python_module(
-        Path(__file__).resolve().parents[1] / "examples" / "logistic-correction" / "compare.py",
-        "logistic_compare",
-    )
-    run = tmp_path / "run"
-    init = run / "initial_annotations"
-    regen = run / "regenerated_annotations"
-    init.mkdir(parents=True)
-    regen.mkdir()
-    pd.DataFrame(
-        {
-            "seq": [f"o{i}" for i in range(20)],
-            "taxID_dummy_0": ["562"] * 10 + ["9606"] * 10,
-            "true": ["562"] * 10 + ["9606"] * 10,
-            "sample": ["1"] * 20,
-        }
-    ).to_csv(init / "1.annotation.csv", index=False)
-    pd.DataFrame(
-        {
-            "seq": [f"r{i}" for i in range(10)],
-            "taxID_dummy_0": ["562"] * 4 + ["9606"] * 6,
-            "true": ["562"] * 5 + ["9606"] * 5,
-            "sample": ["1"] * 10,
-        }
-    ).to_csv(regen / "1.annotation.csv", index=False)
-    dest = tmp_path / "figures"
-    summary = compare_mod.compare_run(run, dest)
-    assert not summary.empty
-    assert (dest / "comparison.csv").is_file()
-    assert (dest / "comparison_L1.png").is_file()
-
-
 def test_import_pytest_export_contract(tmp_path, monkeypatch):
     from samovar.paths import update_config
 

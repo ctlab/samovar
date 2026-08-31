@@ -125,7 +125,7 @@ def _norm_true(df: pd.DataFrame) -> pd.Series:
 
 
 def test_toy_regenerated_ground_truth_table(tmp_path):
-    """examples/toy analog: both regenerated-metagenomes modes assign the same true taxids."""
+    """Both regenerated-metagenomes modes assign the same true taxids."""
     genomes = bundled_genomes_dir()
     meta = genomes / "meta"
     host = genomes / "host" / "9606.fna"
