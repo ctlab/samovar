@@ -10,6 +10,7 @@ and ``{sample}_{annotator}_R*`` on prepare; extra ids (``sequence_type``,
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import shlex
 import shutil
