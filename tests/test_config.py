@@ -449,7 +449,7 @@ def test_prepare_to_flags_embed_convert(tmp_path):
     )
     result = setup_pipeline(args)
     text = Path(result["pipeline"]).read_text()
-    assert "samovar.annotation_convert" in text
+    assert "samovar.abundance_correctors" in text
     assert "--to cami" in text
     assert "--to kraken2_mpa" in text
     assert "--to kraken2" in text
@@ -460,9 +460,10 @@ def test_prepare_to_flags_embed_convert(tmp_path):
     assert "--taxonomy gtdb" in text
     cfg = PipelineConfig.from_args(args)
     assert cfg.export_formats == ["kraken2", "kraken2_mpa", "cami"]
+    assert cfg.export_corrector == "logistic"
 
 
-def test_prepare_without_to_flags_skips_convert(tmp_path):
+def test_prepare_without_to_flags_defaults_logistic_export(tmp_path):
     reads = tmp_path / "reads"
     reads.mkdir()
     args = argparse.Namespace(
@@ -473,7 +474,29 @@ def test_prepare_without_to_flags_skips_convert(tmp_path):
         kaiju=None,
     )
     text = Path(setup_pipeline(args)["pipeline"]).read_text()
-    assert "samovar.annotation_convert" not in text
+    assert "samovar.abundance_correctors" in text
+    assert "--to abundance" in text
+    assert "--export logistic" in text
+    cfg = PipelineConfig.from_args(args)
+    assert cfg.export_corrector == "logistic"
+    assert cfg.export_formats == ["abundance"]
+
+
+def test_prepare_no_export_skips_corrector(tmp_path):
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    args = argparse.Namespace(
+        input_config=None,
+        input_dir=str(reads),
+        output_dir=str(tmp_path / "out"),
+        kraken2=[["kraken2 /tmp/k2"]],
+        kaiju=None,
+        skip_export=True,
+    )
+    text = Path(setup_pipeline(args)["pipeline"]).read_text()
+    assert "samovar.abundance_correctors" not in text
+    cfg = PipelineConfig.from_args(args)
+    assert cfg.export_corrector == "off"
 
 
 def test_prepare_yaml_export_formats(tmp_path):

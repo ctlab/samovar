@@ -50,6 +50,12 @@ from samovar.qc import (
     parse_qc_postfix,
     require_known_qc,
 )
+from samovar.abundance_correctors import (
+    EXPORT_FLAG_GROUPS,
+    is_export_flag_target,
+    is_skipped_export,
+    require_known_export,
+)
 from samovar.main_config import (
     flags_target_matches,
     imported_flags_for_names,
@@ -310,6 +316,9 @@ class PipelineConfig:
     export_formats: Optional[List[str]] = None
     export_taxdump: Optional[str] = None
     export_taxonomy: Optional[str] = None
+    export_corrector: str = "logistic"
+    export_flags: Optional[str] = None
+    export_tool_flags: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
         if self.annotators is None:
@@ -326,6 +335,8 @@ class PipelineConfig:
             self.qc_postfix = {}
         if self.qc_tool_flags is None:
             self.qc_tool_flags = {}
+        if self.export_tool_flags is None:
+            self.export_tool_flags = {}
         if not self.regeneration_modes:
             self.regeneration_modes = [self.regeneration_mode]
         if self.export_formats is None:
@@ -564,6 +575,23 @@ class PipelineConfig:
                     from samovar.taxonomy import normalize_taxonomy
 
                     config.export_taxonomy = normalize_taxonomy(yaml_taxonomy)
+                yaml_export_c = (
+                    input_config.get("export")
+                    or input_config.get("export_corrector")
+                    or input_config.get("abundance_corrector")
+                )
+                if isinstance(yaml_export_c, (list, tuple)):
+                    from samovar.annotation_convert import parse_export_formats as _pe
+
+                    config.export_formats = _pe(yaml_export_c)
+                elif yaml_export_c not in (None, "", False):
+                    config.export_corrector = require_known_export(yaml_export_c)
+                yaml_export_flags = (
+                    input_config.get("export_flags")
+                    or input_config.get("export-flags")
+                )
+                if yaml_export_flags:
+                    config.export_flags = str(yaml_export_flags)
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
@@ -888,6 +916,28 @@ class PipelineConfig:
         merged_pf.update(config.qc_postfix or {})
         config.qc_postfix = merged_pf
 
+        if getattr(args, "skip_export", False):
+            config.export_corrector = "off"
+        cli_export_c = getattr(args, "export_corrector", None)
+        if cli_export_c not in (None, "", False):
+            config.export_corrector = require_known_export(cli_export_c)
+        eflag_parts = [config.export_flags]
+        named_eflags = dict(config.export_tool_flags or {})
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if not is_export_flag_target(str(target)):
+                continue
+            if flags_target_matches(str(target), groups=EXPORT_FLAG_GROUPS):
+                eflag_parts.append(flags)
+            else:
+                named_eflags[str(target)] = merge_flag_strings(
+                    named_eflags.get(str(target)), flags
+                )
+        config.export_flags = merge_flag_strings(*eflag_parts) or None
+        config.export_tool_flags = named_eflags or {}
+
         cli_start = getattr(args, "startpoint", None)
         if cli_start:
             config.startpoint = str(cli_start)
@@ -914,6 +964,10 @@ class PipelineConfig:
             from samovar.taxonomy import normalize_taxonomy
 
             config.export_taxonomy = normalize_taxonomy(cli_taxonomy)
+        if is_skipped_export(config.export_corrector):
+            pass
+        elif not config.export_formats:
+            config.export_formats = ["abundance"]
         _apply_translated_cli_flags(config, args)
         return config
 
@@ -1043,6 +1097,20 @@ class PipelineConfig:
             yaml.dump(reprofiling_config, f)
         configs['reprofiling'] = str(reprofiling_path)
 
+        export_config = {
+            "output_dir": str(base_path),
+            "export": self.export_corrector or "logistic",
+            "export_flags": self.export_flags or "",
+            "export_tool_flags": self.export_tool_flags or {},
+            "export_formats": list(self.export_formats or []),
+            "export_taxdump": self.export_taxdump or "",
+            "export_taxonomy": self.export_taxonomy or "",
+        }
+        export_path = configs_dir / "config_export.yaml"
+        with open(export_path, "w") as f:
+            yaml.dump(export_config, f)
+        configs["export"] = str(export_path)
+
         # Generate reannotate config
         reannotate_config = {
             'r1_dir': regen_trimmed,
@@ -1069,7 +1137,9 @@ class PipelineConfig:
         return configs
 
     def _annotation_export_bash(self, src_rel: str, stage: str) -> str:
-        """Convert combined annotation tables after a combine/reprofile step."""
+        """Corrected Annotation → abundance-like tables after combine/reprofile."""
+        if is_skipped_export(self.export_corrector):
+            return ""
         formats = list(self.export_formats or [])
         if not formats:
             return ""
@@ -1081,9 +1151,16 @@ class PipelineConfig:
             tax = " --taxdump " + shlex.quote(str(self.export_taxdump))
         if self.export_taxonomy:
             tax += " --taxonomy " + shlex.quote(str(self.export_taxonomy))
+        method = shlex.quote(str(self.export_corrector or "logistic"))
+        stage_q = shlex.quote(str(stage))
         return (
-            f"\n$PYTHON_PATH -m samovar.annotation_convert \\\n"
-            f'    -i "$out_dir/{src_rel}" -o "$out_dir/exports/{stage}"{tax} \\\n'
+            f"\n$PYTHON_PATH -m samovar.abundance_correctors \\\n"
+            f'    -i "$out_dir/{src_rel}" -o "$out_dir/exports/{stage}" \\\n'
+            f'    --reference "$out_dir/regenerated_annotations" \\\n'
+            f'    --model "$out_dir/reprofiled_annotations/trained_model.joblib" \\\n'
+            f'    --config "$out_dir/.log/configs/config_export.yaml" \\\n'
+            f'    --output_dir "$out_dir" --stage {stage_q} \\\n'
+            f"    --export {method}{tax} \\\n"
             f"    {tos}"
         )
 
@@ -1144,6 +1221,8 @@ $PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
     -s 2"""
         combine_regen_body = combine_regen_body + self._annotation_export_bash(
             "regenerated_annotations", "regenerated"
+        ) + self._annotation_export_bash(
+            "initial_annotations", "initial"
         )
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
@@ -1195,7 +1274,7 @@ cleanup_tmp_if_requested() {{
 }}
 
 mkdir -p "$out_dir"
-mkdir -p "$out_dir/initial" "$out_dir/initial_trimmed" "$out_dir/initial_reports" "$out_dir/initial_abundance" "$out_dir/regenerated" "$out_dir/regenerated_trimmed" "$out_dir/regenerated_reports"
+mkdir -p "$out_dir/initial" "$out_dir/initial_trimmed" "$out_dir/initial_reports" "$out_dir/initial_abundance" "$out_dir/regenerated" "$out_dir/regenerated_trimmed" "$out_dir/regenerated_reports" "$out_dir/exports"
 "$PYTHON_PATH" -m samovar.exec_control require "$out_dir"
 # NCBI genome cache reuse (truncated data/test_genomes is not a library).
 export SAMOVAR_REUSE_GENOMES="${{SAMOVAR_REUSE_GENOMES:-{reuse_flag}}}"

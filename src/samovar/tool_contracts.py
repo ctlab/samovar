@@ -68,6 +68,13 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "(from/to, extra_argv). dump(annotation, dest, config) and/or load(path, config).",
         "out": "Files at dest (dump) or an Annotation (load). convert(src, dest, config) is also accepted.",
     },
+    "export": {
+        "in": "Annotation (per-read taxID_* / seq) plus dest and config. "
+        "config may include reference (Annotation with taxID_true / true), "
+        "to (abundance|kraken2|cami|…), extra_argv. "
+        "export(annotation, dest, config).",
+        "out": "Abundance-like tables at dest (taxid + N_<sample>, or kraken2/cami reports).",
+    },
     "qc": {
         "in": "FASTQ R1 (and optional R2) plus dest paths and config "
         "(min_gc/max_gc, extra_argv). Python trim(r1, r2, dest_r1, dest_r2, config) "
@@ -86,6 +93,7 @@ GROUP_TO_TESTNODE = {
     "metagenome_generator": "tests/test_tool_contracts.py::test_metagenome_generator_contract",
     "reprofiler": "tests/test_tool_contracts.py::test_reprofiler_contract",
     "annotation_converter": "tests/test_tool_contracts.py::test_annotation_converter_contract",
+    "export": "tests/test_tool_contracts.py::test_export_contract",
     "qc": "tests/test_tool_contracts.py::test_qc_contract",
 }
 
@@ -98,6 +106,7 @@ DEFAULT_TOOLS = {
     "metagenome_generator": "tests/tools/echo_reads.py",
     "reprofiler": "tests/tools/linear_wrapper.py",
     "annotation_converter": "tests/tools/echo_annotation_converter.py",
+    "export": "tests/tools/identity_export.py",
     "qc": "tests/tools/gc_filter.py",
 }
 

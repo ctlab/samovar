@@ -66,7 +66,9 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
             "Tool outputs are joined into one long table per sample in "
             "``initial_annotations/``. Columns are ``taxID_<tool>``; when ISS or CAMISIM "
             "headers contain ``taxid:<digits>`` (or a known assembly accession), a "
-            "``true`` column is filled so F1 and scores can be computed."
+            "``true`` column is filled so F1 and scores can be computed. "
+            "``exports/initial/`` is written here (identity if regenerated truth "
+            "is not available yet) and overwritten after re-annotation."
         ),
     },
     "viz_initial": {
@@ -148,7 +150,9 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
         "description": (
             "Regenerated tool calls are merged like the initial tables "
             "(``regenerated_annotations/``) so each read has a vote from every annotator "
-            "plus a true taxID from the simulator."
+            "plus a true taxID from the simulator. After this step the default "
+            "``--export logistic`` corrector writes abundance-like tables under "
+            "``exports/`` (raw counts divided by per-taxon recall fitted here)."
         ),
     },
     "viz_regenerated": {
@@ -165,7 +169,9 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
         "description": (
             "A supervised model (default ensemble, or an imported ``--type ml`` tool) "
             "is trained on regenerated labels and applied to the original samples. "
-            "The corrected column is ``taxid_SAMOVAR`` in ``reprofiled_annotations/``."
+            "The corrected column is ``taxid_SAMOVAR`` in ``reprofiled_annotations/``. "
+            "The same logistic (or imported) export then corrects SAMOVAR and "
+            "single-annotator abundances into ``exports/reprofiled/``."
         ),
     },
     "viz_reprofiled": {
@@ -182,7 +188,7 @@ STAGE_DIRS = {
     "setup_reads": ("initial",),
     "qc_initial": ("initial_trimmed",),
     "annotate_initial": ("initial_reports",),
-    "combine_initial": ("initial_annotations",),
+    "combine_initial": ("initial_annotations", "exports"),
     "viz_initial": ("initial_annotations_plots",),
     "abundance_tables": ("initial_abundance",),
     "regenerate_tables": ("regenerated/.regenerated_abundance",),
@@ -192,9 +198,9 @@ STAGE_DIRS = {
     "sort_reads": ("regenerated",),
     "qc_generated": ("regenerated_trimmed",),
     "annotate_regenerated": ("regenerated_reports",),
-    "combine_regenerated": ("regenerated_annotations",),
+    "combine_regenerated": ("regenerated_annotations", "exports"),
     "viz_regenerated": ("regenerated_annotations_plots",),
-    "reprofile": ("reprofiled_annotations",),
+    "reprofile": ("reprofiled_annotations", "exports"),
     "viz_reprofiled": ("reprofiled_annotations_plots",),
 }
 

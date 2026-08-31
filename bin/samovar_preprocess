@@ -173,6 +173,24 @@ def main():
         ),
     )
     parser.add_argument(
+        '--export',
+        '--abundance-corrector',
+        '--corrector',
+        dest='export_corrector',
+        default=None,
+        help=(
+            'Annotation→abundance export: logistic (default; per-taxon recall '
+            'correction), none/identity (raw counts), off (skip), or a name '
+            'imported with `samovar tools import --type export`'
+        ),
+    )
+    parser.add_argument(
+        '--no-export',
+        dest='skip_export',
+        action='store_true',
+        help='Skip Annotation→abundance export (same as --export off)',
+    )
+    parser.add_argument(
         '--flags',
         nargs=2,
         action='append',
@@ -187,7 +205,8 @@ def main():
             '--flags metagenome_generator "--model hiseq" or '
             '--flags scoring "--min-files 1" or '
             '--flags ml "--C 1" or '
-            '--flags qc "--min-gc 0.3 --max-gc 0.7"'
+            '--flags qc "--min-gc 0.3 --max-gc 0.7" or '
+            '--flags export "--min-efficiency 0.05 --C 1"'
         ),
     )
     parser.set_defaults(gzip_genomes=None, gzip_reads=None, reuse_genomes=True)
@@ -386,6 +405,7 @@ def main():
         "metagenome_generator", "metagenome-generator",
         "startpoint", "start-point", "endpoint", "end-point",
         "scoring", "reprofiler", "ml",
+        "export", "abundance-corrector", "corrector", "no-export",
         "qc", "qc-initial", "qc_initial", "qc-generated", "qc_generated",
         "qc-postfix", "qc_postfix",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",

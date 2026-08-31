@@ -276,6 +276,62 @@ def test_annotation_converter_contract(request, tmp_path):
         assert roundtrip is not None
 
 
+def test_export_contract(request, tmp_path):
+    _skip_if_other_type(request, "export")
+    path = _tool_path(request, "export")
+    module = load_python_module(path, "contract_export")
+    fn = getattr(module, "export", None)
+    assert callable(fn), f"{path} must define export(annotation, dest, config)"
+    from samovar.parse_annotators import Annotation
+
+    observed = Annotation.from_long_table(
+        pd.DataFrame(
+            {
+                "seq": ["a", "b", "c", "d"],
+                "taxID_dummy_0": ["562", "562", "9606", "9606"],
+                "sample": ["1", "1", "1", "1"],
+            }
+        )
+    )
+    reference = Annotation.from_long_table(
+        pd.DataFrame(
+            {
+                "seq": [f"r{i}" for i in range(10)],
+                "taxID_dummy_0": ["562"] * 8 + ["9606"] * 2,
+                "true": ["562"] * 8 + ["9606"] * 2,
+                "sample": ["1"] * 10,
+            }
+        )
+    )
+    dest = tmp_path / "exported"
+    written = fn(
+        observed,
+        dest,
+        {"to": "abundance", "reference": reference, "output_dir": str(tmp_path)},
+    )
+    written = Path(written) if written else dest
+    assert Path(written).exists() or dest.exists()
+    from samovar.abundance import load_abundance_dir, load_table_input
+
+    if dest.is_dir():
+        tables = load_abundance_dir(dest)
+        if not tables:
+            loaded = load_table_input(dest)
+            tables = loaded.abundance_tables or {}
+            if not tables:
+                from samovar.abundance import input_to_abundance_tables
+
+                tables = input_to_abundance_tables(loaded)
+    else:
+        from samovar.abundance import input_to_abundance_tables
+
+        tables = input_to_abundance_tables(load_table_input(written))
+    assert tables
+    first = next(iter(tables.values()))
+    assert "taxid" in first.columns
+    assert n_sample_columns(normalize_abundance_table(first))
+
+
 def test_qc_contract(request, tmp_path, tiny_fastq):
     _skip_if_other_type(request, "qc")
     path = _tool_path(request, "qc")
