@@ -49,6 +49,7 @@ show_usage() {
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "              Optional --startpoint / --endpoint slice the run (same names as prepare)"
     echo "  checkup     Verify outdir has inputs for --start-point (does not run the pipeline)"
+    echo "  branch      Copy a run up to --start-point; prepare in the copy continues from there"
     echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
     echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
     echo "  tools       import a binary; --sort reads; --status for programs"
@@ -73,6 +74,7 @@ show_usage() {
     echo "  samovar exec --output_dir [...] --redo"
     echo "  samovar exec --outdir [...] --cleanup-tmp"
     echo "  samovar prepare --add-annotator --kraken2-test 'kraken2 toy' --directory [...]"
+    echo "  samovar branch --start-point regenerate_tables /path/run /path/run_branch"
     echo "  samovar multiqc --output_dir [...] -- --export"
     echo "  samovar tools import -n kaiju --exec kaiju --exec-path /usr/bin/kaiju --type annotator --lazy-install 'conda install bioconda::kaiju'"
     echo "  samovar tools import -n standard_8GB --type database --tool kraken2 --exec-path /path/to/db --lazy-download @fetch.sh"
@@ -159,6 +161,11 @@ case "${1:-}" in
         shift
         PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
             "$PYTHON" -m samovar.exec_control checkup "$@"
+        ;;
+    "branch")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.branch "$@"
         ;;
     "multiqc")
         shift

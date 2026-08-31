@@ -419,6 +419,7 @@ def main():
         "qc", "qc-initial", "qc_initial", "qc-generated", "qc_generated",
         "qc-postfix", "qc_postfix",
         "add-annotator", "add_annotator",
+        "branch",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
         "to", "to-mpa", "to-cami", "to-kraken2", "to-kreport", "to-abundance",

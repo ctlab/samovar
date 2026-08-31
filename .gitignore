@@ -54,6 +54,9 @@ examples/**/.snakemake/
 examples/**/.cache/
 examples/**/multiqc/multiqc_data/
 
+# Local branch copies of toy-like runs
+/branch/
+
 # Technical / non-canonical examples (not part of the published set)
 examples/all_annotators/
 examples/phage_test/

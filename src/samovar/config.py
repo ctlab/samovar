@@ -1540,6 +1540,7 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         args = parse_args()
     script_name = "samovar.sh"
     added: List[str] = []
+    branched = False
     if getattr(args, "add_annotator", False):
         from samovar.add_annotator import (
             invalidate_add_annotator,
@@ -1554,7 +1555,15 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
         script_name = f"samovar_v{next_pipeline_version(args.output_dir)}.sh"
-    
+    else:
+        from samovar.branch import maybe_merge_branch_prepare
+
+        try:
+            args, branched = maybe_merge_branch_prepare(args)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
     try:
         config = PipelineConfig.from_args(args)
     except ValueError as exc:
@@ -1577,6 +1586,14 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             f"add-annotator: {', '.join(added)}; pipeline {pipeline_path}; "
             "cleared annotate_initial…viz_reprofiled (kept setup_reads, qc_initial, seed_genomes)"
         )
+    elif branched:
+        from samovar.branch import finish_branch_prepare
+
+        finish_branch_prepare(config.output_dir, args)
+        print(
+            f"branch prepare: kept files before {getattr(args, 'startpoint', None)}; "
+            f"pipeline {pipeline_path}"
+        )
     elif script_name == "samovar.sh":
         from samovar.add_annotator import write_active_pipeline
 
@@ -1585,7 +1602,7 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         from samovar.repro import record_stage, _argv_from_args, _ns_to_dict
 
         record_argv = sys.argv[1:]
-        if added:
+        if added or branched:
             record_argv = _argv_from_args("prepare", _ns_to_dict(args))
         record_stage(
             "prepare",
