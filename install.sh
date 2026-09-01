@@ -12,6 +12,14 @@
 #   ./install.sh NanoSim         optional NanoSim in a separate conda env (ONT / hybrid)
 #   ./install.sh ART             optional ART Illumina simulator in a separate conda env
 #   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
+#   ./install.sh MegaHIT         optional MegaHIT assembler (sidecar)
+#   ./install.sh Prodigal        optional Prodigal gene caller (sidecar)
+#   ./install.sh minimap2        optional minimap2 + samtools (sidecar)
+#   ./install.sh CoverM          optional CoverM MAG quantifier (sidecar)
+#   ./install.sh DAS_Tool        optional DAS Tool (sidecar)
+#   ./install.sh anvio           optional anvi'o binner (sidecar)
+#   ./install.sh CheckM2         optional CheckM2 (sidecar)
+#   ./install.sh GTDB-Tk         optional GTDB-Tk (sidecar; set GTDBTK_DATA_PATH)
 #   ./install.sh SparseDOSSA2    optional SparseDOSSA2 (table generators + CV scorer)
 #   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
 #
@@ -43,6 +51,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export SAMOVAR_ROOT="${SAMOVAR_ROOT:-$ROOT}"
 cd "$ROOT"
 
 SAMOVAR_VERSION="$(
@@ -351,6 +360,7 @@ install_camisim() {
         return 1
     fi
     export PYTHON_PATH
+    export SAMOVAR_ROOT="${SAMOVAR_ROOT:-$ROOT}"
     "$PYTHON_PATH" - <<'PY'
 import os, shutil, subprocess, sys
 from pathlib import Path
@@ -363,7 +373,7 @@ except ImportError:
 
 dest = Path(
     os.environ.get("SAMOVAR_CAMISIM")
-    or (Path(os.environ["SAMOVAR_ROOT"]) / ".cache" / "CAMISIM")
+    or (Path(os.environ.get("SAMOVAR_ROOT", ".")) / ".cache" / "CAMISIM")
 )
 if (dest / "main.nf").is_file() or (dest / "metagenomesimulation.py").is_file():
     print("CAMISIM already present:", dest)
@@ -516,6 +526,14 @@ normalize_optional_arg() {
         art|art_illumina) echo "art" ;;
         nextflow) echo "nextflow" ;;
         seqtk) echo "seqtk" ;;
+        megahit|mega-hit) echo "megahit" ;;
+        prodigal) echo "prodigal" ;;
+        minimap2) echo "minimap2" ;;
+        coverm|cover-m) echo "coverm" ;;
+        dastool|das_tool|das-tool) echo "dastool" ;;
+        anvio|anvi) echo "anvio" ;;
+        checkm2|checkm) echo "checkm2" ;;
+        gtdbtk|gtdb-tk|gtdb_tk) echo "gtdbtk" ;;
         sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
         full|all|everything) echo "full" ;;
         *) echo "" ;;
@@ -551,6 +569,14 @@ run_optional_named() {
         art) install_art ;;
         seqtk) install_seqtk ;;
         nextflow) install_nextflow ;;
+        megahit) "$PYTHON_PATH" -m samovar.sidecar megahit ;;
+        prodigal) "$PYTHON_PATH" -m samovar.sidecar prodigal ;;
+        minimap2) "$PYTHON_PATH" -m samovar.sidecar minimap2 ;;
+        coverm) "$PYTHON_PATH" -m samovar.sidecar coverm ;;
+        dastool) "$PYTHON_PATH" -m samovar.sidecar dastool ;;
+        anvio) "$PYTHON_PATH" -m samovar.sidecar anvio ;;
+        checkm2) "$PYTHON_PATH" -m samovar.sidecar checkm2 ;;
+        gtdbtk) "$PYTHON_PATH" -m samovar.sidecar gtdbtk ;;
         sparsedossa2) install_sparsedossa2 ;;
         *) return 1 ;;
     esac
@@ -770,7 +796,6 @@ fi
 # Write main config.json (location: $SAMOVAR_CONFIG) and build/config_path
 export USER_CFG_DIR
 export SAMOVAR_CONFIG
-export SAMOVAR_ROOT="$ROOT"
 export SAMOVAR_ROOT="$ROOT"
 export PYTHON_PATH
 "$PYTHON_PATH" - <<'PY'
@@ -1008,12 +1033,13 @@ print(
         previous_path=str(cfg_path),
     )
 )
-print("")
-print("Note: bulky genome caches should not live under $HOME (quota).")
-print("  Each `samovar exec` pins XDG_CACHE_HOME/SAMOVAR_GENOMES to $out_dir/.cache.")
-print("  Shared library: SAMOVAR_DATABASE=/scratch/... ./install.sh")
-print("  data/test_genomes is truncated (ISS/CI only), never an NCBI substitute.")
 PY
+
+echo ""
+echo "Note: bulky genome caches should not live under \$HOME (quota)."
+echo "  Each \`samovar exec\` pins XDG_CACHE_HOME/SAMOVAR_GENOMES to \$out_dir/.cache."
+echo "  Shared library: SAMOVAR_DATABASE=/scratch/... ./install.sh"
+echo "  data/test_genomes is truncated (ISS/CI only), never an NCBI substitute."
 
 BIN_DIR="$ROOT/bin"
 UPDATE_SHELL="${SAMOVAR_UPDATE_SHELL:-1}"
