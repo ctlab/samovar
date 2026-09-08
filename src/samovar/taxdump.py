@@ -175,6 +175,23 @@ def load_scientific_names(path: PathLike) -> Dict[int, str]:
     return names
 
 
+def load_scientific_name_to_taxid(path: Optional[PathLike] = None) -> Dict[str, str]:
+    """Lowercase scientific name → NCBI taxid (smaller id wins on collisions)."""
+    names_path = _as_path(path) if path is not None else names_dmp()
+    if names_path is None or not Path(names_path).is_file():
+        return {}
+    names = load_scientific_names(names_path)
+    out: Dict[str, str] = {}
+    for taxid, name in names.items():
+        key = str(name or "").strip().lower()
+        if not key:
+            continue
+        prev = out.get(key)
+        if prev is None or int(prev) > int(taxid):
+            out[key] = str(taxid)
+    return out
+
+
 _MERGED_CACHE: Optional[Dict[str, str]] = None
 
 

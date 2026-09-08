@@ -136,6 +136,17 @@ def _strip_annotator_prefixes(df: pd.DataFrame) -> pd.DataFrame:
         name = re.sub(r"^N_", "", name, flags=re.I)
         rename[col] = name
     out = out.rename(columns=rename)
+    names = [str(c) for c in out.columns]
+    stripped = [re.sub(r"_[0-9]+$", "", n) for n in names]
+    collisions = {s for s in stripped if stripped.count(s) > 1}
+    meta = {"length", "sample", "true", "seq", "read_type"}
+    rename2 = {}
+    for col, short in zip(names, stripped):
+        if col in meta or short in collisions or short == col:
+            continue
+        rename2[col] = short
+    if rename2:
+        out = out.rename(columns=rename2)
     if "length" not in out.columns:
         out["length"] = np.nan
     if "sample" not in out.columns:
@@ -190,9 +201,9 @@ def _r2_table(true: pd.Series, pred: pd.Series) -> Tuple[pd.DataFrame, float]:
     true_tot = counts.groupby("true", as_index=False)["Freq"].sum().rename(columns={"Freq": "true_n"})
     pred_tot = counts.groupby("pred", as_index=False)["Freq"].sum().rename(columns={"Freq": "pred_n"})
     pred_tot = pred_tot.rename(columns={"pred": "true"})
-    table = true_tot.merge(pred_tot, on="true", how="left").fillna(0)
-    if table["pred_n"].sum() <= 0:
-        return table, float("nan")
+    table = true_tot.merge(pred_tot, on="true", how="outer").fillna(0)
+    if table.empty:
+        return table, 0.0
     ss_tot = ((table["true_n"] - table["true_n"].mean()) ** 2).sum()
     ss_res = ((table["pred_n"] - table["true_n"]) ** 2).sum()
     r2 = 0.0 if ss_tot == 0 else float(1 - ss_res / ss_tot)

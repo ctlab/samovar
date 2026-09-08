@@ -119,6 +119,32 @@ def test_viz_annotation_writes_png(tmp_path):
     assert img.shape[0] > 50 and img.shape[1] > 50
 
 
+def test_viz_annotation_writes_assembly_r2_when_preds_are_unclassified(tmp_path):
+    df = pd.DataFrame(
+        {
+            "seq": [f"r{i}" for i in range(20)],
+            "taxID_assembly_0": [0] * 20,
+            "taxID_kraken2_1": [562] * 10 + [9606] * 10,
+            "true": [562] * 10 + [9606] * 10,
+        }
+    )
+    out = tmp_path / "plots"
+    results = viz_annotation(
+        df,
+        type=("f1", "R2", "cv", "scores"),
+        show_top=0,
+        output_dir=str(out),
+        plot=False,
+        rank="none",
+        use_names=False,
+    )
+    assert "assembly" in results.get("F1", {})
+    assert "assembly" in results.get("R2", {})
+    assert (out / "F1_assembly.png").is_file()
+    assert (out / "R2_assembly.png").is_file()
+    assert any(p.name.startswith("CV_") and "assembly" in p.name for p in out.glob("CV_*.png"))
+
+
 def test_viz_annotation_without_true_keeps_cv(tmp_path):
     df = pd.DataFrame(
         {

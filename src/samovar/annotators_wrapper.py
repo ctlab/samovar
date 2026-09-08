@@ -535,6 +535,52 @@ class ConstantTaxidAnnotator(CustomAnnotator):
         return skip_empty_reads_cmd(input_r1, [out_file], run)
 
 
+class AssemblyAnnotator(BaseAnnotator):
+    """FASTQ → assembly / MAG taxonomy / read taxIDs (nested contracts)."""
+
+    @property
+    def default_cmd(self) -> str:
+        return f"{sys.executable} -m samovar.assembly_profiling"
+
+    def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.assembly.out")]
+
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        out_file = outputs[0]
+        sample_dir = os.path.join(
+            os.path.dirname(out_file),
+            os.path.basename(out_file).replace(".out", ""),
+        )
+        extra = self.extra or ""
+        cmd = self.cmd or self.default_cmd
+        if "assembly_profiling" not in str(cmd) and str(cmd).split()[-1] in {
+            "assembly",
+            "assembly_profiling",
+        }:
+            cmd = self.default_cmd
+        run = (
+            f"{cmd} annotator "
+            f"-i {shlex.quote(str(input_r1))} "
+            f"-I {shlex.quote(str(input_r2))} "
+            f"-d {shlex.quote(str(self.db_path or ''))} "
+            f"-o {shlex.quote(str(out_file))} "
+            f"-t {int(self.threads)} "
+            f"--work-dir {shlex.quote(sample_dir)} "
+            f"{extra}"
+        )
+        return skip_empty_reads_cmd(input_r1, [out_file], run)
+
+    def parse_output(self, file_path: str) -> pd.DataFrame:
+        df = _read_table_or_empty(file_path)
+        if df is None:
+            return _empty_taxid_frame()
+        df = df.iloc[:, [0, 1]].copy()
+        df.columns = ["seq", "taxID"]
+        return df
+
+
 def get_annotator_instance(
     tool_type: str, run_config: Dict, config: Dict
 ) -> BaseAnnotator:
@@ -552,6 +598,8 @@ def get_annotator_instance(
         "kraken1": Kraken1Annotator,
         "krakenuniq": KrakenUniqAnnotator,
         "krakenu": KrakenUniqAnnotator,
+        "assembly": AssemblyAnnotator,
+        "assembly_profiling": AssemblyAnnotator,
     }
 
     if tool in DUMMY_TOOL_NAMES:

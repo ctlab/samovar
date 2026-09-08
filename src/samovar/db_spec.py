@@ -114,6 +114,10 @@ DEFAULT_LAZY_DOWNLOAD: Dict[Tuple[str, ...], str] = {
         "taxdump",
         "ncbi",
     ): "https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
+    (
+        "gtdbtk",
+        "gtdbtk",
+    ): "https://data.gtdb.ecogenomic.org/releases/latest/auxillary_files/gtdbtk_package/full_package/gtdbtk_data.tar.gz",
 }
 
 

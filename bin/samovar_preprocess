@@ -383,6 +383,55 @@ def main():
         default=None,
         help='Taxonomy for --to kraken2 / mpa / cami: ncbi (default) or gtdb',
     )
+    parser.add_argument(
+        '--assembler',
+        dest='assembly_assembler',
+        default=None,
+        help='Assembly annotator: contig assembler (default megahit)',
+    )
+    parser.add_argument(
+        '--gene-caller',
+        dest='assembly_gene_caller',
+        default=None,
+        help='Assembly annotator: gene caller (default prodigal)',
+    )
+    parser.add_argument(
+        '--binner',
+        dest='assembly_binners',
+        action='append',
+        default=None,
+        help='Assembly annotator: MAG binner (repeatable)',
+    )
+    parser.add_argument(
+        '--binner-qc',
+        dest='assembly_binner_qc',
+        default=None,
+        help='Assembly annotator: MAG QC (default checkm2)',
+    )
+    parser.add_argument(
+        '--binner-combine',
+        dest='assembly_binner_combine',
+        default=None,
+        help='Assembly annotator: MAG combine (default dastool)',
+    )
+    parser.add_argument(
+        '--mag-taxonomy',
+        dest='assembly_mag_taxonomy',
+        default=None,
+        help='Assembly annotator: MAG taxonomy (default gtdbtk)',
+    )
+    parser.add_argument(
+        '--aligner',
+        dest='assembly_aligner',
+        default=None,
+        help='Assembly annotator: reads→MAG aligner (default minimap2)',
+    )
+    parser.add_argument(
+        '--mag-quantifier',
+        dest='assembly_mag_quantifier',
+        default=None,
+        help='Assembly annotator: MAG abundance (default coverm)',
+    )
 
     # Parse known args first to get output_dir
     from samovar.tool_spec import parse_known_with_custom
@@ -419,6 +468,11 @@ def main():
         "qc", "qc-initial", "qc_initial", "qc-generated", "qc_generated",
         "qc-postfix", "qc_postfix",
         "add-annotator", "add_annotator",
+        "assembler", "gene-caller", "gene_caller", "gene-annotation",
+        "binner", "binner-qc", "binner_qc",
+        "binner-combine", "binner_combine",
+        "mag-taxonomy", "mag_taxonomy",
+        "aligner", "mag-quantifier", "mag_quantifier",
         "branch",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",

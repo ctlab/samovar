@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "${TMP_DIR:-}" 2>/dev/null || true' EXIT
 # Default threads
 THREADS=4
 
@@ -200,7 +200,7 @@ except Exception as e:
     ;;
 esac
 
-# Cleanup temporary directory to save disk space
-rm -rf "$TMP_DIR"
+# Cleanup temporary directory to save disk space (NFS .nfs* files may be busy)
+rm -rf "$TMP_DIR" || true
 echo "[SUCCESS] Finished $TOOL wrapper. Results saved to $OUT"
 

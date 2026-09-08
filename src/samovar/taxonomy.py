@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -67,7 +68,24 @@ GTDB_TSV_NAMES = (
     "ar53_taxonomy.tsv",
     "ar122_taxonomy.tsv",
     "taxonomy.tsv",
+    "gtdb_taxonomy.tsv",
 )
+
+TAXID_NCBI = "ncbi"
+TAXID_GTDB = "gtdb"
+TAXID_UNCLASSIFIED = "unclassified"
+TAXID_MIXED = "mixed"
+TAXID_UNKNOWN = "unknown"
+
+GTDB_RANK_TOKEN = re.compile(r"^[dpcofgs]__", re.I)
+GTDB_SUFFIX = re.compile(r"_[A-Z](\d+)?$")
+DOMAIN_NCBI_TAXID = {
+    "bacteria": "2",
+    "archaea": "2157",
+    "eukaryota": "2759",
+    "viruses": "10239",
+    "virus": "10239",
+}
 
 
 class UnknownTaxonomyError(ValueError):
@@ -86,8 +104,225 @@ def normalize_taxonomy(name: Any) -> str:
     return system
 
 
+class TaxidTypeMismatchError(ValueError):
+    """Annotator columns mix NCBI and GTDB taxID namespaces."""
+
+
+def gtdb_name_candidates(name: str) -> List[str]:
+    """GTDB taxon label → NCBI scientific-name lookup keys."""
+    text = str(name or "").strip()
+    if not text:
+        return []
+    out: List[str] = []
+    seen = set()
+
+    def _add(item: str) -> None:
+        key = item.strip()
+        if key and key.lower() not in seen:
+            seen.add(key.lower())
+            out.append(key)
+
+    _add(text)
+    if "__" in text:
+        _add(text.split("__", 1)[1])
+    for item in list(out):
+        stripped = GTDB_SUFFIX.sub("", item)
+        _add(stripped)
+    return out
+
+
+def ncbi_taxid_from_gtdb_lineage(
+    lineage: str,
+    *,
+    name_to_taxid: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Map a GTDB-Tk classification string onto an NCBI taxid.
+
+    GTDB-Tk reports ``d__…;p__…;s__…`` (or ``Unclassified Bacteria``). Combined
+    SamovaR tables use NCBI taxids (Kraken2/Kaiju/Centrifuge). Do not emit
+    GTDB-Tk synthetic node hashes.
+    """
+    text = str(lineage or "").strip()
+    if not text or text.lower() in {"n/a", "na", ".", "unclassified"}:
+        return "0"
+    mapping = dict(name_to_taxid) if name_to_taxid is not None else {}
+    if name_to_taxid is None:
+        try:
+            from samovar.taxdump import load_scientific_name_to_taxid
+
+            mapping = load_scientific_name_to_taxid()
+        except Exception:
+            mapping = {}
+    tokens = list(_split_gtdb_lineage(text))
+    if not tokens and text:
+        tokens = _split_gtdb_lineage(text.replace(",", ";"))
+    for _rank, name, token in reversed(tokens):
+        lowered = name.lower()
+        if lowered.startswith("unclassified"):
+            rest = re.sub(r"^unclassified\s+", "", name, flags=re.I).strip()
+            if rest.lower() in DOMAIN_NCBI_TAXID:
+                return DOMAIN_NCBI_TAXID[rest.lower()]
+            for cand in gtdb_name_candidates(rest):
+                hit = mapping.get(cand.lower())
+                if hit and str(hit).isdigit() and str(hit) != "0":
+                    return str(hit)
+            continue
+        for cand in gtdb_name_candidates(name) + gtdb_name_candidates(token):
+            hit = mapping.get(cand.lower())
+            if hit and str(hit).isdigit() and str(hit) != "0":
+                return str(hit)
+    if text.lower() in DOMAIN_NCBI_TAXID:
+        return DOMAIN_NCBI_TAXID[text.lower()]
+    return "0"
+
+
+def classify_taxid_token(
+    value: Any,
+    *,
+    ncbi_ids: Optional[Any] = None,
+) -> str:
+    """Return ``ncbi``, ``gtdb``, ``unclassified``, or ``unknown`` for one cell."""
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if lowered.endswith(".0") and lowered[:-2].isdigit():
+        text = text[:-2]
+        lowered = text.lower()
+    if lowered in {
+        "",
+        "0",
+        "unclassified",
+        "unclassified_root",
+        "nan",
+        "none",
+        "na",
+        "<na>",
+        "null",
+    }:
+        return TAXID_UNCLASSIFIED
+    first = text.split()[0] if text else text
+    if GTDB_RANK_TOKEN.match(first) or "__" in first:
+        return TAXID_GTDB
+    if lowered.startswith("unclassified "):
+        return TAXID_GTDB
+    digits = text
+    if not digits.lstrip("-").isdigit():
+        return TAXID_UNKNOWN
+    if ncbi_ids is None:
+        ncbi_ids = _ncbi_taxid_membership()
+    if ncbi_ids:
+        if digits in ncbi_ids or int(digits) in ncbi_ids:
+            return TAXID_NCBI
+        return TAXID_GTDB
+    return TAXID_NCBI
+
+
+_NCBI_ID_CACHE: Optional[set] = None
+
+
+def _ncbi_taxid_membership() -> set:
+    global _NCBI_ID_CACHE
+    if _NCBI_ID_CACHE is not None:
+        return _NCBI_ID_CACHE
+    try:
+        from samovar.parse_annotators import _discover_nodes_path, _load_nodes_cache
+
+        path = _discover_nodes_path()
+        if not path:
+            _NCBI_ID_CACHE = set()
+            return _NCBI_ID_CACHE
+        tree = _load_nodes_cache(path)
+        out = set()
+        for key in tree:
+            out.add(int(key))
+            out.add(str(key))
+        _NCBI_ID_CACHE = out
+        return out
+    except Exception:
+        _NCBI_ID_CACHE = set()
+        return _NCBI_ID_CACHE
+
+
+def infer_taxid_type(
+    values: Iterable[Any],
+    *,
+    ncbi_ids: Optional[Any] = None,
+) -> str:
+    """Majority taxID namespace for a column (ignores unclassified)."""
+    seen = set()
+    membership = ncbi_ids
+    for raw in values:
+        kind = classify_taxid_token(raw, ncbi_ids=membership)
+        if kind == TAXID_UNCLASSIFIED:
+            continue
+        seen.add(kind)
+    if not seen:
+        return TAXID_UNCLASSIFIED
+    if len(seen) > 1:
+        return TAXID_MIXED
+    return next(iter(seen))
+
+
+def autocheck_taxid_types(
+    columns: Mapping[str, Iterable[Any]],
+    *,
+    ncbi_ids: Optional[Any] = None,
+    fatal: bool = True,
+) -> Dict[str, str]:
+    """Classify each annotator's taxID column; error if NCBI and GTDB are mixed."""
+    import logging
+    import warnings
+
+    types = {
+        str(name): infer_taxid_type(vals, ncbi_ids=ncbi_ids)
+        for name, vals in (columns or {}).items()
+    }
+    classified = {name: kind for name, kind in types.items() if kind in {TAXID_NCBI, TAXID_GTDB}}
+    namespaces = set(classified.values())
+    logger = logging.getLogger(__name__)
+    for name, kind in types.items():
+        logger.info("taxid-type %s=%s", name, kind)
+    if TAXID_NCBI in namespaces and TAXID_GTDB in namespaces:
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(classified.items()))
+        msg = (
+            "Annotators mix NCBI and GTDB taxID namespaces "
+            f"({detail}). Combined tables need one system "
+            "(assembly/GTDB-Tk must emit NCBI taxids)."
+        )
+        if fatal:
+            raise TaxidTypeMismatchError(msg)
+        warnings.warn(msg, UserWarning, stacklevel=2)
+    return types
+
+
 def cami_ranks_for(system: str) -> Tuple[str, ...]:
     return GTDB_CAMI_RANKS if normalize_taxonomy(system) == TAXONOMY_GTDB else NCBI_CAMI_RANKS
+
+
+def load_gtdb_taxid_map(root: PathLike) -> Dict[str, str]:
+    """Token (GTDB name, accession, or lineage piece) → integer taxid string."""
+    root_p = Path(root)
+    out: Dict[str, str] = {}
+    if not root_p.is_dir():
+        return out
+    for name in ("taxid.map", "taxid_map.tsv", "taxid_map.txt"):
+        path = root_p / name
+        if path.is_file():
+            for key, taxid in parse_taxid_map(path).items():
+                out[str(key)] = str(taxid)
+    tsvs = [root_p / name for name in GTDB_TSV_NAMES if (root_p / name).is_file()]
+    tsvs.extend(sorted(root_p.glob("**/bac120_taxonomy.tsv")))
+    tsvs.extend(sorted(root_p.glob("**/ar53_taxonomy.tsv")))
+    seen = []
+    for path in tsvs:
+        if path not in seen and path.is_file():
+            seen.append(path)
+    if seen:
+        _tree, _names, aliases = parse_gtdb_taxonomy_files(seen)
+        for key, taxid in aliases.items():
+            if str(key).startswith("node:"):
+                continue
+            out[str(key)] = str(taxid)
+    return out
 
 
 def gtdb_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:

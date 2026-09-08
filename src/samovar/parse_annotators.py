@@ -885,6 +885,8 @@ READ_FUNCTIONS = {
     "centrifuge": read_custom_raw,
     "metauto": read_custom_raw,
     "assembly_hybrid": read_custom_raw,
+    "assembly": read_custom_raw,
+    "assembly_profiling": read_custom_raw,
 }
 
 
@@ -1413,6 +1415,8 @@ def match_annotation(annotation_name:str) -> Optional[str]:
         "centrifuge": "centrifuge",
         "metauto": "metauto",
         "assembly_hybrid": "assembly_hybrid",
+        "assembly": "assembly",
+        "assembly_profiling": "assembly",
     }
     if arg in aliases:
         return aliases[arg]

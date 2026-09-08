@@ -969,6 +969,24 @@ class PipelineConfig:
             pass
         elif not config.export_formats:
             config.export_formats = ["abundance"]
+        from samovar.assembly_profiling import assembly_slot_extra
+
+        slot = assembly_slot_extra(
+            assembler=getattr(args, "assembly_assembler", None) or "",
+            gene_caller=getattr(args, "assembly_gene_caller", None) or "",
+            binners=getattr(args, "assembly_binners", None),
+            binner_qc=getattr(args, "assembly_binner_qc", None) or "",
+            binner_combine=getattr(args, "assembly_binner_combine", None) or "",
+            mag_taxonomy=getattr(args, "assembly_mag_taxonomy", None) or "",
+            aligner=getattr(args, "assembly_aligner", None) or "",
+            mag_quantifier=getattr(args, "assembly_mag_quantifier", None) or "",
+        )
+        if slot:
+            for ann in config.annotators or []:
+                if str(ann.type or "").lower() in {"assembly", "assembly_profiling"}:
+                    ann.extra = " ".join(
+                        p for p in (ann.extra, slot) if p
+                    ) or None
         _apply_translated_cli_flags(config, args)
         return config
 

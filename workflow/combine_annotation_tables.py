@@ -74,19 +74,25 @@ def main(argv=None) -> int:
         args.chunk_rows,
         truth_table=args.truth_table,
     )
-    from samovar.annotation_qc import EmptyAnnotatorsError, filter_classified_abundance_tables
+    from samovar.annotation_qc import (
+        EmptyAnnotatorsError,
+        autocheck_taxid_types_from_tables,
+        filter_classified_abundance_tables,
+    )
     from samovar.abundance import input_to_abundance_tables, load_table_input
+    from samovar.taxonomy import TaxidTypeMismatchError
 
     try:
         loaded = load_table_input(args.output_dir)
         tables = input_to_abundance_tables(loaded)
         if tables:
+            autocheck_taxid_types_from_tables(tables, fatal=True)
             filter_classified_abundance_tables(
                 tables,
                 reports_dir=args.input_dir,
                 fatal_if_none=False,
             )
-    except EmptyAnnotatorsError:
+    except (EmptyAnnotatorsError, TaxidTypeMismatchError):
         raise
     except Exception:
         pass

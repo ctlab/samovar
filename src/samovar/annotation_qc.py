@@ -22,6 +22,45 @@ class EmptyAnnotatorsError(RuntimeError):
     """Every annotator produced empty or unclassified-only assignments."""
 
 
+def autocheck_taxid_types_from_tables(
+    tables: Dict[str, pd.DataFrame],
+    *,
+    fatal: bool = True,
+) -> Dict[str, str]:
+    """Check abundance tables (``taxid`` column) share one taxID namespace."""
+    from samovar.taxonomy import autocheck_taxid_types
+
+    columns = {}
+    for name, frame in (tables or {}).items():
+        if frame is None or getattr(frame, "empty", True) or "taxid" not in frame.columns:
+            continue
+        columns[str(name)] = frame["taxid"].tolist()
+    if not columns:
+        return {}
+    return autocheck_taxid_types(columns, fatal=fatal)
+
+
+def autocheck_taxid_types_from_annotation(
+    frame: pd.DataFrame,
+    *,
+    fatal: bool = True,
+) -> Dict[str, str]:
+    """Check ``taxID_*`` columns of a combined long table."""
+    from samovar.parse_annotators import taxid_value_columns
+    from samovar.taxonomy import autocheck_taxid_types
+
+    if frame is None or getattr(frame, "empty", True):
+        return {}
+    columns = {}
+    for col in taxid_value_columns(frame.columns):
+        if str(col).lower() in {"true", "taxid_true"}:
+            continue
+        columns[str(col)] = frame[col].tolist()
+    if not columns:
+        return {}
+    return autocheck_taxid_types(columns, fatal=fatal)
+
+
 def is_unclassified_taxid(value: Any) -> bool:
     token = str(value or "").strip().lower()
     if token.endswith(".0") and token[:-2].isdigit():

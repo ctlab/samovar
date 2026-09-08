@@ -60,6 +60,15 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "trimmomatic": "conda install -y bioconda::trimmomatic",
     "chopper": "conda install -y bioconda::chopper",
     "nanofilt": "conda install -y bioconda::nanofilt",
+    "megahit": "conda install -y bioconda::megahit",
+    "minimap2": "conda install -y bioconda::minimap2",
+    "coverm": "conda install -y bioconda::coverm",
+    "checkm2": "conda install -y bioconda::checkm2",
+    "dastool": "conda install -y bioconda::das_tool",
+    "DAS_Tool": "conda install -y bioconda::das_tool",
+    "gtdbtk": "conda install -y bioconda::gtdbtk",
+    "anvio": "conda install -y bioconda::anvio",
+    "metabat2": "conda install -y bioconda::metabat2",
 }
 
 DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
@@ -75,6 +84,9 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "art_illumina": {"--threads": "--p", "--cores": "--p"},
     "wgsim": {"--threads": "--threads", "--cores": "--threads"},
     "custom": {"--threads": "-t", "--cores": "-t"},
+    "assembly": {"--threads": "-t", "--cores": "-t"},
+    "assembly_profiling": {"--threads": "-t", "--cores": "-t"},
+    "megahit": {"--threads": "-t", "--cores": "-t"},
     "fastp": {"--threads": "--thread", "--cores": "--thread"},
     "cutadapt": {"--threads": "--cores", "--cores": "--cores"},
     "trimmomatic": {"--threads": "-threads", "--cores": "-threads"},

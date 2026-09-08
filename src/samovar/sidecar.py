@@ -66,6 +66,94 @@ SIDECARS = {
         "tool_keys": ("art", "art_illumina"),
         "hint": "Illumina CAMISIM mode (./install.sh ART).",
     },
+    "megahit": {
+        "python": None,
+        "packages": ["megahit"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "megahit",
+        "config_path_key": "megahit_path",
+        "tool_keys": ("megahit",),
+        "group": "assembler",
+        "hint": "Optional MegaHIT assembler (./install.sh MegaHIT).",
+    },
+    "prodigal": {
+        "python": None,
+        "packages": ["prodigal"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "prodigal",
+        "config_path_key": "prodigal_path",
+        "tool_keys": ("prodigal",),
+        "group": "gene_caller",
+        "hint": "Optional Prodigal gene caller (./install.sh Prodigal).",
+    },
+    "minimap2": {
+        "python": None,
+        "packages": ["minimap2", "samtools"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "minimap2",
+        "config_path_key": "minimap2_path",
+        "tool_keys": ("minimap2",),
+        "group": "aligner",
+        "hint": "Optional minimap2 MAG aligner (./install.sh minimap2).",
+    },
+    "coverm": {
+        "python": None,
+        "packages": ["coverm"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "coverm",
+        "config_path_key": "coverm_path",
+        "tool_keys": ("coverm",),
+        "group": "mag_quantifier",
+        "hint": "Optional CoverM MAG quantifier (./install.sh CoverM).",
+    },
+    "dastool": {
+        "python": None,
+        "packages": ["das_tool"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "DAS_Tool",
+        "config_path_key": "dastool_path",
+        "tool_keys": ("dastool", "DAS_Tool"),
+        "group": "binner_combine",
+        "hint": "Optional DAS Tool MAG combine (./install.sh DAS_Tool).",
+    },
+    "anvio": {
+        "python": "3.10",
+        "packages": ["python=3.10", "anvio-minimal=8", "concoct", "prodigal", "samtools", "setuptools"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "anvi-gen-contigs-database",
+        "config_path_key": "anvio_path",
+        "tool_keys": ("anvio", "anvi-gen-contigs-database"),
+        "group": "binner",
+        "hint": "Optional anvi'o binner sidecar (./install.sh anvio).",
+    },
+    "checkm2": {
+        "python": None,
+        "packages": ["checkm2"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "checkm2",
+        "config_path_key": "checkm2_path",
+        "tool_keys": ("checkm2",),
+        "group": "binner_qc",
+        "hint": "Optional CheckM2 sidecar (./install.sh CheckM2).",
+    },
+    "gtdbtk": {
+        "python": "3.10",
+        "packages": ["python=3.10", "gtdbtk=2.7.2", "prodigal"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "gtdbtk",
+        "config_path_key": "gtdbtk_path",
+        "tool_keys": ("gtdbtk",),
+        "group": "mag_taxonomy",
+        "hint": "Optional GTDB-Tk sidecar (./install.sh GTDB-Tk). Set GTDBTK_DATA_PATH.",
+    },
 }
 
 
@@ -155,6 +243,14 @@ def remove_nanosim_compat_shim(prefix: Path) -> None:
 def ensure_sidecar_compat(name: str, prefix: Path) -> None:
     if name == "nanosim":
         remove_nanosim_compat_shim(prefix)
+    if name == "anvio":
+        python = prefix / "bin" / "python"
+        if python.is_file():
+            subprocess.run(
+                [str(python), "-m", "pip", "install", "setuptools<81"],
+                check=False,
+                timeout=180,
+            )
 
 
 def env_has_versions(prefix: Path, versions: dict) -> bool:
@@ -245,15 +341,22 @@ def create_sidecar_env(
 def record_sidecar(name: str, prefix: Path, binary_path: str) -> None:
     spec = SIDECARS[name]
     cfg = load_config()
-    cfg[str(spec["config_path_key"])] = binary_path
+    from samovar.main_config import LEGACY_TOOL_KEYS
+
+    path_key = str(spec.get("config_path_key") or "")
+    if path_key in LEGACY_TOOL_KEYS:
+        cfg[path_key] = binary_path
     for key in spec["tool_keys"]:
+        group = str(spec.get("group") or (
+            "metagenome_generator" if name == "nanosim" else "reads_generator"
+        ))
         set_tool(
             cfg,
             str(key),
             env="conda",
             workflow=str(name),
             path=str(prefix),
-            group="metagenome_generator" if name == "nanosim" else "reads_generator",
+            group=group,
         )
         # Keep the runnable binary on the primary name
         if str(key) in {spec["binary"], name}:
@@ -263,19 +366,33 @@ def record_sidecar(name: str, prefix: Path, binary_path: str) -> None:
                 env="conda",
                 workflow=str(name),
                 path=binary_path,
-                group="metagenome_generator" if name == "nanosim" else "reads_generator",
+                group=group,
             )
     write_config(cfg)
 
 
 def install_named(name: str) -> Path:
     key = str(name or "").strip().lower()
-    if key in {"art_illumina"}:
-        key = "art"
+    aliases = {
+        "art_illumina": "art",
+        "das_tool": "dastool",
+        "das-tool": "dastool",
+        "gtdb-tk": "gtdbtk",
+        "gtdb_tk": "gtdbtk",
+        "mega-hit": "megahit",
+        "cover-m": "coverm",
+    }
+    key = aliases.get(key, key)
     spec = SIDECARS.get(key)
     if spec is None:
         raise ValueError(f"Unknown sidecar {name!r}")
-    existing = discover_nanosim() if key == "nanosim" else discover_art()
+    existing = None
+    if key == "nanosim":
+        existing = discover_nanosim()
+    elif key == "art":
+        existing = discover_art()
+    else:
+        existing = shutil.which(str(spec["binary"]))
     if existing:
         prefix = Path(conda_prefix_for_executable(existing) or sidecar_prefix(key))
         ensure_sidecar_compat(key, prefix)
@@ -295,7 +412,7 @@ def install_named(name: str) -> Path:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install a SamovaR sidecar conda env")
-    parser.add_argument("name", choices=sorted(SIDECARS) + ["art_illumina"])
+    parser.add_argument("name", choices=sorted(SIDECARS) + ["art_illumina", "DAS_Tool", "GTDB-Tk", "MegaHIT", "CoverM", "CheckM2", "Prodigal"])
     return parser.parse_args(argv)
 
 

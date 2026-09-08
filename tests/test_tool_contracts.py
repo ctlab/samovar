@@ -387,3 +387,158 @@ def test_qc_contract(request, tmp_path, tiny_fastq):
     assert "@" in text
     assert "ACGT" in text
 
+
+def _run_py_main(path: Path, argv: list) -> None:
+    module = load_python_module(path, "contract_assembly_" + path.stem)
+    rc = module.main(argv)
+    assert rc in (None, 0)
+
+
+def test_assembler_contract(request, tmp_path, tiny_fastq):
+    _skip_if_other_type(request, "assembler")
+    path = _tool_path(request, "assembler")
+    r1, r2 = tiny_fastq
+    dest = tmp_path / "contigs.fa"
+    _run_py_main(path, ["-i", str(r1), "-I", str(r2), "-o", str(dest), "-t", "1"])
+    text = dest.read_text()
+    assert dest.is_file()
+    assert text.startswith(">")
+    assert "ACGT" in text
+
+
+def test_gene_caller_contract(request, tmp_path):
+    _skip_if_other_type(request, "gene_caller")
+    path = _tool_path(request, "gene_caller")
+    contigs = tmp_path / "contigs.fa"
+    contigs.write_text(">contig1\nATGAAATTTAAATAA\n")
+    dest = tmp_path / "genes"
+    _run_py_main(path, ["-c", str(contigs), "-o", str(dest), "-t", "1"])
+    faa = list(dest.glob("*.faa"))
+    assert faa
+    assert faa[0].read_text().startswith(">")
+    assert (list(dest.glob("*.gff")) or faa)
+
+
+def test_binner_contract(request, tmp_path, tiny_fastq):
+    _skip_if_other_type(request, "binner")
+    path = _tool_path(request, "binner")
+    contigs = tmp_path / "contigs.fa"
+    contigs.write_text(">contig1\nACGTACGT\n")
+    r1, r2 = tiny_fastq
+    dest = tmp_path / "mags"
+    _run_py_main(
+        path,
+        ["-c", str(contigs), "-i", str(r1), "-I", str(r2), "-o", str(dest), "-t", "1"],
+    )
+    fasta = list(dest.glob("*.fa")) + list(dest.glob("*.fna"))
+    assert fasta
+    assert fasta[0].read_text().startswith(">")
+
+
+def test_binner_qc_contract(request, tmp_path):
+    _skip_if_other_type(request, "binner_qc")
+    path = _tool_path(request, "binner_qc")
+    mag_dir = tmp_path / "mags"
+    mag_dir.mkdir()
+    (mag_dir / "mag1.fa").write_text(">mag1\nACGT\n")
+    dest = tmp_path / "qc.tsv"
+    _run_py_main(path, ["-c", str(mag_dir), "-d", str(tmp_path), "-o", str(dest), "-t", "1"])
+    frame = pd.read_csv(dest, sep="\t")
+    assert "mag_id" in frame.columns
+    assert "completeness" in frame.columns
+    assert "contamination" in frame.columns
+    assert not frame.empty
+
+
+def test_binner_combine_contract(request, tmp_path):
+    _skip_if_other_type(request, "binner_combine")
+    path = _tool_path(request, "binner_combine")
+    a = tmp_path / "bins_a"
+    b = tmp_path / "bins_b"
+    a.mkdir()
+    b.mkdir()
+    (a / "mag1.fa").write_text(">mag1\nACGT\n")
+    (b / "mag2.fa").write_text(">mag2\nTGCA\n")
+    dest = tmp_path / "selected"
+    _run_py_main(path, ["-c", f"{a},{b}", "-o", str(dest), "-t", "1"])
+    fasta = list(dest.glob("*.fa")) + list(dest.glob("*.fna"))
+    assert fasta
+
+
+def test_mag_taxonomy_contract(request, tmp_path):
+    _skip_if_other_type(request, "mag_taxonomy")
+    path = _tool_path(request, "mag_taxonomy")
+    mag_dir = tmp_path / "mags"
+    mag_dir.mkdir()
+    (mag_dir / "mag1.fa").write_text(">mag1\nACGT\n")
+    dest = tmp_path / "tax.tsv"
+    _run_py_main(path, ["-c", str(mag_dir), "-d", str(tmp_path), "-o", str(dest), "-t", "1"])
+    frame = pd.read_csv(dest, sep="\t")
+    assert "mag_id" in frame.columns
+    assert "taxid" in frame.columns
+    assert "lineage" in frame.columns
+    assert not frame.empty
+
+
+def test_aligner_contract(request, tmp_path, tiny_fastq):
+    _skip_if_other_type(request, "aligner")
+    path = _tool_path(request, "aligner")
+    r1, r2 = tiny_fastq
+    mag = tmp_path / "mag1.fa"
+    mag.write_text(">mag1\nACGT\n")
+    dest = tmp_path / "map.bam"
+    _run_py_main(
+        path, ["-i", str(r1), "-I", str(r2), "-r", str(mag), "-o", str(dest), "-t", "1"]
+    )
+    assert dest.is_file() and dest.stat().st_size > 0
+
+
+def test_mag_quantifier_contract(request, tmp_path):
+    _skip_if_other_type(request, "mag_quantifier")
+    path = _tool_path(request, "mag_quantifier")
+    mag_dir = tmp_path / "mags"
+    mag_dir.mkdir()
+    (mag_dir / "mag1.fa").write_text(">mag1\nACGT\n")
+    bam = tmp_path / "map.bam"
+    bam.write_text("@HD\tVN:1.6\n")
+    dest = tmp_path / "mag_abund.tsv"
+    _run_py_main(path, ["-b", str(bam), "-r", str(mag_dir), "-o", str(dest)])
+    frame = pd.read_csv(dest, sep="\t")
+    assert "mag_id" in frame.columns
+    assert any(c == "N" or str(c).startswith("N_") for c in frame.columns)
+    assert not frame.empty
+
+
+def test_taxon_quantifier_contract(request, tmp_path):
+    _skip_if_other_type(request, "taxon_quantifier")
+    path = _tool_path(request, "taxon_quantifier")
+    abund = tmp_path / "mag.tsv"
+    tax = tmp_path / "tax.tsv"
+    abund.write_text("mag_id\tN\nmag1\t10\n")
+    tax.write_text("mag_id\ttaxid\tlineage\nmag1\t562\td__Bacteria\n")
+    dest = tmp_path / "taxon.tsv"
+    _run_py_main(path, ["-a", str(abund), "-x", str(tax), "-o", str(dest)])
+    frame = pd.read_csv(dest, sep="\t")
+    assert "taxid" in frame.columns
+    assert n_sample_columns(normalize_abundance_table(frame))
+    assert not frame.empty
+
+
+def test_read_assigner_contract(request, tmp_path):
+    _skip_if_other_type(request, "read_assigner")
+    path = _tool_path(request, "read_assigner")
+    bam = tmp_path / "map.sam"
+    tax = tmp_path / "tax.tsv"
+    bam.write_text(
+        "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:mag1\tLN:4\n"
+        "r0\t0\tmag1\t1\t60\t4M\t*\t0\t0\tACGT\tIIII\n"
+    )
+    tax.write_text("mag_id\ttaxid\tlineage\nmag1\t562\td__Bacteria\n")
+    dest = tmp_path / "reads.out"
+    _run_py_main(path, ["-b", str(bam), "-x", str(tax), "-o", str(dest)])
+    frame = pd.read_table(dest, header=None)
+    frame.columns = ["seq", "taxID"]
+    assert "seq" in frame.columns
+    assert not frame.empty
+
+

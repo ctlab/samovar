@@ -95,3 +95,68 @@ def test_skip_empty_reads_one_byte_stub(tmp_path):
     assert rc == 0
     assert out.exists()
     assert "fastq_has_reads" in cmd
+
+
+def test_ncbi_taxid_from_gtdb_lineage():
+    from samovar.taxonomy import ncbi_taxid_from_gtdb_lineage
+
+    names = {
+        "thermosphaera aggregans": "2268",
+        "blochmanniella": "34090",
+        "bacteria": "2",
+        "campylobacterota": "1652087",
+    }
+    lineage = (
+        "d__Archaea;p__Thermoproteota;c__Thermoprotei_A;o__Sulfolobales;"
+        "f__Desulfurococcaceae;g__Thermosphaera;s__Thermosphaera aggregans"
+    )
+    assert ncbi_taxid_from_gtdb_lineage(lineage, name_to_taxid=names) == "2268"
+    assert (
+        ncbi_taxid_from_gtdb_lineage(
+            "d__Bacteria;p__Pseudomonadota;g__Blochmanniella;s__",
+            name_to_taxid=names,
+        )
+        == "34090"
+    )
+    assert ncbi_taxid_from_gtdb_lineage("Unclassified Bacteria", name_to_taxid=names) == "2"
+    assert ncbi_taxid_from_gtdb_lineage("", name_to_taxid=names) == "0"
+
+
+def test_autocheck_taxid_types_mismatch():
+    from samovar.taxonomy import TaxidTypeMismatchError, autocheck_taxid_types
+
+    ncbi_ids = {"562", "9606", 562, 9606}
+    types = autocheck_taxid_types(
+        {"kraken2": ["562", "0"], "kaiju": ["9606"]},
+        ncbi_ids=ncbi_ids,
+        fatal=True,
+    )
+    assert types["kraken2"] == "ncbi"
+    with pytest.raises(TaxidTypeMismatchError, match="NCBI and GTDB"):
+        autocheck_taxid_types(
+            {
+                "kraken2": ["562"],
+                "assembly": ["d__Bacteria;p__Pseudomonadota"],
+            },
+            ncbi_ids=ncbi_ids,
+            fatal=True,
+        )
+
+
+def test_autocheck_foreign_numeric_is_gtdb():
+    from samovar.taxonomy import infer_taxid_type
+
+    # Hash-like GTDB node id that is not in NCBI nodes.dmp
+    assert infer_taxid_type(["2147483000"], ncbi_ids={"562", 562}) == "gtdb"
+
+
+def test_autocheck_from_abundance_tables():
+    from samovar.annotation_qc import autocheck_taxid_types_from_tables
+    from samovar.taxonomy import TaxidTypeMismatchError
+
+    tables = {
+        "kraken2": pd.DataFrame({"taxid": ["562"], "N_1": [3]}),
+        "assembly": pd.DataFrame({"taxid": ["d__Bacteria"], "N_1": [3]}),
+    }
+    with pytest.raises(TaxidTypeMismatchError):
+        autocheck_taxid_types_from_tables(tables, fatal=True)

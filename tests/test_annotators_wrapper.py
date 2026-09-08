@@ -44,12 +44,17 @@ def test_factory_returns_custom_and_dummy_classes():
     assert isinstance(dummy, ConstantTaxidAnnotator)
     kaiju = get_annotator_instance("kaiju", {"run_name": "kaiju"}, {})
     assert isinstance(kaiju, KaijuAnnotator)
+    assembly = get_annotator_instance("assembly", {"run_name": "assembly-test"}, {})
+    from samovar.annotators_wrapper import AssemblyAnnotator
+
+    assert isinstance(assembly, AssemblyAnnotator)
 
 
 def test_match_annotation_custom_and_dummy():
     assert match_annotation("1_full_dummy.custom_dummy.out") == "dummy"
     assert match_annotation("s_run.custom_constant9606.out") == "constant9606"
     assert match_annotation("s_kaiju.kaiju.out") == "kaiju"
+    assert match_annotation("1_full_run.assembly.out") == "assembly"
     assert match_annotation("notes.txt") is None
 
 

@@ -82,6 +82,46 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "trimmomatic PE/SE, chopper/nanofilt stdin→stdout).",
         "out": "Trimmed FASTQ at dest_r1/dest_r2 (same layout as input; empty files allowed).",
     },
+    "assembler": {
+        "in": "FASTQ R1/R2 via CLI -i/-I, -o contig FASTA, -t threads.",
+        "out": "Contig FASTA at -o (empty file allowed if assembly produced none).",
+    },
+    "gene_caller": {
+        "in": "Contig or MAG FASTA -c (file or directory), gene directory -o, -t threads.",
+        "out": "Directory of amino-acid FASTA (*.faa) and GFF (*.gff); Prodigal default.",
+    },
+    "binner": {
+        "in": "Contigs -c, optional reads -i/-I, MAG directory -o, -t threads.",
+        "out": "Directory of MAG FASTA files (*.fa / *.fna).",
+    },
+    "binner_qc": {
+        "in": "MAG directory -c, optional DB -d, QC table -o, -t threads.",
+        "out": "TSV mag_id,completeness,contamination,score (plus native report).",
+    },
+    "binner_combine": {
+        "in": "One or more MAG dirs -c dir1,dir2, optional QC table -q, -o MAG dir, -t.",
+        "out": "One non-redundant MAG FASTA directory (best bins).",
+    },
+    "mag_taxonomy": {
+        "in": "MAG directory -c, taxonomy DB -d, table -o, -t threads.",
+        "out": "TSV mag_id,taxid,lineage.",
+    },
+    "aligner": {
+        "in": "FASTQ -i/-I, MAG FASTA or dir -r, BAM -o, -t threads.",
+        "out": "Sorted BAM at -o (index .bai when samtools is available).",
+    },
+    "mag_quantifier": {
+        "in": "BAM -b, MAG dir -r, table -o.",
+        "out": "MAG abundance table (mag_id plus count/coverage columns).",
+    },
+    "taxon_quantifier": {
+        "in": "MAG abundance -a, MAG taxonomy -x, table -o.",
+        "out": "taxid + N_* abundance table.",
+    },
+    "read_assigner": {
+        "in": "BAM -b, MAG taxonomy -x, TSV -o.",
+        "out": "Two-column seq, taxID TSV (Annotation-ready).",
+    },
 }
 
 GROUP_TO_TESTNODE = {
@@ -95,6 +135,16 @@ GROUP_TO_TESTNODE = {
     "annotation_converter": "tests/test_tool_contracts.py::test_annotation_converter_contract",
     "export": "tests/test_tool_contracts.py::test_export_contract",
     "qc": "tests/test_tool_contracts.py::test_qc_contract",
+    "assembler": "tests/test_tool_contracts.py::test_assembler_contract",
+    "gene_caller": "tests/test_tool_contracts.py::test_gene_caller_contract",
+    "binner": "tests/test_tool_contracts.py::test_binner_contract",
+    "binner_qc": "tests/test_tool_contracts.py::test_binner_qc_contract",
+    "binner_combine": "tests/test_tool_contracts.py::test_binner_combine_contract",
+    "mag_taxonomy": "tests/test_tool_contracts.py::test_mag_taxonomy_contract",
+    "aligner": "tests/test_tool_contracts.py::test_aligner_contract",
+    "mag_quantifier": "tests/test_tool_contracts.py::test_mag_quantifier_contract",
+    "taxon_quantifier": "tests/test_tool_contracts.py::test_taxon_quantifier_contract",
+    "read_assigner": "tests/test_tool_contracts.py::test_read_assigner_contract",
 }
 
 DEFAULT_TOOLS = {
@@ -108,6 +158,16 @@ DEFAULT_TOOLS = {
     "annotation_converter": "tests/tools/echo_annotation_converter.py",
     "export": "tests/tools/identity_export.py",
     "qc": "tests/tools/gc_filter.py",
+    "assembler": "tests/tools/dummy_assembler.py",
+    "gene_caller": "tests/tools/dummy_gene_caller.py",
+    "binner": "tests/tools/dummy_binner.py",
+    "binner_qc": "tests/tools/dummy_binner_qc.py",
+    "binner_combine": "tests/tools/dummy_binner_combine.py",
+    "mag_taxonomy": "tests/tools/dummy_mag_taxonomy.py",
+    "aligner": "tests/tools/dummy_aligner.py",
+    "mag_quantifier": "tests/tools/dummy_mag_quantifier.py",
+    "taxon_quantifier": "tests/tools/dummy_taxon_quantifier.py",
+    "read_assigner": "tests/tools/dummy_read_assigner.py",
 }
 
 

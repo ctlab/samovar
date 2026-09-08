@@ -136,6 +136,33 @@ def test_import_scoring_writes_inputs_slot(tmp_path, monkeypatch):
     assert spec2[5] == "*annotations/combined_annotation_table.csv"
 
 
+def test_import_assembly_groups(tmp_path, monkeypatch):
+    from samovar.main_config import normalize_tool_group
+
+    assert normalize_tool_group("assembler") == "assembler"
+    assert normalize_tool_group("prodigal") == "gene_caller"
+    assert normalize_tool_group("gene-caller") == "gene_caller"
+    assert normalize_tool_group("binner-qc") == "binner_qc"
+    assert normalize_tool_group("binner-combine") == "binner_combine"
+    assert normalize_tool_group("mag-taxonomy") == "mag_taxonomy"
+    assert normalize_tool_group("aligner") == "aligner"
+    assert normalize_tool_group("mag-quantifier") == "mag_quantifier"
+    assert normalize_tool_group("taxon-quantifier") == "taxon_quantifier"
+    assert normalize_tool_group("read-assigner") == "read_assigner"
+    script = tmp_path / "dummy_assembler.py"
+    script.write_text("def main(argv=None):\n    return 0\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    spec = import_tool(
+        name="megahit",
+        tool_type="assembler",
+        exec_path=str(script),
+        also_repo_build=False,
+    )
+    assert spec[3] == "assembler"
+
+
 def test_import_table_scoring_group(tmp_path, monkeypatch):
     from samovar.main_config import normalize_tool_group
 
