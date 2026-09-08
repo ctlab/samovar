@@ -527,7 +527,7 @@ def run_anvio_binner(
     if want_cluster and len(profile_dbs) >= 2:
         merge_dir = work / "merged"
         try:
-            merge_cmd = [which_tool("anvi-merge")]
+            merge_cmd = [which_tool("anvi-merge"), "-i"]
             merge_cmd.extend(str(p) for p in profile_dbs)
             merge_cmd.extend(
                 [
@@ -538,7 +538,10 @@ def run_anvio_binner(
                     "--skip-hierarchical-clustering",
                 ]
             )
-            _run(merge_cmd)
+            merge_env = os.environ.copy()
+            merge_bin = Path(merge_cmd[0]).parent
+            merge_env["PATH"] = str(merge_bin) + os.pathsep + merge_env.get("PATH", "")
+            _run(merge_cmd, env=merge_env)
             merged = merge_dir / "PROFILE.db"
             if merged.is_file():
                 profile = merged
@@ -558,7 +561,7 @@ def run_anvio_binner(
                     "--just-do-it",
                 ]
                 cmd.extend(extra_list)
-                _run(cmd)
+                _run(cmd, env=merge_env)
                 clustered = True
         except (FileNotFoundError, subprocess.CalledProcessError):
             clustered = False
