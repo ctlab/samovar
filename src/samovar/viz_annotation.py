@@ -431,7 +431,7 @@ def _save_scatter_png(table: pd.DataFrame, path: Path, title: str, caption: str)
     y = table["true_n"].to_numpy(dtype=float)
     ratio = np.log10((y + 1e-9) / (x + 1e-9))
     ax.scatter(x, y, c=ratio, cmap="RdYlGn_r", edgecolors="none")
-    if len(x) >= 2:
+    if len(x) >= 2 and float(np.std(x)) > 0:
         coef = np.polyfit(x, y, 1)
         xs = np.linspace(min(x.min(), y.min()), max(x.max(), y.max()), 50)
         ax.plot(xs, np.polyval(coef, xs), color="0.4", alpha=0.5)

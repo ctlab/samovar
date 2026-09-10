@@ -357,6 +357,8 @@ def test_c2_anvio_three_samples(tmp_path, monkeypatch):
     _put_on_path(monkeypatch, binary)
     megahit = _sidecar_bin("megahit")
     _put_on_path(monkeypatch, megahit)
+    minimap = _sidecar_bin("minimap2")
+    _put_on_path(monkeypatch, minimap)
     from samovar.assembly_profiling import run_anvio_binner
 
     contigs = tmp_path / "contigs.fa"

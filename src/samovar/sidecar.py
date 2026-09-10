@@ -123,7 +123,15 @@ SIDECARS = {
     },
     "anvio": {
         "python": "3.10",
-        "packages": ["python=3.10", "anvio-minimal=8", "concoct", "prodigal", "samtools", "setuptools"],
+        "packages": [
+            "python=3.10",
+            "anvio-minimal=8",
+            "concoct",
+            "prodigal",
+            "samtools",
+            "minimap2",
+            "setuptools",
+        ],
         "runtime_modules": (),
         "runtime_versions": {},
         "binary": "anvi-gen-contigs-database",

@@ -205,6 +205,17 @@ def _run(cmd: Sequence[str], **kwargs: Any) -> None:
     subprocess.check_call([str(c) for c in cmd], env=env, **kwargs)
 
 
+def _anvio_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTHONNOUSERSITE", "1")
+    try:
+        bin_dir = str(Path(which_tool("anvi-profile")).parent)
+        env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+    except FileNotFoundError:
+        pass
+    return env
+
+
 def _is_mag_fasta(path: Path) -> bool:
     name = path.name.lower()
     return any(name.endswith(suf) for suf in MAG_SUFFIXES)
@@ -485,14 +496,29 @@ def run_anvio_binner(
     for extra_pair in additional_reads or []:
         if extra_pair and extra_pair[0] and as_path(extra_pair[0]).is_file():
             pairs.append((str(extra_pair[0]), str(extra_pair[1] if len(extra_pair) > 1 else "")))
+    extra_list = [str(x) for x in (extra or []) if str(x) not in {"--skip-clustering", "--no-cluster"}]
+    want_cluster = skip_clustering is False or (
+        skip_clustering is None
+        and not any(str(x) in {"--skip-clustering", "--no-cluster"} for x in (extra or []))
+    )
+    need_profiles = want_cluster and len(pairs) >= 2
+    anvio_env = _anvio_env()
     profile_dbs: List[Path] = []
     for i, (pr1, pr2) in enumerate(pairs, start=1):
         sample_bam = work / f"sample{i}.bam" if len(pairs) > 1 else bam
         try:
             run_minimap2(pr1, pr2, str(simple), str(sample_bam), threads=threads)
         except FileNotFoundError:
+            if need_profiles:
+                raise
+            continue
+        except subprocess.CalledProcessError:
+            if need_profiles:
+                raise
             continue
         if not sample_bam.is_file() or sample_bam.stat().st_size <= 0:
+            if need_profiles:
+                raise RuntimeError(f"anvi'o profiling needs a BAM for sample {i}")
             continue
         pdir = work / (f"profile_{i}" if len(pairs) > 1 else "profile")
         try:
@@ -510,20 +536,23 @@ def run_anvio_binner(
                     "-T",
                     str(int(threads)),
                     "--skip-hierarchical-clustering",
-                ]
+                    "--min-contig-length",
+                    "100",
+                    "--skip-SNV-profiling",
+                ],
+                env=anvio_env,
             )
         except (FileNotFoundError, subprocess.CalledProcessError):
+            if need_profiles:
+                raise
             continue
         pdb = pdir / "PROFILE.db"
         if pdb.is_file():
             profile_dbs.append(pdb)
-    want_cluster = skip_clustering is False or (
-        skip_clustering is None
-        and not any(str(x) in {"--skip-clustering", "--no-cluster"} for x in (extra or []))
-    )
+        elif need_profiles:
+            raise RuntimeError(f"anvi-profile did not write {pdb}")
     clustered = False
     profile = profile_dbs[0] if profile_dbs else work / "profile" / "PROFILE.db"
-    extra_list = [str(x) for x in (extra or []) if str(x) not in {"--skip-clustering", "--no-cluster"}]
     if want_cluster and len(profile_dbs) >= 2:
         merge_dir = work / "merged"
         try:
@@ -538,10 +567,7 @@ def run_anvio_binner(
                     "--skip-hierarchical-clustering",
                 ]
             )
-            merge_env = os.environ.copy()
-            merge_bin = Path(merge_cmd[0]).parent
-            merge_env["PATH"] = str(merge_bin) + os.pathsep + merge_env.get("PATH", "")
-            _run(merge_cmd, env=merge_env)
+            _run(merge_cmd, env=anvio_env)
             merged = merge_dir / "PROFILE.db"
             if merged.is_file():
                 profile = merged
@@ -561,10 +587,12 @@ def run_anvio_binner(
                     "--just-do-it",
                 ]
                 cmd.extend(extra_list)
-                _run(cmd, env=merge_env)
+                _run(cmd, env=anvio_env)
                 clustered = True
         except (FileNotFoundError, subprocess.CalledProcessError):
             clustered = False
+            if skip_clustering is False and not (work / "merged" / "PROFILE.db").is_file():
+                raise
     elif want_cluster and len(profile_dbs) == 1:
         clustered = False
     if not clustered:

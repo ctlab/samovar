@@ -11,6 +11,9 @@ import re
 import sys
 import hashlib
 import tempfile
+import types
+import urllib.parse
+import warnings
 from typing import Dict, List, Optional, Union
 import sqlite3
 import pickle
@@ -19,24 +22,14 @@ from pathlib import Path
 from samovar.annotators_wrapper import get_annotator_instance
 from samovar.taxonomy_engine import NCBITaxonomyParser
 
-# `ete3` imports its webplugin unconditionally, and the webplugin imports the
-# stdlib `cgi` module. Python 3.13 removed `cgi`, so importing ete3 fails
-# unless we provide a tiny compatibility shim.
-try:
-    from ete3 import NCBITaxa
-except ModuleNotFoundError as exc:
-    if str(exc).endswith(": cgi") or getattr(exc, "name", None) == "cgi":
-        # Minimal `cgi` module shim: ete3 only needs `cgi.parse_qs` at import
-        # time (runtime usage is irrelevant for our CLI/library usage).
-        import types
-        import urllib.parse
-
-        cgi_stub = types.ModuleType("cgi")
-        cgi_stub.parse_qs = urllib.parse.parse_qs
-        sys.modules["cgi"] = cgi_stub
-        from ete3 import NCBITaxa
-    else:
-        raise
+# `ete3` imports its webplugin unconditionally, and that plugin imports `cgi`.
+# Python 3.12 warns that `cgi` is deprecated; 3.13 removed it. Stub first so
+# ete3 never loads the stdlib module.
+if "cgi" not in sys.modules:
+    cgi_stub = types.ModuleType("cgi")
+    cgi_stub.parse_qs = urllib.parse.parse_qs
+    sys.modules["cgi"] = cgi_stub
+from ete3 import NCBITaxa
 
 # Common ISS / test-genome prefixes when headers omit `taxid:`.
 _TRUE_TAXID_PREFIXES = {
@@ -377,7 +370,7 @@ def ensure_taxid_name_map(taxids, cache_path=None) -> Dict[str, str]:
         translated: Dict[int, str] = {}
         try:
             ids = [int(t) for t in missing]
-            translated = _get_ncbi().get_taxid_translator(ids) or {}
+            translated = _ncbi_call("get_taxid_translator", ids) or {}
         except Exception:
             translated = {}
         for key in missing:
@@ -480,6 +473,17 @@ def _get_ncbi() -> "NCBITaxa":
     if ncbi is None:
         ncbi = NCBITaxa()
     return ncbi
+
+
+def _ncbi_call(method: str, *args, **kwargs):
+    """Call NCBITaxa without printing merged-taxid UserWarnings."""
+    fn = getattr(_get_ncbi(), method)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"taxid .* was translated into",
+        )
+        return fn(*args, **kwargs)
 
 
 def _cache_dir() -> Path:
@@ -620,8 +624,8 @@ def _resolve_taxid_by_rank_exact(taxid: str, rank_name: str) -> Optional[str]:
         return None
 
     try:
-        lineage = _get_ncbi().get_lineage(taxid_int)
-        ranks = _get_ncbi().get_rank(lineage)
+        lineage = _ncbi_call("get_lineage", taxid_int)
+        ranks = _ncbi_call("get_rank", lineage)
         for tid, rank in ranks.items():
             if rank == rank_name:
                 return str(tid)
@@ -667,7 +671,7 @@ def taxid_ncbi_rank(taxid: str) -> Optional[str]:
     except (TypeError, ValueError):
         return None
     try:
-        ranks = _get_ncbi().get_rank([taxid_int])
+        ranks = _ncbi_call("get_rank", [taxid_int])
         name = ranks.get(taxid_int)
         if name and name != "no rank":
             return str(name)
