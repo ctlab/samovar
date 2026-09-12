@@ -151,6 +151,7 @@ def test_annotation_scoring_is_not_table_scoring(tmp_path, monkeypatch):
         canonicalize_table_scorer("viz_score")
 
 
+@pytest.mark.optional
 def test_globalpatterns_three_generators_three_scorers(tmp_path, monkeypatch):
     from samovar.abundance import n_sample_columns
     from samovar.paths import write_config

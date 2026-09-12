@@ -41,9 +41,9 @@ jobs:
       run: |
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
+    - name: Test with pytest (mandatory suite)
       timeout-minutes: 30
       env:
         NCBI_EMAIL: test@samovar.com
       run: |
-        pytest --tb=short --cov=src
+        pytest -m mandatory --tb=short --cov=src

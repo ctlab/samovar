@@ -39,16 +39,26 @@ Do not duplicate pipeline, configuration, tool, model, or contract logic inside 
 
 ## 3. Tests
 
-Every new code path must have tests covering both:
+Tests are split into **mandatory** and **optional** suites (`pytest` markers). GitHub Actions runs **mandatory tests only**:
 
-* its intended logic;
-* its compliance with the relevant contracts.
+```text
+pytest -m mandatory
+```
 
-Where a component participates in a pipeline, add integration tests that verify its interaction with the surrounding stages.
+Optional suite and full suite:
 
-Tests belong under `tests/` and must not import implementation code from `examples/`.
+```text
+pytest -m optional
+pytest
+```
 
-For workflow changes, test repeatability and integration where applicable, not only isolated functions.
+Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (dummy/small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
+
+Installation is validated through `install.sh` (the same procedure GitHub Actions uses before pytest). Do not add a second install path for tests.
+
+Test data may come from repository `data/` / `tests/` fixtures or stable public Internet sources. Test code may use `src/`, `tests/`, and installed package APIs. Tests must never import executable code from `examples/`; examples demonstrate the public interface and are not test infrastructure.
+
+New functionality gets mandatory tests if it is core, optional tests if it is ecosystem/extended, or both when both roles apply.
 
 ## 4. Repository structure
 

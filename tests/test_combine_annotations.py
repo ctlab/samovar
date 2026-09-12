@@ -273,6 +273,7 @@ def test_sample_name_keeps_underscores(tmp_path, combiner):
     assert "818" in (out / "sample_2.annotation.csv").read_text()
 
 
+@pytest.mark.optional
 def test_large_tables_chunked_merge(tmp_path, combiner):
     n = 20000
     reports = tmp_path / "reports"
@@ -381,6 +382,7 @@ def test_matches_pandas_annotation_on_fixture_logs(tmp_path, combiner):
             assert a == b, (seq, col_cpp, a, b)
 
 
+@pytest.mark.optional
 def test_tenbac_reports_merge(tmp_path, combiner):
     src = REPO / "samovar_10bac" / "initial_reports"
     if not src.exists():

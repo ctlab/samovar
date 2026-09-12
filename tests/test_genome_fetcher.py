@@ -91,6 +91,7 @@ def test_fetch_genome_does_not_use_bundled_test_data(tmp_path, monkeypatch):
     assert result is None
 
 
+@pytest.mark.optional
 def test_fetch_genome_invalid_taxid(test_output_dir):
     """Test fetching genome for an invalid taxid"""
     email = "test@example.com"
@@ -328,6 +329,7 @@ def test_raw_parent_is_sibling_of_processed(tmp_path):
     assert raw.is_dir()
 
 
+@pytest.mark.optional
 def test_generate_random_taxids(test_output_dir):
     """Test generating random taxids"""
     from samovar.genome_fetcher import generate_random_taxids
@@ -367,6 +369,7 @@ def test_generate_random_taxids_no_email():
         generate_random_taxids()
 
 
+@pytest.mark.optional
 def test_generate_random_taxids_invalid_group(test_output_dir):
     """Test generating taxids for invalid group"""
     from samovar.genome_fetcher import generate_random_taxids

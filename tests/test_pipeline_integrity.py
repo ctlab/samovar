@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.parse_annotators import extract_true_taxid
 from samovar.paths import repo_root
@@ -174,6 +175,7 @@ def test_copy_test_genomes_strips_taxid_tokens(tmp_path):
         assert extract_true_taxid(f"{token}_0_0") == ""
 
 
+@pytest.mark.optional
 def test_integrity_known_ground_truth_after_generate(tmp_path):
     """Bundled test genomes keep taxid: in headers; combine fills ``true``."""
     root = repo_root()
@@ -193,6 +195,7 @@ def test_integrity_known_ground_truth_after_generate(tmp_path):
     assert (json_dir / "setup_reads.samovar.json").is_file()
 
 
+@pytest.mark.optional
 def test_integrity_unknown_ground_truth_stripped_genomes(tmp_path):
     """Same generate/prepare/exec path after stripping true taxid from genomes."""
     root = repo_root()

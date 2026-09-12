@@ -6,6 +6,9 @@ from Bio.SeqRecord import SeqRecord
 from samovar.table2iss import process_annotation_table
 import pytest
 
+pytestmark = pytest.mark.optional
+
+
 def create_test_fasta(output_dir, taxid):
     """Create a test FASTA file for a specific taxid."""
     genome_path = os.path.join(output_dir, f"{taxid}.fa")

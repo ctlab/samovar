@@ -304,6 +304,7 @@ def test_normal_apply_integration_and_contracts(tmp_path, monkeypatch):
     assert apply_yaml["retrained"] is False
 
 
+@pytest.mark.optional
 def test_apply_repeatability(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -320,6 +321,7 @@ def test_apply_repeatability(tmp_path, monkeypatch):
     assert list(da["taxid_SAMOVAR"]) == list(db["taxid_SAMOVAR"])
 
 
+@pytest.mark.optional
 def test_full_apply_retrains_and_regenerates(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"

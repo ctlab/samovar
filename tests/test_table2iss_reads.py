@@ -1,4 +1,6 @@
 import os
+
+import pytest
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -11,6 +13,9 @@ from samovar.table2iss import (
     write_combined_genomes,
     write_readcount_file,
 )
+
+pytestmark = pytest.mark.optional
+
 
 def create_test_fasta(output_dir, name="test"):
     """Create a test FASTA file."""

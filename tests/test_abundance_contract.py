@@ -154,6 +154,7 @@ def test_globalpatterns_sparsedossa2_mocked(gp_table, tmp_path, monkeypatch):
     assert len(n_sample_columns(next(iter(tables.values())))) == 3
 
 
+@pytest.mark.optional
 def test_globalpatterns_samovar_r(gp_table, tmp_path):
     src = tmp_path / "gp.csv"
     gp_table.to_csv(src, index=False)

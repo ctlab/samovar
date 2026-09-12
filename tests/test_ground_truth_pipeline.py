@@ -15,6 +15,8 @@ from samovar.paths import repo_root
 from samovar.paths import test_genomes_dir as bundled_genomes_dir
 from samovar.seqio import link_or_copy_reads
 
+pytestmark = pytest.mark.optional
+
 REPO = repo_root()
 CAMI_TOY = REPO / "tests" / "data" / "cami_toy"
 MAPPING = CAMI_TOY / "reads_mapping.tsv.gz"

@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from samovar.exec_control import mark_done
 from samovar.stage_report import bundle_multiqc, write_stage_report
 
@@ -136,6 +138,7 @@ def test_bundle_keeps_stage_plot_ids_unique(tmp_path):
     assert any(i.startswith("samovar_regenerated_") for i in ids)
 
 
+@pytest.mark.optional
 def test_multiqc_render_is_adequate(tmp_path):
     import os
     import subprocess

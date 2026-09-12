@@ -267,6 +267,7 @@ def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config
         os.unlink(config_path)
 
 
+@pytest.mark.optional
 @requires_r_samovar
 def test_samovar_annotation_regenerate_basic(
     test_data_dir, test_output_dir, mock_config, r_regenerator_script
@@ -300,6 +301,7 @@ def test_samovar_annotation_regenerate_basic(
         os.unlink(config_path)
 
 
+@pytest.mark.optional
 @requires_r_samovar
 def test_samovar_annotation_regenerate_integration(
     test_data_dir, test_output_dir, mock_config, r_regenerator_script

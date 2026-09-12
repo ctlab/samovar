@@ -6,12 +6,15 @@ import shutil
 import tarfile
 from pathlib import Path
 
+import pytest
 import yaml
 from omegaconf import OmegaConf
 
 from samovar.iss_config import select_generate_genome_paths, setup_iss_test
 from samovar.paths import test_genomes_dir as bundled_genomes_dir
 from samovar.repro import export_run, reproduce
+
+pytestmark = pytest.mark.optional
 
 META = bundled_genomes_dir() / "meta"
 HOST = bundled_genomes_dir() / "host" / "9606.fna"

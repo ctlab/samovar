@@ -60,6 +60,7 @@ def test_gtdb_lineage_emits_ncbi_taxid(monkeypatch):
     assert _gtdb_taxid_from_lineage("Unclassified Bacteria") == "2"
 
 
+@pytest.mark.optional
 def test_prodigal_gene_caller(tmp_path):
     try:
         which_tool("prodigal")
@@ -250,6 +251,7 @@ def test_anvio_empty_contigs_skips_database(tmp_path, monkeypatch):
     assert (dest / "mag1.fa").is_file()
 
 
+@pytest.mark.optional
 def test_c1_megahit(tmp_path, monkeypatch):
     if not READS_R1.is_file():
         pytest.skip("test reads missing")
@@ -268,6 +270,7 @@ def test_c1_megahit(tmp_path, monkeypatch):
     assert "N" in text or "A" in text.upper()
 
 
+@pytest.mark.optional
 def test_c2_anvio(tmp_path, monkeypatch):
     binary = _sidecar_bin("anvio")
     _put_on_path(monkeypatch, binary)
@@ -305,6 +308,7 @@ def test_c2_anvio(tmp_path, monkeypatch):
     assert _iter_mag_fastas(skipped)
 
 
+@pytest.mark.optional
 def test_c2_qc_combine(tmp_path, monkeypatch):
     megahit = _sidecar_bin("megahit")
     _put_on_path(monkeypatch, megahit)
@@ -347,6 +351,7 @@ def test_c2_qc_combine(tmp_path, monkeypatch):
     assert _iter_mag_fastas(selected)
 
 
+@pytest.mark.optional
 def test_c2_anvio_three_samples(tmp_path, monkeypatch):
     reads = REPO / "tests" / "data" / "reads"
     r1s = [reads / f"{i}_full_R1.fastq" for i in (1, 2, 3)]
@@ -392,6 +397,7 @@ def test_c2_anvio_three_samples(tmp_path, monkeypatch):
     assert (work / "PROFILE.db").is_file(), "anvi-merge should write a merged profile for 3 samples"
 
 
+@pytest.mark.optional
 def test_c3_gtdbtk(tmp_path, monkeypatch):
     db = Path("/mnt/tank/scratch/partition-metagenomics/databases/GTDB")
     env_db = os.environ.get("GTDBTK_DATA_PATH", "")
@@ -410,6 +416,7 @@ def test_c3_gtdbtk(tmp_path, monkeypatch):
     assert "taxid" in header
 
 
+@pytest.mark.optional
 def test_c4_minimap2(tmp_path, monkeypatch):
     mm = _sidecar_bin("minimap2")
     _put_on_path(monkeypatch, mm)
@@ -422,6 +429,7 @@ def test_c4_minimap2(tmp_path, monkeypatch):
     assert bam.read_bytes()[:3] == b"BAM" or bam.stat().st_size > 0
 
 
+@pytest.mark.optional
 def test_c5_coverm(tmp_path, monkeypatch):
     mm = _sidecar_bin("minimap2")
     _put_on_path(monkeypatch, mm)
@@ -440,6 +448,7 @@ def test_c5_coverm(tmp_path, monkeypatch):
     assert "mag_id" in dest.read_text().splitlines()[0]
 
 
+@pytest.mark.optional
 def test_composite_annotator(tmp_path, monkeypatch):
     from samovar.assembly_profiling import main as assembly_main
 

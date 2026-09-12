@@ -196,6 +196,7 @@ def _cosine(a, b) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
+@pytest.mark.optional
 def test_bootstrap_mimics_real_samples_with_error(test_data_dir):
     if not test_data_dir.exists():
         pytest.skip("data/test_annotations missing")
@@ -330,6 +331,7 @@ def test_samovar_annotation_regenerate_direct_integration(toy_annotation_dir, tm
     assert int(kaiju[kaiju["taxid"] == 562]["N_1"].iloc[0]) == 2
 
 
+@pytest.mark.optional
 def test_real_toy_annotations_direct(test_data_dir, tmp_path):
     if not test_data_dir.exists():
         pytest.skip("data/test_annotations missing")
@@ -349,6 +351,7 @@ def test_real_toy_annotations_direct(test_data_dir, tmp_path):
         assert df[n_cols].sum().sum() > 0
 
 
+@pytest.mark.optional
 def test_real_toy_annotations_generative_modes(test_data_dir, tmp_path):
     if not test_data_dir.exists():
         pytest.skip("data/test_annotations missing")
@@ -768,6 +771,7 @@ def test_prepare_flags_table_reads_generator(tmp_path):
     assert "table_reads_generator_flags" in text
 
 
+@pytest.mark.optional
 def test_camisim_table_toy_io_and_extra_flags(toy_annotation_dir, tmp_path):
     out = tmp_path / "cami"
     tables = regenerate_annotation_tables(
