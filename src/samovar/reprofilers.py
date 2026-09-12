@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -276,6 +277,39 @@ def write_reprofile_result(result: ReprofileResult, output_dir: PathLike) -> Pat
         name = f"{_reprofiled_stem(stem)}.csv"
         table.to_csv(dest / name, index=False)
     return dest
+
+
+def apply_saved_reprofiler(
+    *,
+    model_path: PathLike,
+    initial_dir: PathLike,
+    output_dir: PathLike,
+    config: Optional[Dict[str, Any]] = None,
+) -> ReprofileResult:
+    """Profile initial tables with a previously trained joblib (no fitting)."""
+    cfg = dict(config or {})
+    if cfg.get("features") and cfg.get("features_df") is None:
+        cfg["features_df"] = load_read_features(cfg.get("features"))
+    src_model = Path(model_path)
+    if not src_model.is_file():
+        raise FileNotFoundError(f"trained reprofiler model not found: {src_model}")
+    initial = load_csv_tables(initial_dir)
+    if not initial:
+        raise FileNotFoundError(f"no initial annotation CSVs under {initial_dir}")
+    tables = profile_tables_with_model(
+        initial,
+        str(src_model),
+        features_df=cfg.get("features_df"),
+        classify_unclassified=bool(cfg.get("classify_unclassified")),
+    )
+    dest = Path(output_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = dest / "trained_model.joblib"
+    if src_model.resolve() != copied.resolve():
+        shutil.copy2(src_model, copied)
+    for stem, table in tables.items():
+        table.to_csv(dest / f"{_reprofiled_stem(stem)}.csv", index=False)
+    return ReprofileResult(tables=tables, model=str(copied))
 
 
 def _coerce_result(value: Any, initial: Dict[str, pd.DataFrame]) -> ReprofileResult:

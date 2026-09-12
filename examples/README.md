@@ -18,5 +18,6 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 | [phage](phage/) | Named SamovaR databases and `reindex` |
 | [databases_comparison](databases_comparison/) | Same community, several Kraken2 indexes |
 | [realistic](realistic/) | NCBI genomes with public Kraken2 and Kaiju indexes |
+| [samovar apply](../samovar/samovar_apply/) | Apply a completed pipeline to one new sample (`--full` refits) |
 
 Figures and MultiQC reports are copied next to each `pipeline.sh` after a run.

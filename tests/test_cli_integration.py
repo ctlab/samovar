@@ -50,6 +50,7 @@ def test_cli_help_lists_prepare_build_exec():
     assert "--initial-ground-truth-table" in out
     assert "--regenerated-metagenomes" in out
     assert "convert" in out
+    assert "apply" in out
 
 
 def test_prepare_writes_pipeline_and_configs(tmp_path):

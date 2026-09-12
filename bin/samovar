@@ -58,6 +58,7 @@ show_usage() {
     echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
     echo "  convert     Convert Annotation (abundance, kraken2, CAMI, or a custom converter)"
+    echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
@@ -87,6 +88,8 @@ show_usage() {
     echo "  samovar convert -i initial_annotations -o reports --to kraken2"
     echo "  samovar convert -i initial_annotations -o profiles --to cami --taxonomy gtdb"
     echo "  samovar convert -i table.csv --from abundance --to annotation -o long.csv"
+    echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_out"
+    echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_full --full"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
 
@@ -246,6 +249,11 @@ case "${1:-}" in
         shift
         PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
             "$PYTHON" -m samovar.annotation_convert "$@"
+        ;;
+    "apply")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.apply "$@"
         ;;
     "reindex")
         shift

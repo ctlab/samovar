@@ -5,6 +5,7 @@ import pandas as pd
 from samovar.config import PipelineConfig
 from samovar.paths import write_config
 from samovar.reprofilers import (
+    apply_saved_reprofiler,
     require_known_reprofiler,
     resolve_reprofiler,
     run_reprofiler,
@@ -89,6 +90,34 @@ def test_run_builtin_linear(tmp_path):
     csvs = list(dest.glob("*_reprofiled.csv"))
     assert csvs
     assert "taxid_SAMOVAR" in pd.read_csv(csvs[0]).columns
+
+
+def test_apply_saved_reprofiler_does_not_refit(tmp_path):
+    regenerated, ground, initial = _tiny_tables()
+    trained = tmp_path / "trained"
+    run_reprofiler(
+        "linear",
+        regenerated=regenerated,
+        ground_truth=ground,
+        initial=initial,
+        output_dir=trained,
+        config={"seed": 0},
+    )
+    model = trained / "trained_model.joblib"
+    mtime = model.stat().st_mtime
+    initial_dir = tmp_path / "initial"
+    initial_dir.mkdir()
+    next(iter(initial.values())).to_csv(initial_dir / "sample.annotation.csv", index=False)
+    dest = tmp_path / "applied"
+    apply_saved_reprofiler(
+        model_path=model,
+        initial_dir=initial_dir,
+        output_dir=dest,
+    )
+    assert (dest / "trained_model.joblib").is_file()
+    assert model.stat().st_mtime == mtime
+    assert any(dest.glob("*_reprofiled.csv"))
+    assert "taxid_SAMOVAR" in pd.read_csv(next(dest.glob("*_reprofiled.csv"))).columns
 
 
 def test_custom_linear_reprofiler(tmp_path, monkeypatch):

@@ -100,9 +100,26 @@ samovar prepare \
 # Do SAMOVARing (resumes from `.log/checkpoints`; `--redo` reruns every step)
 samovar exec --output_dir samovar_out
 
+# Apply that trained pipeline to a new sample (no retraining)
+samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_out
+
+# Same stages, but regenerate abundance tables and refit the ML reprofiler
+samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_full --full
+
 # MultiQC report: optional
 # samovar multiqc --output_dir samovar_out -- --export --interactive
 ```
+
+### `samovar apply`
+
+Takes **one new sample** (a FASTQ directory) and a completed pipeline run (`--pipeline`, the original `--output_dir` from prepare/exec). Configs, databases, annotators, export/scoring contracts, and the trained reprofiler are loaded from that run.
+
+* **Normal** (`samovar apply`): QC → the configured annotators → combine → the saved `reprofiled_annotations/trained_model.joblib` → export and scoring contracts. The ML component is **not** fitted again.
+* **`--full`**: the same prefix, then abundance-table regeneration (the run’s ModDirect analogue under `regenerated/.regenerated_abundance`) and a **refit** via `samovar.reprofilers.run_reprofiler`, then the remaining contracts. Profiles need not match normal apply.
+
+Required source state: `.log/configs/config_init.yaml`, and for normal mode `reprofiled_annotations/trained_model.joblib`. `--full` also needs `regenerated_annotations` (labeled training tables from the original run). Outputs land in `--output_dir` (aliases `--outdir` / `--directory`); the source run is not overwritten. Provenance is written to `.log/apply.yaml`.
+
+A dummy-annotator walkthrough of both modes is in [`samovar/samovar_apply`](samovar/samovar_apply/).
 
 ## R package
 
