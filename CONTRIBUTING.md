@@ -39,7 +39,7 @@ Do not duplicate pipeline, configuration, tool, model, or contract logic inside 
 
 ## 3. Tests
 
-Tests are split into **mandatory** and **optional** suites (`pytest` markers). GitHub Actions runs **mandatory tests only**:
+Tests are split into **mandatory** and **optional** suites (`pytest` markers). The default GitHub Actions workflow (`python-package.yml`) runs **mandatory tests only**:
 
 ```text
 pytest -m mandatory
@@ -51,6 +51,8 @@ Optional suite and full suite:
 pytest -m optional
 pytest
 ```
+
+**Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`: `./install.sh full` plus assembly sidecars, then `pytest` (all markers) and every example `pipeline.sh`.
 
 Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (dummy/small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
 

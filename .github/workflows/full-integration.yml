@@ -1,0 +1,92 @@
+# Full integration: install.sh extras, all pytest, all examples.
+# Not used on ordinary PR/push (those run python-package.yml / mandatory tests).
+
+name: Full integration
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: full-integration
+  cancel-in-progress: false
+
+jobs:
+  full-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    env:
+      CI: "true"
+      NCBI_EMAIL: test@samovar.com
+      SAMOVAR_INSTALL_DEV: "1"
+      SAMOVAR_UPDATE_SHELL: "0"
+      SAMOVAR_CORES: "2"
+      SAMOVAR_GENERATE_CORES: "2"
+      SAMOVAR_SD2_WORKERS: "2"
+      SAMOVAR_N_SAMPLES: "2"
+      SAMOVAR_N_READS: "200"
+      SAMOVAR_MAX_GENOMES: "20"
+      N_SAMPLES: "2"
+      TOTAL_READS: "200"
+      SAMOVAR_KRAKEN2_DB_ROOT: ${{ github.workspace }}/.ci-dbs/kraken2
+      SAMOVAR_KAIJU_DB: ${{ github.workspace }}/.ci-dbs/kaiju/refseq
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: "3.12"
+        auto-update-conda: true
+        activate-environment: samovar
+        environment-file: environment.yml
+
+    - name: Conda extras for full install and examples
+      run: |
+        conda install -y -c conda-forge -c bioconda \
+          r-base r-essentials openjdk \
+          kraken2 kaiju
+
+    - name: Install via install.sh full
+      run: |
+        chmod +x install.sh
+        ./install.sh full
+
+    - name: Install optional assembly sidecars
+      run: |
+        ./install.sh MegaHIT Prodigal minimap2 CoverM DAS_Tool anvio CheckM2 GTDB-Tk
+
+    - name: All pytest (mandatory and optional)
+      timeout-minutes: 120
+      run: |
+        pytest --tb=short --cov=src
+
+    - name: Examples (toy indexes)
+      timeout-minutes: 90
+      run: |
+        bash examples/toy/pipeline.sh
+        bash examples/scoring/pipeline.sh
+        bash examples/reprofiling/pipeline.sh
+        bash examples/multiple_tables/pipeline.sh
+        SAMOVAR_TOY=1 bash examples/logistic-correction/pipeline.sh
+        bash samovar/samovar_apply/pipeline.sh
+
+    - name: Examples (phage + add-annotator)
+      timeout-minutes: 90
+      run: |
+        bash examples/phage/pipeline.sh
+        SAMOVAR_PHASE=add-annotator bash examples/phage/pipeline.sh
+
+    - name: Examples (public indexes)
+      timeout-minutes: 180
+      run: |
+        mkdir -p "$SAMOVAR_KRAKEN2_DB_ROOT" "$SAMOVAR_KAIJU_DB"
+        bash examples/realistic/pipeline.sh
+        bash examples/databases_comparison/pipeline.sh
