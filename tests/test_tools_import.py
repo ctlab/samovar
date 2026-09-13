@@ -186,6 +186,29 @@ def test_import_table_scoring_group(tmp_path, monkeypatch):
     assert raw["type"] == "table_scoring"
 
 
+def test_import_sample_scoring_group(tmp_path, monkeypatch):
+    from samovar.main_config import normalize_tool_group
+
+    assert normalize_tool_group("sample-qc") == "sample_scoring"
+    script = tmp_path / "qc_plugin.py"
+    script.write_text(
+        "def score_samples(generated, reference, config=None):\n"
+        "    return {'s1': 1.0}\n"
+    )
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    spec = import_tool(
+        name="qc_plugin",
+        tool_type="sample-score",
+        exec_path=str(script),
+        also_repo_build=False,
+    )
+    assert spec[3] == "sample_scoring"
+    raw = _tool_row(json.loads(cfg.read_text())["tools"], "qc_plugin")
+    assert raw["type"] == "sample_scoring"
+
+
 def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
     script = tmp_path / "clf"
     script.write_text("#!/bin/sh\nexit 0\n")

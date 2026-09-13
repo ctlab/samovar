@@ -26,7 +26,9 @@ CHECKPOINT_STEPS = (
     "viz_initial",
     "abundance_tables",
     "regenerate_tables",
+    "score_sample_qc_full",
     "score_regenerated_tables",
+    "score_sample_qc_final",
     "seed_genomes",
     "regenerate_reads",
     "sort_reads",
@@ -70,6 +72,14 @@ STEP_ALIASES = {
     "table_scoring": "score_regenerated_tables",
     "regenerated_tables_scoring": "score_regenerated_tables",
     "score_regenerated_tables": "score_regenerated_tables",
+    "sample_qc": "score_sample_qc_full",
+    "sample-qc": "score_sample_qc_full",
+    "sample_qc_full": "score_sample_qc_full",
+    "sample-qc-full": "score_sample_qc_full",
+    "score_sample_qc_full": "score_sample_qc_full",
+    "sample_qc_final": "score_sample_qc_final",
+    "sample-qc-final": "score_sample_qc_final",
+    "score_sample_qc_final": "score_sample_qc_final",
     "genomes": "seed_genomes",
     "seed": "seed_genomes",
     "regenerate": "regenerate_reads",
@@ -297,6 +307,26 @@ def startpoint_gaps(
                     "(run abundance_tables, or drop OTU tables there)"
                 )
         return gaps
+    if start_s == "score_sample_qc_full":
+        from samovar.abundance import (
+            collect_observed_abundance,
+            has_abundance_tables,
+            observed_abundance_dir,
+            regenerated_abundance_dir,
+        )
+        from samovar.table_scorers import load_tables_by_mode_from_run
+
+        if not has_abundance_tables(observed_abundance_dir(root)) and not collect_observed_abundance(
+            root
+        ):
+            gaps.append("observed abundance under outdir/initial_abundance")
+        modes = load_tables_by_mode_from_run(root)
+        if not modes and not has_abundance_tables(regenerated_abundance_dir(root)):
+            gaps.append(
+                "regenerated abundance CSVs under "
+                "outdir/regenerated/.regenerated_abundance"
+            )
+        return gaps
     if start_s == "score_regenerated_tables":
         from samovar.abundance import (
             collect_observed_abundance,
@@ -314,6 +344,24 @@ def startpoint_gaps(
         if not modes and not has_abundance_tables(regenerated_abundance_dir(root)):
             gaps.append(
                 "regenerated abundance CSVs under "
+                "outdir/regenerated/.regenerated_abundance"
+            )
+        return gaps
+    if start_s == "score_sample_qc_final":
+        from samovar.abundance import (
+            collect_observed_abundance,
+            has_abundance_tables,
+            observed_abundance_dir,
+            regenerated_abundance_dir,
+        )
+
+        if not has_abundance_tables(observed_abundance_dir(root)) and not collect_observed_abundance(
+            root
+        ):
+            gaps.append("observed abundance under outdir/initial_abundance")
+        if not has_abundance_tables(regenerated_abundance_dir(root)):
+            gaps.append(
+                "selected regenerated abundance CSVs under "
                 "outdir/regenerated/.regenerated_abundance"
             )
         return gaps

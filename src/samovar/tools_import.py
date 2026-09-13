@@ -222,8 +222,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             f"Tool group: {', '.join(TOOL_GROUPS)} "
-            "(aliases: a, reads, meta, table, table-scoring, score, viz, ml, "
-            "converter, annotation-converter, export, corrector, QC); "
+            "(aliases: a, reads, meta, table, table-scoring, sample-score, "
+            "score, viz, ml, converter, annotation-converter, export, corrector, QC); "
             "or 'database' / 'db' to register an annotator index under databases.*"
         ),
     )

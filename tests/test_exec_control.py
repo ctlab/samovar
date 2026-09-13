@@ -205,6 +205,8 @@ def test_canonicalize_and_window():
     assert canonicalize_step("otu") == "abundance_tables"
     assert canonicalize_step("regenerated_tables") == "regenerate_tables"
     assert canonicalize_step("table_score") == "score_regenerated_tables"
+    assert canonicalize_step("sample_qc") == "score_sample_qc_full"
+    assert canonicalize_step("sample_qc_final") == "score_sample_qc_final"
     assert canonicalize_step("ML") == "reprofile"
     assert resolve_window("annotate", "tables") == (
         "annotate_initial",

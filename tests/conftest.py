@@ -23,5 +23,5 @@ def pytest_addoption(parser):
         "--tool-type",
         action="store",
         default=None,
-        help="Import group: annotator, table_reads_generator, table_scoring, export, ...",
+        help="Import group: annotator, table_reads_generator, table_scoring, sample_scoring, export, ...",
     )

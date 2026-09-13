@@ -159,6 +159,31 @@ def test_table_scoring_contract(request):
         assert "rank_value" in block or "ks_statistic" in block
 
 
+def test_sample_scoring_contract(request):
+    _skip_if_other_type(request, "sample_scoring")
+    path = _tool_path(request, "sample_scoring")
+    module = load_python_module(path, "contract_sample_score")
+    fn = getattr(module, "score_samples", None)
+    assert callable(fn), f"{path} must define score_samples(generated, reference, config)"
+    gen = _tiny_abundance().copy()
+    ref = _tiny_abundance()
+    payload = fn(gen, ref, {})
+    if isinstance(payload, dict):
+        assert payload, f"{path} score_samples() returned an empty dict"
+        qualities = list(payload.values())
+        if qualities and isinstance(qualities[0], dict) and "quality" in qualities[0]:
+            qualities = [row["quality"] for row in qualities]
+        elif "quality" in payload:
+            qualities = list(payload["quality"]) if not isinstance(payload["quality"], (int, float)) else [payload["quality"]]
+    else:
+        assert hasattr(payload, "columns"), f"{path} score_samples() must return a DataFrame or dict"
+        assert "quality" in payload.columns
+        qualities = list(payload["quality"])
+    assert qualities, f"{path} must return at least one quality score"
+    for value in qualities:
+        assert value == value, "quality must be numeric (NaN allowed only for invalid samples)"
+
+
 def test_scoring_contract(request, tmp_path):
     _skip_if_other_type(request, "scoring")
     path = _tool_path(request, "scoring")

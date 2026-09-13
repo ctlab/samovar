@@ -20,6 +20,11 @@ from samovar.paths import (
 )
 from samovar.table_regenerators import flags_apply_to_regenerator, canonical_regeneration_modes
 from samovar.table_scorers import flags_apply_to_table_scorer
+from samovar.sample_scorers import (
+    flags_apply_to_sample_scorer,
+    ingest_sample_score_settings,
+    sample_qc_configured,
+)
 from samovar.reads_generators import (
     flags_apply_to_reads_generator,
     require_known_reads_generator,
@@ -279,6 +284,10 @@ class PipelineConfig:
     regeneration_mode: str = "direct"
     regeneration_modes: Optional[List[str]] = None
     table_score: str = "shannon_ks"
+    sample_score: str = ""
+    sample_score_by_annotator: Optional[Dict[str, str]] = None
+    sample_score_flags: Optional[str] = None
+    sample_score_tool_flags: Optional[Dict[str, str]] = None
     regeneration_n: Optional[int] = None
     regeneration_n_reads: int = 1000
     regeneration_seed: int = 42
@@ -338,6 +347,10 @@ class PipelineConfig:
             self.qc_tool_flags = {}
         if self.export_tool_flags is None:
             self.export_tool_flags = {}
+        if self.sample_score_by_annotator is None:
+            self.sample_score_by_annotator = {}
+        if self.sample_score_tool_flags is None:
+            self.sample_score_tool_flags = {}
         if not self.regeneration_modes:
             self.regeneration_modes = [self.regeneration_mode]
         if self.export_formats is None:
@@ -399,6 +412,27 @@ class PipelineConfig:
                 )
                 if yaml_score:
                     config.table_score = str(yaml_score)
+                yaml_sample, yaml_sample_by = ingest_sample_score_settings(
+                    input_config.get("sample_score")
+                    or input_config.get("sample-score")
+                    or input_config.get("sample_qc")
+                    or input_config.get("sample-qc"),
+                    input_config.get("sample_score_by_annotator")
+                    or input_config.get("sample-score-by-annotator")
+                    or input_config.get("sample_qc_by_annotator"),
+                )
+                if yaml_sample:
+                    config.sample_score = yaml_sample
+                if yaml_sample_by:
+                    config.sample_score_by_annotator = dict(yaml_sample_by)
+                yaml_sflags = input_config.get("sample_score_flags") or input_config.get(
+                    "sample-score-flags"
+                )
+                if yaml_sflags:
+                    config.sample_score_flags = str(yaml_sflags)
+                yaml_stf = input_config.get("sample_score_tool_flags")
+                if isinstance(yaml_stf, dict):
+                    config.sample_score_tool_flags = {str(k): str(v) for k, v in yaml_stf.items()}
                 meta = input_config.get("samples_metadata") or input_config.get(
                     "metadata"
                 )
@@ -755,6 +789,21 @@ class PipelineConfig:
         cli_score = getattr(args, "table_score", None)
         if cli_score:
             config.table_score = str(cli_score)
+        cli_sample = getattr(args, "sample_score", None)
+        if cli_sample:
+            from samovar.sample_scorers import NONE_TOKENS, parse_sample_score_tokens
+
+            tokens = [str(x) for x in cli_sample if str(x).strip()]
+            g_name, by_ann = parse_sample_score_tokens(tokens)
+            if any(str(t).strip().lower() in NONE_TOKENS for t in tokens):
+                config.sample_score = g_name
+                config.sample_score_by_annotator = dict(by_ann)
+            else:
+                if g_name:
+                    config.sample_score = g_name
+                merged_by = dict(config.sample_score_by_annotator or {})
+                merged_by.update(by_ann)
+                config.sample_score_by_annotator = merged_by
         cli_reads = getattr(args, "reads_generator", None)
         if cli_reads:
             config.reads_generator = require_known_reads_generator(cli_reads)
@@ -798,6 +847,8 @@ class PipelineConfig:
                 continue
             if flags_apply_to_table_scorer(target, config.table_score):
                 flag_parts.append(flags)
+                continue
+            if flags_apply_to_sample_scorer(target, config.sample_score):
                 continue
             low = str(target).lower().replace("-", "_")
             if "sparsedossa2" in low or low in {"sd2", "sd2_cv", "sd2_fit"}:
@@ -916,6 +967,48 @@ class PipelineConfig:
                 merged_pf.setdefault(key, val)
         merged_pf.update(config.qc_postfix or {})
         config.qc_postfix = merged_pf
+
+        sample_names = [
+            config.sample_score,
+            *list((config.sample_score_by_annotator or {}).values()),
+        ]
+        sscore_parts = [config.sample_score_flags]
+        named_sscore = dict(config.sample_score_tool_flags or {})
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if not flags_apply_to_sample_scorer(str(target), *sample_names):
+                # Still allow --flags kaiju "..." when kaiju is an annotator key
+                # in sample_score_by_annotator (scorer attached to that annotator).
+                ann_keys = {
+                    str(k).strip().lower()
+                    for k in (config.sample_score_by_annotator or {})
+                }
+                if str(target).strip().lower() not in ann_keys:
+                    continue
+                named_sscore[str(target)] = merge_flag_strings(
+                    named_sscore.get(str(target)), flags
+                )
+                continue
+            if flags_target_matches(
+                str(target),
+                groups=(
+                    "sample_scoring",
+                    "sample-scoring",
+                    "sample_score",
+                    "sample-score",
+                    "sample_qc",
+                    "sample-qc",
+                ),
+            ):
+                sscore_parts.append(flags)
+            else:
+                named_sscore[str(target)] = merge_flag_strings(
+                    named_sscore.get(str(target)), flags
+                )
+        config.sample_score_flags = merge_flag_strings(*sscore_parts) or None
+        config.sample_score_tool_flags = named_sscore or {}
 
         if getattr(args, "skip_export", False):
             config.export_corrector = "off"
@@ -1038,6 +1131,10 @@ class PipelineConfig:
             'regeneration_mode': self.regeneration_mode,
             'table_reads_generator': self.regeneration_mode,
             'table_score': self.table_score,
+            'sample_score': self.sample_score or "",
+            'sample_score_by_annotator': dict(self.sample_score_by_annotator or {}),
+            'sample_score_flags': self.sample_score_flags or "",
+            'sample_score_tool_flags': dict(self.sample_score_tool_flags or {}),
             'reannotation_level': self.reannotation_level,
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
@@ -1206,7 +1303,16 @@ class PipelineConfig:
         wf = root / "workflow"
         src = root / "src"
         email = self.email or ncbi_email()
-        step_names = " ".join(CHECKPOINT_STEPS)
+        sample_qc_on = sample_qc_configured(
+            self.sample_score, self.sample_score_by_annotator
+        )
+        listed_steps = [
+            name
+            for name in CHECKPOINT_STEPS
+            if sample_qc_on
+            or name not in {"score_sample_qc_full", "score_sample_qc_final"}
+        ]
+        step_names = " ".join(listed_steps)
         tool_path = runtime_path_prefix()
         extra_genome_dirs = ":".join(self.genome_dirs or [])
         reuse_flag = "1" if self.reuse_genomes else "0"
@@ -1370,6 +1476,24 @@ fi""",
     --config {configs['annotation2iss']}""",
         )
 
+        score_sample_qc_full = ""
+        score_sample_qc_final = ""
+        if sample_qc_on:
+            score_sample_qc_full = _checkpoint_block(
+                "score_sample_qc_full",
+                f"""$PYTHON_PATH -m samovar.sample_scorers stage \\
+    --output_dir "$out_dir" \\
+    --config {configs['annotation2iss']} \\
+    --phase full""",
+            )
+            score_sample_qc_final = _checkpoint_block(
+                "score_sample_qc_final",
+                f"""$PYTHON_PATH -m samovar.sample_scorers stage \\
+    --output_dir "$out_dir" \\
+    --config {configs['annotation2iss']} \\
+    --phase final""",
+            )
+
         score_regenerated_tables = _checkpoint_block(
             "score_regenerated_tables",
             f"""$PYTHON_PATH -m samovar.table_scorers stage \\
@@ -1484,7 +1608,8 @@ cleanup_tmp_if_requested
 """
 
         pipeline_content = "\n".join(
-            [
+            part
+            for part in [
                 header,
                 setup_reads,
                 qc_initial,
@@ -1493,7 +1618,9 @@ cleanup_tmp_if_requested
                 viz_initial,
                 abundance_tables,
                 regenerate_tables,
+                score_sample_qc_full,
                 score_regenerated_tables,
+                score_sample_qc_final,
                 seed_genomes,
                 regenerate_reads,
                 early_exit,
@@ -1506,6 +1633,7 @@ cleanup_tmp_if_requested
                 viz_reprofiled,
                 footer,
             ]
+            if part
         )
 
         with open(pipeline_path, 'w') as f:

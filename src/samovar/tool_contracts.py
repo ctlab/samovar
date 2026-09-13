@@ -43,6 +43,12 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "(score_annotator(...) or score_table(observed, generated, config)).",
         "out": "dict with rank_value (and usually ok, pvalue, scorer).",
     },
+    "sample_scoring": {
+        "in": "Generated abundance table plus a reference/predicted table "
+        "(score_samples(generated, reference, config)). config may carry extra method fields.",
+        "out": "DataFrame or dict with one quality score per generated sample "
+        "(higher is better).",
+    },
     "scoring": {
         "in": "List of paths under the run dir (glob *annotations by default), "
         "output_dir, config.",
@@ -128,6 +134,7 @@ GROUP_TO_TESTNODE = {
     "annotator": "tests/test_tool_contracts.py::test_annotator_contract",
     "table_reads_generator": "tests/test_tool_contracts.py::test_table_regenerator_contract",
     "table_scoring": "tests/test_tool_contracts.py::test_table_scoring_contract",
+    "sample_scoring": "tests/test_tool_contracts.py::test_sample_scoring_contract",
     "scoring": "tests/test_tool_contracts.py::test_scoring_contract",
     "reads_generator": "tests/test_tool_contracts.py::test_reads_generator_contract",
     "metagenome_generator": "tests/test_tool_contracts.py::test_metagenome_generator_contract",
@@ -151,6 +158,7 @@ DEFAULT_TOOLS = {
     "annotator": "tests/tools/dummy_annotator.py",
     "table_reads_generator": "tests/tools/identity_table.py",
     "table_scoring": "tests/data/bray_ks_table_scorer.py",
+    "sample_scoring": "tests/tools/dummy_sample_scorer.py",
     "scoring": "tests/tools/count_annotations.py",
     "reads_generator": "tests/tools/echo_reads.py",
     "metagenome_generator": "tests/tools/echo_reads.py",

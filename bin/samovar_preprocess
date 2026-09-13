@@ -82,6 +82,21 @@ def main():
         ),
     )
     parser.add_argument(
+        '--sample-score',
+        '--sample_score',
+        '--sample-qc',
+        dest='sample_score',
+        action='append',
+        default=None,
+        help=(
+            'Optional per-sample abundance quality scorer (higher is better). '
+            'NAME is global for every annotator; annotator:NAME is specific. '
+            'Repeat to mix, e.g. --sample-score bray_curtis --sample-score kaiju:imported. '
+            'Most specific mapping wins. Omit for no sample QC (pipeline unchanged). '
+            'Built-in: bray_curtis. Import others with `samovar tools import --type sample-score`.'
+        ),
+    )
+    parser.add_argument(
         '--table-score',
         '--table_score',
         '--table-reads-scorer',
@@ -308,7 +323,8 @@ def main():
         help=(
             'First exec checkpoint to run (default: setup_reads). '
             'Aliases: annotate, tables/combine, viz, abundance/otu, '
-            'regenerate_tables, score_tables/table_score, genomes, regenerate/iss, '
+            'regenerate_tables, sample_qc_full, score_tables/table_score, '
+            'sample_qc_final, genomes, regenerate/iss, '
             'sort, reannotate, ml/reprofile. checkup verifies outdir inputs.'
         ),
     )
@@ -459,6 +475,7 @@ def main():
         "reannotation-level", "reannotation_level",
         "table_reads_generator", "table-reads-generator", "regeneration_mode",
         "table-score", "table_score", "table-reads-scorer",
+        "sample-score", "sample_score", "sample-qc",
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",
