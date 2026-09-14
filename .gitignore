@@ -9,9 +9,6 @@ tests_outs/
 tests_outs*/
 /samovar_*/
 /samovar/*
-!/samovar/samovar_apply/
-!/samovar/samovar_apply/**
-/samovar/samovar_apply/work/
 /samovar2/
 debug/
 

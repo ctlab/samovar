@@ -252,8 +252,7 @@ case "${1:-}" in
         ;;
     "apply")
         shift
-        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
-            "$PYTHON" -m samovar.apply "$@"
+        "$PYTHON" "$SCRIPT_DIR/samovar_apply" "$@"
         ;;
     "reindex")
         shift

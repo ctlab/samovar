@@ -76,7 +76,7 @@ jobs:
         bash examples/reprofiling/pipeline.sh
         bash examples/multiple_tables/pipeline.sh
         SAMOVAR_TOY=1 bash examples/logistic-correction/pipeline.sh
-        bash samovar/samovar_apply/pipeline.sh
+        bash examples/apply/pipeline.sh
 
     - name: Examples (phage + add-annotator)
       timeout-minutes: 90
