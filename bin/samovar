@@ -59,6 +59,7 @@ show_usage() {
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
     echo "  convert     Convert Annotation (abundance, kraken2, CAMI, or a custom converter)"
     echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
+    echo "  merge       Combine two or more run directories (modes: initial, regenerated)"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
@@ -90,6 +91,8 @@ show_usage() {
     echo "  samovar convert -i table.csv --from abundance --to annotation -o long.csv"
     echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_out"
     echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_full --full"
+    echo "  samovar merge --mode initial --output_dir merged_init run_a run_b"
+    echo "  samovar merge --mode regenerated --output_dir merged_regen run_a run_b"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
 
@@ -253,6 +256,10 @@ case "${1:-}" in
     "apply")
         shift
         "$PYTHON" "$SCRIPT_DIR/samovar_apply" "$@"
+        ;;
+    "merge")
+        shift
+        "$PYTHON" "$SCRIPT_DIR/samovar_merge" "$@"
         ;;
     "reindex")
         shift

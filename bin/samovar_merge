@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from samovar.apply import main
+from samovar.merge import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

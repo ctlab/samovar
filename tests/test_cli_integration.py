@@ -51,6 +51,7 @@ def test_cli_help_lists_prepare_build_exec():
     assert "--regenerated-metagenomes" in out
     assert "convert" in out
     assert "apply" in out
+    assert "merge" in out
 
 
 def test_prepare_writes_pipeline_and_configs(tmp_path):
