@@ -119,7 +119,7 @@ Takes **one new sample** (a FASTQ directory) and a completed pipeline run (`--pi
 
 Required source state: `.log/configs/config_init.yaml`, and for normal mode `reprofiled_annotations/trained_model.joblib`. `--full` also needs `regenerated_annotations` (labeled training tables from the original run). Outputs land in `--output_dir` (aliases `--outdir` / `--directory`); the source run is not overwritten. Provenance is written to `.log/apply.yaml`.
 
-A dummy-annotator walkthrough of both modes is in [`examples/apply`](examples/apply/).
+A generate → apply `--full` → merge (`initial` / `regenerated`) → exec walkthrough is in [`examples/apply_and_merge`](examples/apply_and_merge/).
 
 ## R package
 

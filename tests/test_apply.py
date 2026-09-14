@@ -48,6 +48,19 @@ def _fastq_pair(dest: Path, n: int = 8) -> None:
     (dest / "sample_R2.fastq").write_text("".join(r2), encoding="utf-8")
 
 
+def _fastq_named(dest: Path, sample: str, n: int = 8) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    r1 = []
+    r2 = []
+    for i in range(n):
+        taxid = 562 if i % 2 == 0 else 9606
+        rec = f"@{sample}{i}|taxid:{taxid}\nACGTACGTACGT\n+\nIIIIIIIIIIII\n"
+        r1.append(rec)
+        r2.append(rec)
+    (dest / f"{sample}_R1.fastq").write_text("".join(r1), encoding="utf-8")
+    (dest / f"{sample}_R2.fastq").write_text("".join(r2), encoding="utf-8")
+
+
 def _training_tables():
     n = 16
     tax = [9606, 9606, 562, 562] * (n // 4)
@@ -393,3 +406,30 @@ def test_cli_apply_success(tmp_path, monkeypatch):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert list((out / "reprofiled_annotations").glob("*_reprofiled.csv"))
+
+
+def test_apply_full_then_merge_initial_and_regenerated(tmp_path, monkeypatch):
+    from samovar.merge import merge_runs
+
+    source = _source_pipeline(tmp_path, monkeypatch)
+    _fastq_named(source / "initial", "train")
+    held = tmp_path / "held"
+    _fastq_named(held, "held")
+    applied = tmp_path / "applied"
+    prov = apply_pipeline(held, source, applied, full=True, cores=1)
+    assert prov["retrained"] is True
+    assert not (applied / "regenerated_annotations").exists()
+    initial = merge_runs([source, applied], tmp_path / "merged_initial", "initial")
+    regenerated = merge_runs(
+        [source, applied], tmp_path / "merged_regenerated", "regenerated"
+    )
+    assert initial["mode"] == "initial"
+    assert regenerated["mode"] == "regenerated"
+    assert "held" in initial["samples"]
+    assert "train" in initial["samples"]
+    assert (tmp_path / "merged_initial" / "initial" / "held_R1.fastq").is_file()
+    assert (tmp_path / "merged_initial" / "initial" / "train_R1.fastq").is_file()
+    assert not (tmp_path / "merged_initial" / "regenerated_annotations").exists()
+    assert (tmp_path / "merged_regenerated" / "regenerated_annotations").is_dir()
+    assert initial["next_step"] == "viz_initial"
+    assert regenerated["next_step"] == "viz_regenerated"

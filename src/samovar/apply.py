@@ -329,18 +329,6 @@ def _viz_and_score(
     run_custom_scorers(dest, config=cfg, stage=stage)
 
 
-def _copy_regenerated_annotations(source: Path, dest: Path) -> Path:
-    target = dest / "regenerated_annotations"
-    if target.exists():
-        return target
-    if source.is_file():
-        target.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target / source.name)
-        return target
-    shutil.copytree(source, target)
-    return target
-
-
 def apply_pipeline(
     input_dir: PathLike,
     pipeline_dir: PathLike,
@@ -471,9 +459,9 @@ def apply_pipeline(
                 stage_filter_sample_qc(dest, a2iss, phase="final")
         elif step == "reprofile":
             if full:
-                copied = _copy_regenerated_annotations(
-                    Path(state.regenerated_annotations), dest
-                )
+                # Train from the source run's labeled tables. Do not copy them
+                # into dest: that would collide on ``samovar merge regenerated``.
+                regen_src = Path(state.regenerated_annotations)
                 gt_dir = regenerated_abundance_dir(dest)
                 name = (
                     repro_cfg.get("reprofiler")
@@ -482,7 +470,7 @@ def apply_pipeline(
                 )
                 run_reprofiler(
                     name,
-                    regenerated_path=copied,
+                    regenerated_path=regen_src,
                     ground_truth_dir=gt_dir if gt_dir.is_dir() else None,
                     initial_dir=dest / "initial_annotations",
                     output_dir=dest / "reprofiled_annotations",
@@ -490,7 +478,7 @@ def apply_pipeline(
                 )
                 trained = True
                 applied_model = dest / "reprofiled_annotations" / "trained_model.joblib"
-                reference = copied
+                reference = regen_src
             else:
                 apply_saved_reprofiler(
                     model_path=state.model_path,
