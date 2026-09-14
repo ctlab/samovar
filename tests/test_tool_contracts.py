@@ -184,6 +184,23 @@ def test_sample_scoring_contract(request):
         assert value == value, "quality must be numeric (NaN allowed only for invalid samples)"
 
 
+def test_sample_filtering_contract(request):
+    _skip_if_other_type(request, "sample_filtering")
+    path = _tool_path(request, "sample_filtering")
+    module = load_python_module(path, "contract_sample_filter")
+    fn = getattr(module, "filter_samples", None)
+    assert callable(fn), f"{path} must define filter_samples(table, scores, config)"
+    table = _tiny_abundance()
+    scores = pd.DataFrame({"sample": ["1", "2"], "quality": [0.9, 0.1]})
+    out = fn(table, scores, {"n": 2})
+    if isinstance(out, dict):
+        out = out.get("table")
+    assert isinstance(out, pd.DataFrame)
+    assert "taxid" in out.columns
+    kept = n_sample_columns(out)
+    assert kept, f"{path} must keep at least one sample column"
+
+
 def test_scoring_contract(request, tmp_path):
     _skip_if_other_type(request, "scoring")
     path = _tool_path(request, "scoring")

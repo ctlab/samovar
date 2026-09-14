@@ -49,6 +49,12 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "DataFrame or dict with one quality score per generated sample "
         "(higher is better).",
     },
+    "sample_filtering": {
+        "in": "Generated abundance table plus per-sample quality scores "
+        "(filter_samples(table, scores, config)). config may include n, frac, sd.",
+        "out": "Abundance table with a subset of sample columns kept "
+        "(higher quality preferred). At least one sample remains.",
+    },
     "scoring": {
         "in": "List of paths under the run dir (glob *annotations by default), "
         "output_dir, config.",
@@ -135,6 +141,7 @@ GROUP_TO_TESTNODE = {
     "table_reads_generator": "tests/test_tool_contracts.py::test_table_regenerator_contract",
     "table_scoring": "tests/test_tool_contracts.py::test_table_scoring_contract",
     "sample_scoring": "tests/test_tool_contracts.py::test_sample_scoring_contract",
+    "sample_filtering": "tests/test_tool_contracts.py::test_sample_filtering_contract",
     "scoring": "tests/test_tool_contracts.py::test_scoring_contract",
     "reads_generator": "tests/test_tool_contracts.py::test_reads_generator_contract",
     "metagenome_generator": "tests/test_tool_contracts.py::test_metagenome_generator_contract",
@@ -159,6 +166,7 @@ DEFAULT_TOOLS = {
     "table_reads_generator": "tests/tools/identity_table.py",
     "table_scoring": "tests/data/bray_ks_table_scorer.py",
     "sample_scoring": "tests/tools/dummy_sample_scorer.py",
+    "sample_filtering": "tests/tools/dummy_sample_filter.py",
     "scoring": "tests/tools/count_annotations.py",
     "reads_generator": "tests/tools/echo_reads.py",
     "metagenome_generator": "tests/tools/echo_reads.py",

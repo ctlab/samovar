@@ -131,14 +131,21 @@ def lookup_sample_scorer(name: str):
 
 def parse_sample_score_tokens(
     tokens: Optional[Sequence[str]],
-) -> Tuple[str, Dict[str, str]]:
-    """Split CLI/YAML tokens into (global_scorer, annotator→scorer).
+    *,
+    table_methods: Optional[Sequence[str]] = None,
+) -> Tuple[str, Dict[str, str], Dict[str, str]]:
+    """Split CLI/YAML tokens into (global, annotator→scorer, method→scorer).
 
     ``bray_curtis`` is global. ``kaiju:imported`` is annotator-specific.
-    ``none`` clears both. Annotator keys win over the global name at resolve time.
+    ``bootstrap:bray_curtis`` is generation-method-specific when the left
+    token is a table regenerator. ``none`` clears all.
     """
+    from samovar.table_regenerators import is_table_method_name
+
     global_name = ""
     by_annotator: Dict[str, str] = {}
+    by_method: Dict[str, str] = {}
+    extras = list(table_methods or [])
     for raw in tokens or []:
         text = str(raw or "").strip()
         if not text:
@@ -146,44 +153,63 @@ def parse_sample_score_tokens(
         if text.lower() in NONE_TOKENS:
             global_name = ""
             by_annotator = {}
+            by_method = {}
             continue
         if ":" in text:
             left, right = text.split(":", 1)
-            ann, scorer = left.strip(), right.strip()
-            if ann and scorer:
+            key, scorer = left.strip(), right.strip()
+            if key and scorer:
+                target = by_method if is_table_method_name(key, extras) else by_annotator
                 if scorer.lower() in NONE_TOKENS:
-                    by_annotator.pop(ann, None)
+                    target.pop(key, None)
                 else:
-                    by_annotator[ann] = scorer
+                    target[key] = scorer
             continue
         global_name = "" if text.lower() in NONE_TOKENS else text
-    return global_name, by_annotator
+    return global_name, by_annotator, by_method
 
 
 def ingest_sample_score_settings(
     raw: Any = None,
     by_annotator: Optional[Mapping[str, Any]] = None,
-) -> Tuple[str, Dict[str, str]]:
-    """Normalize YAML ``sample_score`` / ``sample_score_by_annotator`` values."""
-    mapping: Dict[str, str] = {}
+    by_method: Optional[Mapping[str, Any]] = None,
+    *,
+    table_methods: Optional[Sequence[str]] = None,
+) -> Tuple[str, Dict[str, str], Dict[str, str]]:
+    """Normalize YAML ``sample_score`` / per-annotator / per-method maps."""
+    from samovar.table_regenerators import is_table_method_name
+
+    ann_map: Dict[str, str] = {}
+    method_map: Dict[str, str] = {}
     tokens: List[str] = []
+    extras = list(table_methods or [])
     if isinstance(raw, Mapping):
-        mapping.update({str(k).strip(): str(v).strip() for k, v in raw.items() if str(k).strip()})
+        for k, v in raw.items():
+            key, value = str(k).strip(), str(v).strip()
+            if not key:
+                continue
+            if is_table_method_name(key, extras):
+                method_map[key] = value
+            else:
+                ann_map[key] = value
     elif isinstance(raw, (list, tuple)):
         tokens.extend(str(item) for item in raw)
     elif raw not in (None, False):
         tokens.append(str(raw))
     if isinstance(by_annotator, Mapping):
-        mapping.update(
-            {str(k).strip(): str(v).strip() for k, v in by_annotator.items() if str(k).strip()}
-        )
-    global_name, specific = parse_sample_score_tokens(tokens)
-    for key, value in mapping.items():
-        if not value or value.lower() in NONE_TOKENS:
-            specific.pop(key, None)
-        else:
-            specific[key] = value
-    return global_name, specific
+        ann_map.update({str(k).strip(): str(v).strip() for k, v in by_annotator.items() if str(k).strip()})
+    if isinstance(by_method, Mapping):
+        method_map.update({str(k).strip(): str(v).strip() for k, v in by_method.items() if str(k).strip()})
+    global_name, specific_ann, specific_method = parse_sample_score_tokens(
+        tokens, table_methods=extras
+    )
+    specific_ann.update(ann_map)
+    specific_method.update(method_map)
+    specific_ann = {k: v for k, v in specific_ann.items() if v and v.lower() not in NONE_TOKENS}
+    specific_method = {
+        k: v for k, v in specific_method.items() if v and v.lower() not in NONE_TOKENS
+    }
+    return global_name, specific_ann, specific_method
 
 
 def parse_neighbor_k_from_flags(flags: Optional[str]) -> Optional[int]:
@@ -204,19 +230,34 @@ def parse_neighbor_k_from_flags(flags: Optional[str]) -> Optional[int]:
 def sample_qc_configured(
     global_name: Optional[str] = None,
     by_annotator: Optional[Mapping[str, str]] = None,
+    by_method: Optional[Mapping[str, str]] = None,
 ) -> bool:
     if str(global_name or "").strip() and str(global_name).strip().lower() not in NONE_TOKENS:
         return True
-    return any(str(v or "").strip() for v in (by_annotator or {}).values())
+    if any(str(v or "").strip() for v in (by_annotator or {}).values()):
+        return True
+    return any(str(v or "").strip() for v in (by_method or {}).values())
 
 
 def resolve_sample_scorer(
     annotator: str,
     *,
+    method: str = "",
     global_name: Optional[str] = None,
     by_annotator: Optional[Mapping[str, str]] = None,
+    by_method: Optional[Mapping[str, str]] = None,
 ) -> str:
-    """Most specific mapping wins: annotator entry, else global, else empty."""
+    """Most specific mapping wins: generation method, then annotator, then global."""
+    if method:
+        specific_m = str((by_method or {}).get(method) or "").strip()
+        if not specific_m:
+            low = str(method).strip().lower()
+            for key, value in (by_method or {}).items():
+                if str(key).strip().lower() == low:
+                    specific_m = str(value or "").strip()
+                    break
+        if specific_m:
+            return canonicalize_sample_scorer(specific_m)
     specific = str((by_annotator or {}).get(annotator) or "").strip()
     if not specific:
         low = str(annotator or "").strip().lower()
@@ -494,7 +535,8 @@ def stage_score_sample_qc(
     cfg = dict(config or {})
     global_name = cfg.get("sample_score") or cfg.get("sample_qc") or ""
     by_annotator = dict(cfg.get("sample_score_by_annotator") or {})
-    if not sample_qc_configured(global_name, by_annotator):
+    by_method = dict(cfg.get("sample_score_by_method") or {})
+    if not sample_qc_configured(global_name, by_annotator, by_method):
         return {"enabled": False, "written": []}
     root = Path(output_dir)
     observed_dir = observed_abundance_dir(root)
@@ -505,7 +547,11 @@ def stage_score_sample_qc(
     combined: List[pd.DataFrame] = []
     for mode, annotator, table in _iter_generated_tables(root, phase):
         scorer = resolve_sample_scorer(
-            annotator, global_name=str(global_name or ""), by_annotator=by_annotator
+            annotator,
+            method=mode,
+            global_name=str(global_name or ""),
+            by_annotator=by_annotator,
+            by_method=by_method,
         )
         if not scorer:
             continue

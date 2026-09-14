@@ -151,7 +151,7 @@ def test_resolve_precedence():
         == "bray_curtis"
     )
     assert canonicalize_sample_scorer("nearest3_bray") == "bray_curtis"
-    g, by = parse_sample_score_tokens(["bray_curtis", "kaiju:bray_curtis"])
+    g, by = parse_sample_score_tokens(["bray_curtis", "kaiju:bray_curtis"])[:2]
     assert g == "bray_curtis"
     assert by["kaiju"] == "bray_curtis"
     assert sample_qc_configured("", {}) is False

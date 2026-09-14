@@ -93,8 +93,53 @@ def main():
             'NAME is global for every annotator; annotator:NAME is specific. '
             'Repeat to mix, e.g. --sample-score bray_curtis --sample-score kaiju:imported. '
             'Most specific mapping wins. Omit for no sample QC (pipeline unchanged). '
-            'Built-in: bray_curtis. Import others with `samovar tools import --type sample-score`.'
+            'Built-in: bray_curtis. Import others with `samovar tools import --type sample-score`. '
+            'Generation methods use the same NAME:value form (bootstrap:bray_curtis).'
         ),
+    )
+    parser.add_argument(
+        '--sample-filter',
+        '--sample_filter',
+        dest='sample_filter',
+        action='append',
+        default=None,
+        help=(
+            'Optional sample filter after QC scoring. NAME is global; method:NAME is '
+            'per table_reads_generator (e.g. --sample-filter top --sample-filter vae:median_sd). '
+            'Built-in: top, median_sd. Omit for no filtering.'
+        ),
+    )
+    parser.add_argument(
+        '--sample-filter-n',
+        '--sample_filter_n',
+        dest='sample_filter_n',
+        action='append',
+        default=None,
+        help='Top-N samples to keep (or method:N). Must be >1 and < generated sample count.',
+    )
+    parser.add_argument(
+        '--sample-filter-frac',
+        '--sample-filter-percent',
+        '--sample_filter_frac',
+        dest='sample_filter_frac',
+        action='append',
+        default=None,
+        help='Top fraction of samples to keep, exclusive (0, 1), or method:FRAC.',
+    )
+    parser.add_argument(
+        '--sample-filter-sd',
+        '--sample_filter_sd',
+        dest='sample_filter_sd',
+        action='append',
+        default=None,
+        help='Keep samples in median ± X·SD (or method:X). Used by median_sd.',
+    )
+    parser.add_argument(
+        '--sample-filter-stage',
+        '--sample_filter_stage',
+        dest='sample_filter_stage',
+        default=None,
+        help='Where to filter: final (default), candidates (before table compare), or both.',
     )
     parser.add_argument(
         '--table-score',
@@ -476,6 +521,11 @@ def main():
         "table_reads_generator", "table-reads-generator", "regeneration_mode",
         "table-score", "table_score", "table-reads-scorer",
         "sample-score", "sample_score", "sample-qc",
+        "sample-filter", "sample_filter",
+        "sample-filter-n", "sample_filter_n",
+        "sample-filter-frac", "sample_filter_frac",
+        "sample-filter-sd", "sample_filter_sd",
+        "sample-filter-stage", "sample_filter_stage",
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",

@@ -33,6 +33,7 @@ from samovar.scorers import run_custom_scorers
 from samovar.seqio import has_r1_reads, link_or_copy_reads, list_r1_files
 from samovar.table_scorers import stage_score_regenerated_tables
 from samovar.sample_scorers import sample_qc_configured, stage_score_sample_qc
+from samovar.sample_filters import sample_filter_configured, stage_filter_sample_qc
 from samovar.viz_annotation import compare_annotations
 
 PathLike = Union[str, os.PathLike]
@@ -53,8 +54,10 @@ TABLE_ADAPT_STEPS = (
     "abundance_tables",
     "regenerate_tables",
     "score_sample_qc_full",
+    "filter_sample_qc_full",
     "score_regenerated_tables",
     "score_sample_qc_final",
+    "filter_sample_qc_final",
 )
 
 
@@ -439,9 +442,16 @@ def apply_pipeline(
             stage_regenerate_tables(dest, a2iss)
         elif step == "score_sample_qc_full":
             if sample_qc_configured(
-                a2iss.get("sample_score"), a2iss.get("sample_score_by_annotator")
+                a2iss.get("sample_score"),
+                a2iss.get("sample_score_by_annotator"),
+                a2iss.get("sample_score_by_method"),
             ):
                 stage_score_sample_qc(dest, a2iss, phase="full")
+        elif step == "filter_sample_qc_full":
+            if sample_filter_configured(
+                a2iss.get("sample_filter"), a2iss.get("sample_filter_by_method")
+            ):
+                stage_filter_sample_qc(dest, a2iss, phase="full")
         elif step == "score_regenerated_tables":
             try:
                 stage_score_regenerated_tables(dest, a2iss)
@@ -449,9 +459,16 @@ def apply_pipeline(
                 print(f"[apply] table scoring skipped: {exc}", file=sys.stderr)
         elif step == "score_sample_qc_final":
             if sample_qc_configured(
-                a2iss.get("sample_score"), a2iss.get("sample_score_by_annotator")
+                a2iss.get("sample_score"),
+                a2iss.get("sample_score_by_annotator"),
+                a2iss.get("sample_score_by_method"),
             ):
                 stage_score_sample_qc(dest, a2iss, phase="final")
+        elif step == "filter_sample_qc_final":
+            if sample_filter_configured(
+                a2iss.get("sample_filter"), a2iss.get("sample_filter_by_method")
+            ):
+                stage_filter_sample_qc(dest, a2iss, phase="final")
         elif step == "reprofile":
             if full:
                 copied = _copy_regenerated_annotations(

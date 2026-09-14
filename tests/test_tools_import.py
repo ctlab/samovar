@@ -209,6 +209,29 @@ def test_import_sample_scoring_group(tmp_path, monkeypatch):
     assert raw["type"] == "sample_scoring"
 
 
+def test_import_sample_filtering_group(tmp_path, monkeypatch):
+    from samovar.main_config import normalize_tool_group
+
+    assert normalize_tool_group("sample-filter") == "sample_filtering"
+    script = tmp_path / "filt_plugin.py"
+    script.write_text(
+        "def filter_samples(table, scores, config=None):\n"
+        "    return table\n"
+    )
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    spec = import_tool(
+        name="filt_plugin",
+        tool_type="sample-filter",
+        exec_path=str(script),
+        also_repo_build=False,
+    )
+    assert spec[3] == "sample_filtering"
+    raw = _tool_row(json.loads(cfg.read_text())["tools"], "filt_plugin")
+    assert raw["type"] == "sample_filtering"
+
+
 def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
     script = tmp_path / "clf"
     script.write_text("#!/bin/sh\nexit 0\n")

@@ -292,6 +292,18 @@ def require_known_regeneration_mode(mode: Optional[str]) -> str:
     return name
 
 
+def is_table_method_name(name: Optional[str], extra_modes: Optional[List[str]] = None) -> bool:
+    """True if ``name`` is a builtin or configured abundance-table generator."""
+    key = str(name or "").strip()
+    if not key:
+        return False
+    kind, canon = resolve_regeneration_mode(key)
+    if kind == "builtin":
+        return True
+    extra = {str(m).strip().lower() for m in (extra_modes or []) if str(m).strip()}
+    return key.lower() in extra or str(canon).strip().lower() in extra
+
+
 class TableRegenerator(ABC):
     """One abundance table in, one (or more) abundance tables out."""
 

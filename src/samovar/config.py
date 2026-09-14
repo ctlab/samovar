@@ -25,6 +25,15 @@ from samovar.sample_scorers import (
     ingest_sample_score_settings,
     sample_qc_configured,
 )
+from samovar.sample_filters import (
+    filter_candidates_enabled,
+    filter_final_enabled,
+    ingest_sample_filter_settings,
+    parse_param_tokens,
+    parse_sample_filter_stage,
+    sample_filter_configured,
+    validate_pipeline_sample_filters,
+)
 from samovar.reads_generators import (
     flags_apply_to_reads_generator,
     require_known_reads_generator,
@@ -286,8 +295,18 @@ class PipelineConfig:
     table_score: str = "shannon_ks"
     sample_score: str = ""
     sample_score_by_annotator: Optional[Dict[str, str]] = None
+    sample_score_by_method: Optional[Dict[str, str]] = None
     sample_score_flags: Optional[str] = None
     sample_score_tool_flags: Optional[Dict[str, str]] = None
+    sample_filter: str = ""
+    sample_filter_by_method: Optional[Dict[str, str]] = None
+    sample_filter_n: Optional[float] = None
+    sample_filter_frac: Optional[float] = None
+    sample_filter_sd: Optional[float] = None
+    sample_filter_n_by_method: Optional[Dict[str, float]] = None
+    sample_filter_frac_by_method: Optional[Dict[str, float]] = None
+    sample_filter_sd_by_method: Optional[Dict[str, float]] = None
+    sample_filter_stage: str = "final"
     regeneration_n: Optional[int] = None
     regeneration_n_reads: int = 1000
     regeneration_seed: int = 42
@@ -349,8 +368,18 @@ class PipelineConfig:
             self.export_tool_flags = {}
         if self.sample_score_by_annotator is None:
             self.sample_score_by_annotator = {}
+        if self.sample_score_by_method is None:
+            self.sample_score_by_method = {}
         if self.sample_score_tool_flags is None:
             self.sample_score_tool_flags = {}
+        if self.sample_filter_by_method is None:
+            self.sample_filter_by_method = {}
+        if self.sample_filter_n_by_method is None:
+            self.sample_filter_n_by_method = {}
+        if self.sample_filter_frac_by_method is None:
+            self.sample_filter_frac_by_method = {}
+        if self.sample_filter_sd_by_method is None:
+            self.sample_filter_sd_by_method = {}
         if not self.regeneration_modes:
             self.regeneration_modes = [self.regeneration_mode]
         if self.export_formats is None:
@@ -412,7 +441,7 @@ class PipelineConfig:
                 )
                 if yaml_score:
                     config.table_score = str(yaml_score)
-                yaml_sample, yaml_sample_by = ingest_sample_score_settings(
+                yaml_sample, yaml_sample_by, yaml_sample_method = ingest_sample_score_settings(
                     input_config.get("sample_score")
                     or input_config.get("sample-score")
                     or input_config.get("sample_qc")
@@ -420,11 +449,16 @@ class PipelineConfig:
                     input_config.get("sample_score_by_annotator")
                     or input_config.get("sample-score-by-annotator")
                     or input_config.get("sample_qc_by_annotator"),
+                    input_config.get("sample_score_by_method")
+                    or input_config.get("sample-score-by-method"),
+                    table_methods=config.regeneration_modes,
                 )
                 if yaml_sample:
                     config.sample_score = yaml_sample
                 if yaml_sample_by:
                     config.sample_score_by_annotator = dict(yaml_sample_by)
+                if yaml_sample_method:
+                    config.sample_score_by_method = dict(yaml_sample_method)
                 yaml_sflags = input_config.get("sample_score_flags") or input_config.get(
                     "sample-score-flags"
                 )
@@ -433,6 +467,44 @@ class PipelineConfig:
                 yaml_stf = input_config.get("sample_score_tool_flags")
                 if isinstance(yaml_stf, dict):
                     config.sample_score_tool_flags = {str(k): str(v) for k, v in yaml_stf.items()}
+                yaml_filt, yaml_filt_by = ingest_sample_filter_settings(
+                    input_config.get("sample_filter")
+                    or input_config.get("sample-filter")
+                    or input_config.get("sample_qc_filter"),
+                    input_config.get("sample_filter_by_method")
+                    or input_config.get("sample-filter-by-method"),
+                    table_methods=config.regeneration_modes,
+                )
+                if yaml_filt:
+                    config.sample_filter = yaml_filt
+                if yaml_filt_by:
+                    config.sample_filter_by_method = dict(yaml_filt_by)
+                if input_config.get("sample_filter_n") not in (None, ""):
+                    config.sample_filter_n = float(input_config.get("sample_filter_n"))
+                if input_config.get("sample_filter_frac") not in (None, ""):
+                    config.sample_filter_frac = float(
+                        input_config.get("sample_filter_frac")
+                        or input_config.get("sample_filter_percent")
+                    )
+                if input_config.get("sample_filter_sd") not in (None, ""):
+                    config.sample_filter_sd = float(input_config.get("sample_filter_sd"))
+                yaml_stage = input_config.get("sample_filter_stage") or input_config.get(
+                    "sample-filter-stage"
+                )
+                if yaml_stage:
+                    config.sample_filter_stage = parse_sample_filter_stage(yaml_stage)
+                for kind, dest in (
+                    ("sample_filter_n_by_method", "sample_filter_n_by_method"),
+                    ("sample_filter_frac_by_method", "sample_filter_frac_by_method"),
+                    ("sample_filter_sd_by_method", "sample_filter_sd_by_method"),
+                ):
+                    raw_map = input_config.get(kind) or input_config.get(kind.replace("_", "-"))
+                    if isinstance(raw_map, dict):
+                        setattr(
+                            config,
+                            dest,
+                            {str(k): float(v) for k, v in raw_map.items()},
+                        )
                 meta = input_config.get("samples_metadata") or input_config.get(
                     "metadata"
                 )
@@ -794,16 +866,56 @@ class PipelineConfig:
             from samovar.sample_scorers import NONE_TOKENS, parse_sample_score_tokens
 
             tokens = [str(x) for x in cli_sample if str(x).strip()]
-            g_name, by_ann = parse_sample_score_tokens(tokens)
+            g_name, by_ann, by_method = parse_sample_score_tokens(
+                tokens, table_methods=config.regeneration_modes
+            )
             if any(str(t).strip().lower() in NONE_TOKENS for t in tokens):
                 config.sample_score = g_name
                 config.sample_score_by_annotator = dict(by_ann)
+                config.sample_score_by_method = dict(by_method)
             else:
                 if g_name:
                     config.sample_score = g_name
                 merged_by = dict(config.sample_score_by_annotator or {})
                 merged_by.update(by_ann)
                 config.sample_score_by_annotator = merged_by
+                merged_m = dict(config.sample_score_by_method or {})
+                merged_m.update(by_method)
+                config.sample_score_by_method = merged_m
+        cli_filt = getattr(args, "sample_filter", None)
+        if cli_filt:
+            from samovar.sample_scorers import NONE_TOKENS as _NONE
+
+            tokens = [str(x) for x in cli_filt if str(x).strip()]
+            g_filt, by_filt = ingest_sample_filter_settings(
+                tokens, table_methods=config.regeneration_modes
+            )
+            if any(str(t).strip().lower() in _NONE for t in tokens):
+                config.sample_filter = g_filt
+                config.sample_filter_by_method = dict(by_filt)
+            else:
+                if g_filt:
+                    config.sample_filter = g_filt
+                merged_f = dict(config.sample_filter_by_method or {})
+                merged_f.update(by_filt)
+                config.sample_filter_by_method = merged_f
+        cli_filt_stage = getattr(args, "sample_filter_stage", None)
+        if cli_filt_stage:
+            config.sample_filter_stage = parse_sample_filter_stage(cli_filt_stage)
+        for kind, attr, by_attr in (
+            ("sample_filter_n", "sample_filter_n", "sample_filter_n_by_method"),
+            ("sample_filter_frac", "sample_filter_frac", "sample_filter_frac_by_method"),
+            ("sample_filter_sd", "sample_filter_sd", "sample_filter_sd_by_method"),
+        ):
+            cli_tok = getattr(args, kind, None)
+            if not cli_tok:
+                continue
+            g_val, by_val = parse_param_tokens(cli_tok)
+            if g_val is not None:
+                setattr(config, attr, g_val)
+            merged_p = dict(getattr(config, by_attr) or {})
+            merged_p.update(by_val)
+            setattr(config, by_attr, merged_p)
         cli_reads = getattr(args, "reads_generator", None)
         if cli_reads:
             config.reads_generator = require_known_reads_generator(cli_reads)
@@ -1081,6 +1193,31 @@ class PipelineConfig:
                         p for p in (ann.extra, slot) if p
                     ) or None
         _apply_translated_cli_flags(config, args)
+        params = {}
+        if config.sample_filter_n is not None:
+            params["n"] = config.sample_filter_n
+        if config.sample_filter_frac is not None:
+            params["frac"] = config.sample_filter_frac
+        if config.sample_filter_sd is not None:
+            params["sd"] = config.sample_filter_sd
+        per_params: Dict[str, Dict[str, float]] = {}
+        for method, value in (config.sample_filter_n_by_method or {}).items():
+            per_params.setdefault(method, {})["n"] = value
+        for method, value in (config.sample_filter_frac_by_method or {}).items():
+            per_params.setdefault(method, {})["frac"] = value
+        for method, value in (config.sample_filter_sd_by_method or {}).items():
+            per_params.setdefault(method, {})["sd"] = value
+        validate_pipeline_sample_filters(
+            sample_filter=config.sample_filter,
+            sample_filter_by_method=config.sample_filter_by_method,
+            params=params,
+            params_by_method=per_params,
+            table_methods=config.regeneration_modes,
+            n_generated=config.regeneration_n,
+            sample_score=config.sample_score,
+            sample_score_by_annotator=config.sample_score_by_annotator,
+            sample_score_by_method=config.sample_score_by_method,
+        )
         return config
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
@@ -1133,8 +1270,15 @@ class PipelineConfig:
             'table_score': self.table_score,
             'sample_score': self.sample_score or "",
             'sample_score_by_annotator': dict(self.sample_score_by_annotator or {}),
+            'sample_score_by_method': dict(self.sample_score_by_method or {}),
             'sample_score_flags': self.sample_score_flags or "",
             'sample_score_tool_flags': dict(self.sample_score_tool_flags or {}),
+            'sample_filter': self.sample_filter or "",
+            'sample_filter_by_method': dict(self.sample_filter_by_method or {}),
+            'sample_filter_stage': self.sample_filter_stage or "final",
+            'sample_filter_n_by_method': dict(self.sample_filter_n_by_method or {}),
+            'sample_filter_frac_by_method': dict(self.sample_filter_frac_by_method or {}),
+            'sample_filter_sd_by_method': dict(self.sample_filter_sd_by_method or {}),
             'reannotation_level': self.reannotation_level,
             'N_reads': self.regeneration_n_reads,
             'seed': self.regeneration_seed,
@@ -1154,6 +1298,12 @@ class PipelineConfig:
             annotation2iss_config['metagenome_generator'] = self.metagenome_generator
         if self.regeneration_n:
             annotation2iss_config['N'] = self.regeneration_n
+        if self.sample_filter_n is not None:
+            annotation2iss_config['n'] = self.sample_filter_n
+        if self.sample_filter_frac is not None:
+            annotation2iss_config['frac'] = self.sample_filter_frac
+        if self.sample_filter_sd is not None:
+            annotation2iss_config['sd'] = self.sample_filter_sd
         if self.samples_metadata:
             annotation2iss_config['samples_metadata'] = self.samples_metadata
         if self.regeneration_extra_flags:
@@ -1304,13 +1454,23 @@ class PipelineConfig:
         src = root / "src"
         email = self.email or ncbi_email()
         sample_qc_on = sample_qc_configured(
-            self.sample_score, self.sample_score_by_annotator
+            self.sample_score,
+            self.sample_score_by_annotator,
+            self.sample_score_by_method,
         )
+        filter_on = sample_filter_configured(
+            self.sample_filter, self.sample_filter_by_method
+        )
+        if filter_on:
+            sample_qc_on = True
+        filter_full_on = filter_on and filter_candidates_enabled(self.sample_filter_stage)
+        filter_final_on = filter_on and filter_final_enabled(self.sample_filter_stage)
         listed_steps = [
             name
             for name in CHECKPOINT_STEPS
-            if sample_qc_on
-            or name not in {"score_sample_qc_full", "score_sample_qc_final"}
+            if (sample_qc_on or name not in {"score_sample_qc_full", "score_sample_qc_final"})
+            and (filter_full_on or name != "filter_sample_qc_full")
+            and (filter_final_on or name != "filter_sample_qc_final")
         ]
         step_names = " ".join(listed_steps)
         tool_path = runtime_path_prefix()
@@ -1478,6 +1638,8 @@ fi""",
 
         score_sample_qc_full = ""
         score_sample_qc_final = ""
+        filter_sample_qc_full = ""
+        filter_sample_qc_final = ""
         if sample_qc_on:
             score_sample_qc_full = _checkpoint_block(
                 "score_sample_qc_full",
@@ -1489,6 +1651,22 @@ fi""",
             score_sample_qc_final = _checkpoint_block(
                 "score_sample_qc_final",
                 f"""$PYTHON_PATH -m samovar.sample_scorers stage \\
+    --output_dir "$out_dir" \\
+    --config {configs['annotation2iss']} \\
+    --phase final""",
+            )
+        if filter_full_on:
+            filter_sample_qc_full = _checkpoint_block(
+                "filter_sample_qc_full",
+                f"""$PYTHON_PATH -m samovar.sample_filters stage \\
+    --output_dir "$out_dir" \\
+    --config {configs['annotation2iss']} \\
+    --phase full""",
+            )
+        if filter_final_on:
+            filter_sample_qc_final = _checkpoint_block(
+                "filter_sample_qc_final",
+                f"""$PYTHON_PATH -m samovar.sample_filters stage \\
     --output_dir "$out_dir" \\
     --config {configs['annotation2iss']} \\
     --phase final""",
@@ -1619,8 +1797,10 @@ cleanup_tmp_if_requested
                 abundance_tables,
                 regenerate_tables,
                 score_sample_qc_full,
+                filter_sample_qc_full,
                 score_regenerated_tables,
                 score_sample_qc_final,
+                filter_sample_qc_final,
                 seed_genomes,
                 regenerate_reads,
                 early_exit,
