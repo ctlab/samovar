@@ -159,6 +159,27 @@ rule metaphlan4:
         {params.cmd} 2> {log}
         """
 
+rule kmer2:
+    input:
+        r1 = r1_input,
+        r2 = r2_input
+    output:
+        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kmer2.out"
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
+    params:
+        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, input.r2, [output.out]
+        )
+    shell:
+        """
+        mkdir -p $(dirname {output.out})
+        mkdir -p $(dirname {log})
+        {params.cmd} 2> {log}
+        """
+
 rule kraken:
     input:
         r1 = r1_input,

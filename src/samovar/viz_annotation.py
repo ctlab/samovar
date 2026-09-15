@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from samovar.annotation_io import annotator_columns, read_annotation_dir
+from samovar.annotation_columns import is_feat_column
 from samovar.parse_annotators import (
     ensure_taxid_name_map,
     remap_taxid_dataframe,
@@ -160,13 +161,21 @@ def _annotator_names(df: pd.DataFrame) -> List[str]:
     for col in df.columns:
         if col in skip or "confidence" in str(col).lower() or str(col).endswith("_conf"):
             continue
+        if is_feat_column(col) or str(col).lower().startswith("feat_"):
+            continue
         if str(col).startswith("taxID") or str(col) in skip:
             continue
         names.append(col)
-    # After prefix strip, annotators are remaining non-meta columns that were taxID_/N_
     if names:
         return names
-    return [c for c in df.columns if c not in skip and "conf" not in str(c).lower()]
+    return [
+        c
+        for c in df.columns
+        if c not in skip
+        and "conf" not in str(c).lower()
+        and not is_feat_column(c)
+        and not str(c).lower().startswith("feat_")
+    ]
 
 
 def _collapse_other(pred: pd.Series, true: pd.Series) -> pd.Series:
@@ -589,13 +598,26 @@ def viz_annotation(
 
     selected = annotator_columns(work)
     work = _strip_annotator_prefixes(work)
-    # After stripping, selected names lost prefixes
     annotators = []
     skip_meta = {"length", "sample", "true", "seq", "read_type"}
+    renamed_selected = []
+    for col in selected:
+        name = re.sub(r"^taxid_", "", str(col), flags=re.I)
+        name = re.sub(r"^N_", "", name, flags=re.I)
+        short = re.sub(r"_[0-9]+$", "", name)
+        renamed_selected.append(short if short in work.columns else name)
     for col in work.columns:
         if col in skip_meta or "confidence" in str(col).lower() or str(col).endswith("_conf"):
             continue
+        if is_feat_column(col):
+            continue
+        if str(col).lower().startswith("feat_"):
+            continue
         annotators.append(col)
+    if renamed_selected:
+        keep = [c for c in annotators if c in renamed_selected or c in selected]
+        if keep:
+            annotators = keep
 
     taxid_xlab = "True taxon" if use_names else "True taxID"
     taxid_ylab = "Predicted taxon" if use_names else "Predicted taxID"

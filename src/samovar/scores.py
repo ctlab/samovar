@@ -15,6 +15,8 @@ from typing import Dict, Iterable, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from samovar.annotation_columns import is_feat_column, select_scoring_annotators
+
 
 def _taxon_helpers():
     from samovar.viz_annotation import is_special_taxon, normalize_taxon_token
@@ -377,7 +379,8 @@ def score_annotators(
     not added again. When ground truth is missing or all-unclassified, F1 / R²
     and related metrics are left as NaN; ``n_reads`` / ``n_taxa`` are still filled.
     """
-    names = [n for n in annotators if str(n).lower() != "read_type"]
+    names = [n for n in annotators if str(n).lower() != "read_type" and not is_feat_column(n)]
+    names = select_scoring_annotators(work, names)
     tools = tool_annotators(names)
     scored = rows_with_usable_truth(work, true_col) if work is not None else None
     true = scored[true_col] if scored is not None else None

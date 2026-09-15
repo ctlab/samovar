@@ -13,15 +13,16 @@ from typing import Optional
 from collections import Counter
 
 def _tool_name_from_column(col: str) -> Optional[str]:
-    """Extract annotator name from taxid/taxID column labels."""
-    name = str(col).lower()
-    if "confidence" in name:
+    """Extract annotator name from taxid/taxID column labels, never from feat_."""
+    name = str(col)
+    low = name.lower()
+    if low.startswith("feat_") or "confidence" in low:
         return None
-    match = re.search(r"taxid[_./]*([a-z][a-z0-9]*)", name)
+    match = re.match(r"taxid[_./]*([a-z][a-z0-9]*)", low)
     if not match:
         return None
     tool = match.group(1)
-    if tool in {"samovar", "true", "length", "sample", "read"}:
+    if tool in {"samovar", "true", "length", "sample", "read", "feat"}:
         return None
     return tool
 

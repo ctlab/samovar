@@ -29,8 +29,11 @@ def _contract_repo_root() -> Path:
 CONTRACTS: Dict[str, Dict[str, str]] = {
     "annotator": {
         "in": "FASTQ R1/R2 via CLI -i/-I, -d DB, -o out, -t threads "
-        "(or Python parse_output(path) on a two-column TSV).",
-        "out": "TSV/table with columns seq, taxID (CustomAnnotator parse).",
+        "(or Python parse_output(path) on a TSV). Feature extractors use the same CLI.",
+        "out": "TSV with seq plus one or more taxID columns and/or feature columns. "
+        "Combined tables label tax as taxID_<tool>_<n>[_id] and features as "
+        "feat_<tool>_<n>[_id]. A tool may emit only tax, only features, or both. "
+        "--type feature is an alias of annotator (seq2feature).",
     },
     "table_reads_generator": {
         "in": "Abundance or long annotation (Annotation / DataFrame / dir of "

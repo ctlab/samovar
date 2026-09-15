@@ -68,10 +68,13 @@ class TestReprofiling(unittest.TestCase):
             self.assertGreaterEqual(score, 0)
             self.assertLessEqual(score, 1)
         
-        # Check if feature columns are correct
+        # Check if feature columns are taxid votes, length, and optional feat_*
         self.assertIsInstance(feature_cols, list)
         self.assertIn('length', feature_cols)
-        self.assertTrue(all(col.startswith('taxid_') for col in feature_cols if col != 'length'))
+        extra = [col for col in feature_cols if col not in {'length', 'read_type'}]
+        self.assertTrue(
+            all(col.startswith('taxid_') or col.startswith('feat_') for col in extra)
+        )
 
     def test_predict_taxid(self):
         """Test prediction functionality"""

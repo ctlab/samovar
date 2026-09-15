@@ -136,6 +136,8 @@ def test_read_annotation(test_data_dir):
     assert isinstance(ann.DataFrame, pd.DataFrame)
     assert len(ann.DataFrame) > 0
     assert any(col.startswith("taxID_") for col in ann.DataFrame.columns)
+    kraken_feat = [c for c in ann.DataFrame.columns if c.startswith("feat_") and "kraken" in c]
+    assert kraken_feat, f"expected feat_ columns from Kraken length, got {list(ann.DataFrame.columns)}"
 
 
 def test_annotation_class(test_data_dir):

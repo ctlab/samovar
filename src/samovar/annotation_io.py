@@ -30,6 +30,8 @@ def _normalize_colnames(columns: Iterable) -> list:
             out.append(name)
         elif name.startswith("taxID_") or name.startswith("N_"):
             out.append(stripped if name.startswith("taxID_") else name)
+        elif name.startswith("feat_"):
+            out.append(name)
         else:
             out.append(stripped)
     return out
@@ -79,16 +81,10 @@ def read_annotation_dir(
 
 
 def annotator_columns(df: pd.DataFrame) -> list:
-    cols = []
-    for col in df.columns:
-        name = str(col)
-        if "confidence" in name.lower():
-            continue
-        if name.startswith("taxID_") or name.startswith("N_"):
-            if name.lower() == "read_type":
-                continue
-            cols.append(col)
-    return cols
+    from samovar.annotation_columns import tax_annotator_columns
+
+    cols = tax_annotator_columns(df.columns, include_n=True)
+    return [c for c in cols if str(c).lower() != "read_type"]
 
 
 def annotation_to_abundance(

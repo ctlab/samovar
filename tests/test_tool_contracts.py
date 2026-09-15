@@ -99,7 +99,14 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
         )
         frame = inst.parse_output(str(out))
     assert "seq" in frame.columns
-    assert "taxID" in frame.columns or "taxid" in {c.lower() for c in frame.columns}
+    cols_l = {c.lower() for c in frame.columns}
+    has_tax = "taxid" in cols_l or any(str(c).lower().startswith("taxid") for c in frame.columns)
+    has_feat = any(
+        str(c).lower().startswith("feat") or str(c) not in {"seq", "taxID", "taxid"}
+        for c in frame.columns
+        if str(c).lower() not in {"seq", "taxid"}
+    )
+    assert has_tax or has_feat, f"annotator/feature contract needs taxID and/or features: {list(frame.columns)}"
     assert not frame.empty
 
 

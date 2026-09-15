@@ -19,6 +19,14 @@ import sqlite3
 import pickle
 from pathlib import Path
 
+from samovar.annotation_columns import (
+    classify_raw_columns,
+    feat_annotator_columns,
+    is_tax_column,
+    looks_like_header_row,
+    prefix_tool_columns,
+    tax_annotator_columns,
+)
 from samovar.annotators_wrapper import get_annotator_instance
 from samovar.taxonomy_engine import NCBITaxonomyParser
 
@@ -178,13 +186,10 @@ def canonical_taxid(value) -> str:
 
 
 def taxid_value_columns(columns) -> List[str]:
-    """Annotator taxID columns plus ``true``; skip confidence fields."""
+    """Annotator taxID columns plus ``true``; skip ``feat_`` and confidence."""
     out = []
     for col in columns:
-        name = str(col).lower()
-        if "confidence" in name:
-            continue
-        if name == "true" or name.startswith("taxid"):
+        if is_tax_column(col, include_true=True):
             out.append(col)
     return out
 
@@ -863,9 +868,58 @@ def read_metaphlan_raw(file_path: str, db_path: Optional[str] = None) -> pd.Data
     return df
 
 
+def trim_raw_tool_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep ``seq`` plus tax and feature columns; drop classified/taxa/k-mer."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["seq"])
+    seq_col, tax_cols, feat_cols = classify_raw_columns(df.columns)
+    cols = []
+    rename = {}
+    if seq_col is not None:
+        cols.append(seq_col)
+        if seq_col != "seq":
+            rename[seq_col] = "seq"
+    elif "seq" in df.columns:
+        cols.append("seq")
+    for col in tax_cols:
+        cols.append(col)
+    for col in feat_cols:
+        cols.append(col)
+    if not cols:
+        return pd.DataFrame(columns=["seq"])
+    out = df.loc[:, [c for c in cols if c in df.columns]].rename(columns=rename)
+    if "seq" not in out.columns:
+        out.insert(0, "seq", out.index.astype(str) if out.index.name else "")
+    return out
+
+
 def read_custom_raw(file_path: str) -> pd.DataFrame:
-    """Read custom annotator output (seq, taxID)."""
-    return _read_table_or_empty(file_path, ["seq", "taxID"])
+    """Read custom annotator/feature output (headered or ``seq`` + tax/feat)."""
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        return pd.DataFrame(columns=["seq", "taxID"])
+    try:
+        with open(file_path, encoding="utf-8", errors="replace") as handle:
+            first = handle.readline()
+    except OSError:
+        return pd.DataFrame(columns=["seq", "taxID"])
+    first = first.lstrip("\ufeff").strip("\n\r")
+    fields = first.split("\t") if first else []
+    try:
+        if looks_like_header_row(fields):
+            df = pd.read_table(file_path)
+        else:
+            df = pd.read_table(file_path, header=None)
+            names = ["seq"]
+            if df.shape[1] >= 2:
+                names.append("taxID")
+            for i in range(max(0, df.shape[1] - 2)):
+                names.append("length" if i == 0 and df.shape[1] == 3 else f"f{i}")
+            df.columns = names[: df.shape[1]]
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, FileNotFoundError):
+        return pd.DataFrame(columns=["seq", "taxID"])
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["seq", "taxID"])
+    return trim_raw_tool_frame(df)
 
 
 # Dictionary mapping tool names to their respective read functions
@@ -891,6 +945,8 @@ READ_FUNCTIONS = {
     "assembly_hybrid": read_custom_raw,
     "assembly": read_custom_raw,
     "assembly_profiling": read_custom_raw,
+    "kmer2": read_custom_raw,
+    "kmer_counter": read_custom_raw,
 }
 
 
@@ -898,9 +954,11 @@ def read_tool_output(file_path: str, tool_type: str) -> pd.DataFrame:
     """Read an annotator file via native parsers or the OOP wrapper."""
     reader = READ_FUNCTIONS.get(tool_type)
     if reader is not None:
-        return reader(file_path)
-    annotator = get_annotator_instance(tool_type, run_config={}, config={})
-    return annotator.parse_output(file_path)
+        frame = reader(file_path)
+    else:
+        annotator = get_annotator_instance(tool_type, run_config={}, config={})
+        frame = annotator.parse_output(file_path)
+    return trim_raw_tool_frame(frame)
 
 
 def read_annotation(file_path_type: Dict[str, str], trimmed: bool = True) -> pd.DataFrame:
@@ -915,12 +973,16 @@ def read_annotation(file_path_type: Dict[str, str], trimmed: bool = True) -> pd.
     """
     res = pd.DataFrame()
     for path, tool_type in file_path_type.items():
-        df = read_tool_output(path, tool_type).set_index("seq")
-        if trimmed:
-            df = df[["taxID"]]
+        df = read_tool_output(path, tool_type)
         tool_name = tool_type.split("_")[-1].split(".")[0]
-        df.columns = [f"{col}_{tool_name}" if col != "seq" else col for col in df.columns]
-        res = pd.concat([res, df], axis=1)
+        labeled = prefix_tool_columns(df, tool_name, 0)
+        if "seq" in labeled.columns:
+            labeled = labeled.set_index("seq")
+        if trimmed:
+            tax = tax_annotator_columns(labeled.columns)
+            keep = tax or feat_annotator_columns(labeled.columns) or list(labeled.columns)
+            labeled = labeled[keep]
+        res = pd.concat([res, labeled], axis=1)
     return res
 
 
@@ -943,22 +1005,26 @@ class Annotation:
         self.DataFrame = pd.DataFrame()
         self.abundance_tables = None
         
-        # Read and combine all annotation files
+        # Read and combine all annotation files (taxID_* and/or feat_*)
         for path, tool_type in file_path_type.items():
-            df = read_tool_output(path, tool_type).set_index("seq").astype({"taxID": 'string'})
-            df.columns = [f"{col}_{tool_type}_{self.id}" for col in df.columns]
-            
-            # Check for duplicate indices
-            if df.index.duplicated().any():
-                df = df[~df.index.duplicated(keep='first')]
-            
+            raw = read_tool_output(path, tool_type)
+            labeled = prefix_tool_columns(raw, tool_type, self.id)
+            if "seq" in labeled.columns:
+                labeled = labeled.set_index("seq")
+            if labeled.index.duplicated().any():
+                labeled = labeled[~labeled.index.duplicated(keep="first")]
             try:
-                self.DataFrame = pd.concat([self.DataFrame, df], axis=1)
-            except:
-                raise ValueError(f"Error concatenating {path}")
+                self.DataFrame = pd.concat([self.DataFrame, labeled], axis=1)
+            except Exception as exc:
+                raise ValueError(f"Error concatenating {path}") from exc
             self.id += 1
 
-        self.DataFrame = self.DataFrame.fillna("0")
+        tax_cols = tax_annotator_columns(self.DataFrame.columns)
+        feat_cols = feat_annotator_columns(self.DataFrame.columns)
+        for col in tax_cols:
+            self.DataFrame[col] = self.DataFrame[col].fillna("0").astype("string")
+        for col in feat_cols:
+            self.DataFrame[col] = pd.to_numeric(self.DataFrame[col], errors="coerce").fillna(0)
         self.DataFrame["read_type"] = [
             extract_read_type(seq_id) for seq_id in self.DataFrame.index
         ]
@@ -1113,7 +1179,17 @@ class Annotation:
 
     def tr(self) -> pd.DataFrame:
         """Get DataFrame with only taxID columns."""
+        cols = tax_annotator_columns(self.DataFrame.columns)
+        if cols:
+            return self.DataFrame.loc[:, cols].copy()
         return self.DataFrame.copy().filter(regex="taxID.*")
+
+    def ft(self) -> pd.DataFrame:
+        """Get DataFrame with only Feature (``feat_``) columns."""
+        cols = feat_annotator_columns(self.DataFrame.columns)
+        if cols:
+            return self.DataFrame.loc[:, cols].copy()
+        return self.DataFrame.copy().filter(regex=r"^feat_")
 
     @staticmethod
     def list2set(a: List) -> List[str]:

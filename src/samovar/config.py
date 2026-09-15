@@ -100,7 +100,7 @@ def _merge_annotator_launch_flags(
 
     tools = iter_tools(load_config())
     pairs = tool_flag_pairs or []
-    groups = ("annotator", "annotators", "a", "ann")
+    groups = ("annotator", "annotators", "a", "ann", "feature", "features")
     for ann in annotators:
         cmd_base = _cmd_basename(ann.cmd)
         imported = imported_flags_for_names(tools, ann.run_name, ann.type, cmd_base)
@@ -747,6 +747,15 @@ class PipelineConfig:
                     dummy_aliases = {"dummy", "dummy9606", "constant9606", "constant", "random"}
                     if run_name.lower() in dummy_aliases or type_name.lower() in dummy_aliases:
                         type_name = "constant9606"
+                    kmer2_aliases = {"kmer2", "kmer_counter", "dinuc", "dinucleotide"}
+                    cmd_join = " ".join(parts).lower()
+                    if (
+                        run_name.lower() in kmer2_aliases
+                        or type_name.lower() in kmer2_aliases
+                        or "samovar.kmer2" in cmd_join
+                    ):
+                        type_name = "kmer2"
+                        cmd = f"{sys.executable} -m samovar.kmer2"
                     # Konstantaza CLI: --custom-test "metauto /path/to/db"
                     if run_name.lower() in {"custom", "custom-test", "custom_test"}:
                         run_name = type_name

@@ -203,6 +203,9 @@ class Kraken2Annotator(BaseAnnotator):
             return match.group(0) if match else "0"
 
         df["taxID"] = df["taxa"].apply(extract_taxid)
+        if "length" in df.columns:
+            df["length"] = df["length"].astype(str).str.replace(r"\|.*", "", regex=True)
+            return df[["seq", "taxID", "length"]]
         return df[["seq", "taxID"]]
 
 
@@ -370,7 +373,8 @@ class Kraken1Annotator(BaseAnnotator):
         if df is None:
             return _empty_taxid_frame()
         df.columns = ["classified", "seq", "taxID", "length", "k-mer"]
-        return df[["seq", "taxID"]]
+        df["length"] = df["length"].astype(str).str.replace(r"\|.*", "", regex=True)
+        return df[["seq", "taxID", "length"]]
 
 
 class KrakenUniqAnnotator(BaseAnnotator):
@@ -403,7 +407,8 @@ class KrakenUniqAnnotator(BaseAnnotator):
         if df is None:
             return _empty_taxid_frame()
         df.columns = ["classified", "seq", "taxID", "length", "k-mer"]
-        return df[["seq", "taxID"]]
+        df["length"] = df["length"].astype(str).str.replace(r"\|.*", "", regex=True)
+        return df[["seq", "taxID", "length"]]
 
 
 def _cmd_is_custom_wrapper(cmd: str) -> bool:
@@ -489,15 +494,9 @@ class CustomAnnotator(BaseAnnotator):
         )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
-        # Safe reading for empty files
-        try:
-            if os.stat(file_path).st_size == 0:
-                return pd.DataFrame(columns=["seq", "taxID"])
-            df = pd.read_table(file_path, header=None).iloc[:, [0, 1]]
-            df.columns = ["seq", "taxID"]
-            return df
-        except (pd.errors.EmptyDataError, FileNotFoundError):
-            return pd.DataFrame(columns=["seq", "taxID"])
+        from samovar.parse_annotators import read_custom_raw
+
+        return read_custom_raw(file_path)
 
 
 class ConstantTaxidAnnotator(CustomAnnotator):
@@ -581,6 +580,44 @@ class AssemblyAnnotator(BaseAnnotator):
         return df
 
 
+KMER2_TOOL_NAMES = {"kmer2", "kmer_counter", "dinuc", "dinucleotide"}
+
+
+class Kmer2Annotator(BaseAnnotator):
+    """Dinucleotide (k=2) feature extractor: FASTQ → seq + 16 ACGT 2-mer counts."""
+
+    @property
+    def default_cmd(self) -> str:
+        return f"{sys.executable} -m samovar.kmer2"
+
+    def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.kmer2.out")]
+
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        out_file = outputs[0]
+        extra = self.extra or ""
+        cmd = self.cmd
+        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        if not cmd or first.split(".")[0].lower() in KMER2_TOOL_NAMES:
+            cmd = self.default_cmd
+        run = (
+            f"{cmd} "
+            f"-i {shlex.quote(str(input_r1))} "
+            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"-o {shlex.quote(str(out_file))} "
+            f"-t {int(self.threads)} "
+            f"{extra}"
+        )
+        return skip_empty_reads_cmd(input_r1, [out_file], run)
+
+    def parse_output(self, file_path: str) -> pd.DataFrame:
+        from samovar.parse_annotators import read_custom_raw
+
+        return read_custom_raw(file_path)
+
+
 def get_annotator_instance(
     tool_type: str, run_config: Dict, config: Dict
 ) -> BaseAnnotator:
@@ -600,6 +637,10 @@ def get_annotator_instance(
         "krakenu": KrakenUniqAnnotator,
         "assembly": AssemblyAnnotator,
         "assembly_profiling": AssemblyAnnotator,
+        "kmer2": Kmer2Annotator,
+        "kmer_counter": Kmer2Annotator,
+        "dinuc": Kmer2Annotator,
+        "dinucleotide": Kmer2Annotator,
     }
 
     if tool in DUMMY_TOOL_NAMES:

@@ -1,5 +1,5 @@
 // External sort-merge of annotator *.out tables into per-sample CSVs.
-// Streams seq/taxID/length only so Kraken k-mer columns never sit in RAM.
+// Streams seq/taxID/features only so Kraken k-mer LCA maps never sit in RAM.
 
 #include <algorithm>
 #include <cctype>
@@ -29,21 +29,7 @@ namespace {
 constexpr size_t kDefaultChunk = 500000;
 constexpr size_t kIoBuf = 1 << 20;
 
-struct Record {
-    std::string seq;
-    std::string taxid;
-    std::string length;
-};
-
-struct Options {
-    std::string input_dir;
-    std::string output_dir;
-    int split_n = 1;
-    size_t chunk_rows = kDefaultChunk;
-    std::string tmp_dir;
-    bool keep_tmp = false;
-    std::string truth_table;
-};
+enum class ToolKind { Kaiju, Kraken, Kraken2, Custom };
 
 std::string trim_cr(std::string s) {
     if (!s.empty() && s.back() == '\r') {
@@ -73,6 +59,218 @@ std::vector<std::string> split_tab(const std::string& line) {
     }
     return fields;
 }
+
+struct Schema {
+    std::vector<std::string> tax_ids;
+    std::vector<std::string> feat_ids;
+    int seq_col = 0;
+    std::vector<int> tax_cols;
+    std::vector<int> feat_cols;
+};
+
+struct Record {
+    std::string seq;
+    std::vector<std::string> tax;
+    std::vector<std::string> feat;
+};
+
+void resize_record(Record* rec, const Schema& sch) {
+    rec->tax.assign(sch.tax_ids.size(), "0");
+    rec->feat.assign(sch.feat_ids.size(), "");
+}
+
+std::string drop_prefix_ci(const std::string& name, const std::string& prefix) {
+    std::string low = to_lower(name);
+    std::string pre = to_lower(prefix);
+    if (low == pre) {
+        return "";
+    }
+    if (low.size() > pre.size() && low.compare(0, pre.size(), pre) == 0 && name[pre.size()] == '_') {
+        return name.substr(pre.size() + 1);
+    }
+    return name;
+}
+
+bool is_skip_header(const std::string& h) {
+    std::string l = to_lower(h);
+    return l == "classified" || l == "taxa" || l == "k-mer" || l == "kmer" || l == "k_mer" ||
+           l == "sample" || l == "true" || l == "read_type";
+}
+
+bool is_tax_header(const std::string& h) {
+    std::string l = to_lower(h);
+    if (l.rfind("feat", 0) == 0) {
+        return false;
+    }
+    if (l == "taxa" || l == "taxon" || l == "taxonomy") {
+        return false;
+    }
+    if (l == "taxid" || l == "tax_id" || l == "tax") {
+        return true;
+    }
+    return l.rfind("taxid_", 0) == 0 || l.rfind("tax_", 0) == 0;
+}
+
+bool looks_like_header(const std::vector<std::string>& f) {
+    if (f.empty()) {
+        return false;
+    }
+    std::string a = to_lower(f[0]);
+    while (!a.empty() && (a[0] == '#' || a[0] == '@')) {
+        a.erase(a.begin());
+    }
+    return a == "seq" || a == "read_id" || a == "readid" || a == "sequenceid" ||
+           a == "anonymous_read_id";
+}
+
+std::string tax_header_id(const std::string& h) {
+    std::string id = drop_prefix_ci(h, "taxID");
+    if (id != h) {
+        return id;
+    }
+    id = drop_prefix_ci(h, "taxid");
+    if (id != h) {
+        return id;
+    }
+    id = drop_prefix_ci(h, "tax_id");
+    if (id != h) {
+        return id;
+    }
+    return drop_prefix_ci(h, "tax");
+}
+
+std::string feat_header_id(const std::string& h) {
+    std::string id = drop_prefix_ci(h, "feat");
+    return id == h ? h : id;
+}
+
+Schema schema_from_header(const std::vector<std::string>& header) {
+    Schema s;
+    s.seq_col = 0;
+    for (size_t i = 0; i < header.size(); ++i) {
+        std::string l = to_lower(header[i]);
+        if (l == "seq" || l == "read_id" || l == "readid" || l == "sequenceid" ||
+            l == "anonymous_read_id") {
+            s.seq_col = static_cast<int>(i);
+            continue;
+        }
+        if (is_skip_header(header[i])) {
+            continue;
+        }
+        if (is_tax_header(header[i])) {
+            s.tax_ids.push_back(tax_header_id(header[i]));
+            s.tax_cols.push_back(static_cast<int>(i));
+        } else {
+            s.feat_ids.push_back(feat_header_id(header[i]));
+            s.feat_cols.push_back(static_cast<int>(i));
+        }
+    }
+    return s;
+}
+
+Schema native_schema(ToolKind kind) {
+    Schema s;
+    s.seq_col = 1;
+    s.tax_ids.push_back("");
+    s.tax_cols.push_back(2);
+    if (kind == ToolKind::Kraken || kind == ToolKind::Kraken2) {
+        s.feat_ids.push_back("length");
+        s.feat_cols.push_back(3);
+    }
+    return s;
+}
+
+Schema unheadered_custom_schema(size_t nfields) {
+    Schema s;
+    s.seq_col = 0;
+    if (nfields >= 2) {
+        s.tax_ids.push_back("");
+        s.tax_cols.push_back(1);
+    }
+    if (nfields == 3) {
+        s.feat_ids.push_back("length");
+        s.feat_cols.push_back(2);
+    } else if (nfields > 3) {
+        for (size_t i = 2; i < nfields; ++i) {
+            s.feat_ids.push_back(std::to_string(i - 2));
+            s.feat_cols.push_back(static_cast<int>(i));
+        }
+    }
+    return s;
+}
+
+void write_schema(std::ostream& out, const Schema& s) {
+    out << "#schema\tTAX\t" << s.tax_ids.size();
+    for (const auto& id : s.tax_ids) {
+        out << '\t' << id;
+    }
+    out << "\tFEAT\t" << s.feat_ids.size();
+    for (const auto& id : s.feat_ids) {
+        out << '\t' << id;
+    }
+    out << '\n';
+}
+
+bool parse_schema_line(const std::string& line, Schema* s) {
+    if (line.size() < 7 || line.compare(0, 7, "#schema") != 0) {
+        return false;
+    }
+    auto f = split_tab(line);
+    s->tax_ids.clear();
+    s->feat_ids.clear();
+    size_t i = 1;
+    if (i < f.size() && to_lower(f[i]) == "tax") {
+        ++i;
+    }
+    if (i >= f.size()) {
+        return true;
+    }
+    int n_tax = 0;
+    try {
+        n_tax = std::stoi(f[i++]);
+    } catch (...) {
+        return false;
+    }
+    for (int k = 0; k < n_tax && i < f.size(); ++k) {
+        s->tax_ids.push_back(f[i++]);
+    }
+    if (i < f.size() && to_lower(f[i]) == "feat") {
+        ++i;
+    }
+    if (i >= f.size()) {
+        return true;
+    }
+    int n_feat = 0;
+    try {
+        n_feat = std::stoi(f[i++]);
+    } catch (...) {
+        return false;
+    }
+    for (int k = 0; k < n_feat && i < f.size(); ++k) {
+        s->feat_ids.push_back(f[i++]);
+    }
+    return true;
+}
+
+std::string combined_col(const std::string& prefix, const std::string& tool, size_t i,
+                         const std::string& id) {
+    std::string base = prefix + "_" + tool + "_" + std::to_string(i);
+    if (id.empty()) {
+        return base;
+    }
+    return base + "_" + id;
+}
+
+
+struct Options {
+    std::string input_dir;
+    std::string output_dir;
+    int split_n = 1;
+    size_t chunk_rows = kDefaultChunk;
+    std::string tmp_dir;
+    bool keep_tmp = false;
+    std::string truth_table;
+};
 
 std::vector<std::string> split_underscore(const std::string& s) {
     std::vector<std::string> parts;
@@ -494,8 +692,6 @@ std::string sample_name_from(const std::string& filename, int split_n) {
     return out;
 }
 
-enum class ToolKind { Kaiju, Kraken, Kraken2, Custom };
-
 ToolKind tool_kind(const std::string& tool) {
     if (tool == "kraken2") {
         return ToolKind::Kraken2;
@@ -510,81 +706,135 @@ ToolKind tool_kind(const std::string& tool) {
     return ToolKind::Custom;
 }
 
-bool parse_line(const std::string& line, ToolKind kind, Record* rec) {
-    if (line.empty()) {
-        return false;
-    }
-    auto f = split_tab(line);
+bool fill_from_fields(const std::vector<std::string>& f, const Schema& sch, Record* rec) {
     rec->seq.clear();
-    rec->taxid = "0";
-    rec->length.clear();
-    if (kind == ToolKind::Custom) {
-        if (f.size() < 2) {
+    resize_record(rec, sch);
+    if (sch.seq_col < 0 || sch.seq_col >= static_cast<int>(f.size())) {
+        if (f.empty()) {
             return false;
         }
         rec->seq = f[0];
-        rec->taxid = normalize_taxid(f[1]);
-        if (f.size() >= 3) {
-            rec->length = first_length_token(f[2]);
+    } else {
+        rec->seq = f[static_cast<size_t>(sch.seq_col)];
+    }
+    for (size_t i = 0; i < sch.tax_cols.size() && i < rec->tax.size(); ++i) {
+        int c = sch.tax_cols[i];
+        if (c >= 0 && c < static_cast<int>(f.size())) {
+            rec->tax[i] = normalize_taxid(f[static_cast<size_t>(c)]);
         }
-        return !rec->seq.empty();
+    }
+    for (size_t i = 0; i < sch.feat_cols.size() && i < rec->feat.size(); ++i) {
+        int c = sch.feat_cols[i];
+        if (c >= 0 && c < static_cast<int>(f.size())) {
+            std::string val = f[static_cast<size_t>(c)];
+            if (i < sch.feat_ids.size() && sch.feat_ids[i] == "length") {
+                val = first_length_token(val);
+            }
+            rec->feat[i] = val;
+        }
+    }
+    for (char& ch : rec->seq) {
+        if (ch == '\t') {
+            ch = ' ';
+        }
+    }
+    return !rec->seq.empty();
+}
+
+bool parse_line(const std::string& line, ToolKind kind, const Schema& sch, Record* rec) {
+    if (line.empty() || line[0] == '#') {
+        return false;
+    }
+    auto f = split_tab(line);
+    if (kind == ToolKind::Custom) {
+        if (f.size() < 1) {
+            return false;
+        }
+        return fill_from_fields(f, sch, rec);
     }
     if (f.size() < 3) {
         return false;
     }
+    resize_record(rec, sch);
     rec->seq = f[1];
     if (kind == ToolKind::Kraken2) {
-        rec->taxid = normalize_taxid(extract_kraken2_taxid(f[2]));
-        if (f.size() >= 4) {
-            rec->length = first_length_token(f[3]);
+        rec->tax[0] = normalize_taxid(extract_kraken2_taxid(f[2]));
+        if (!rec->feat.empty() && f.size() >= 4) {
+            rec->feat[0] = first_length_token(f[3]);
         }
     } else if (kind == ToolKind::Kraken) {
-        rec->taxid = normalize_taxid(f[2]);
-        if (f.size() >= 4) {
-            rec->length = first_length_token(f[3]);
+        rec->tax[0] = normalize_taxid(f[2]);
+        if (!rec->feat.empty() && f.size() >= 4) {
+            rec->feat[0] = first_length_token(f[3]);
         }
     } else {
-        rec->taxid = normalize_taxid(f[2]);
+        rec->tax[0] = normalize_taxid(f[2]);
     }
-    for (char& c : rec->seq) {
-        if (c == '\t') {
-            c = ' ';
+    for (char& ch : rec->seq) {
+        if (ch == '\t') {
+            ch = ' ';
         }
     }
     return !rec->seq.empty();
 }
 
 void write_tsv_record(std::ostream& out, const Record& r) {
-    out << r.seq << '\t' << r.taxid << '\t' << r.length << '\n';
+    out << r.seq;
+    for (const auto& t : r.tax) {
+        out << '\t' << t;
+    }
+    for (const auto& feat : r.feat) {
+        out << '\t' << feat;
+    }
+    out << '\n';
 }
 
-bool read_tsv_record(std::istream& in, Record* rec) {
+bool read_tsv_record(std::istream& in, const Schema& sch, Record* rec) {
     std::string line;
     if (!std::getline(in, line)) {
         return false;
     }
     line = trim_cr(line);
-    if (line.empty()) {
-        return read_tsv_record(in, rec);
+    if (line.empty() || (line.size() >= 7 && line.compare(0, 7, "#schema") == 0)) {
+        return read_tsv_record(in, sch, rec);
     }
     auto f = split_tab(line);
     rec->seq = f.empty() ? "" : f[0];
-    rec->taxid = f.size() > 1 ? normalize_taxid(f[1]) : "0";
-    rec->length = f.size() > 2 ? f[2] : "";
+    resize_record(rec, sch);
+    size_t i = 1;
+    for (size_t k = 0; k < rec->tax.size(); ++k) {
+        rec->tax[k] = i < f.size() ? normalize_taxid(f[i++]) : "0";
+    }
+    for (size_t k = 0; k < rec->feat.size(); ++k) {
+        rec->feat[k] = i < f.size() ? f[i++] : "";
+    }
     return true;
 }
 
 class BufferedIn {
 public:
-    explicit BufferedIn(const fs::path& path) : file_(path, std::ios::in | std::ios::binary) {}
+    explicit BufferedIn(const fs::path& path) : file_(path, std::ios::in | std::ios::binary) {
+        std::string line;
+        if (std::getline(file_, line)) {
+            line = trim_cr(line);
+            if (!parse_schema_line(line, &schema_)) {
+                file_.clear();
+                file_.seekg(0);
+                schema_.tax_ids = {""};
+                schema_.feat_ids = {"length"};
+            }
+        }
+    }
     bool ok() const { return static_cast<bool>(file_); }
-    bool next(Record* rec) { return read_tsv_record(file_, rec); }
+    const Schema& schema() const { return schema_; }
+    bool next(Record* rec) { return read_tsv_record(file_, schema_, rec); }
 
 private:
     std::ifstream file_;
+    Schema schema_;
 };
 
-fs::path write_run(const fs::path& dir, size_t idx, std::vector<Record>& recs) {
+fs::path write_run(const fs::path& dir, size_t idx, std::vector<Record>& recs, const Schema& sch) {
     std::sort(recs.begin(), recs.end(), [](const Record& a, const Record& b) {
         return a.seq < b.seq;
     });
@@ -592,6 +842,7 @@ fs::path write_run(const fs::path& dir, size_t idx, std::vector<Record>& recs) {
     std::ofstream out(path, std::ios::out | std::ios::binary | std::ios::trunc);
     std::vector<char> buf(kIoBuf);
     out.rdbuf()->pubsetbuf(buf.data(), static_cast<std::streamsize>(buf.size()));
+    write_schema(out, sch);
     std::string prev;
     for (const Record& r : recs) {
         if (r.seq == prev) {
@@ -603,7 +854,7 @@ fs::path write_run(const fs::path& dir, size_t idx, std::vector<Record>& recs) {
     return path;
 }
 
-fs::path merge_runs(const std::vector<fs::path>& runs, const fs::path& out_path) {
+fs::path merge_runs(const std::vector<fs::path>& runs, const fs::path& out_path, const Schema& sch) {
     struct Item {
         Record rec;
         size_t src;
@@ -629,6 +880,7 @@ fs::path merge_runs(const std::vector<fs::path>& runs, const fs::path& out_path)
     std::ofstream out(out_path, std::ios::out | std::ios::binary | std::ios::trunc);
     std::vector<char> buf(kIoBuf);
     out.rdbuf()->pubsetbuf(buf.data(), static_cast<std::streamsize>(buf.size()));
+    write_schema(out, sch);
     std::string prev;
     while (!heap.empty()) {
         Item cur = heap.top();
@@ -653,6 +905,8 @@ fs::path sort_annotator(const fs::path& input, ToolKind kind, const fs::path& tm
     std::vector<char> buf(kIoBuf);
     in.rdbuf()->pubsetbuf(buf.data(), static_cast<std::streamsize>(buf.size()));
 
+    Schema sch = native_schema(kind);
+    bool header_checked = kind != ToolKind::Custom;
     std::vector<Record> chunk;
     chunk.reserve(std::min(chunk_rows, static_cast<size_t>(65536)));
     std::vector<fs::path> runs;
@@ -660,31 +914,44 @@ fs::path sort_annotator(const fs::path& input, ToolKind kind, const fs::path& tm
     std::string line;
     while (std::getline(in, line)) {
         line = trim_cr(line);
+        if (line.empty()) {
+            continue;
+        }
+        if (!header_checked) {
+            header_checked = true;
+            auto fields = split_tab(line);
+            if (looks_like_header(fields)) {
+                sch = schema_from_header(fields);
+                continue;
+            }
+            sch = unheadered_custom_schema(fields.size());
+        }
         Record rec;
-        if (!parse_line(line, kind, &rec)) {
+        if (!parse_line(line, kind, sch, &rec)) {
             continue;
         }
         chunk.push_back(std::move(rec));
         if (chunk.size() >= chunk_rows) {
-            runs.push_back(write_run(work, run_i++, chunk));
+            runs.push_back(write_run(work, run_i++, chunk, sch));
             chunk.clear();
         }
     }
     if (!chunk.empty()) {
-        runs.push_back(write_run(work, run_i++, chunk));
+        runs.push_back(write_run(work, run_i++, chunk, sch));
         chunk.clear();
         chunk.shrink_to_fit();
     }
     fs::path sorted = tmp / ("sorted_" + std::to_string(file_index) + ".tsv");
     if (runs.empty()) {
-        std::ofstream(sorted, std::ios::trunc).close();
+        std::ofstream out(sorted, std::ios::trunc);
+        write_schema(out, sch);
         return sorted;
     }
     if (runs.size() == 1) {
         fs::rename(runs[0], sorted);
         return sorted;
     }
-    merge_runs(runs, sorted);
+    merge_runs(runs, sorted, sch);
     return sorted;
 }
 
@@ -692,9 +959,7 @@ struct JoinStream {
     BufferedIn in;
     Record rec;
     bool alive = false;
-    explicit JoinStream(const fs::path& path) : in(path) {
-        alive = in.next(&rec);
-    }
+    explicit JoinStream(const fs::path& path) : in(path) { alive = in.next(&rec); }
 };
 
 void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::string>& tools,
@@ -709,8 +974,14 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
     out.rdbuf()->pubsetbuf(buf.data(), static_cast<std::streamsize>(buf.size()));
 
     out << "seq";
-    for (size_t i = 0; i < tools.size(); ++i) {
-        out << ",taxID_" << tools[i] << '_' << i;
+    for (size_t i = 0; i < streams.size(); ++i) {
+        const Schema& sch = streams[i].in.schema();
+        for (const auto& id : sch.tax_ids) {
+            out << ',' << csv_escape(combined_col("taxID", tools[i], i, id));
+        }
+        for (const auto& id : sch.feat_ids) {
+            out << ',' << csv_escape(combined_col("feat", tools[i], i, id));
+        }
     }
     out << ",length,true,read_type\n";
 
@@ -730,16 +1001,26 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
         if (!any) {
             break;
         }
-        std::vector<std::string> tax(tools.size(), "0");
         std::string length;
+        std::vector<std::vector<std::string>> tax_row(streams.size());
+        std::vector<std::vector<std::string>> feat_row(streams.size());
+        for (size_t i = 0; i < streams.size(); ++i) {
+            const Schema& sch = streams[i].in.schema();
+            tax_row[i].assign(sch.tax_ids.size(), "0");
+            feat_row[i].assign(sch.feat_ids.size(), "");
+        }
         for (size_t i = 0; i < streams.size(); ++i) {
             auto& s = streams[i];
             if (!s.alive || s.rec.seq != min_seq) {
                 continue;
             }
-            tax[i] = normalize_taxid(s.rec.taxid);
-            if (length.empty() && !s.rec.length.empty()) {
-                length = s.rec.length;
+            tax_row[i] = s.rec.tax;
+            feat_row[i] = s.rec.feat;
+            const Schema& sch = s.in.schema();
+            for (size_t k = 0; k < sch.feat_ids.size() && k < s.rec.feat.size(); ++k) {
+                if (length.empty() && sch.feat_ids[k] == "length" && !s.rec.feat[k].empty()) {
+                    length = s.rec.feat[k];
+                }
             }
             s.alive = s.in.next(&s.rec);
             while (s.alive && s.rec.seq == min_seq) {
@@ -747,8 +1028,13 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
             }
         }
         out << csv_escape(min_seq);
-        for (const auto& t : tax) {
-            out << ',' << csv_escape(t);
+        for (size_t i = 0; i < streams.size(); ++i) {
+            for (const auto& t : tax_row[i]) {
+                out << ',' << csv_escape(t);
+            }
+            for (const auto& feat : feat_row[i]) {
+                out << ',' << csv_escape(feat);
+            }
         }
         out << ',' << csv_escape(length) << ',' << csv_escape(true_taxid_for(min_seq, truth))
             << ',' << csv_escape(extract_read_type(min_seq)) << '\n';

@@ -47,6 +47,63 @@ def _write_custom(path: Path, rows):
             handle.write(f"{seq}\t{taxid}\n")
 
 
+def _write_features(path: Path, header, rows):
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("\t".join(header) + "\n")
+        for row in rows:
+            handle.write("\t".join(str(x) for x in row) + "\n")
+
+
+def test_combine_merges_headered_features(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_kaiju(
+        reports / "s1_kaiju.kaiju.out",
+        [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")],
+    )
+    _write_features(
+        reports / "s1_kmer2.kmer2.out",
+        ["seq", "AA", "AT"],
+        [
+            ("readA|taxid:9606|", "2", "1"),
+            ("readB|taxid:562|", "0", "3"),
+        ],
+    )
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv")
+    by_seq = df.set_index("seq")
+    assert "taxID_kaiju_0" in df.columns
+    assert "feat_kmer2_1_AA" in df.columns
+    assert "feat_kmer2_1_AT" in df.columns
+    assert not any(c.startswith("taxID_kmer2") for c in df.columns)
+    assert int(by_seq.loc["readA|taxid:9606|", "feat_kmer2_1_AA"]) == 2
+    assert int(by_seq.loc["readB|taxid:562|", "feat_kmer2_1_AT"]) == 3
+    assert int(by_seq.loc["readB|taxid:562|", "taxID_kaiju_0"]) == 562
+
+
+def test_combine_tool_with_tax_and_features(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_features(
+        reports / "s1_hybrid.custom_hybrid.out",
+        ["seq", "taxID", "taxID_species", "GC", "length"],
+        [
+            ("readA|taxid:562|", "562", "562", "0.5", "120"),
+            ("readB|taxid:9606|", "9606", "9606", "0.4", "80"),
+        ],
+    )
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv")
+    tax = [c for c in df.columns if c.startswith("taxID_")]
+    feat = [c for c in df.columns if c.startswith("feat_")]
+    assert len(tax) == 2
+    assert "feat_hybrid_0_GC" in feat or any("GC" in c for c in feat)
+    assert any("length" in c for c in feat)
+    assert int(df.loc[0, "length"]) in {120, 80}
+
+
 def test_ensure_combine_binary(combiner):
     assert combiner.exists()
     assert os.access(combiner, os.X_OK)
@@ -100,6 +157,7 @@ def test_sort_merge_outer_join(tmp_path, combiner):
     assert str(int(by_seq.loc["readA|taxid:9606|", "true"])) == "9606"
     assert str(int(by_seq.loc["readC|taxid:4932|", "true"])) == "4932"
     assert int(by_seq.loc["readA|taxid:9606|", "length"]) == 126
+    assert int(by_seq.loc["readA|taxid:9606|", "feat_kraken2_1_length"]) == 126
 
 
 def test_true_taxid_prefix_without_token(tmp_path, combiner):

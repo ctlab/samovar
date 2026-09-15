@@ -64,7 +64,8 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
         "title": "Combine initial calls",
         "description": (
             "Tool outputs are joined into one long table per sample in "
-            "``initial_annotations/``. Columns are ``taxID_<tool>``; when ISS or CAMISIM "
+            "``initial_annotations/``. Tax columns are ``taxID_<tool>``; feature "
+            "extractors add ``feat_<tool>[_id]``. When ISS or CAMISIM "
             "headers contain ``taxid:<digits>`` (or a known assembly accession), a "
             "``true`` column is filled so F1 and scores can be computed. "
             "``exports/initial/`` is written here (identity if regenerated truth "
