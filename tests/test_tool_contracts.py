@@ -1,6 +1,6 @@
 """In→out contracts for each ``samovar tools import`` type.
 
-Default run uses bundled example tools. Pass ``--tool PATH --tool-type GROUP``
+Default run uses the built-in baseline for each group. Pass ``--tool PATH --tool-type GROUP``
 (or env SAMOVAR_CONTRACT_TOOL / SAMOVAR_CONTRACT_TYPE) to check a custom dest.
 """
 
@@ -14,7 +14,7 @@ import pytest
 
 from samovar.abundance import n_sample_columns, normalize_abundance_table
 from samovar.main_config import normalize_tool_group
-from samovar.tool_contracts import DEFAULT_TOOLS, _contract_repo_root, load_python_module
+from samovar.tool_contracts import DEFAULT_TOOLS, _contract_repo_root, default_tool_path, load_python_module
 
 
 def _wanted_type(request) -> str:
@@ -34,8 +34,11 @@ def _tool_path(request, group: str) -> Path:
         raw = os.environ.get("SAMOVAR_CONTRACT_TOOL")
     if raw:
         return Path(raw).expanduser().resolve()
-    rel = DEFAULT_TOOLS[group]
-    return (_contract_repo_root() / rel).resolve()
+    try:
+        return default_tool_path(group)
+    except KeyError:
+        rel = DEFAULT_TOOLS[group]
+        return (_contract_repo_root() / rel).resolve()
 
 
 def _skip_if_other_type(request, group: str) -> None:

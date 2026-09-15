@@ -744,9 +744,16 @@ class PipelineConfig:
                     
                     # Extract run name from attribute name (remove 'cmd_' prefix)
                     run_name = attr[4:]
-                    dummy_aliases = {"dummy", "dummy9606", "constant9606", "constant", "random"}
-                    if run_name.lower() in dummy_aliases or type_name.lower() in dummy_aliases:
-                        type_name = "constant9606"
+                    constant_aliases = {
+                        "dummy",
+                        "dummy9606",
+                        "constant9606",
+                        "constant_taxid",
+                        "constant",
+                        "random",
+                    }
+                    if run_name.lower() in constant_aliases or type_name.lower() in constant_aliases:
+                        type_name = "constant_taxid"
                     kmer2_aliases = {"kmer2", "kmer_counter", "dinuc", "dinucleotide"}
                     cmd_join = " ".join(parts).lower()
                     if (
@@ -787,9 +794,16 @@ class PipelineConfig:
                     # Extract type from command basename
                     cmd_basename = os.path.basename(cmd)
                     type_name = cmd_basename.split('.')[0]
-                    dummy_aliases = {"dummy", "dummy9606", "constant9606", "constant", "random"}
-                    if attr == "dummy" or type_name.lower() in dummy_aliases:
-                        type_name = "constant9606"
+                    constant_aliases = {
+                        "dummy",
+                        "dummy9606",
+                        "constant9606",
+                        "constant_taxid",
+                        "constant",
+                        "random",
+                    }
+                    if attr == "dummy" or type_name.lower() in constant_aliases:
+                        type_name = "constant_taxid"
                     
                     config.annotators.append(AnnotatorConfig(
                         run_name=type_name if attr != "dummy" else "dummy",

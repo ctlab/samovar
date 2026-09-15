@@ -1,4 +1,4 @@
-"""Tests for OOP annotators, CustomAnnotator, and the constant-taxID dummy."""
+"""Annotator classes, custom tools, and the built-in constant-taxID classifier."""
 
 import os
 from pathlib import Path
@@ -19,14 +19,7 @@ from samovar.parse_annotators import Annotation, match_annotation, read_custom_r
 
 REPO = Path(__file__).resolve().parents[1]
 
-import importlib.util
-
-_CONSTANT_MOD = importlib.util.spec_from_file_location(
-    "constant9606", REPO / "src" / "annotators" / "constant9606.py"
-)
-_constant9606 = importlib.util.module_from_spec(_CONSTANT_MOD)
-_CONSTANT_MOD.loader.exec_module(_constant9606)
-classify_fastq = _constant9606.classify_fastq
+from samovar.baselines.constant_taxid import classify_fastq
 
 
 def _tiny_fastq(path: Path, n: int = 3, prefix: str = "read") -> None:
@@ -36,10 +29,13 @@ def _tiny_fastq(path: Path, n: int = 3, prefix: str = "read") -> None:
     path.write_text("".join(records))
 
 
-def test_factory_returns_custom_and_dummy_classes():
+def test_factory_returns_custom_and_constant_taxid_classes():
+    """Factory maps centrifuge to CustomAnnotator and dummy aliases to ConstantTaxidAnnotator."""
     custom = get_annotator_instance("centrifuge", {"run_name": "cf"}, {})
     assert isinstance(custom, CustomAnnotator)
     assert custom.tool_name == "centrifuge"
+    constant = get_annotator_instance("constant_taxid", {"run_name": "constant_taxid"}, {})
+    assert isinstance(constant, ConstantTaxidAnnotator)
     dummy = get_annotator_instance("dummy", {"run_name": "dummy"}, {})
     assert isinstance(dummy, ConstantTaxidAnnotator)
     kaiju = get_annotator_instance("kaiju", {"run_name": "kaiju"}, {})
@@ -50,9 +46,10 @@ def test_factory_returns_custom_and_dummy_classes():
     assert isinstance(assembly, AssemblyAnnotator)
 
 
-def test_match_annotation_custom_and_dummy():
+def test_match_annotation_custom_and_constant_taxid():
     assert match_annotation("1_full_dummy.custom_dummy.out") == "dummy"
     assert match_annotation("s_run.custom_constant9606.out") == "constant9606"
+    assert match_annotation("s.custom_constant_taxid.out") == "constant_taxid"
     assert match_annotation("s_kaiju.kaiju.out") == "kaiju"
     assert match_annotation("1_full_run.assembly.out") == "assembly"
     assert match_annotation("notes.txt") is None
@@ -104,7 +101,7 @@ def test_constant_taxid_annotator_parse_and_shell(tmp_path):
     expected = annotator.get_expected_outputs("s", str(tmp_path))
     assert expected[0].endswith("s_dummy.custom_dummy.out")
     cmd = annotator.get_snakemake_shell_cmd(str(r1), str(r2), [str(out)])
-    assert "constant9606.py" in cmd
+    assert "constant_taxid.py" in cmd
     assert "--taxid 9606" in cmd
     rc = os.system(cmd)
     assert rc == 0
@@ -116,7 +113,8 @@ def test_constant_taxid_annotator_parse_and_shell(tmp_path):
     assert (ann.DataFrame[tax_cols[0]].astype(str) == "9606").all()
 
 
-def test_prepare_wires_dummy_custom_type(tmp_path):
+def test_prepare_wires_constant_taxid_from_dummy_flag(tmp_path):
+    """``--dummy`` still prepares a run; type is the built-in constant_taxid annotator."""
     reads = tmp_path / "reads"
     reads.mkdir()
     _tiny_fastq(reads / "1_full_R1.fastq")
@@ -137,7 +135,7 @@ def test_prepare_wires_dummy_custom_type(tmp_path):
     result = setup_pipeline(args)
     init_cfg = yaml.safe_load(Path(result["configs"]["init_annotator"]).read_text())
     types = {run["type"] for run in init_cfg["run_config"]}
-    assert "constant9606" in types
+    assert "constant_taxid" in types
     run_names = {run["run_name"] for run in init_cfg["run_config"]}
     assert "dummy" in run_names
 
@@ -190,7 +188,8 @@ def test_kaiju_and_kraken2_commands_support_single_end_fastq(tmp_path):
     assert f"else {kraken.cmd}" in kraken_cmd
 
 
-def test_snakemake_custom_dummy_rule(tmp_path):
+def test_snakemake_constant_taxid_rule(tmp_path):
+    """Snakemake custom_tool rule runs the constant-taxID annotator on toy reads."""
     pytest.importorskip("snakemake")
     r1_dir = tmp_path / "initial"
     r1_dir.mkdir()

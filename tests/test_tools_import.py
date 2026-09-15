@@ -378,7 +378,7 @@ def test_import_pytest_accepts_identity_table(tmp_path, monkeypatch):
         "samovar.tools_import.update_config",
         lambda updates, also_repo_build=True: update_config(updates, also_repo_build=False),
     )
-    good = Path(__file__).resolve().parent / "tools" / "identity_table.py"
+    good = Path(__file__).resolve().parents[1] / "src" / "samovar" / "baselines" / "identity_table.py"
     rc = import_main(
         [
             "-n",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper: constant-taxID annotator lives in ``samovar.baselines``."""
+"""CLI entry for the built-in constant-taxID annotator."""
 
 from samovar.baselines.constant_taxid import classify_fastq, iter_fastq_ids, main, parse_output
 

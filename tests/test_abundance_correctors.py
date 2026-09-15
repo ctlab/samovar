@@ -156,7 +156,7 @@ def test_custom_export_import(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
-    script = Path(__file__).resolve().parent / "tools" / "identity_export.py"
+    script = Path(__file__).resolve().parents[1] / "src" / "samovar" / "baselines" / "identity_export.py"
     spec = import_tool(
         name="echo_export",
         tool_type="export",
@@ -180,7 +180,7 @@ def test_import_pytest_export_contract(tmp_path, monkeypatch):
         "samovar.tools_import.update_config",
         lambda updates, also_repo_build=True: update_config(updates, also_repo_build=False),
     )
-    good = Path(__file__).resolve().parent / "tools" / "identity_export.py"
+    good = Path(__file__).resolve().parents[1] / "src" / "samovar" / "baselines" / "identity_export.py"
     rc = import_main(
         [
             "-n",

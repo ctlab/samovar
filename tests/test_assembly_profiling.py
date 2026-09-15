@@ -1,4 +1,4 @@
-"""Assembly-profiling contracts: live MegaHIT/anvi'o/QC/GTDB-Tk/minimap2/CoverM + glue."""
+"""Assembly-profiling stage: MegaHIT, anvi'o, MAG QC, GTDB-Tk, minimap2, CoverM."""
 
 from __future__ import annotations
 
@@ -34,15 +34,14 @@ from samovar.parse_annotators import Annotation, match_annotation
 REPO = Path(__file__).resolve().parents[1]
 READS_R1 = REPO / "tests" / "data" / "reads" / "1_full_R1.fastq"
 READS_R2 = REPO / "tests" / "data" / "reads" / "1_full_R2.fastq"
-DUMMY_BINNER = REPO / "tests" / "tools" / "dummy_binner.py"
-DUMMY_GENE_CALLER = REPO / "tests" / "tools" / "dummy_gene_caller.py"
 
 
-def test_dummy_gene_caller(tmp_path):
+def test_translate_orfs_gene_caller(tmp_path):
+    """Naive codon translation writes FAA without Prodigal."""
     contigs = tmp_path / "contigs.fa"
     contigs.write_text(">c1\nATGAAATTTAAATAA\n")
     dest = tmp_path / "genes"
-    run_gene_caller(str(contigs), str(dest), name=str(DUMMY_GENE_CALLER))
+    run_gene_caller(str(contigs), str(dest), name="translate")
     faa = list(dest.glob("*.faa"))
     assert faa
     assert faa[0].read_text().startswith(">")
@@ -107,7 +106,8 @@ def test_factory_and_match_annotation():
     assert match_annotation("1_full_assembly-test.assembly.out") == "assembly"
 
 
-def test_c6_c7_glue(tmp_path):
+def test_taxon_quantifier_joins_mag_counts_and_taxonomy(tmp_path):
+    """taxon_quantifier + read_assigner glue MAG abundance into taxid tables."""
     mag_ab = tmp_path / "mag.tsv"
     mag_ab.write_text("mag_id\tN\nmagA\t10\nmagB\t5\n", encoding="utf-8")
     tax = tmp_path / "tax.tsv"
@@ -252,7 +252,8 @@ def test_anvio_empty_contigs_skips_database(tmp_path, monkeypatch):
 
 
 @pytest.mark.optional
-def test_c1_megahit(tmp_path, monkeypatch):
+def test_megahit_assembler_writes_contigs(tmp_path, monkeypatch):
+    """MegaHIT sidecar assembles the toy paired FASTQ into a contig FASTA."""
     if not READS_R1.is_file():
         pytest.skip("test reads missing")
     binary = _sidecar_bin("megahit")
@@ -271,7 +272,8 @@ def test_c1_megahit(tmp_path, monkeypatch):
 
 
 @pytest.mark.optional
-def test_c2_anvio(tmp_path, monkeypatch):
+def test_anvio_binner_single_sample_skips_clustering(tmp_path, monkeypatch):
+    """Single-sample anvi'o writes mag1.fa and honors --skip-clustering."""
     binary = _sidecar_bin("anvio")
     _put_on_path(monkeypatch, binary)
     megahit = _sidecar_bin("megahit")
@@ -309,7 +311,8 @@ def test_c2_anvio(tmp_path, monkeypatch):
 
 
 @pytest.mark.optional
-def test_c2_qc_combine(tmp_path, monkeypatch):
+def test_binner_qc_and_combine(tmp_path, monkeypatch):
+    """CheckM2 QC plus DAS Tool (or identity) combine two MAG directories."""
     megahit = _sidecar_bin("megahit")
     _put_on_path(monkeypatch, megahit)
     contigs = tmp_path / "contigs.fa"
@@ -352,7 +355,8 @@ def test_c2_qc_combine(tmp_path, monkeypatch):
 
 
 @pytest.mark.optional
-def test_c2_anvio_three_samples(tmp_path, monkeypatch):
+def test_anvio_binner_merges_three_samples(tmp_path, monkeypatch):
+    """Three FASTQ pairs are profiled and anvi-merge writes a merged PROFILE.db."""
     reads = REPO / "tests" / "data" / "reads"
     r1s = [reads / f"{i}_full_R1.fastq" for i in (1, 2, 3)]
     r2s = [reads / f"{i}_full_R2.fastq" for i in (1, 2, 3)]
@@ -398,7 +402,8 @@ def test_c2_anvio_three_samples(tmp_path, monkeypatch):
 
 
 @pytest.mark.optional
-def test_c3_gtdbtk(tmp_path, monkeypatch):
+def test_gtdbtk_mag_taxonomy(tmp_path, monkeypatch):
+    """GTDB-Tk classify_wf writes a taxid column when the GTDB data path is ready."""
     db = Path("/mnt/tank/scratch/partition-metagenomics/databases/GTDB")
     env_db = os.environ.get("GTDBTK_DATA_PATH", "")
     if not gtdbtk_db_ready(str(db)) and not (env_db and gtdbtk_db_ready(env_db)):
@@ -417,7 +422,8 @@ def test_c3_gtdbtk(tmp_path, monkeypatch):
 
 
 @pytest.mark.optional
-def test_c4_minimap2(tmp_path, monkeypatch):
+def test_minimap2_aligner_writes_bam(tmp_path, monkeypatch):
+    """minimap2 aligner maps toy reads to a MAG and writes BAM."""
     mm = _sidecar_bin("minimap2")
     _put_on_path(monkeypatch, mm)
     mag = tmp_path / "mags"
@@ -430,7 +436,8 @@ def test_c4_minimap2(tmp_path, monkeypatch):
 
 
 @pytest.mark.optional
-def test_c5_coverm(tmp_path, monkeypatch):
+def test_coverm_mag_quantifier(tmp_path, monkeypatch):
+    """CoverM quantifies MAG abundance from a BAM."""
     mm = _sidecar_bin("minimap2")
     _put_on_path(monkeypatch, mm)
     mag = tmp_path / "mags"
@@ -450,26 +457,13 @@ def test_c5_coverm(tmp_path, monkeypatch):
 
 @pytest.mark.optional
 def test_composite_annotator(tmp_path, monkeypatch):
+    """Assembler + identity binner + minimap2 + samtools counts produce an assembly TSV."""
     from samovar.assembly_profiling import main as assembly_main
 
     megahit = _sidecar_bin("megahit")
     mm = _sidecar_bin("minimap2")
     _put_on_path(monkeypatch, megahit)
     _put_on_path(monkeypatch, mm)
-    dummy = tmp_path / "dummy_binner"
-    dummy.write_text(
-        "#!/usr/bin/env python3\n"
-        "import argparse, pathlib, shutil\n"
-        "p=argparse.ArgumentParser()\n"
-        "p.add_argument('-c'); p.add_argument('-i', default=''); p.add_argument('-I', default='')\n"
-        "p.add_argument('-o'); p.add_argument('-t', default='1')\n"
-        "a=p.parse_args()\n"
-        "d=pathlib.Path(a.o); d.mkdir(parents=True, exist_ok=True)\n"
-        "shutil.copy2(a.c, d/'mag1.fa')\n",
-        encoding="utf-8",
-    )
-    dummy.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{dummy.parent}:{os.environ.get('PATH', '')}")
     dest = tmp_path / "sample_run.assembly.out"
     try:
         assembly_main(
@@ -486,7 +480,7 @@ def test_composite_annotator(tmp_path, monkeypatch):
                 "--assembler",
                 "megahit",
                 "--binner",
-                "dummy_binner",
+                "identity",
                 "--binner-combine",
                 "identity",
                 "--aligner",

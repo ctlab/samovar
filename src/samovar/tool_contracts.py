@@ -1,7 +1,8 @@
 """In→out contracts for ``samovar tools import`` groups.
 
 Each group has a documented input and output. Pytest in
-``tests/test_tool_contracts.py`` exercises a dest file against one group.
+``tests/test_tool_contracts.py`` exercises the built-in baseline (or a
+``--tool`` path) against one group.
 ``samovar tools import --pytest`` runs that check before writing config.
 """
 
@@ -16,6 +17,11 @@ from typing import Dict, Optional, Tuple
 
 from samovar.main_config import normalize_tool_group
 from samovar.paths import repo_root
+
+try:
+    from samovar.baselines import BASELINE_TOOLS
+except Exception:
+    BASELINE_TOOLS = {}
 
 
 def _contract_repo_root() -> Path:
@@ -164,30 +170,22 @@ GROUP_TO_TESTNODE = {
     "read_assigner": "tests/test_tool_contracts.py::test_read_assigner_contract",
 }
 
-DEFAULT_TOOLS = {
-    "annotator": "tests/tools/dummy_annotator.py",
-    "table_reads_generator": "tests/tools/identity_table.py",
-    "table_scoring": "tests/data/bray_ks_table_scorer.py",
-    "sample_scoring": "tests/tools/dummy_sample_scorer.py",
-    "sample_filtering": "tests/tools/dummy_sample_filter.py",
-    "scoring": "tests/tools/count_annotations.py",
-    "reads_generator": "tests/tools/echo_reads.py",
-    "metagenome_generator": "tests/tools/echo_reads.py",
-    "reprofiler": "tests/tools/linear_wrapper.py",
-    "annotation_converter": "tests/tools/echo_annotation_converter.py",
-    "export": "tests/tools/identity_export.py",
-    "qc": "tests/tools/gc_filter.py",
-    "assembler": "tests/tools/dummy_assembler.py",
-    "gene_caller": "tests/tools/dummy_gene_caller.py",
-    "binner": "tests/tools/dummy_binner.py",
-    "binner_qc": "tests/tools/dummy_binner_qc.py",
-    "binner_combine": "tests/tools/dummy_binner_combine.py",
-    "mag_taxonomy": "tests/tools/dummy_mag_taxonomy.py",
-    "aligner": "tests/tools/dummy_aligner.py",
-    "mag_quantifier": "tests/tools/dummy_mag_quantifier.py",
-    "taxon_quantifier": "tests/tools/dummy_taxon_quantifier.py",
-    "read_assigner": "tests/tools/dummy_read_assigner.py",
-}
+DEFAULT_TOOLS = {group: str(path) for group, path in BASELINE_TOOLS.items()}
+DEFAULT_TOOLS["table_scoring"] = "tests/data/bray_ks_table_scorer.py"
+DEFAULT_TOOLS["reprofiler"] = "tests/tools/linear_wrapper.py"
+
+
+def default_tool_path(group: str) -> Path:
+    """Built-in baseline (or bundled example) for a contract group."""
+    if group in BASELINE_TOOLS:
+        return Path(BASELINE_TOOLS[group])
+    rel = DEFAULT_TOOLS.get(group)
+    if not rel:
+        raise KeyError(group)
+    path = Path(rel)
+    if path.is_absolute() and path.is_file():
+        return path
+    return (_contract_repo_root() / rel).resolve()
 
 
 def format_contract(group: str) -> str:

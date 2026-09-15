@@ -8,14 +8,11 @@ from typing import Dict, List, Optional, Sequence
 
 import pandas as pd
 
+from samovar.baselines import CONSTANT_TAXID_NAMES
+
 DUMMY_TAXID = "9606"
-DUMMY_TOOL_NAMES = {
-    "dummy",
-    "dummy9606",
-    "constant9606",
-    "constant",
-    "random",
-}
+DUMMY_TOOL_NAMES = CONSTANT_TAXID_NAMES
+CONSTANT_TAXID_TOOL_NAMES = CONSTANT_TAXID_NAMES
 
 # Thin CLI wrappers that already append ``-p <tool>`` and forward custom.sh flags.
 CUSTOM_WRAPPER_SCRIPTS = {
@@ -500,19 +497,19 @@ class CustomAnnotator(BaseAnnotator):
 
 
 class ConstantTaxidAnnotator(CustomAnnotator):
-    """Dummy / custom classifier that assigns one taxID to every sequence.
+    """Built-in classifier that assigns one taxID to every sequence.
 
     Default taxID is 9606 (Homo sapiens). Output uses the custom two-column
     seq/taxID table so it is consumed by the same Snakemake `custom_tool` rule.
     """
 
-    def __init__(self, run_config: Dict, config: Dict, tool_name: str = "constant9606"):
+    def __init__(self, run_config: Dict, config: Dict, tool_name: str = "constant_taxid"):
         super().__init__(run_config, config, tool_name=tool_name)
         self.taxid = str(run_config.get("taxid", DUMMY_TAXID))
 
     @property
     def default_cmd(self) -> str:
-        script = Path(__file__).resolve().parent.parent / "annotators" / "constant9606.py"
+        script = Path(__file__).resolve().parent / "baselines" / "constant_taxid.py"
         return f"{sys.executable} {script}"
 
     def get_snakemake_shell_cmd(
@@ -520,7 +517,7 @@ class ConstantTaxidAnnotator(CustomAnnotator):
     ) -> str:
         out_file = outputs[0]
         cmd = self.cmd
-        if not cmd or os.path.basename(str(cmd).split()[0]).split(".")[0].lower() in DUMMY_TOOL_NAMES:
+        if not cmd or os.path.basename(str(cmd).split()[0]).split(".")[0].lower() in CONSTANT_TAXID_TOOL_NAMES:
             cmd = self.default_cmd
         extra = self.extra or ""
         run = (
@@ -643,7 +640,7 @@ def get_annotator_instance(
         "dinucleotide": Kmer2Annotator,
     }
 
-    if tool in DUMMY_TOOL_NAMES:
+    if tool in CONSTANT_TAXID_TOOL_NAMES:
         return ConstantTaxidAnnotator(run_config, config, tool_name=tool_type)
 
     if tool in native_tools:

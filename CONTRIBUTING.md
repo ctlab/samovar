@@ -54,7 +54,7 @@ pytest
 
 **Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`: `./install.sh full` plus assembly sidecars, then `pytest` (all markers) and every example `pipeline.sh`.
 
-Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (dummy/small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
+Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (built-in baselines and small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
 
 Installation is validated through `install.sh` (the same procedure GitHub Actions uses before pytest). Do not add a second install path for tests.
 

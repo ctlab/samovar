@@ -263,7 +263,7 @@ def test_tools_import_sample_scoring(tmp_path, monkeypatch):
     from samovar.main_config import normalize_tool_group, parse_tool_entry
 
     assert normalize_tool_group("sample-score") == "sample_scoring"
-    script = Path("tests/tools/dummy_sample_scorer.py").resolve()
+    script = Path(__file__).resolve().parents[1] / "src" / "samovar" / "baselines" / "constant_sample_score.py"
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)

@@ -322,6 +322,13 @@ def run_assembler(
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
     key = str(name or "megahit").lower()
+    if key in {"identity", "concat", "baseline"}:
+        from samovar.baselines.identity_assembler import main as _main
+
+        dest_path = as_path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        _main(["-i", str(r1), "-I", str(r2 or ""), "-o", str(dest_path), "-t", str(int(threads))])
+        return dest_path
     if key in {"megahit", "assembler", ""}:
         return run_megahit(r1, r2, dest, threads=threads, extra=extra)
     exe = which_tool(name)
@@ -394,6 +401,13 @@ def run_gene_caller(
             cmd = [sys.executable, *cmd]
         cmd.extend(str(x) for x in (extra or []))
         _run(cmd)
+        return out
+    if key in {"identity", "translate", "naive_translate", "translate_orfs"}:
+        from samovar.baselines.translate_orfs import main as _main
+
+        out = as_path(dest)
+        out.mkdir(parents=True, exist_ok=True)
+        _main(["-c", str(contigs), "-o", str(out), "-t", str(int(threads))])
         return out
     if key in {"prodigal", "gene_caller", "gene_annotation", ""}:
         return run_prodigal(contigs, dest, threads=threads, extra=extra)
@@ -635,6 +649,26 @@ def run_binner(
     additional_reads: Optional[Sequence[Tuple[str, str]]] = None,
 ) -> Path:
     key = str(name or "anvio").lower().replace("-", "_")
+    if key in {"identity", "copy", "one"}:
+        from samovar.baselines.identity_binner import main as _main
+
+        mag_dir = as_path(dest)
+        mag_dir.mkdir(parents=True, exist_ok=True)
+        _main(
+            [
+                "-c",
+                str(contigs),
+                "-i",
+                str(r1 or ""),
+                "-I",
+                str(r2 or ""),
+                "-o",
+                str(mag_dir),
+                "-t",
+                str(int(threads)),
+            ]
+        )
+        return mag_dir
     if key in {"anvio", "anvi", "anvio_binner"}:
         return run_anvio_binner(
             contigs,

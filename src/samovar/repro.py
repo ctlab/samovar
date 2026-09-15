@@ -63,8 +63,9 @@ CAPTURE_ENV = (
     "PATH",
 )
 BUILTIN_NAMES = set(TOOL_GROUP_BY_NAME) | {
-    "dummy",
+    "constant_taxid",
     "constant9606",
+    "dummy",
     "dummy9606",
     "constant",
     "samovar",
