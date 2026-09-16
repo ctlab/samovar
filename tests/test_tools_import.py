@@ -393,3 +393,36 @@ def test_import_pytest_accepts_identity_table(tmp_path, monkeypatch):
     assert rc == 0
     spec = parse_tool_entry(_tool_row(json.loads(cfg.read_text())["tools"], "echo_tab"), "echo_tab")
     assert spec[3] == "table_reads_generator"
+
+
+def test_import_pytest_maps_every_importable_group_to_one_contract_test():
+    """``samovar tools import --pytest`` must hit exactly one contract test per group."""
+    from samovar.main_config import TOOL_GROUPS
+    from samovar.tool_contracts import GROUP_TO_TESTNODE, _contract_repo_root, default_tool_path
+
+    skip = {"runtime", "compiler", "workflow"}
+    missing = [g for g in TOOL_GROUPS if g not in skip and g not in GROUP_TO_TESTNODE]
+    extra = [g for g in GROUP_TO_TESTNODE if g not in TOOL_GROUPS]
+    assert missing == [], f"import --pytest has no contract test for {missing}"
+    assert extra == [], f"GROUP_TO_TESTNODE has unknown groups {extra}"
+
+    root = _contract_repo_root()
+    src = (root / "tests" / "test_tool_contracts.py").read_text(encoding="utf-8")
+    for group, node in GROUP_TO_TESTNODE.items():
+        rel, func = node.split("::", 1)
+        assert (root / rel).is_file(), f"{group}: missing {rel}"
+        assert f"def {func}(" in src, f"{group}: {func} not defined in {rel}"
+        assert default_tool_path(group).is_file(), f"{group}: baseline/example dest missing"
+
+
+def test_import_pytest_runs_baseline_for_every_contract_group():
+    """Each group’s baseline dest must pass the same pytest node import --pytest uses."""
+    from samovar.tool_contracts import GROUP_TO_TESTNODE, default_tool_path, run_contract_pytest
+
+    failed = []
+    for group in GROUP_TO_TESTNODE:
+        dest = default_tool_path(group)
+        code, output = run_contract_pytest(str(dest), group)
+        if code != 0:
+            failed.append((group, code, output[-2500:]))
+    assert not failed, failed

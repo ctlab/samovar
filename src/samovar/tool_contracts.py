@@ -220,6 +220,13 @@ def run_contract_pytest(
         )
     root = _contract_repo_root()
     node = GROUP_TO_TESTNODE[group]
+    rel_file, func_name = node.split("::", 1)
+    test_file = root / rel_file
+    if not test_file.is_file():
+        raise ValueError(
+            f"Contract pytest file missing for --type {tool_type} ({group}): {test_file}"
+        )
+    pytest_node = f"{test_file}::{func_name}"
     env = os.environ.copy()
     src = str(root / "src")
     env["PYTHONPATH"] = src + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
@@ -229,11 +236,9 @@ def run_contract_pytest(
         sys.executable,
         "-m",
         "pytest",
-        str(root / node.split("::")[0]),
+        pytest_node,
         "-q",
         "--tb=short",
-        "-k",
-        node.split("::")[1],
         "--tool",
         str(Path(tool_path).resolve()),
         "--tool-type",

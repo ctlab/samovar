@@ -16,7 +16,7 @@ If a pipeline stage is defined by a clear contract and is intended to be interch
 * make the pipeline import/integration layer consume the contract rather than a specific implementation;
 * keep contracts mutually consistent across pipeline stages.
 
-When introducing a new contract, first check whether existing modules already compose or execute such contracts. Extend or refactor those modules instead of creating parallel mechanisms.
+When introducing a new contract, first check whether existing modules already compose or execute such contracts. Extend or refactor those modules instead of creating parallel mechanisms. `samovar tools import … --pytest` normalizes `--type`, looks it up in `GROUP_TO_TESTNODE`, and runs that one `tests/test_tool_contracts.py::test_*_contract` against `--exec-path` (via `--tool` / `--tool-type`) before writing config; for a new type, document in/out in `CONTRACTS`, map the group, add one `test_*_contract` that calls `_skip_if_other_type` and exercises the dest from `_tool_path`, and ship a baseline that passes it.
 
 ## 2. Reuse before duplication
 
