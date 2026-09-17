@@ -224,7 +224,9 @@ phase_database1() {
   samovar prepare \
     --output_dir "$out1" \
     --kraken2-test "kraken2 phage_test" \
-    --kaiju-test "kaiju phage_test"
+    --kaiju-test "kaiju phage_test" \
+    --kmer2-test kmer2 \
+    --gc-test gc
 
   samovar_run_exec "$out1"
 
