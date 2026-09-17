@@ -763,5 +763,12 @@ def build_database_from_config(
             add_database_krakenunique(input_file, taxid, genome_name, db_path=db_path)
         # Build the database
         build_database_krakenunique(db_path=db_path, threads=1)
+    elif db_type in {"kmer_encoder", "metauto", "kmerenc"}:
+        from samovar.kmer_encoder import train_encoder
+
+        os.makedirs(db_path, exist_ok=True)
+        dest = os.path.join(db_path, "kmer_encoder.pt")
+        train_encoder(input_dirs, dest)
+        logger.info("k-mer encoder model written to %s", dest)
     else:
         raise ValueError(f"Unknown database type: {db_type}")

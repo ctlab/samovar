@@ -612,6 +612,52 @@ class Kmer2Annotator(BaseAnnotator):
         return read_custom_raw(file_path)
 
 
+KMER_ENCODER_TOOL_NAMES = {
+    "kmer_encoder",
+    "kmer-encoder",
+    "kmerenc",
+    "encoder",
+    "kmerencoder",
+}
+
+
+class KmerEncoderAnnotator(BaseAnnotator):
+    """k-mer encoder Feature extractor (metauto encoding stage)."""
+
+    @property
+    def default_cmd(self) -> str:
+        return f"{sys.executable} -m samovar.kmer_encoder"
+
+    def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.kmer_encoder.out")]
+
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        out_file = outputs[0]
+        extra = self.extra or ""
+        cmd = self.cmd
+        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        if not cmd or first.split(".")[0].lower().replace("-", "_") in KMER_ENCODER_TOOL_NAMES:
+            cmd = self.default_cmd
+        db = self.db_path or ""
+        run = (
+            f"{cmd} "
+            f"-i {shlex.quote(str(input_r1))} "
+            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"-d {shlex.quote(str(db))} "
+            f"-o {shlex.quote(str(out_file))} "
+            f"-t {int(self.threads)} "
+            f"{extra}"
+        )
+        return skip_empty_reads_cmd(input_r1, [out_file], run)
+
+    def parse_output(self, file_path: str) -> pd.DataFrame:
+        from samovar.parse_annotators import read_custom_raw
+
+        return read_custom_raw(file_path)
+
+
 def get_annotator_instance(
     tool_type: str, run_config: Dict, config: Dict
 ) -> BaseAnnotator:
@@ -635,6 +681,11 @@ def get_annotator_instance(
         "kmer_counter": Kmer2Annotator,
         "dinuc": Kmer2Annotator,
         "dinucleotide": Kmer2Annotator,
+        "kmer_encoder": KmerEncoderAnnotator,
+        "kmer-encoder": KmerEncoderAnnotator,
+        "kmerenc": KmerEncoderAnnotator,
+        "encoder": KmerEncoderAnnotator,
+        "kmerencoder": KmerEncoderAnnotator,
     }
 
     if tool in CONSTANT_TAXID_TOOL_NAMES:

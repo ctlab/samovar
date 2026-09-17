@@ -763,6 +763,20 @@ class PipelineConfig:
                     ):
                         type_name = "kmer2"
                         cmd = f"{sys.executable} -m samovar.kmer2"
+                    enc_aliases = {
+                        "kmer_encoder",
+                        "kmer-encoder",
+                        "kmerenc",
+                        "encoder",
+                        "kmerencoder",
+                    }
+                    if (
+                        run_name.lower() in enc_aliases
+                        or type_name.lower() in enc_aliases
+                        or "samovar.kmer_encoder" in cmd_join
+                    ):
+                        type_name = "kmer_encoder"
+                        cmd = f"{sys.executable} -m samovar.kmer_encoder"
                     # Konstantaza CLI: --custom-test "metauto /path/to/db"
                     if run_name.lower() in {"custom", "custom-test", "custom_test"}:
                         run_name = type_name
