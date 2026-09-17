@@ -833,6 +833,14 @@ def maybe_score_reprofiler(
             payloads.append(
                 fn(est, annotation, initial_abundance, regenerated_abundance, local)
             )
+    try:
+        out = Path(cfg.get("output_dir") or ".")
+        root = out.parent if out.name == "reprofiled_annotations" else out
+        from samovar.annotation_correlation import refresh_spearman_heatmaps
+
+        refresh_spearman_heatmaps(root)
+    except Exception as exc:
+        print(f"[spearman] refresh skipped: {exc}", file=sys.stderr)
     return payloads
 
 

@@ -948,6 +948,8 @@ READ_FUNCTIONS = {
     "assembly_profiling": read_custom_raw,
     "kmer2": read_custom_raw,
     "kmer_counter": read_custom_raw,
+    "gc": read_custom_raw,
+    "gc_content": read_custom_raw,
     "kmer_encoder": read_custom_raw,
     "kmerenc": read_custom_raw,
 }
@@ -1510,6 +1512,8 @@ def match_annotation(annotation_name:str) -> Optional[str]:
         "assembly": "assembly",
         "assembly_profiling": "assembly",
         "kmer2": "kmer2",
+        "gc": "gc",
+        "gc_content": "gc",
         "kmer_encoder": "kmer_encoder",
         "kmerenc": "kmer_encoder",
         "encoder": "kmer_encoder",

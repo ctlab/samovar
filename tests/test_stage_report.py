@@ -241,8 +241,8 @@ def test_bundle_unknown_truth_omits_nan_metrics(tmp_path):
     (plots / "quality_scores.csv").write_text(
         "annotator,n_reads,n_taxa,accuracy,f1,r2\nkaiju,10,2,,,\nkraken2,10,3,,,\nSAMOVAR,10,2,,,\n"
     )
-    (plots / "CV_kaiju_vs_kraken2_mqc.json").write_text(
-        json.dumps({"plot_type": "heatmap", "section_name": "Cross-validation", "data": [[1]], "xcats": ["a"], "ycats": ["a"]})
+    (plots / "spearman_correlation_mqc.json").write_text(
+        json.dumps({"plot_type": "heatmap", "section_name": "Spearman correlation", "data": [[1]], "xcats": ["a"], "ycats": ["a"]})
     )
     staged = bundle_multiqc(tmp_path)
     tables = [json.loads(p.read_text()) for p in staged.glob("*quality_scores_mqc.json")]

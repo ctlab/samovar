@@ -552,6 +552,8 @@ def _heatmap_pconfig(
     xlab: str,
     ylab: str,
     min_value: Optional[float] = 0,
+    max_value: Optional[float] = None,
+    colstops: Optional[Sequence] = None,
 ) -> Dict[str, Any]:
     # Keep FPC / true-vs-pred order; do not treat taxIDs as sample names.
     cfg: Dict[str, Any] = {
@@ -564,10 +566,12 @@ def _heatmap_pconfig(
         "ycats_samples": False,
         "cluster_rows": False,
         "cluster_cols": False,
-        "colstops": HEATMAP_COLSTOPS,
+        "colstops": list(colstops) if colstops is not None else HEATMAP_COLSTOPS,
     }
     if min_value is not None:
         cfg["min"] = min_value
+    if max_value is not None:
+        cfg["max"] = max_value
     return cfg
 
 
@@ -699,6 +703,8 @@ def write_heatmap_mqc(
     parent_id: Optional[str] = None,
     parent_name: Optional[str] = None,
     min_value: Optional[float] = 0,
+    max_value: Optional[float] = None,
+    colstops: Optional[Sequence] = None,
 ) -> Path:
     """Native MultiQC heatmap (selectable + ``--export``)."""
     dest = as_path(path)
@@ -721,7 +727,13 @@ def write_heatmap_mqc(
         "xcats": [str(c) for c in matrix.columns],
         "ycats": [str(c) for c in matrix.index],
         "pconfig": _heatmap_pconfig(
-            f"{cid}_plot", section_name, xlab, ylab, min_value=min_value
+            f"{cid}_plot",
+            section_name,
+            xlab,
+            ylab,
+            min_value=min_value,
+            max_value=max_value,
+            colstops=colstops,
         ),
         "data": values,
     }

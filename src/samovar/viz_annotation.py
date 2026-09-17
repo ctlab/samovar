@@ -859,109 +859,27 @@ def viz_annotation(
                         ylab="True taxon",
                     )
 
-    if types & {"cv", "cross-validation"}:
-        if len(annotators) >= 2:
-            gglist = {}
-            for i, name1 in enumerate(annotators):
-                for name2 in annotators[:i]:
-                    raw = pd.DataFrame(
-                        {
-                            name1: work[name1].map(normalize_taxon_token),
-                            name2: work[name2].map(normalize_taxon_token),
-                        }
-                    )
-                    if show_top != 0:
-                        freq = pd.concat([raw[name1], raw[name2]]).value_counts()
-                        keep = [t for t in freq.index if not is_special_taxon(t)][: max(1, show_top - 1)]
-                        keep_set = set(keep) | {"0"}
-                        raw[name1] = raw[name1].where(raw[name1].isin(keep_set), "other")
-                        raw[name2] = raw[name2].where(raw[name2].isin(keep_set), "other")
-                    counts = raw.value_counts().rename("Freq").reset_index()
-                    counts = counts.rename(columns={name1: "a", name2: "b"})
-                    if reord == "fpc":
-                        fpc_core = fpc_taxon_order(counts, "b", "a")
-                    else:
-                        fpc_core = sorted({t for t in list(counts["a"]) + list(counts["b"]) if not is_special_taxon(t)})
-                    lev1 = axis_levels_from_fpc(raw[name1], fpc_core)
-                    lev2 = axis_levels_from_fpc(raw[name2], fpc_core)
-                    matrix = _trim_matrix(
-                        _pivot_matrix(
-                            counts.rename(columns={"a": name1, "b": name2}),
-                            name2,
-                            name1,
-                            lev2,
-                            lev1,
-                        )
-                    )
-                    key = f"{name1} vs {name2}"
-                    gglist[key] = matrix
-                    if out_dir:
-                        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", key)
-                        title = key if rank_used is None else f"{key} ({rank_used})"
-                        _save_heatmap_png(
-                            matrix,
-                            out_dir / f"CV_{safe}.png",
-                            title,
-                            name2,
-                            name1,
-                            "",
-                            name_map,
-                            italic,
-                        )
-                        _save_altair(
-                            _altair_heatmap(matrix, title, name2, name1),
-                            out_dir / f"CV_{safe}.html",
-                            n_cells=int(matrix.size),
-                        )
-                        from samovar.stage_report import write_heatmap_mqc
+    if types & {"cv", "cross-validation", "correlation", "spearman", "corr"}:
+        from samovar.annotation_correlation import plot_spearman_annotation_correlation
 
-                        write_heatmap_mqc(
-                            matrix,
-                            out_dir / f"CV_{safe}_mqc.json",
-                            section_name=f"Cross-validation — {title}",
-                            description="",
-                            xlab=name2,
-                            ylab=name1,
-                        )
-            results["CV"] = gglist
-            if out_dir and len(platform_types) >= 2:
-                from samovar.stage_report import write_heatmap_mqc
+        if out_dir:
+            matrix = plot_spearman_annotation_correlation(
+                work, out_dir, importance_dir=out_dir
+            )
+        else:
+            from samovar.annotation_correlation import spearman_annotation_correlation
 
+            matrix = spearman_annotation_correlation(work)
+        if matrix is not None and not matrix.empty:
+            results["correlation"] = matrix
+            if out_dir and len(platform_types) >= 2 and "read_type" in work.columns:
                 for rt in platform_types:
                     sub = work[work["read_type"].astype(str).str.strip().str.lower() == rt]
                     if sub.empty:
                         continue
-                    for i, name1 in enumerate(annotators):
-                        for name2 in annotators[:i]:
-                            raw = pd.DataFrame(
-                                {
-                                    name1: sub[name1].map(normalize_taxon_token),
-                                    name2: sub[name2].map(normalize_taxon_token),
-                                }
-                            )
-                            counts = raw.value_counts().rename("Freq").reset_index()
-                            if counts.empty:
-                                continue
-                            counts = counts.rename(columns={name1: "a", name2: "b"})
-                            fpc_core = fpc_taxon_order(counts, "b", "a")
-                            matrix = _trim_matrix(
-                                _pivot_matrix(
-                                    counts.rename(columns={"a": name1, "b": name2}),
-                                    name2,
-                                    name1,
-                                    axis_levels_from_fpc(raw[name2], fpc_core),
-                                    axis_levels_from_fpc(raw[name1], fpc_core),
-                                )
-                            )
-                            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{name1} vs {name2}")
-                            write_heatmap_mqc(
-                                matrix,
-                                out_dir / f"CV_{safe}.{rt}_mqc.json",
-                                section_name=f"Cross-validation — {name1} vs {name2}",
-                                description="",
-                                xlab=name2,
-                                ylab=name1,
-                            )
+                    plot_spearman_annotation_correlation(
+                        sub, out_dir, read_type=rt, importance_dir=out_dir
+                    )
 
     conf_cols = [c for c in work.columns if str(c).endswith("_conf") or "_conf" in str(c)]
     if types & {"conf", "confidence"} and conf_cols:
@@ -992,6 +910,11 @@ def compare_annotations(
     split: bool = False,
 ) -> pd.DataFrame:
     """CLI analog of ``workflow/compare_annotations.R``."""
+    from samovar.annotation_correlation import (
+        CORRELATION_TYPES,
+        annotation_stage_allows_correlation,
+    )
+
     annotation_path = Path(annotation_dir)
     if not annotation_path.is_dir():
         raise FileNotFoundError(f"annotation_dir not found: {annotation_path}")
@@ -1018,14 +941,9 @@ def compare_annotations(
             Path(csv_file).parent.mkdir(parents=True, exist_ok=True)
             data.to_csv(csv_file, index=False)
         return data
-    annotators = []
-    for col in tax_cols:
-        parts = str(col).split("_")
-        if len(parts) >= 2:
-            annotators.append(parts[1])
     type_list = list(types)
-    if len(set(annotators)) < 2:
-        type_list = [t for t in type_list if t.lower() not in {"cv", "cross-validation"}]
+    if not annotation_stage_allows_correlation(annotation_dir, output_dir):
+        type_list = [t for t in type_list if str(t).lower() not in CORRELATION_TYPES]
     viz_annotation(
         data,
         type=type_list,

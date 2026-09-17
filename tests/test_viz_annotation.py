@@ -1,7 +1,9 @@
 """Tests for Python visualization and annotation I/O."""
 
-import pandas as pd
+import json
 from pathlib import Path
+
+import pandas as pd
 
 from samovar.annotation_io import annotation_to_abundance, read_annotation_dir
 from samovar.viz_annotation import (
@@ -96,18 +98,19 @@ def test_viz_annotation_writes_png(tmp_path):
     )
     assert "F1" in results
     assert "R2" in results
-    assert "CV" in results
+    assert "correlation" in results
     assert "scores" in results
     pngs = list(out.glob("*.png"))
     assert pngs, "expected publication PNGs from cnsplots/matplotlib"
     assert any(p.name.startswith("F1_") for p in pngs)
     assert any(p.name.startswith("R2_") for p in pngs)
-    assert any(p.name.startswith("CV_") for p in pngs)
+    assert any("spearman" in p.name for p in pngs)
     assert (out / "scores.png").is_file()
     assert (out / "quality_scores.csv").is_file()
     assert list(out.glob("F1_*_mqc.json"))
     assert list(out.glob("R2_*_mqc.json"))
-    assert list(out.glob("CV_*_mqc.json"))
+    assert list(out.glob("spearman_correlation_mqc.json"))
+    assert not list(out.glob("CV_*_mqc.json"))
     htmls = list(out.glob("F1_*.html"))
     if htmls:
         assert "vega" in htmls[0].read_text().lower() or "altair" in htmls[0].read_text().lower() or htmls[0].stat().st_size > 100
@@ -142,7 +145,9 @@ def test_viz_annotation_writes_assembly_r2_when_preds_are_unclassified(tmp_path)
     assert "assembly" in results.get("R2", {})
     assert (out / "F1_assembly.png").is_file()
     assert (out / "R2_assembly.png").is_file()
-    assert any(p.name.startswith("CV_") and "assembly" in p.name for p in out.glob("CV_*.png"))
+    assert any("spearman" in p.name and "assembly" in p.name for p in out.glob("spearman*")) or (
+        out / "spearman_correlation.png"
+    ).is_file()
 
 
 def test_viz_annotation_without_true_keeps_cv(tmp_path):
@@ -165,14 +170,62 @@ def test_viz_annotation_without_true_keeps_cv(tmp_path):
     )
     assert "F1" not in results
     assert "R2" not in results
-    assert "CV" in results
+    assert "correlation" in results
     assert "scores" in results
     assert results["scores"]["f1"].isna().all()
-    assert list(out.glob("CV_*_mqc.json"))
+    assert list(out.glob("spearman_correlation_mqc.json"))
+    assert not list(out.glob("CV_*_mqc.json"))
     assert not list(out.glob("F1_*_mqc.json"))
 
 
-def test_require_viz_backend():
+def test_compare_annotations_skips_correlation_on_raw(tmp_path):
+    ann = tmp_path / "initial_annotations"
+    ann.mkdir()
+    pd.DataFrame(
+        {
+            "seq": [f"r{i}" for i in range(8)],
+            "taxID_kaiju_0": [562] * 4 + [9606] * 4,
+            "taxID_kraken2_1": [562] * 3 + [9606] * 5,
+            "true": [562] * 4 + [9606] * 4,
+        }
+    ).to_csv(ann / "1.annotation.csv", index=False)
+    out = tmp_path / "initial_annotations_plots"
+    compare_annotations(
+        annotation_dir=str(ann),
+        output_dir=str(out),
+        types=("f1", "R2", "cv", "scores"),
+        rank="none",
+    )
+    assert not list(out.glob("spearman_correlation_mqc.json"))
+    assert not list(out.glob("CV_*_mqc.json"))
+
+
+def test_compare_annotations_writes_correlation_on_regenerated(tmp_path):
+    ann = tmp_path / "regenerated_annotations"
+    ann.mkdir()
+    pd.DataFrame(
+        {
+            "seq": [f"r{i}" for i in range(8)],
+            "taxID_kaiju_0": [562] * 4 + [9606] * 4,
+            "taxID_kraken2_1": [562] * 3 + [9606] * 5,
+            "feat_gc_0": list(range(8)),
+            "true": [562] * 4 + [9606] * 4,
+        }
+    ).to_csv(ann / "1.annotation.csv", index=False)
+    out = tmp_path / "regenerated_annotations_plots"
+    compare_annotations(
+        annotation_dir=str(ann),
+        output_dir=str(out),
+        types=("f1", "R2", "cv", "scores"),
+        rank="none",
+    )
+    payload = json.loads((out / "spearman_correlation_mqc.json").read_text())
+    assert payload["plot_type"] == "heatmap"
+    cats = payload["xcats"]
+    assert any("kaiju" in str(c) for c in cats)
+    assert any("feat" in str(c) for c in cats)
+    assert "true" in cats
+
     from samovar.viz_annotation import require_viz_backend
 
     backend = require_viz_backend()

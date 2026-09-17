@@ -53,6 +53,7 @@ def test_match_annotation_custom_and_constant_taxid():
     assert match_annotation("s_kaiju.kaiju.out") == "kaiju"
     assert match_annotation("1_full_run.assembly.out") == "assembly"
     assert match_annotation("s.kmer2.out") == "kmer2"
+    assert match_annotation("s.gc.out") == "gc"
     assert match_annotation("s.kmer_encoder.out") == "kmer_encoder"
     assert match_annotation("notes.txt") is None
 

@@ -780,6 +780,7 @@ class PipelineConfig:
                     if run_name.lower() in constant_aliases or type_name.lower() in constant_aliases:
                         type_name = "constant_taxid"
                     kmer2_aliases = {"kmer2", "kmer_counter", "dinuc", "dinucleotide"}
+                    gc_aliases = {"gc", "gc_content", "gc-content", "gcfrac", "gc_fraction"}
                     cmd_join = " ".join(parts).lower()
                     if (
                         run_name.lower() in kmer2_aliases
@@ -788,6 +789,13 @@ class PipelineConfig:
                     ):
                         type_name = "kmer2"
                         cmd = f"{sys.executable} -m samovar.kmer2"
+                    if (
+                        run_name.lower().replace("-", "_") in gc_aliases
+                        or type_name.lower().replace("-", "_") in gc_aliases
+                        or "samovar.gc" in cmd_join
+                    ):
+                        type_name = "gc"
+                        cmd = f"{sys.executable} -m samovar.gc"
                     enc_aliases = {
                         "kmer_encoder",
                         "kmer-encoder",
