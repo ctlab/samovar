@@ -18,6 +18,7 @@ from samovar.assembly_profiling import (
     run_aligner,
     run_anvio_binner,
     run_assembler,
+    run_assembly_annotator,
     run_binner,
     run_binner_combine,
     run_binner_qc,
@@ -130,6 +131,65 @@ def test_taxon_quantifier_joins_mag_counts_and_taxonomy(tmp_path):
     assert set(parsed.DataFrame.index) == {"r1", "r2"}
     tax_col = [c for c in parsed.DataFrame.columns if str(c).startswith("taxID")][0]
     assert set(parsed.DataFrame[tax_col].astype(str)) == {"9606", "2"}
+    feat_cols = [c for c in parsed.DataFrame.columns if str(c).startswith("feat_")]
+    assert any("MAG_ID" in c for c in feat_cols)
+    mag_col = next(c for c in feat_cols if "MAG_ID" in c)
+    assert set(parsed.DataFrame[mag_col].astype(str)) == {"magA", "magB"}
+    header = dest.read_text(encoding="utf-8").splitlines()[0]
+    assert header == "seq\ttaxID\tMAG_ID"
+
+
+def test_identity_composite_emits_mag_id_feature(tmp_path):
+    dest = tmp_path / "sample_run.assembly.out"
+    run_assembly_annotator(
+        str(READS_R1),
+        str(READS_R2),
+        str(dest),
+        threads=1,
+        assembler="identity",
+        gene_caller="identity",
+        binners=["identity"],
+        binner_qc="identity",
+        binner_combine="identity",
+        mag_taxonomy="identity",
+        aligner="identity",
+        mag_quantifier="identity",
+        work_dir=str(tmp_path / "sample_run.assembly"),
+    )
+    assert dest.is_file()
+    text = dest.read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "seq\ttaxID\tMAG_ID"
+    parsed = Annotation({str(dest): "assembly"})
+    tax_cols = [c for c in parsed.DataFrame.columns if str(c).startswith("taxID")]
+    feat_cols = [c for c in parsed.DataFrame.columns if str(c).startswith("feat_")]
+    assert tax_cols
+    mag_col = next(c for c in feat_cols if "MAG_ID" in c)
+    mag_ids = set(parsed.DataFrame[mag_col].astype(str))
+    assert mag_ids <= {"mag1", "mag2"}
+    assert mag_ids
+    assert set(parsed.DataFrame[tax_cols[0]].astype(str)) == {"562"}
+
+
+def test_identity_aligner_maps_taxid_headers_to_mags(tmp_path):
+    from samovar.baselines.identity_aligner import main as align_main
+
+    mag = tmp_path / "mags"
+    mag.mkdir()
+    (mag / "mag1.fa").write_text(">mag1\nACGT\n")
+    (mag / "mag2.fa").write_text(">mag2\nTGCA\n")
+    r1 = tmp_path / "r1.fastq"
+    r1.write_text(
+        "@rA|taxid:10710|\nACGT\n+\nIIII\n"
+        "@rB|taxid:10699|\nACGT\n+\nIIII\n"
+    )
+    r2 = tmp_path / "r2.fastq"
+    r2.write_text("@rC|taxid:10710|/2\nACGT\n+\nIIII\n")
+    dest = tmp_path / "hits.sam"
+    align_main(["-i", str(r1), "-I", str(r2), "-r", str(mag), "-o", str(dest)])
+    text = dest.read_text()
+    assert "rA|taxid:10710|\t0\tmag1\t" in text
+    assert "rB|taxid:10699|\t0\tmag2\t" in text
+    assert "rC|taxid:10710|/2\t0\tmag1\t" in text
 
 
 def test_gzip_bam_uses_samtools(tmp_path, monkeypatch):
@@ -152,7 +212,7 @@ def test_gzip_bam_uses_samtools(tmp_path, monkeypatch):
         ),
     )
     run_read_assigner(str(bam), str(tax), str(dest))
-    assert dest.read_text(encoding="utf-8") == "r1\t54254\n"
+    assert dest.read_text(encoding="utf-8") == "seq\ttaxID\tMAG_ID\nr1\t54254\tmagA\n"
 
 
 def test_rewrite_mag_taxonomy_ncbi_unclassified_bacteria(tmp_path):
@@ -498,4 +558,10 @@ def test_composite_annotator(tmp_path, monkeypatch):
     assert dest.is_file()
     parsed = Annotation({str(dest): "assembly"})
     tax_cols = [c for c in parsed.DataFrame.columns if str(c).startswith("taxID")]
-    assert tax_cols or dest.stat().st_size == 0
+    feat_cols = [c for c in parsed.DataFrame.columns if str(c).startswith("feat_")]
+    if dest.stat().st_size > 0 and dest.read_text(encoding="utf-8").strip() not in {
+        "",
+        "seq\ttaxID\tMAG_ID",
+    }:
+        assert tax_cols
+        assert any("MAG_ID" in c for c in feat_cols)

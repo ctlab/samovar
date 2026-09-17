@@ -47,6 +47,18 @@ class TestReprofiling(unittest.TestCase):
         # Check if true is converted to int
         self.assertTrue(pd.api.types.is_integer_dtype(processed_df['true']))
 
+    def test_preprocess_factorizes_mag_id(self):
+        df = pd.DataFrame({
+            'seq': ['a', 'b', 'c', 'd'],
+            'taxid_assembly_0': ['562', '562', '9606', '9606'],
+            'feat_assembly_0_MAG_ID': ['magA', 'magB', 'magA', 'magB'],
+            'length': [4, 4, 4, 4],
+            'true': [562, 562, 9606, 9606],
+        })
+        processed = preprocess_data(df)
+        self.assertTrue(pd.api.types.is_integer_dtype(processed['feat_assembly_0_MAG_ID']))
+        self.assertEqual(processed['feat_assembly_0_MAG_ID'].nunique(), 2)
+
     def test_train_models(self):
         """Test model training functionality"""
         processed_df = preprocess_data(self.test_data.copy())

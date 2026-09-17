@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""Built-in binner baseline: copy the assembly into a single MAG FASTA."""
+"""Built-in binner baseline: split the assembly into two MAG FASTA files."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+
+
+def _assembly_seq(src: Path) -> str:
+    if not src.is_file():
+        return "ACGT"
+    seqs = []
+    for line in src.read_text(encoding="utf-8").splitlines():
+        if line.startswith(">"):
+            continue
+        seqs.append(line.strip())
+    return "".join(seqs) or "ACGT"
 
 
 def main(argv=None) -> int:
@@ -17,9 +28,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     dest = Path(args.o)
     dest.mkdir(parents=True, exist_ok=True)
-    src = Path(args.c)
-    text = src.read_text(encoding="utf-8") if src.is_file() else ">contig1\nACGT\n"
-    (dest / "mag1.fa").write_text(text, encoding="utf-8")
+    seq = _assembly_seq(Path(args.c))
+    if len(seq) >= 8:
+        mid = len(seq) // 2
+        parts = [("mag1", seq[:mid]), ("mag2", seq[mid:])]
+    else:
+        parts = [("mag1", seq), ("mag2", seq)]
+    for name, chunk in parts:
+        (dest / f"{name}.fa").write_text(f">{name}\n{chunk}\n", encoding="utf-8")
     return 0
 
 

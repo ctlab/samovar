@@ -141,7 +141,7 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
     },
     "read_assigner": {
         "in": "BAM -b, MAG taxonomy -x, TSV -o.",
-        "out": "Two-column seq, taxID TSV (Annotation-ready).",
+        "out": "Headered TSV seq, taxID, MAG_ID (Annotation tax + Feature MAG_ID).",
     },
 }
 

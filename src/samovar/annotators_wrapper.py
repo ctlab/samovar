@@ -569,12 +569,9 @@ class AssemblyAnnotator(BaseAnnotator):
         return skip_empty_reads_cmd(input_r1, [out_file], run)
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
-        df = _read_table_or_empty(file_path)
-        if df is None:
-            return _empty_taxid_frame()
-        df = df.iloc[:, [0, 1]].copy()
-        df.columns = ["seq", "taxID"]
-        return df
+        from samovar.parse_annotators import read_custom_raw
+
+        return read_custom_raw(file_path)
 
 
 KMER2_TOOL_NAMES = {"kmer2", "kmer_counter", "dinuc", "dinucleotide"}

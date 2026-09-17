@@ -1025,7 +1025,15 @@ class Annotation:
         for col in tax_cols:
             self.DataFrame[col] = self.DataFrame[col].fillna("0").astype("string")
         for col in feat_cols:
-            self.DataFrame[col] = pd.to_numeric(self.DataFrame[col], errors="coerce").fillna(0)
+            numeric = pd.to_numeric(self.DataFrame[col], errors="coerce")
+            if numeric.notna().all() or (
+                self.DataFrame[col].isna().all()
+                if self.DataFrame.empty
+                else numeric.notna().sum() >= max(1, int(0.9 * len(self.DataFrame)))
+            ):
+                self.DataFrame[col] = numeric.fillna(0)
+            else:
+                self.DataFrame[col] = self.DataFrame[col].fillna("").astype("string")
         self.DataFrame["read_type"] = [
             extract_read_type(seq_id) for seq_id in self.DataFrame.index
         ]

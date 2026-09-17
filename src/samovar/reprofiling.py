@@ -121,12 +121,17 @@ def preprocess_data(df, drop_missing_true: bool = True):
         codes, _uniques = pd.factorize(df['read_type'].fillna('').astype(str), sort=True)
         df['read_type'] = pd.Series(codes, index=df.index).astype(int)
 
-    # Optional biological features from fastq_annotator (gc, shannon, kmer_pca_*, …)
+    # Numeric features (kmer counts, length sidecars, …); categorical feat_* (MAG_ID) are factorized
     skip = {"true", "length"}
     for col in df.columns:
         if col in skip or col.startswith("taxid_"):
             continue
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        if numeric.notna().all() or numeric.notna().sum() >= max(1, int(0.9 * len(df))):
+            df[col] = numeric.fillna(0)
+        else:
+            codes, _ = pd.factorize(df[col].fillna("").astype(str), sort=True)
+            df[col] = pd.Series(codes, index=df.index).astype(int)
     
     # Convert true to numeric and handle NaN values
     if 'true' in df.columns:

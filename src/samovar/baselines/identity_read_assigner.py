@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Built-in read assigner baseline: SAM-like text + MAG taxonomy → seq/taxID."""
+"""Built-in read assigner baseline: SAM-like text + MAG taxonomy → seq/taxID/MAG_ID."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def main(argv=None) -> int:
     tax = _tax_by_mag(Path(args.x))
     dest = Path(args.o)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    rows = []
+    rows = ["seq\ttaxID\tMAG_ID"]
     bam = Path(args.b)
     if bam.is_file():
         for line in bam.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -37,12 +37,13 @@ def main(argv=None) -> int:
             if len(parts) < 3:
                 continue
             seq, rname = parts[0], parts[2]
-            if rname in { "*", "" }:
+            if rname in {"*", ""}:
                 continue
-            taxid = tax.get(rname, tax.get("mag1", "0"))
-            rows.append(f"{seq}\t{taxid}")
-    if not rows:
-        rows.append("r0\t562")
+            mag = rname.split("~", 1)[0]
+            taxid = tax.get(mag, tax.get(rname, tax.get("mag1", "0")))
+            rows.append(f"{seq}\t{taxid}\t{mag}")
+    if len(rows) == 1:
+        rows.append("r0\t562\tmag1")
     dest.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return 0
 

@@ -92,6 +92,14 @@ def test_scoring_ignores_feat_columns():
     assert select_scoring_annotators(df, ["feat_kmer2_0_AA", "taxID_kaiju_0"]) == [
         "taxID_kaiju_0"
     ]
+    mag_df = pd.DataFrame(
+        {
+            "taxID_assembly_0": ["562", "562"],
+            "feat_assembly_0_MAG_ID": ["mag1", "mag1"],
+            "true": ["562", "562"],
+        }
+    )
+    assert select_scoring_annotators(mag_df) == ["taxID_assembly_0"]
 
 
 def test_ml_uses_feat_columns():

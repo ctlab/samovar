@@ -82,6 +82,29 @@ def test_combine_merges_headered_features(tmp_path, combiner):
     assert int(by_seq.loc["readB|taxid:562|", "taxID_kaiju_0"]) == 562
 
 
+def test_combine_assembly_mag_id_feature(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_features(
+        reports / "s1_assembly-test.assembly.out",
+        ["seq", "taxID", "MAG_ID"],
+        [
+            ("readA|taxid:562|", "562", "mag1"),
+            ("readB|taxid:9606|", "562", "mag1"),
+        ],
+    )
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv")
+    tax = [c for c in df.columns if str(c).startswith("taxID_")]
+    feat = [c for c in df.columns if str(c).startswith("feat_")]
+    assert len(tax) == 1
+    assert any("MAG_ID" in c for c in feat)
+    mag_col = next(c for c in feat if "MAG_ID" in c)
+    assert set(df[mag_col].astype(str)) == {"mag1"}
+    assert set(df[tax[0]].astype(str)) == {"562"}
+
+
 def test_combine_tool_with_tax_and_features(tmp_path, combiner):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"

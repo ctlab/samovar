@@ -588,9 +588,14 @@ def test_read_assigner_contract(request, tmp_path):
     tax.write_text("mag_id\ttaxid\tlineage\nmag1\t562\td__Bacteria\n")
     dest = tmp_path / "reads.out"
     _run_py_main(path, ["-b", str(bam), "-x", str(tax), "-o", str(dest)])
-    frame = pd.read_table(dest, header=None)
-    frame.columns = ["seq", "taxID"]
+    frame = pd.read_table(dest)
     assert "seq" in frame.columns
+    assert "taxID" in frame.columns or "taxid" in {c.lower() for c in frame.columns}
+    assert "MAG_ID" in frame.columns
     assert not frame.empty
+    assert set(frame["MAG_ID"].astype(str)) == {"mag1"}
+    assert set(frame["taxID"].astype(str) if "taxID" in frame.columns else frame["taxid"].astype(str)) == {
+        "562"
+    }
 
 

@@ -1,9 +1,9 @@
 """Assembly-based annotation: nested contracts plus a composite annotator.
 
-Outer CLI matches ``annotator`` (``-i/-I/-d/-o/-t`` → seq/taxID TSV). Inner
-stages are importable groups (assembler, gene_caller, binner, binner_qc,
-binner_combine, mag_taxonomy, aligner, mag_quantifier, taxon_quantifier,
-read_assigner).
+Outer CLI matches ``annotator`` (``-i/-I/-d/-o/-t`` → headered TSV with
+``seq``, ``taxID``, and Feature ``MAG_ID``). Inner stages are importable
+groups (assembler, gene_caller, binner, binner_qc, binner_combine,
+mag_taxonomy, aligner, mag_quantifier, taxon_quantifier, read_assigner).
 """
 
 from __future__ import annotations
@@ -765,6 +765,24 @@ def run_binner_qc(
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
     key = str(name or "checkm2").lower().replace("-", "_")
+    if key in {"identity", "passthrough", "baseline", "dummy", "passthrough_binner_qc"}:
+        from samovar.baselines.passthrough_binner_qc import main as _main
+
+        dest_path = as_path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        _main(
+            [
+                "-c",
+                str(mag_dir),
+                "-d",
+                str(db or ""),
+                "-o",
+                str(dest_path),
+                "-t",
+                str(int(threads)),
+            ]
+        )
+        return dest_path
     if key in {"checkm2", "binner_qc", ""}:
         return run_checkm2(mag_dir, dest, db=db, threads=threads, extra=extra)
     exe = which_tool(name)
@@ -948,6 +966,24 @@ def run_mag_taxonomy(
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
     key = str(name or "gtdbtk").lower().replace("-", "_")
+    if key in {"identity", "constant", "baseline", "dummy", "constant_mag_taxonomy"}:
+        from samovar.baselines.constant_mag_taxonomy import main as _main
+
+        dest_path = as_path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        _main(
+            [
+                "-c",
+                str(mag_dir),
+                "-d",
+                str(db or ""),
+                "-o",
+                str(dest_path),
+                "-t",
+                str(int(threads)),
+            ]
+        )
+        return dest_path
     if key in {"gtdbtk", "gtdb", "mag_taxonomy", ""}:
         return run_gtdbtk(mag_dir, dest, db=db, threads=threads, extra=extra)
     exe = which_tool(name)
@@ -1044,6 +1080,26 @@ def run_aligner(
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
     key = str(name or "minimap2").lower()
+    if key in {"identity", "baseline", "dummy"}:
+        from samovar.baselines.identity_aligner import main as _main
+
+        dest_path = as_path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        _main(
+            [
+                "-i",
+                str(r1),
+                "-I",
+                str(r2 or ""),
+                "-r",
+                str(reference),
+                "-o",
+                str(dest_path),
+                "-t",
+                str(int(threads)),
+            ]
+        )
+        return dest_path
     if key in {"minimap2", "aligner", ""}:
         return run_minimap2(r1, r2, reference, dest, threads=threads, extra=extra)
     exe = which_tool(name)
@@ -1155,6 +1211,13 @@ def run_mag_quantifier(
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
     key = str(name or "coverm").lower()
+    if key in {"identity", "constant", "baseline", "dummy", "constant_mag_quantifier"}:
+        from samovar.baselines.constant_mag_quantifier import main as _main
+
+        dest_path = as_path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        _main(["-b", str(bam), "-r", str(mag_dir), "-o", str(dest_path)])
+        return dest_path
     if key in {"coverm", "mag_quantifier", ""}:
         try:
             return run_coverm(bam, mag_dir, dest, extra=extra)
@@ -1290,18 +1353,23 @@ def _iter_sam_alignments(bam: Path) -> Iterable[Tuple[str, str]]:
 
 
 def run_read_assigner(bam: str, taxonomy: str, dest: str, mag_dir: str = "") -> Path:
+    """Write Annotation + Feature table: ``seq``, ``taxID``, ``MAG_ID``.
+
+    Headered TSV so the combine step labels tax as ``taxID_<tool>_<n>`` and
+    MAG identity as ``feat_<tool>_<n>_MAG_ID`` (Feature sub-contract).
+    """
     tax = load_mag_taxonomy(as_path(taxonomy))
     mapping = contig_to_mag_map(as_path(mag_dir)) if mag_dir else {}
     dest_path = as_path(dest)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = []
+    rows = ["seq\ttaxID\tMAG_ID"]
     for seq, rname in _iter_sam_alignments(as_path(bam)):
         if rname in {"*", ""}:
             continue
         mag = mapping.get(rname, rname.split("~", 1)[0])
         taxid = tax.get(mag, tax.get(rname, "0"))
-        rows.append(f"{seq}\t{taxid}")
-    dest_path.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
+        rows.append(f"{seq}\t{taxid}\t{mag}")
+    dest_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return dest_path
 
 
@@ -1322,7 +1390,7 @@ def run_assembly_annotator(
     mag_quantifier: str = "coverm",
     work_dir: str = "",
 ) -> Path:
-    """Full nested pipeline; writes annotator TSV at dest."""
+    """Full nested pipeline; writes headered seq/taxID/MAG_ID TSV at dest."""
     out = as_path(dest)
     work = as_path(work_dir) if work_dir else out.with_suffix("")
     if str(work) == str(out):
@@ -1395,7 +1463,7 @@ def run_assembly_annotator(
     dest_path = as_path(out)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     if not any(_fasta_has_records(p) for p in _iter_mag_fastas(selected)):
-        dest_path.write_text("", encoding="utf-8")
+        dest_path.write_text("seq\ttaxID\tMAG_ID\n", encoding="utf-8")
         return dest_path
     bam = work / "reads_to_mag.bam"
     run_aligner(r1, r2, str(selected), str(bam), threads=threads, name=aligner)
