@@ -72,6 +72,7 @@ jobs:
       timeout-minutes: 90
       run: |
         bash examples/toy/pipeline.sh
+        bash examples/assembly/pipeline.sh
         bash examples/scoring/pipeline.sh
         bash examples/reprofiling/pipeline.sh
         bash examples/multiple_tables/pipeline.sh
