@@ -74,6 +74,7 @@ TOOL_GROUPS = (
     "mag_quantifier",
     "taxon_quantifier",
     "read_assigner",
+    "feature_importance",
     "workflow",
 )
 
@@ -126,6 +127,12 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "reprofile": "reprofiler",
     "reprofiler": "reprofiler",
     "reprofiling": "reprofiler",
+    "feature_importance": "feature_importance",
+    "feature-importance": "feature_importance",
+    "featureimportance": "feature_importance",
+    "fi": "feature_importance",
+    "importance": "feature_importance",
+    "importance_scoring": "feature_importance",
     "converter": "annotation_converter",
     "convert": "annotation_converter",
     "annotation_converter": "annotation_converter",

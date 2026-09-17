@@ -171,8 +171,19 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
             "A supervised model (default ensemble, or an imported ``--type ml`` tool) "
             "is trained on regenerated labels and applied to the original samples. "
             "The corrected column is ``taxid_SAMOVAR`` in ``reprofiled_annotations/``. "
+            "Feature importance for the selected model is written to "
+            "``feature_importance_plots/`` (MultiQC section before Reprofiled). "
             "The same logistic (or imported) export then corrects SAMOVAR and "
             "single-annotator abundances into ``exports/reprofiled/``."
+        ),
+    },
+    "feature_importance": {
+        "title": "Feature importance",
+        "description": (
+            "Which annotation and feature columns the selected reprofiler relies on "
+            "(native ``feature_importances_`` / ``coef_`` when present, otherwise "
+            "permutation importance). Shown before the Reprofiled scores so you can "
+            "read the model before looking at its effect on the original samples."
         ),
     },
     "viz_reprofiled": {
@@ -202,13 +213,14 @@ STAGE_DIRS = {
     "combine_regenerated": ("regenerated_annotations", "exports"),
     "viz_regenerated": ("regenerated_annotations_plots",),
     "reprofile": ("reprofiled_annotations", "exports"),
+    "feature_importance": ("feature_importance_plots",),
     "viz_reprofiled": ("reprofiled_annotations_plots",),
 }
 
 PLOT_SUFFIXES = {".png", ".html", ".svg", ".pdf"}
 JSON_NAME = "{stage}.samovar.json"
 
-REPORT_STAGES = ("viz_initial", "viz_regenerated", "viz_reprofiled")
+REPORT_STAGES = ("viz_initial", "viz_regenerated", "feature_importance", "viz_reprofiled")
 REPORT_SECTION = {
     "viz_initial": {
         "id": "samovar_raw",
@@ -221,6 +233,12 @@ REPORT_SECTION = {
         "title": "Regenerated",
         "description": STAGE_INFO["viz_regenerated"]["description"],
         "folder": "regenerated_annotations_plots",
+    },
+    "feature_importance": {
+        "id": "samovar_feature_importance",
+        "title": "Feature importance",
+        "description": STAGE_INFO["feature_importance"]["description"],
+        "folder": "feature_importance_plots",
     },
     "viz_reprofiled": {
         "id": "samovar_reprofiled",
@@ -886,6 +904,9 @@ def collect_run_options(output_dir: PathLike) -> List[tuple]:
         _add("Genome skip list", skip)
     _add("Regeneration seed", regen_cfg.get("seed"))
     _add("Rescale abundance", regen_cfg.get("rescale_abundance"))
+    repro_cfg = _load_yaml(root / ".log" / "configs" / "config_reprofiling.yaml")
+    _add("Reprofiler", repro_cfg.get("reprofiler"))
+    _add("Feature importance", repro_cfg.get("feature_importance") or "builtin")
     return rows
 
 
@@ -1330,6 +1351,11 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
 
     for i, stage in enumerate(REPORT_STAGES, start=1):
         spec = REPORT_SECTION[stage]
+        folder = root / spec["folder"]
+        if stage == "feature_importance" and not (
+            folder.is_dir() and any(folder.glob("*_mqc.json"))
+        ):
+            continue
         intro = dest / f"{i:02d}_{_slug(spec['title'])}_intro_mqc.html"
         intro.write_text(
             _html_comment(
@@ -1346,7 +1372,6 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
             + f"<p>{html.escape(spec['description'])}</p>\n",
             encoding="utf-8",
         )
-        folder = root / spec["folder"]
         _copy_plot_assets(folder, dest, stage, i)
 
     hidden_ids = _hidden_parent_ids(dest)

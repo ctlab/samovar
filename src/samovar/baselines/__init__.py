@@ -33,6 +33,7 @@ BASELINE_TOOLS: Dict[str, Path] = {
     "mag_quantifier": _DIR / "constant_mag_quantifier.py",
     "taxon_quantifier": _DIR / "identity_taxon_quantifier.py",
     "read_assigner": _DIR / "identity_read_assigner.py",
+    "feature_importance": _DIR / "native_feature_importance.py",
 }
 
 # Names that resolve to the constant-taxID annotator (legacy aliases kept).

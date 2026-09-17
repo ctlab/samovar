@@ -334,6 +334,10 @@ class PipelineConfig:
     reprofiler: str = "ensemble"
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
+    feature_importance: str = "builtin"
+    feature_importance_all: bool = False
+    feature_importance_flags: Optional[str] = None
+    feature_importance_tool_flags: Optional[Dict[str, str]] = None
     qc: str = ""
     qc_initial: str = ""
     qc_generated: str = ""
@@ -360,6 +364,8 @@ class PipelineConfig:
             self.scoring_tool_flags = {}
         if self.reprofiler_tool_flags is None:
             self.reprofiler_tool_flags = {}
+        if self.feature_importance_tool_flags is None:
+            self.feature_importance_tool_flags = {}
         if self.qc_postfix is None:
             self.qc_postfix = {}
         if self.qc_tool_flags is None:
@@ -566,6 +572,25 @@ class PipelineConfig:
                 if isinstance(yaml_rtf, dict):
                     config.reprofiler_tool_flags = {
                         str(k): str(v) for k, v in yaml_rtf.items()
+                    }
+                yaml_fi = (
+                    input_config.get("feature_importance")
+                    or input_config.get("feature-importance")
+                )
+                if yaml_fi not in (None, "", False):
+                    config.feature_importance = str(yaml_fi)
+                yaml_fi_all = input_config.get("feature_importance_all") or input_config.get(
+                    "feature-importance-all"
+                )
+                if yaml_fi_all not in (None, ""):
+                    config.feature_importance_all = bool(yaml_fi_all)
+                yaml_fif = input_config.get("feature_importance_flags")
+                if yaml_fif:
+                    config.feature_importance_flags = str(yaml_fif)
+                yaml_fitf = input_config.get("feature_importance_tool_flags")
+                if isinstance(yaml_fitf, dict):
+                    config.feature_importance_tool_flags = {
+                        str(k): str(v) for k, v in yaml_fitf.items()
                     }
                 yaml_qc = input_config.get("qc")
                 yaml_qc_i = input_config.get("qc_initial") or input_config.get("qc-initial")
@@ -974,6 +999,13 @@ class PipelineConfig:
         )
         if cli_reprofiler:
             config.reprofiler = require_known_reprofiler(cli_reprofiler)
+        cli_fi = getattr(args, "feature_importance", None)
+        if cli_fi not in (None, ""):
+            config.feature_importance = str(cli_fi)
+        if getattr(args, "feature_importance_all", None):
+            config.feature_importance_all = True
+        if getattr(args, "no_feature_importance", None):
+            config.feature_importance = "none"
         cli_meta = getattr(args, "samples_metadata", None)
         if cli_meta:
             config.samples_metadata = absolute_path(str(cli_meta))
@@ -1067,6 +1099,30 @@ class PipelineConfig:
                 )
         config.reprofiler_flags = merge_flag_strings(*rprof_parts) or None
         config.reprofiler_tool_flags = named_rprof or {}
+        from samovar.feature_importance import (
+            flags_apply_to_feature_importance,
+            is_feature_importance_flag_target,
+        )
+
+        fif_parts = [config.feature_importance_flags]
+        named_fif = dict(config.feature_importance_tool_flags or {})
+        for item in pairs:
+            if not item or len(item) < 2:
+                continue
+            target, flags = item[0], item[1]
+            if not is_feature_importance_flag_target(str(target)):
+                continue
+            if flags_apply_to_feature_importance(str(target), config.feature_importance):
+                if flags_target_matches(
+                    str(target), groups=("feature_importance", "feature-importance", "fi", "importance")
+                ):
+                    fif_parts.append(flags)
+                else:
+                    named_fif[str(target)] = merge_flag_strings(
+                        named_fif.get(str(target)), flags
+                    )
+        config.feature_importance_flags = merge_flag_strings(*fif_parts) or None
+        config.feature_importance_tool_flags = named_fif or {}
 
         shared_qc = getattr(args, "qc", None)
         cli_qc_i = getattr(args, "qc_initial", None)
@@ -1393,6 +1449,10 @@ class PipelineConfig:
             'reprofiler': self.reprofiler,
             'reprofiler_flags': self.reprofiler_flags or "",
             'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
+            'feature_importance': self.feature_importance or "builtin",
+            'feature_importance_all': bool(self.feature_importance_all),
+            'feature_importance_flags': self.feature_importance_flags or "",
+            'feature_importance_tool_flags': self.feature_importance_tool_flags or {},
             'seed': self.regeneration_seed,
         }
         reprofiling_path = configs_dir / 'config_reprofiling.yaml'

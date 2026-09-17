@@ -599,3 +599,42 @@ def test_read_assigner_contract(request, tmp_path):
     }
 
 
+def test_feature_importance_contract(request, tmp_path):
+    _skip_if_other_type(request, "feature_importance")
+    path = _tool_path(request, "feature_importance")
+    module = load_python_module(path, "contract_feature_importance")
+    fn = getattr(module, "score_feature_importance", None)
+    assert callable(fn), (
+        f"{path} must define score_feature_importance(model, annotation, "
+        "initial_abundance, regenerated_abundance, config)"
+    )
+    from sklearn.ensemble import RandomForestClassifier
+
+    annotation = pd.DataFrame(
+        {
+            "seq": [f"r{i}" for i in range(12)],
+            "taxid_dummy": [9606, 9606, 562, 562, 9606, 562, 9606, 562, 9606, 562, 9606, 562],
+            "length": [50] * 12,
+            "true": [9606, 9606, 562, 562, 9606, 562, 9606, 562, 9606, 562, 9606, 562],
+        }
+    )
+    X = annotation[["taxid_dummy", "length"]]
+    y = annotation["true"]
+    model = RandomForestClassifier(n_estimators=8, random_state=0)
+    model.fit(X, y)
+    initial = {"obs": pd.DataFrame({"taxid": [9606, 562], "N_1": [4, 8]})}
+    regenerated = {"obs": pd.DataFrame({"taxid": [9606, 562], "N_1": [6, 6]})}
+    dest = tmp_path / "feature_importance_plots"
+    payload = fn(
+        model,
+        annotation,
+        initial,
+        regenerated,
+        {"output_dir": str(tmp_path / "reprofiled_annotations"), "plot_dir": str(dest), "seed": 0},
+    )
+    assert dest.exists()
+    mqc = list(dest.glob("*_mqc.json"))
+    assert mqc, f"{path} must write MultiQC JSON under dest"
+    assert payload is None or isinstance(payload, dict)
+
+

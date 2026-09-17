@@ -536,6 +536,21 @@ def run_reprofiler(
         result.tables = load_csv_tables(output_dir, skip_prefixes=())
         return result
     write_reprofile_result(result, output_dir)
+    try:
+        from samovar.feature_importance import maybe_score_reprofiler, resolve_abundance_inputs
+
+        initial_ab, regen_ab = resolve_abundance_inputs(
+            cfg, regenerated_tables=truth, output_dir=output_dir
+        )
+        maybe_score_reprofiler(
+            result,
+            annotation=regen,
+            initial_abundance=initial_ab,
+            regenerated_abundance=regen_ab,
+            config=cfg,
+        )
+    except Exception as exc:
+        print(f"[feature-importance] skipped: {exc}", file=sys.stderr)
     return result
 
 

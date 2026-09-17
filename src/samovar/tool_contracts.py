@@ -143,6 +143,14 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "in": "BAM -b, MAG taxonomy -x, TSV -o.",
         "out": "Headered TSV seq, taxID, MAG_ID (Annotation tax + Feature MAG_ID).",
     },
+    "feature_importance": {
+        "in": "score_feature_importance(model, annotation, initial_abundance, "
+        "regenerated_abundance, config). model is the selected estimator "
+        "(default: best reprofiler); annotation is the regenerated table; "
+        "abundance args are taxid+N_* tables (or dirs/dicts of them).",
+        "out": "MultiQC custom-content JSON (and optional altair/cnsplots) under "
+        "feature_importance_plots/. Dict with per-feature scores.",
+    },
 }
 
 GROUP_TO_TESTNODE = {
@@ -168,6 +176,7 @@ GROUP_TO_TESTNODE = {
     "mag_quantifier": "tests/test_tool_contracts.py::test_mag_quantifier_contract",
     "taxon_quantifier": "tests/test_tool_contracts.py::test_taxon_quantifier_contract",
     "read_assigner": "tests/test_tool_contracts.py::test_read_assigner_contract",
+    "feature_importance": "tests/test_tool_contracts.py::test_feature_importance_contract",
 }
 
 DEFAULT_TOOLS = {group: str(path) for group, path in BASELINE_TOOLS.items()}

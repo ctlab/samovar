@@ -233,6 +233,31 @@ def main():
         ),
     )
     parser.add_argument(
+        '--feature-importance',
+        '--feature_importance',
+        dest='feature_importance',
+        default=None,
+        help=(
+            'Feature-importance scorer at ML training (default: builtin). '
+            'Pass none to skip, or a name imported with '
+            '`samovar tools import --type feature-importance`'
+        ),
+    )
+    parser.add_argument(
+        '--feature-importance-all',
+        dest='feature_importance_all',
+        action='store_true',
+        default=False,
+        help='Score every trained model, not only the selected (best) model',
+    )
+    parser.add_argument(
+        '--no-feature-importance',
+        dest='no_feature_importance',
+        action='store_true',
+        default=False,
+        help='Skip feature-importance scoring',
+    )
+    parser.add_argument(
         '--export',
         '--abundance-corrector',
         '--corrector',
@@ -531,6 +556,8 @@ def main():
         "metagenome_generator", "metagenome-generator",
         "startpoint", "start-point", "endpoint", "end-point",
         "scoring", "reprofiler", "ml",
+        "feature-importance", "feature_importance", "no-feature-importance",
+        "feature-importance-all",
         "export", "abundance-corrector", "corrector", "no-export",
         "qc", "qc-initial", "qc_initial", "qc-generated", "qc_generated",
         "qc-postfix", "qc_postfix",
