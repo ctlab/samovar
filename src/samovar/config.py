@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import sys
+import warnings
 import yaml
 import argparse
 from typing import Dict, List, Optional, Union
@@ -18,7 +19,11 @@ from samovar.paths import (
     runtime_path_prefix,
     shell_outdir_override_snippet,
 )
-from samovar.table_regenerators import flags_apply_to_regenerator, canonical_regeneration_modes
+from samovar.table_regenerators import (
+    apply_concat_choose_best_policy,
+    flags_apply_to_regenerator,
+    canonical_regeneration_modes,
+)
 from samovar.table_scorers import flags_apply_to_table_scorer
 from samovar.sample_scorers import (
     flags_apply_to_sample_scorer,
@@ -1319,6 +1324,14 @@ class PipelineConfig:
             sample_score_by_annotator=config.sample_score_by_annotator,
             sample_score_by_method=config.sample_score_by_method,
         )
+        modes = list(config.regeneration_modes or [config.regeneration_mode])
+        if len(modes) > 1:
+            filtered, concat_warning = apply_concat_choose_best_policy(modes)
+            if concat_warning:
+                warnings.warn(concat_warning, UserWarning, stacklevel=2)
+            if filtered:
+                config.regeneration_modes = filtered
+                config.regeneration_mode = filtered[0]
         return config
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:

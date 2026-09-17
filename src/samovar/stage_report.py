@@ -93,7 +93,7 @@ STAGE_INFO: Dict[str, Dict[str, str]] = {
         "title": "Regenerated abundance",
         "description": (
             "One or more ``table_reads_generator`` methods (direct copy, bootstrap, "
-            "GLM, SparseDOSSA2, …) write candidate synthetic communities under "
+            "concat, GLM, SparseDOSSA2, …) write candidate synthetic communities under "
             "``regenerated/.regenerated_abundance/``. The goal is a table that is "
             "statistically close to the observed mix so re-annotation has known labels."
         ),

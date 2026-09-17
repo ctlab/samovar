@@ -14,7 +14,7 @@ import sys
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -34,6 +34,7 @@ from samovar.regenerate import (
     max_genomes_from_config,
     regenerate_bootstrap,
     regenerate_camisim,
+    regenerate_concat,
     regenerate_glm_python,
     regenerate_preserve,
     regenerate_vae,
@@ -89,6 +90,8 @@ def flags_apply_to_regenerator(target: str, mode: Optional[str]) -> bool:
     names = [name, mode]
     if kind == "builtin" and name == "camisim-table":
         names.extend(["camisim", "camisim_table", "cami"])
+    if kind == "builtin" and name in {"concat", "concat_weighted"}:
+        names.extend(["concat", "concat_weighted", "concatenate"])
     if kind == "builtin" and str(name).startswith("sparsedossa2"):
         names.extend(["sparsedossa2", "sd2", "SparseDOSSA2"])
     return flags_target_matches(
@@ -658,6 +661,28 @@ class SparseDOSSA2TableRegenerator(TableRegenerator):
         return sd2_regenerate(annotation, metadata, cfg)
 
 
+class ConcatTableRegenerator(TableRegenerator):
+    """Merge prior abundance tables into one community, then one ISS regeneration."""
+
+    def __init__(self, weighted: bool = False):
+        self.weighted = bool(weighted)
+
+    def run(self, annotation, metadata, config):
+        _ = metadata
+        cfg = dict(config or {})
+        n_reads = cfg.get("N_reads")
+        if n_reads is not None:
+            n_reads = int(n_reads)
+        name = "concat_weighted" if self.weighted else "concat"
+        return regenerate_concat(
+            annotation,
+            weighted=self.weighted,
+            n_reads=n_reads,
+            max_genomes=max_genomes_from_config(cfg),
+            table_name=name,
+        )
+
+
 _BUILTIN: Dict[str, type] = {
     "direct": DirectTableRegenerator,
     "bootstrap": BootstrapTableRegenerator,
@@ -665,6 +690,8 @@ _BUILTIN: Dict[str, type] = {
     "glm": GlmTableRegenerator,
     "samovar": SamovarRTableRegenerator,
     "camisim-table": CamisimTableRegenerator,
+    "concat": ConcatTableRegenerator,
+    "concat_weighted": ConcatTableRegenerator,
     "sparsedossa2-fit": SparseDOSSA2TableRegenerator,
     "sparsedossa2-stool": SparseDOSSA2TableRegenerator,
     "sparsedossa2-vaginal": SparseDOSSA2TableRegenerator,
@@ -672,10 +699,46 @@ _BUILTIN: Dict[str, type] = {
 }
 
 
+CONCAT_CHOOSE_BEST_WARNING = (
+    "concat/concat_weighted cannot be mixed with other table_reads_generator "
+    "methods when choosing the best regeneration table; concat* is ignored. "
+    "The winner is selected among the remaining methods."
+)
+
+
+def comparable_builtin_regeneration_modes() -> List[str]:
+    """Builtin methods that participate in choose-best (excludes concat*)."""
+    from samovar.regenerate import is_concat_mode
+
+    return [name for name in _BUILTIN if not is_concat_mode(name)]
+
+
+def apply_concat_choose_best_policy(modes: Sequence[str]) -> tuple:
+    """Drop concat* when choose-best mixes them with other methods.
+
+    Returns ``(modes, warning_or_none)``. If the selection already contains
+    every comparable builtin method, concat* is dropped silently.
+    """
+    from samovar.regenerate import is_concat_mode
+
+    ordered = [str(m) for m in modes if str(m).strip()]
+    concat = [m for m in ordered if is_concat_mode(m)]
+    others = [m for m in ordered if not is_concat_mode(m)]
+    if not concat or not others:
+        return ordered, None
+    if set(comparable_builtin_regeneration_modes()) <= set(others):
+        return others, None
+    return others, CONCAT_CHOOSE_BEST_WARNING
+
+
 def get_table_regenerator(mode: Optional[str]) -> TableRegenerator:
     """Factory: builtin mode or imported ``tools.<name>`` custom regenerator."""
     kind, name = resolve_regeneration_mode(mode)
     if kind == "builtin":
+        if name == "concat":
+            return ConcatTableRegenerator(weighted=False)
+        if name == "concat_weighted":
+            return ConcatTableRegenerator(weighted=True)
         cls = _BUILTIN[name]
         if cls is SparseDOSSA2TableRegenerator:
             return SparseDOSSA2TableRegenerator(name)

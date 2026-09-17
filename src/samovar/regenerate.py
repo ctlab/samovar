@@ -17,6 +17,9 @@ Modes:
 - ``glm``: correlation-aware synthetic communities (Python).
 - ``camisim-table`` (aliases camisim, cami): CAMISIM log-normal community
   design on the observed taxIDs (same engine as ``samovar generate --simulator camisim --camisim-mode table``).
+- ``concat``: merge prior annotator tables into one (union taxa, equal
+  reads per taxon), then one regeneration.
+- ``concat_weighted``: same merge, summing counts for shared taxa.
 - ``samovar``: optional R regenerator (not part of the Python install). Looked
   up via ``SAMOVAR_R_REGENERATE`` / config ``annotation_regenerate_r``.
 - any other name: custom ``table_reads_generator`` registered with
@@ -153,6 +156,11 @@ SAMOVAR_R_MODES = frozenset({"samovar", "r", "boil"})
 CAMISIM_TABLE_MODES = frozenset(
     {"camisim", "camisim-table", "camisim_table", "cami"}
 )
+CONCAT_EQUAL_MODES = frozenset({"concat", "concat_equal", "concatenate"})
+CONCAT_WEIGHTED_MODES = frozenset(
+    {"concat_weighted", "concat-weighted", "concatweighted", "weighted_concat"}
+)
+CONCAT_MODES = CONCAT_EQUAL_MODES | CONCAT_WEIGHTED_MODES
 SPARSEDOSSA2_MODE_ALIASES = {
     "sparsedossa2": "sparsedossa2-fit",
     "sparsedossa2-fit": "sparsedossa2-fit",
@@ -193,6 +201,10 @@ def resolve_regeneration_mode(mode: Optional[str]) -> Tuple[str, str]:
         return "builtin", "samovar"
     if low in CAMISIM_TABLE_MODES:
         return "builtin", "camisim-table"
+    if low.replace("_", "-") in {m.replace("_", "-") for m in CONCAT_WEIGHTED_MODES} or low in CONCAT_WEIGHTED_MODES:
+        return "builtin", "concat_weighted"
+    if low in CONCAT_EQUAL_MODES:
+        return "builtin", "concat"
     sd2 = SPARSEDOSSA2_MODE_ALIASES.get(low.replace("_", "-")) or SPARSEDOSSA2_MODE_ALIASES.get(low)
     if sd2:
         return "builtin", sd2
@@ -206,8 +218,8 @@ def normalize_regeneration_mode(mode: Optional[str]) -> str:
         return name
     raise ValueError(
         f"Unknown regeneration_mode={mode!r}. "
-        "Use direct, bootstrap, vae, glm, camisim-table, sparsedossa2-fit, "
-        "sparsedossa2-stool, samovar, or an imported "
+        "Use direct, bootstrap, vae, glm, camisim-table, concat, concat_weighted, "
+        "sparsedossa2-fit, sparsedossa2-stool, samovar, or an imported "
         "table_reads_generator name (`samovar tools import --type table`)."
     )
 
@@ -215,6 +227,11 @@ def normalize_regeneration_mode(mode: Optional[str]) -> str:
 def is_direct_mode(mode: Optional[str]) -> bool:
     kind, name = resolve_regeneration_mode(mode)
     return kind == "builtin" and name == "direct"
+
+
+def is_concat_mode(mode: Optional[str]) -> bool:
+    kind, name = resolve_regeneration_mode(mode)
+    return kind == "builtin" and name in {"concat", "concat_weighted"}
 
 
 def coerce_seed(seed: Any, default: int = 42) -> int:
@@ -373,6 +390,72 @@ def regenerate_preserve(
         mat = _apply_abundance_scale(mat, n_reads, rescale)
         result[name] = _abundance_table_from_matrix(mat, name)
     return result
+
+
+def _union_count_matrix(data: Any) -> pd.DataFrame:
+    """Align prior annotator abundance tables on the union of taxa and samples."""
+    parts = _source_matrices(data)
+    if not parts:
+        return pd.DataFrame()
+    taxa: List[str] = []
+    samples: List[str] = []
+    seen_taxa = set()
+    seen_samples = set()
+    for _name, mat in parts:
+        for tax in mat.index.astype(str):
+            if tax not in seen_taxa:
+                seen_taxa.add(tax)
+                taxa.append(tax)
+        for col in mat.columns.astype(str):
+            if col not in seen_samples:
+                seen_samples.add(col)
+                samples.append(col)
+    stacked = pd.DataFrame(0.0, index=taxa, columns=samples)
+    for _name, mat in parts:
+        aligned = mat.copy()
+        aligned.index = aligned.index.astype(str)
+        aligned.columns = aligned.columns.astype(str)
+        aligned = aligned.reindex(index=taxa, columns=samples, fill_value=0.0)
+        stacked = stacked.add(aligned, fill_value=0.0)
+    return stacked
+
+
+def regenerate_concat(
+    data,
+    *,
+    weighted: bool = False,
+    n_reads: Optional[int] = None,
+    max_genomes: Any = None,
+    table_name: Optional[str] = None,
+) -> Dict[str, pd.DataFrame]:
+    """Merge prior abundance tables into one community.
+
+    ``concat``: union of taxa, equal reads per taxon (optionally totalling
+    ``n_reads`` per sample). ``concat_weighted``: union of taxa with summed
+    counts on shared taxids.
+    """
+    stacked = _union_count_matrix(data)
+    name = table_name or ("concat_weighted" if weighted else "concat")
+    if stacked.empty:
+        return {name: pd.DataFrame(columns=["taxid"])}
+    stacked = cap_matrix_taxa(stacked, max_genomes)
+    if weighted:
+        mat = stacked.round()
+    else:
+        n_taxa = int(len(stacked.index))
+        target = int(n_reads) if n_reads and int(n_reads) > 0 else None
+        if n_taxa <= 0:
+            mat = stacked
+        elif target is None:
+            mat = pd.DataFrame(1.0, index=stacked.index, columns=stacked.columns)
+        else:
+            per = max(1, target // n_taxa)
+            mat = pd.DataFrame(float(per), index=stacked.index, columns=stacked.columns)
+            leftover = target - per * n_taxa
+            if leftover > 0 and len(mat.index):
+                first = mat.index[0]
+                mat.loc[first] = mat.loc[first] + leftover
+    return {name: _abundance_table_from_matrix(mat, name)}
 
 
 def regenerate_bootstrap(
@@ -642,7 +725,10 @@ def regenerate_annotation_tables(
     written to ``output_dir``. With ``select_best=False`` every method is kept
     under ``.table_candidates/`` and the first success is copied to ``output_dir``.
     """
-    from samovar.table_regenerators import canonical_regeneration_modes
+    from samovar.table_regenerators import (
+        apply_concat_choose_best_policy,
+        canonical_regeneration_modes,
+    )
     from samovar.table_scorers import (
         rank_methods_per_annotator,
         write_table_score_plots,
@@ -664,6 +750,13 @@ def regenerate_annotation_tables(
         else cfg.get("table_reads_generator") or cfg.get("regeneration_mode", "direct")
     )
     modes = canonical_regeneration_modes(raw_modes) or ["direct"]
+    if select_best and len(modes) > 1:
+        import warnings
+
+        modes, concat_warning = apply_concat_choose_best_policy(modes)
+        if concat_warning:
+            warnings.warn(concat_warning, UserWarning, stacklevel=2)
+        modes = modes or ["direct"]
 
     if len(modes) == 1:
         one = dict(cfg)

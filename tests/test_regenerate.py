@@ -11,10 +11,12 @@ import pytest
 
 from samovar.annotation_io import read_annotation_dir
 from samovar.regenerate import (
+    is_concat_mode,
     is_direct_mode,
     normalize_regeneration_mode,
     regenerate_annotation_tables,
     regenerate_bootstrap,
+    regenerate_concat,
     regenerate_glm_python,
     regenerate_preserve,
     regenerate_vae,
@@ -92,7 +94,12 @@ def test_normalize_regeneration_mode_aliases():
     with pytest.raises(ValueError):
         normalize_regeneration_mode("unknown")
     assert resolve_regeneration_mode("unknown") == ("custom", "unknown")
-    assert resolve_regeneration_mode("preserve") == ("builtin", "direct")
+    assert resolve_regeneration_mode("concat") == ("builtin", "concat")
+    assert resolve_regeneration_mode("concat_weighted") == ("builtin", "concat_weighted")
+    assert resolve_regeneration_mode("concat-weighted") == ("builtin", "concat_weighted")
+    assert is_concat_mode("concat")
+    assert is_concat_mode("concat_weighted")
+    assert not is_concat_mode("direct")
     assert resolve_regeneration_mode("cami") == ("builtin", "camisim-table")
     assert not is_direct_mode("glm")
     assert not is_direct_mode("camisim-table")
@@ -727,6 +734,9 @@ def test_prepare_rejects_unimported_table_generator(tmp_path, monkeypatch):
         ("sparsedossa2-fit", "sparsedossa2-fit"),
         ("sparsedossa2-stool", "sparsedossa2-stool"),
         ("sd2", "sparsedossa2-fit"),
+        ("concat", "concat"),
+        ("concat_weighted", "concat_weighted"),
+        ("concat-weighted", "concat_weighted"),
     ],
 )
 def test_prepare_parses_all_regeneration_modes(tmp_path, mode, canonical):
@@ -926,5 +936,132 @@ def test_prepare_parses_multiple_table_generators(tmp_path):
     text = Path(cfg.generate_configs(str(tmp_path / "out"))["annotation2iss"]).read_text()
     assert "bootstrap" in text
     assert "shannon_ks" in text
+
+
+def _concat_source_tables():
+    from samovar.parse_annotators import Annotation
+
+    kaiju = pd.DataFrame({"taxid": ["1", "2"], "N_s1": [10, 20], "N_s2": [4, 6]})
+    kraken = pd.DataFrame({"taxid": ["2", "3"], "N_s1": [5, 7], "N_s2": [1, 2]})
+    return Annotation.from_abundance_tables({"kaiju": kaiju, "kraken2": kraken})
+
+
+def test_concat_equal_reads_union_one_table():
+    tables = regenerate_concat(_concat_source_tables(), weighted=False, n_reads=30)
+    assert list(tables) == ["concat"]
+    frame = tables["concat"]
+    assert set(frame["taxid"].astype(str)) == {"1", "2", "3"}
+    assert list(frame.columns) == ["taxid", "N_s1", "N_s2"]
+    # 30 reads / 3 taxa → 10 each
+    assert (frame["N_s1"].astype(int) == 10).all()
+    assert (frame["N_s2"].astype(int) == 10).all()
+
+
+def test_concat_weighted_sums_shared_taxa():
+    tables = regenerate_concat(_concat_source_tables(), weighted=True)
+    frame = tables["concat_weighted"].set_index(tables["concat_weighted"]["taxid"].astype(str))
+    assert int(frame.loc["1", "N_s1"]) == 10
+    assert int(frame.loc["2", "N_s1"]) == 25
+    assert int(frame.loc["3", "N_s1"]) == 7
+    assert int(frame.loc["2", "N_s2"]) == 7
+
+
+def test_concat_regenerator_contract():
+    from samovar.table_regenerators import get_table_regenerator
+
+    out = get_table_regenerator("concat").run(
+        _concat_source_tables(), None, {"N_reads": 9}
+    )
+    assert list(out) == ["concat"]
+    weighted = get_table_regenerator("concat_weighted").run(
+        _concat_source_tables(), None, {}
+    )
+    assert list(weighted) == ["concat_weighted"]
+
+
+def test_prepare_concat_mixed_with_choose_best_warns_and_drops(tmp_path):
+    from samovar.config import PipelineConfig
+
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "table_reads_generator": ["direct", "bootstrap", "concat"],
+            "table_score": "shannon_ks",
+        },
+    )()
+    with pytest.warns(UserWarning, match="concat"):
+        cfg = PipelineConfig.from_args(args)
+    assert cfg.regeneration_modes == ["direct", "bootstrap"]
+    assert "concat" not in cfg.regeneration_modes
+
+
+def test_prepare_all_methods_skips_concat_silently(tmp_path):
+    import warnings
+
+    from samovar.config import PipelineConfig
+    from samovar.table_regenerators import comparable_builtin_regeneration_modes
+
+    (tmp_path / "reads").mkdir()
+    modes = comparable_builtin_regeneration_modes() + ["concat", "concat_weighted"]
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "table_reads_generator": modes,
+            "table_score": "shannon_ks",
+        },
+    )()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cfg = PipelineConfig.from_args(args)
+    assert not any("concat" in str(w.message).lower() for w in caught)
+    assert "concat" not in cfg.regeneration_modes
+    assert "concat_weighted" not in cfg.regeneration_modes
+    assert set(comparable_builtin_regeneration_modes()) <= set(cfg.regeneration_modes)
+
+
+def test_regenerate_tables_mixed_choose_best_ignores_concat(toy_annotation_dir, tmp_path):
+    import json
+
+    out = tmp_path / "multi_concat"
+    with pytest.warns(UserWarning, match="concat"):
+        tables = regenerate_annotation_tables(
+            toy_annotation_dir,
+            out,
+            {
+                "table_reads_generators": ["direct", "concat", "bootstrap"],
+                "table_score": "shannon_ks",
+                "N": 2,
+                "N_reads": 50,
+                "seed": 1,
+            },
+        )
+    assert tables
+    assert "concat.csv" not in {p.name for p in out.glob("*.csv")}
+    selection = json.loads((out / "table_selection.json").read_text())
+    modes = {row["mode"] for row in selection["candidates"]}
+    assert "concat" not in modes
+    assert modes >= {"direct", "bootstrap"}
+
+
+def test_concat_only_keeps_single_table(toy_annotation_dir, tmp_path):
+    out = tmp_path / "concat_only"
+    tables = regenerate_annotation_tables(
+        toy_annotation_dir,
+        out,
+        {"regeneration_mode": "concat", "N_reads": 40},
+    )
+    assert list(tables) == ["concat"]
+    assert (out / "concat.csv").is_file()
+    assert not (out / "kaiju.csv").is_file()
+
 
 
