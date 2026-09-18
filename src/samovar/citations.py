@@ -8,18 +8,22 @@ from doi.org, R ``citation()``, and CLI ``--citation`` when available.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from samovar.main_config import TOOL_GROUP_BY_NAME
-from samovar.paths import _code_repo_root
+from samovar.paths import _code_repo_root, user_config_dir
+from samovar.tool_spec import parse_citation_refs
 
 DOI_ACCEPT = "application/x-bibtex"
 USER_AGENT = "samovar-citations/1.0 (https://github.com/ctlab/samovar)"
@@ -176,6 +180,198 @@ CLI_CITATION_FLAGS: Dict[str, Sequence[str]] = {
 def cite_dir(root: Optional[Path] = None) -> Path:
     base = Path(root) if root is not None else _code_repo_root()
     return base / "cite"
+
+
+def user_cite_dir() -> Path:
+    """Writable cite overlay next to the active install config.
+
+    ``$SAMOVAR_CITE`` overrides. Imported tools merge here so they do not
+    rewrite the bundled ``<repo>/cite/citations.json``.
+    """
+    override = os.environ.get("SAMOVAR_CITE", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return user_config_dir() / "cite"
+
+
+_BIB_ENTRY_START = re.compile(r"@(?!comment\b|string\b|preamble\b)\w+\s*\{", re.IGNORECASE)
+_BIB_KEY = re.compile(r"@\w+\s*\{\s*([^,\s}]+)", re.IGNORECASE)
+_SAFE_TOKEN = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def parse_bibtex_entries(text: str) -> List[str]:
+    blob = str(text or "")
+    starts = [m.start() for m in _BIB_ENTRY_START.finditer(blob)]
+    if not starts:
+        stripped = blob.strip()
+        return [stripped] if stripped else []
+    entries: List[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(blob)
+        body = blob[start:end].strip()
+        if body:
+            entries.append(body if body.endswith("\n") else body + "\n")
+    return entries
+
+
+def bibtex_citekey(entry: str) -> str:
+    match = _BIB_KEY.search(entry or "")
+    if not match:
+        return ""
+    return _SAFE_TOKEN.sub("_", match.group(1).strip())
+
+
+def _content_tag(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_registry(path: Path) -> Dict[str, List[str]]:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: Dict[str, List[str]] = {}
+    for key, value in data.items():
+        files = parse_citation_refs(value)
+        if files:
+            out[str(key)] = files
+        else:
+            out[str(key)] = []
+    return out
+
+
+def merge_citation_registry(
+    updates: Mapping[str, Sequence[str]],
+    *,
+    dest: Optional[Path] = None,
+) -> Dict[str, List[str]]:
+    """Merge ``{tool: [file.bib]}`` into the user registry without dropping other tools."""
+    path = dest if dest is not None else user_cite_dir() / "citations.json"
+    current = _read_registry(path)
+    for tool, files in updates.items():
+        name = str(tool or "").strip()
+        if not name:
+            continue
+        merged = parse_citation_refs(list(current.get(name) or []) + list(files))
+        current[name] = merged
+    _atomic_write_text(path, json.dumps(current, indent=2, sort_keys=True) + "\n")
+    return current
+
+
+def _write_bib_file(dest: Path, text: str) -> None:
+    body = (text or "").strip()
+    if body and not body.endswith("\n"):
+        body += "\n"
+    if dest.is_file():
+        existing = dest.read_text(encoding="utf-8")
+        if existing.strip() == body.strip():
+            return
+    _atomic_write_text(dest, body)
+
+
+def _link_citation_file(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src = src.expanduser().resolve()
+    if dest.exists() or dest.is_symlink():
+        try:
+            if dest.resolve() == src:
+                return
+        except OSError:
+            pass
+        if dest.is_file() and not dest.is_symlink():
+            try:
+                if dest.read_bytes() == src.read_bytes():
+                    return
+            except OSError:
+                pass
+        dest.unlink()
+    try:
+        os.symlink(str(src), dest)
+    except OSError:
+        shutil.copy2(src, dest)
+
+
+def _store_inline_entry(cite_root: Path, tool: str, entry: str) -> str:
+    key = bibtex_citekey(entry) or _content_tag(entry)
+    filename = f"{tool}_{key}.bib"
+    path = cite_root / filename
+    if path.is_file() and path.read_text(encoding="utf-8").strip() != entry.strip():
+        filename = f"{tool}_{key}_{_content_tag(entry)}.bib"
+        path = cite_root / filename
+    _write_bib_file(path, entry)
+    return filename
+
+
+def register_tool_citations(
+    tool: str,
+    *,
+    inline: Sequence[str] = (),
+    files: Sequence[str] = (),
+    dest_dir: Optional[Path] = None,
+) -> List[str]:
+    """Write/link BibTeX into the user cite dir and merge ``citations.json``.
+
+    Inline strings are split into one ``.bib`` per ``@entry``. Paths are linked
+    (symlink, copy fallback) as a single file each. Re-registering the same
+    content reuses the same filenames.
+    """
+    name = str(tool or "").strip()
+    if not name:
+        raise ValueError("tool name is required for citations")
+    cite_root = Path(dest_dir) if dest_dir is not None else user_cite_dir()
+    cite_root.mkdir(parents=True, exist_ok=True)
+    stored: List[str] = []
+    extra_files = [str(p) for p in files]
+
+    for blob in inline:
+        text = str(blob or "").strip()
+        if not text:
+            continue
+        if text == "-":
+            text = sys.stdin.read()
+        elif text.startswith("@") and "{" not in text:
+            extra_files.append(text[1:])
+            continue
+        for entry in parse_bibtex_entries(text):
+            stored.append(_store_inline_entry(cite_root, name, entry))
+
+    for raw in extra_files:
+        src = Path(str(raw or "").strip()).expanduser()
+        if not str(raw or "").strip():
+            continue
+        if not src.is_file():
+            raise FileNotFoundError(f"--bibtex-file not found: {raw}")
+        stem = _SAFE_TOKEN.sub("_", src.stem) or _content_tag(src.read_text(encoding="utf-8"))
+        suffix = src.suffix if src.suffix in {".bib", ".txt"} else ".bib"
+        filename = f"{name}_{stem}{suffix}"
+        _link_citation_file(src, cite_root / filename)
+        stored.append(filename)
+
+    stored = parse_citation_refs(stored)
+    if stored:
+        merge_citation_registry({name: stored}, dest=cite_root / "citations.json")
+    return stored
 
 
 def builtin_tool_names() -> List[str]:
@@ -383,9 +579,14 @@ def rebuild(
 def load_citations(root: Optional[Path] = None) -> Dict[str, List[str]]:
     path = cite_dir(root) / "citations.json"
     if path.is_file():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return {str(k): list(v) for k, v in data.items()}
-    return mapping_for_tools()
+        bundled = _read_registry(path)
+    else:
+        bundled = mapping_for_tools()
+    overlay = _read_registry(user_cite_dir() / "citations.json")
+    merged = dict(bundled)
+    for tool, files in overlay.items():
+        merged[tool] = parse_citation_refs(list(merged.get(tool) or []) + list(files))
+    return merged
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

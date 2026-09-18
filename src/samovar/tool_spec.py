@@ -7,7 +7,8 @@ On disk a tool is an object keyed by ``name:version``::
       "type": "annotator",
       "lazy-install": "conda install -y bioconda::kraken2=2.1.3",
       "flags": "",
-      "flags-translate": {"--threads": "--threads"}
+      "flags-translate": {"--threads": "--threads"},
+      "citation": ["kraken2_wood2019.bib"]
     }
 
 Legacy list rows ``[env, parser, path, group, flags?, inputs?]`` still parse.
@@ -151,6 +152,42 @@ def parse_flags_translate(raw: Any) -> Dict[str, str]:
     return out
 
 
+def parse_citation_refs(raw: Any) -> List[str]:
+    """Filenames or paths stored on ``tools.*.citation`` / the cite registry."""
+    out: List[str] = []
+    if raw is None or raw is False:
+        return out
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            out.extend(parse_citation_refs(item))
+        return _unique_keep(out)
+    text = str(raw).strip()
+    if not text:
+        return out
+    if "," in text and "@" not in text:
+        for piece in text.split(","):
+            out.extend(parse_citation_refs(piece))
+        return _unique_keep(out)
+    if " " in text and not text.startswith("@") and "/" not in text and "\\" not in text:
+        for piece in text.split():
+            out.extend(parse_citation_refs(piece))
+        return _unique_keep(out)
+    out.append(text)
+    return _unique_keep(out)
+
+
+def _unique_keep(items: Sequence[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in items:
+        key = str(item).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 def _norm_flag(flag: str) -> str:
     text = str(flag or "").strip()
     if not text:
@@ -248,6 +285,11 @@ def parse_tool_record(value: Any, name: str = "") -> Dict[str, Any]:
         rec["inputs"] = inputs
     if version:
         rec["_version"] = version
+    cites: List[str] = []
+    if isinstance(value, dict):
+        cites = parse_citation_refs(value.get("citation") or value.get("citations"))
+    if cites:
+        rec["citation"] = cites
     return rec
 
 

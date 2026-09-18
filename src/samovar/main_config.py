@@ -517,10 +517,12 @@ def set_tool(
     lazy_install: Optional[str] = None,
     flags_translate: Any = None,
     version: Optional[str] = None,
+    citation: Any = None,
 ) -> Dict[str, Any]:
     from samovar.tool_spec import (
         bare_tool_name,
         join_tool_key,
+        parse_citation_refs,
         parse_flags_translate,
         parse_tool_record,
         probe_tool_version,
@@ -569,6 +571,13 @@ def set_tool(
     in_val = inputs if inputs is not None else previous.get("inputs")
     if in_val:
         rec["inputs"] = str(in_val).strip()
+    prev_cites = parse_citation_refs(previous.get("citation"))
+    if citation is not None:
+        rec["citation"] = parse_citation_refs(list(prev_cites) + parse_citation_refs(citation))
+    elif prev_cites:
+        rec["citation"] = prev_cites
+    if rec.get("citation") == []:
+        rec.pop("citation", None)
     if not rec["lazy-install"]:
         from samovar.tool_spec import lazy_install_for
 
@@ -1128,6 +1137,7 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
                         lazy_install=rec.get("lazy-install"),
                         flags_translate=rec.get("flags-translate"),
                         version=str(rec.get("_version") or ""),
+                        citation=rec.get("citation"),
                     )
             continue
         if key == "tool_envs":

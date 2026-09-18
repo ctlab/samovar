@@ -426,3 +426,158 @@ def test_import_pytest_runs_baseline_for_every_contract_group():
         if code != 0:
             failed.append((group, code, output[-2500:]))
     assert not failed, failed
+
+
+BIB_ONE = """@article{toyA2024,
+  title={Toy annotator A},
+  author={Doe, Jane},
+  year={2024},
+  journal={None}
+}
+"""
+
+BIB_TWO = """@article{toyB2024,
+  title={Toy annotator B},
+  year={2024}
+}
+@inproceedings{toyBtalk,
+  title={Talk},
+  year={2023}
+}
+"""
+
+
+def test_import_inline_bibtex_writes_registry_and_record(tmp_path, monkeypatch):
+    binary = tmp_path / "myclf"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    spec = import_tool(
+        name="myclf",
+        tool_type="annotator",
+        exec_path=str(binary),
+        bibtex=[BIB_ONE],
+        also_repo_build=False,
+    )
+    assert spec[3] == "annotator"
+    rec = _tool_row(json.loads(cfg.read_text())["tools"], "myclf")
+    assert rec["citation"] == ["myclf_toyA2024.bib"]
+    registry = json.loads((tmp_path / "cite" / "citations.json").read_text())
+    assert registry["myclf"] == ["myclf_toyA2024.bib"]
+    assert "@article{toyA2024" in (tmp_path / "cite" / "myclf_toyA2024.bib").read_text()
+
+
+def test_import_bibtex_file_and_idempotent_merge(tmp_path, monkeypatch):
+    binary = tmp_path / "other"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    bib = tmp_path / "paper.bib"
+    bib.write_text(BIB_TWO)
+    extra = tmp_path / "note.txt"
+    extra.write_text("@misc{note, title={Note}, year={2020}}\n")
+    import_tool(
+        name="other",
+        tool_type="annotator",
+        exec_path=str(binary),
+        bibtex_file=[str(bib), str(extra)],
+        also_repo_build=False,
+    )
+    import_tool(
+        name="other",
+        tool_type="annotator",
+        exec_path=str(binary),
+        bibtex_file=[str(bib)],
+        also_repo_build=False,
+    )
+    rec = _tool_row(json.loads(cfg.read_text())["tools"], "other")
+    assert rec["citation"] == ["other_paper.bib", "other_note.txt"]
+    registry = json.loads((tmp_path / "cite" / "citations.json").read_text())
+    assert registry["other"] == ["other_paper.bib", "other_note.txt"]
+    linked = tmp_path / "cite" / "other_paper.bib"
+    assert linked.is_file() or linked.is_symlink()
+    assert "toyB2024" in linked.read_text()
+
+
+def test_import_citations_do_not_drop_other_tools(tmp_path, monkeypatch):
+    a = tmp_path / "a.py"
+    a.write_text("#!/bin/sh\n")
+    b = tmp_path / "b.py"
+    b.write_text("#!/bin/sh\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="alpha",
+        tool_type="annotator",
+        exec_path=str(a),
+        bibtex=[BIB_ONE],
+        also_repo_build=False,
+    )
+    import_tool(
+        name="beta",
+        tool_type="annotator",
+        exec_path=str(b),
+        bibtex=["@article{beta, title={B}, year={2021}}\n"],
+        also_repo_build=False,
+    )
+    registry = json.loads((tmp_path / "cite" / "citations.json").read_text())
+    assert "alpha" in registry and "beta" in registry
+    assert registry["alpha"] == ["alpha_toyA2024.bib"]
+
+
+def test_import_cli_bibtex_and_file(tmp_path, monkeypatch):
+    binary = tmp_path / "cli_tool"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    monkeypatch.setattr(
+        "samovar.tools_import.update_config",
+        lambda updates, also_repo_build=True: update_config(updates, also_repo_build=False),
+    )
+    bib = tmp_path / "fromfile.bib"
+    bib.write_text("@article{fromfile, title={F}, year={2019}}\n")
+    rc = import_main(
+        [
+            "-n",
+            "cli_tool",
+            "--type",
+            "annotator",
+            "--exec-path",
+            str(binary),
+            "--bibtex",
+            BIB_ONE,
+            "--bibtex-file",
+            str(bib),
+        ]
+    )
+    assert rc == 0
+    rec = _tool_row(json.loads(cfg.read_text())["tools"], "cli_tool")
+    assert "cli_tool_toyA2024.bib" in rec["citation"]
+    assert "cli_tool_fromfile.bib" in rec["citation"]
+
+
+def test_import_without_bibtex_leaves_existing_cli(tmp_path, monkeypatch):
+    """Database import still works when citation flags are unused."""
+    from samovar.tools_import import import_database
+
+    db = tmp_path / "idx"
+    db.write_text("x")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}, "databases": {}}, also_repo_build=False)
+    rec = import_database(
+        name="toy",
+        tool="kraken2",
+        exec_path=str(db),
+        also_repo_build=False,
+    )
+    assert rec["path"]
+    assert (tmp_path / "cite" / "citations.json").is_file() is False
+

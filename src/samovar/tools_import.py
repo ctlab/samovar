@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Sequence, Tuple
 
 from samovar.main_config import (
     DEFAULT_SCORING_INPUTS,
@@ -62,6 +62,32 @@ def resolve_import_path(
     )
 
 
+def collect_bibtex_args(
+    bibtex: Optional[Sequence[str]] = None,
+    bibtex_file: Optional[Sequence[str]] = None,
+) -> Tuple[List[str], List[str]]:
+    """Split CLI ``--bibtex`` / ``--bibtex-file`` into inline text vs paths.
+
+    ``--bibtex @FILE`` is the same as ``--bibtex-file FILE``. ``--bibtex -``
+    is left as ``-`` for ``register_tool_citations`` to read stdin.
+    """
+    inline: List[str] = []
+    files: List[str] = []
+    for raw in list(bibtex or []):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if text.startswith("@") and "{" not in text:
+            files.append(text[1:])
+            continue
+        inline.append(text)
+    for raw in list(bibtex_file or []):
+        text = str(raw or "").strip()
+        if text:
+            files.append(text)
+    return inline, files
+
+
 def import_tool(
     *,
     name: str,
@@ -75,6 +101,8 @@ def import_tool(
     flags_translate: str = "",
     version: str = "",
     also_repo_build: bool = True,
+    bibtex: Optional[list] = None,
+    bibtex_file: Optional[list] = None,
 ) -> list:
     """Write ``tools.<name:version>`` object record; return list spec for callers."""
     name = str(name or "").strip()
@@ -91,6 +119,12 @@ def import_tool(
     from samovar.repro import load_lazy_install_text
 
     lazy = load_lazy_install_text(str(lazy_install or ""))
+    citation_refs: list = []
+    inline, files = collect_bibtex_args(bibtex, bibtex_file)
+    if inline or files:
+        from samovar.citations import register_tool_citations
+
+        citation_refs = register_tool_citations(name, inline=inline, files=files)
     cfg = load_config()
     kwargs = dict(
         path=path,
@@ -101,6 +135,7 @@ def import_tool(
         lazy_install=lazy or None,
         flags_translate=flags_translate or None,
         version=str(version or "").strip() or None,
+        citation=citation_refs or None,
     )
     if glob:
         kwargs["inputs"] = glob
@@ -307,6 +342,26 @@ def build_parser() -> argparse.ArgumentParser:
             "writing the config. Import only if the test passes."
         ),
     )
+    parser.add_argument(
+        "--bibtex",
+        "--citation",
+        action="append",
+        default=[],
+        dest="bibtex",
+        help=(
+            "BibTeX entry (repeatable). Several @entries in one string become "
+            "several files. Use @FILE for a path, or '-' for stdin."
+        ),
+    )
+    parser.add_argument(
+        "--bibtex-file",
+        "--citation-file",
+        action="append",
+        default=[],
+        dest="bibtex_file",
+        metavar="PATH",
+        help="Link a .bib/.txt file into the citation registry (repeatable).",
+    )
     return parser
 
 
@@ -369,6 +424,8 @@ def main(argv: Optional[list] = None) -> int:
             lazy_install=lazy,
             flags_translate=args.flags_translate,
             version=args.version,
+            bibtex=list(getattr(args, "bibtex", None) or []),
+            bibtex_file=list(getattr(args, "bibtex_file", None) or []),
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
