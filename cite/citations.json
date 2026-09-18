@@ -1,0 +1,178 @@
+{
+  "DAS_Tool": [
+    "dastool_sieber2018.bib"
+  ],
+  "R": [
+    "r_core_team.bib"
+  ],
+  "Rscript": [
+    "r_core_team.bib"
+  ],
+  "adaboost": [
+    "sklearn_pedregosa2011.bib"
+  ],
+  "anvio": [
+    "anvio_eren2015.bib",
+    "anvio_eren2021.bib"
+  ],
+  "art": [
+    "art_huang2012.bib"
+  ],
+  "art_illumina": [
+    "art_huang2012.bib"
+  ],
+  "assembly": [
+    "samovar_chechenina2023.bib"
+  ],
+  "assembly_profiling": [
+    "samovar_chechenina2023.bib"
+  ],
+  "bash": [],
+  "bray-curtis": [
+    "bray_curtis1957.bib"
+  ],
+  "bray_curtis": [
+    "bray_curtis1957.bib"
+  ],
+  "c++": [],
+  "camisim": [
+    "camisim_fritz2019.bib",
+    "cami_sczyrba2017.bib",
+    "cami2_meyer2022.bib"
+  ],
+  "centrifuge": [
+    "centrifuge_kim2016.bib"
+  ],
+  "checkm2": [
+    "checkm2_chklovski2023.bib"
+  ],
+  "chopper": [
+    "nanopack2_decoster2023.bib"
+  ],
+  "clang++": [],
+  "coverm": [
+    "coverm_aroney2025.bib"
+  ],
+  "cutadapt": [
+    "cutadapt_martin2011.bib"
+  ],
+  "dastool": [
+    "dastool_sieber2018.bib"
+  ],
+  "fastp": [
+    "fastp_chen2018.bib"
+  ],
+  "g++": [],
+  "gtdbtk": [
+    "gtdbtk_chaumeil2020.bib",
+    "gtdbtk2_chaumeil2022.bib"
+  ],
+  "iss": [
+    "iss_gourle2019.bib"
+  ],
+  "kaiju": [
+    "kaiju_menzel2016.bib"
+  ],
+  "kraken": [
+    "kraken_wood2014.bib"
+  ],
+  "kraken2": [
+    "kraken2_wood2019.bib"
+  ],
+  "krakenuniq": [
+    "krakenuniq_breitwieser2018.bib"
+  ],
+  "magscot": [
+    "magscot_ruhlemann2022.bib"
+  ],
+  "megahit": [
+    "megahit_li2015.bib"
+  ],
+  "metabat2": [
+    "metabat2_kang2019.bib"
+  ],
+  "metaphlan": [
+    "metaphlan_blanco2023.bib",
+    "metaphlan_beghini2021.bib"
+  ],
+  "metaphlan4": [
+    "metaphlan_blanco2023.bib",
+    "metaphlan_beghini2021.bib"
+  ],
+  "minimap2": [
+    "minimap2_li2018.bib"
+  ],
+  "multiqc": [
+    "multiqc_ewels2016.bib"
+  ],
+  "nanofilt": [
+    "nanopack_decoster2018.bib"
+  ],
+  "nanosim": [
+    "nanosim_yang2017.bib"
+  ],
+  "nanosim3": [
+    "nanosim_yang2017.bib"
+  ],
+  "nextflow": [
+    "nextflow_ditommaso2017.bib"
+  ],
+  "opal": [
+    "opal_meyer2019.bib",
+    "cami_sczyrba2017.bib",
+    "cami2_meyer2022.bib"
+  ],
+  "opal.py": [
+    "opal_meyer2019.bib",
+    "cami_sczyrba2017.bib",
+    "cami2_meyer2022.bib"
+  ],
+  "prodigal": [
+    "prodigal_hyatt2010.bib"
+  ],
+  "python": [],
+  "python3": [],
+  "random_forest": [
+    "sklearn_pedregosa2011.bib"
+  ],
+  "samovar": [
+    "samovar_chechenina2023.bib"
+  ],
+  "samtools": [
+    "samtools_danecek2021.bib",
+    "samtools_li2009.bib"
+  ],
+  "seqtk": [],
+  "simulator.py": [
+    "nanosim_yang2017.bib"
+  ],
+  "snakemake": [
+    "snakemake_koster2012.bib",
+    "snakemake_molder2021.bib"
+  ],
+  "sparsedossa2": [
+    "sparsedossa2_ma2021.bib"
+  ],
+  "sparsedossa2-cv": [
+    "sparsedossa2_ma2021.bib"
+  ],
+  "sparsedossa2-fit": [
+    "sparsedossa2_ma2021.bib"
+  ],
+  "sparsedossa2-ibd": [
+    "sparsedossa2_ma2021.bib"
+  ],
+  "sparsedossa2-stool": [
+    "sparsedossa2_ma2021.bib"
+  ],
+  "sparsedossa2-vaginal": [
+    "sparsedossa2_ma2021.bib"
+  ],
+  "trimmomatic": [
+    "trimmomatic_bolger2014.bib"
+  ],
+  "wgsim": [
+    "samtools_li2009.bib",
+    "samtools_danecek2021.bib"
+  ]
+}

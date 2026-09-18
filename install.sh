@@ -22,6 +22,8 @@
 #   ./install.sh GTDB-Tk         optional GTDB-Tk (sidecar; set GTDBTK_DATA_PATH)
 #   ./install.sh SparseDOSSA2    optional SparseDOSSA2 (table generators + CV scorer)
 #   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
+#   ./install.sh --rebuild-citations 1 refresh cite/*.bib after install (default)
+#   ./install.sh --rebuild-citations 0 skip doi.org / R citation() / CLI harvest
 #
 # Environment:
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
@@ -40,6 +42,7 @@
 #   SAMOVAR_R_BRANCH           default r-package
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
 #   SAMOVAR_UPDATE_SHELL=0     shared/read-only: skip PATH and ~/.bashrc edits
+#   SAMOVAR_REBUILD_CITATIONS=0 same as --rebuild-citations 0
 #   SAMOVAR_CONFIG=/path/to/config.json
 #                              write main config to this file (dir holds env/)
 #   SAMOVAR_CONFIG_DIR=/dir    write $dir/config.json instead of ~/.config/samovar
@@ -582,6 +585,22 @@ run_optional_named() {
     esac
 }
 
+rebuild_citations() {
+    if [ "$REBUILD_CITATIONS" = "0" ]; then
+        echo "Skipping cite/*.bib refresh (--rebuild-citations 0)."
+        return 0
+    fi
+    echo "Refreshing cite/*.bib (doi.org, R citation(), CLI --citation)..."
+    local extra=()
+    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        extra+=(--offline)
+    fi
+    if ! "$PYTHON_PATH" -m samovar.citations rebuild --root "$ROOT" "${extra[@]+"${extra[@]}"}"; then
+        echo "Warning: citation rebuild failed; bundled cite/ files were left as-is."
+        return 0
+    fi
+}
+
 enable_full_install_flags() {
     export SAMOVAR_INSTALL_R=1
     export SAMOVAR_INSTALL_OPAL=1
@@ -598,8 +617,35 @@ INSTALL_FULL=0
 if [ "${SAMOVAR_INSTALL_FULL:-0}" != "0" ]; then
     INSTALL_FULL=1
 fi
+REBUILD_CITATIONS="${SAMOVAR_REBUILD_CITATIONS:-1}"
 FILTERED_ARGS=()
+SKIP_NEXT=0
 for arg in "$@"; do
+    if [ "$SKIP_NEXT" = "1" ]; then
+        SKIP_NEXT=0
+        case "$arg" in
+            0|false|FALSE|no|NO|off|OFF) REBUILD_CITATIONS=0 ;;
+            *) REBUILD_CITATIONS=1 ;;
+        esac
+        continue
+    fi
+    case "$arg" in
+        --rebuild-citations)
+            SKIP_NEXT=1
+            continue
+            ;;
+        --rebuild-citations=*)
+            case "${arg#--rebuild-citations=}" in
+                0|false|FALSE|no|NO|off|OFF) REBUILD_CITATIONS=0 ;;
+                *) REBUILD_CITATIONS=1 ;;
+            esac
+            continue
+            ;;
+        --no-rebuild-citations)
+            REBUILD_CITATIONS=0
+            continue
+            ;;
+    esac
     mapped="$(normalize_optional_arg "$arg")"
     if [ "$mapped" = "full" ]; then
         INSTALL_FULL=1
@@ -607,6 +653,9 @@ for arg in "$@"; do
     fi
     FILTERED_ARGS+=("$arg")
 done
+if [ "$SKIP_NEXT" = "1" ]; then
+    REBUILD_CITATIONS=1
+fi
 if [ "${#FILTERED_ARGS[@]}" -gt 0 ]; then
     set -- "${FILTERED_ARGS[@]}"
 else
@@ -634,6 +683,7 @@ if [ "$INSTALL_FULL" != "1" ] && [ "$#" -gt 0 ]; then
             echo "Optional install: $name"
             run_optional_named "$name" || FAIL=1
         done
+        rebuild_citations
         print_install_status
         exit "$FAIL"
     fi
@@ -1115,6 +1165,8 @@ if [ "$SMOKE_FAIL" != "0" ]; then
 else
     echo "Smoke test passed."
 fi
+
+rebuild_citations
 
 print_install_status
 

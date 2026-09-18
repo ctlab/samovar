@@ -127,4 +127,4 @@ The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://g
 
 ## References
 
-See the current citation list in the references github wiki. Also, do not forget to cite all annotators used for the ensemble & inside the SAMOVAR
+BibTeX for built-in tools lives in [`cite/`](cite/citations.json) (`cite/*.bib`). Refresh after install with `./install.sh --rebuild-citations 1` (default) or `python -m samovar.citations rebuild`. Also cite every annotator used in the ensemble.
