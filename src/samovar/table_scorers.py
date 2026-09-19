@@ -110,7 +110,7 @@ def shannon_entropy(counts: Iterable[float]) -> float:
     total = float(vec.sum())
     if total <= 0:
         return 0.0
-    p = vec / total
+    p = np.sort(vec / total)
     return float(-(p * np.log(p)).sum())
 
 

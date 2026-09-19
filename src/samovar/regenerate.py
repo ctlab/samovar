@@ -115,7 +115,7 @@ def cap_abundance_table(frame: pd.DataFrame, max_genomes: Any = None) -> pd.Data
     from samovar.abundance import n_sample_columns
 
     limit = finite_max_genomes(max_genomes, default_from_env=False)
-    if limit is None or frame is None or frame.empty:
+    if limit is None or frame is None or frame.empty or len(frame) <= limit:
         return frame
     if "taxid" not in frame.columns:
         return cap_matrix_taxa(frame, max_genomes)

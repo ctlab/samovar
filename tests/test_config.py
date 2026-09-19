@@ -191,7 +191,8 @@ def test_pipeline_config_n_reads_cli_overrides_default():
     assert iss_config["max_genomes"] == 20
 
 
-def test_pipeline_config_max_genomes_default_inf(tmp_path):
+def test_pipeline_config_max_genomes_default_inf(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_MAX_GENOMES", raising=False)
     args = argparse.Namespace(
         input_config=None,
         input_dir="/path/to/input",
