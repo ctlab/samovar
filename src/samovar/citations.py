@@ -19,7 +19,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from samovar.main_config import TOOL_GROUP_BY_NAME
 from samovar.paths import _code_repo_root, user_config_dir
@@ -587,6 +587,348 @@ def load_citations(root: Optional[Path] = None) -> Dict[str, List[str]]:
     for tool, files in overlay.items():
         merged[tool] = parse_citation_refs(list(merged.get(tool) or []) + list(files))
     return merged
+
+
+USED_CITATIONS_NAME = "used_citations.bib"
+
+_SKIP_PREPARE_TOOLS = frozenset(
+    {
+        "",
+        "none",
+        "off",
+        "false",
+        "0",
+        "skip",
+        "no",
+        "identity",
+        "raw",
+        "python",
+        "python3",
+        "bash",
+        "R",
+        "Rscript",
+    }
+)
+
+# Extra names to try when looking up BibTeX (canonical tool files).
+_CITE_LOOKUP = {
+    "ensemble": ("random_forest", "adaboost"),
+    "linear": ("random_forest",),
+    "builtin": ("random_forest",),
+    "native": ("random_forest",),
+    "sklearn": ("random_forest",),
+    "permutation": ("random_forest",),
+    "default": ("random_forest",),
+    "auto": ("random_forest",),
+    "illumina": ("fastp",),
+    "bgi": ("fastp",),
+    "mgi": ("fastp",),
+    "ont": ("chopper",),
+    "nanopore": ("chopper",),
+    "nanosim": ("nanosim",),
+    "opal.py": ("opal",),
+    "art_illumina": ("art",),
+    "metaphlan4": ("metaphlan",),
+    "simulator.py": ("nanosim",),
+    "sparsedossa2": ("sparsedossa2-fit",),
+    "sparsedossa2_cv": ("sparsedossa2-cv",),
+    "sd2_cv": ("sparsedossa2-cv",),
+    "bray_ks": ("bray_curtis",),
+    "bray": ("bray_curtis",),
+    "bray_curtis_ks": ("bray_curtis",),
+    "bray-curtis": ("bray_curtis",),
+    "DAS_Tool": ("dastool",),
+    "samovar": ("samovar",),
+}
+
+
+def _unique_names(names: Sequence[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for raw in names:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in _SKIP_PREPARE_TOOLS or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    return out
+
+
+def _add_cmd_token(out: List[str], cmd: str) -> None:
+    text = str(cmd or "").strip()
+    if not text:
+        return
+    base = Path(text.split()[0]).name
+    if base.endswith(".py"):
+        base = base[:-3]
+    if base and base.lower() not in _SKIP_PREPARE_TOOLS:
+        out.append(base)
+
+
+def _annotator_tool_names(ann: Any) -> List[str]:
+    names: List[str] = []
+    typ = str(getattr(ann, "type", "") or "").strip()
+    run = str(getattr(ann, "run_name", "") or "").strip()
+    if run.endswith("-test"):
+        run = run[: -len("-test")]
+    elif run.endswith("_test"):
+        run = run[: -len("_test")]
+    if typ:
+        names.append(typ)
+    dummy_alias = {
+        "dummy",
+        "dummy9606",
+        "constant9606",
+        "constant",
+        "random",
+        "constant_taxid",
+    }
+    if run and run.lower() not in dummy_alias and run.lower() != typ.lower():
+        names.append(run)
+    _add_cmd_token(names, str(getattr(ann, "cmd", "") or ""))
+    extra = str(getattr(ann, "extra", "") or "")
+    if extra and typ.lower() in {"assembly", "assembly_profiling"}:
+        from samovar.assembly_profiling import parse_slot_extra
+
+        slots = parse_slot_extra(extra)
+        names.append(str(slots.get("assembler") or ""))
+        names.append(str(slots.get("gene_caller") or ""))
+        names.extend(str(x) for x in slots.get("binners") or [])
+        names.append(str(slots.get("binner_qc") or ""))
+        names.append(str(slots.get("binner_combine") or ""))
+        names.append(str(slots.get("mag_taxonomy") or ""))
+        names.append(str(slots.get("aligner") or ""))
+        names.append(str(slots.get("mag_quantifier") or ""))
+    return names
+
+
+def selected_prepare_tools(config: Any) -> List[str]:
+    """Tool names actually wired by this ``samovar prepare`` config."""
+    names: List[str] = []
+    for ann in getattr(config, "annotators", None) or []:
+        names.extend(_annotator_tool_names(ann))
+
+    try:
+        from samovar.qc import canonical_qc_name
+
+        for raw in (
+            getattr(config, "qc", ""),
+            getattr(config, "qc_initial", ""),
+            getattr(config, "qc_generated", ""),
+        ):
+            names.append(canonical_qc_name(raw) or str(raw or ""))
+        for raw in (getattr(config, "qc_postfix", None) or {}).values():
+            names.append(canonical_qc_name(raw) or str(raw or ""))
+        for raw in (getattr(config, "qc_tool_flags", None) or {}):
+            names.append(canonical_qc_name(raw) or str(raw or ""))
+    except Exception:
+        names.extend(
+            [
+                str(getattr(config, "qc", "") or ""),
+                str(getattr(config, "qc_initial", "") or ""),
+                str(getattr(config, "qc_generated", "") or ""),
+            ]
+        )
+
+    names.extend(getattr(config, "regeneration_modes", None) or [getattr(config, "regeneration_mode", "")])
+    names.append(getattr(config, "table_score", "") or "")
+    names.append(getattr(config, "sample_score", "") or "")
+    names.extend((getattr(config, "sample_score_by_annotator", None) or {}).values())
+    names.extend((getattr(config, "sample_score_by_method", None) or {}).values())
+    names.extend((getattr(config, "sample_filter_by_method", None) or {}).values())
+    names.append(getattr(config, "sample_filter", "") or "")
+    names.append(getattr(config, "reads_generator", "") or "iss")
+    names.append(getattr(config, "metagenome_generator", "") or "")
+
+    repro = str(getattr(config, "reprofiler", "") or "ensemble")
+    try:
+        from samovar.reprofilers import resolve_reprofiler
+
+        _kind, repro = resolve_reprofiler(repro)
+    except Exception:
+        pass
+    names.append(repro)
+
+    fi = str(getattr(config, "feature_importance", "") or "builtin")
+    if fi.strip().lower() not in _SKIP_PREPARE_TOOLS:
+        names.append(fi)
+
+    export_name = str(getattr(config, "export_corrector", "") or "logistic")
+    try:
+        from samovar.abundance_correctors import is_skipped_export, require_known_export
+
+        if not is_skipped_export(export_name):
+            try:
+                names.append(require_known_export(export_name))
+            except Exception:
+                names.append(export_name)
+    except Exception:
+        names.append(export_name)
+
+    scoring = getattr(config, "scoring_tools", None)
+    if scoring is not None:
+        if isinstance(scoring, (list, tuple)):
+            names.extend(str(x) for x in scoring)
+        else:
+            names.extend(str(scoring).replace(",", " ").split())
+    else:
+        try:
+            from samovar.scorers import iter_custom_scoring_names
+
+            names.extend(iter_custom_scoring_names())
+        except Exception:
+            pass
+    names.extend(getattr(config, "scoring_tool_flags", None) or {})
+
+    names.append("snakemake")
+    meta = str(getattr(config, "metagenome_generator", "") or "").lower()
+    reads = str(getattr(config, "reads_generator", "") or "").lower()
+    if meta in {"camisim"} or reads in {"camisim", "art", "wgsim", "hybrid"}:
+        names.append("camisim")
+    if meta in {"camisim", "nanosim", "hybrid"}:
+        names.append("nextflow")
+
+    run_mqc = getattr(config, "run_multiqc", None)
+    if run_mqc is True:
+        names.append("multiqc")
+    elif run_mqc is None:
+        try:
+            from samovar.paths import discover_multiqc
+
+            if discover_multiqc():
+                names.append("multiqc")
+        except Exception:
+            pass
+
+    return _unique_names(names)
+
+
+def resolve_citation_file(ref: str) -> Optional[Path]:
+    text = str(ref or "").strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if path.is_file():
+        return path
+    name = path.name
+    for root in (user_cite_dir(), cite_dir()):
+        cand = root / name
+        try:
+            if cand.is_file() or cand.is_symlink():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def citation_refs_for_tool(name: str) -> List[str]:
+    """Filenames/paths for one tool: record field, then registry, then bundled map."""
+    bare = str(name or "").strip()
+    if not bare:
+        return []
+    refs: List[str] = []
+    try:
+        from samovar.main_config import lookup_tool_record
+        from samovar.paths import load_config
+
+        rec = lookup_tool_record(load_config(), bare) or {}
+        refs.extend(parse_citation_refs(rec.get("citation")))
+    except Exception:
+        pass
+    mapping = load_citations()
+    aliases = [bare, *list(_CITE_LOOKUP.get(bare, ())), *list(_CITE_LOOKUP.get(bare.lower(), ()))]
+    if bare.lower() != bare:
+        aliases.append(bare.lower())
+    seen = set()
+    for key in aliases:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        refs.extend(mapping.get(key) or [])
+        refs.extend(TOOL_FILES.get(key) or [])
+        refs.extend(mapping_for_tools().get(key) or [])
+    return parse_citation_refs(refs)
+
+
+def bibtex_entries_for_refs(refs: Sequence[str]) -> List[str]:
+    chunks: List[str] = []
+    seen_keys = set()
+    seen_body = set()
+    for ref in refs:
+        path = resolve_citation_file(ref)
+        if path is None:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for entry in parse_bibtex_entries(text):
+            body = entry.strip()
+            if not body:
+                continue
+            key = bibtex_citekey(body) or _content_tag(body)
+            if key in seen_keys or body in seen_body:
+                continue
+            seen_keys.add(key)
+            seen_body.add(body)
+            chunks.append(body if body.endswith("\n") else body + "\n")
+    return chunks
+
+
+def write_used_citations(config: Any, outdir: Optional[Path] = None) -> Path:
+    """Write ``used_citations.bib`` for tools selected in this prepare.
+
+    Missing papers warn (``UserWarning``) and do not abort. Rewrite is atomic
+    and stable across identical prepares.
+    """
+    import warnings
+
+    dest_root = Path(outdir) if outdir is not None else Path(getattr(config, "output_dir"))
+    dest_root = dest_root.expanduser()
+    dest = dest_root / USED_CITATIONS_NAME
+    tools = selected_prepare_tools(config)
+    missing: List[str] = []
+    blocks: List[str] = []
+    found_tools: List[str] = []
+    for name in tools:
+        entries = bibtex_entries_for_refs(citation_refs_for_tool(name))
+        if not entries:
+            missing.append(name)
+            continue
+        found_tools.append(name)
+        blocks.append(f"% --- {name} ---\n")
+        blocks.extend(entries)
+        if not blocks[-1].endswith("\n"):
+            blocks[-1] += "\n"
+        if not blocks[-1].endswith("\n\n"):
+            blocks.append("\n")
+    header = [
+        "% SamovaR used_citations.bib (tools selected at prepare)\n",
+        "% Tools: " + (", ".join(tools) if tools else "(none)") + "\n",
+    ]
+    if missing:
+        header.append("% Missing citations: " + ", ".join(missing) + "\n")
+        warnings.warn(
+            "No BibTeX citation for prepare tool(s): " + ", ".join(missing),
+            UserWarning,
+            stacklevel=2,
+        )
+    header.append("\n")
+    text = "".join(header + blocks)
+    if not text.endswith("\n"):
+        text += "\n"
+    _atomic_write_text(dest, text)
+    configs_copy = dest_root / ".log" / "configs" / USED_CITATIONS_NAME
+    try:
+        configs_copy.parent.mkdir(parents=True, exist_ok=True)
+        if configs_copy.resolve() != dest.resolve():
+            _atomic_write_text(configs_copy, text)
+    except OSError:
+        pass
+    return dest
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

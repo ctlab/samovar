@@ -581,3 +581,39 @@ def test_import_without_bibtex_leaves_existing_cli(tmp_path, monkeypatch):
     assert rec["path"]
     assert (tmp_path / "cite" / "citations.json").is_file() is False
 
+
+def test_prepare_used_citations_includes_imported_bibtex(tmp_path, monkeypatch):
+    import pytest
+
+    from samovar.citations import write_used_citations
+    from samovar.config import AnnotatorConfig, PipelineConfig
+
+    binary = tmp_path / "myclf"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="myclf",
+        tool_type="annotator",
+        exec_path=str(binary),
+        bibtex=[BIB_ONE],
+        also_repo_build=False,
+    )
+    out = tmp_path / "run"
+    pipe = PipelineConfig()
+    pipe.output_dir = str(out)
+    pipe.annotators = [
+        AnnotatorConfig(run_name="myclf", type="myclf", db_path="/db", cmd=str(binary)),
+    ]
+    pipe.reads_generator = "iss"
+    pipe.run_multiqc = False
+    pipe.export_corrector = "off"
+    pipe.scoring_tools = []
+    with pytest.warns(UserWarning):
+        path = write_used_citations(pipe, out)
+    text = path.read_text()
+    assert "Toy annotator A" in text
+    assert "myclf" in text
+

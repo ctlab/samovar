@@ -1518,6 +1518,17 @@ class PipelineConfig:
             yaml.dump(reannotate_config, f)
         configs['reannotate'] = str(reannotate_path)
 
+        try:
+            from samovar.citations import write_used_citations
+            from samovar.methods import write_methods
+
+            cite_path = write_used_citations(self, base_path)
+            configs["used_citations"] = str(cite_path)
+            method_paths = write_methods(base_path)
+            configs["methods"] = method_paths.get("methods.md", "")
+        except Exception as exc:
+            print(f"Warning: could not write used_citations.bib / methods.md: {exc}", file=sys.stderr)
+
         return configs
 
     def _annotation_export_bash(self, src_rel: str, stage: str) -> str:
