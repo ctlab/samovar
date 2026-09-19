@@ -1,0 +1,3 @@
+contract: binner
+md: Contigs {verb} binned with {tools}{cite_md}.
+tex: Contigs {verb} binned with {tools}{cite_tex}.

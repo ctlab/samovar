@@ -1,0 +1,3 @@
+contract: binner_qc
+md: MAG quality {verb} assessed with {tools}{cite_md}.
+tex: MAG quality {verb} assessed with {tools}{cite_tex}.

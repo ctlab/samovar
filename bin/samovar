@@ -60,6 +60,7 @@ show_usage() {
     echo "  convert     Convert Annotation (abundance, kraken2, CAMI, or a custom converter)"
     echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
     echo "  merge       Combine two or more run directories (modes: initial, regenerated)"
+    echo "  methods     Write methods.md from a prepared run (alias: samovar-method)"
     echo "  help        Show this help message"
     echo ""
     echo "Examples:"
@@ -93,6 +94,7 @@ show_usage() {
     echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_full --full"
     echo "  samovar merge --mode initial --output_dir merged_init run_a run_b"
     echo "  samovar merge --mode regenerated --output_dir merged_regen run_a run_b"
+    echo "  samovar methods --output_dir RUN"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
 
@@ -260,6 +262,11 @@ case "${1:-}" in
     "merge")
         shift
         "$PYTHON" "$SCRIPT_DIR/samovar_merge" "$@"
+        ;;
+    "methods"|"samovar-method")
+        shift
+        PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+            "$PYTHON" -m samovar.methods "$@"
         ;;
     "reindex")
         shift

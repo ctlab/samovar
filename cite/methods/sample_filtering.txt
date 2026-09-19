@@ -1,0 +1,3 @@
+contract: sample_filtering
+md: Generated samples {verb} filtered with {tools}{cite_md}.
+tex: Generated samples {verb} filtered with {tools}{cite_tex}.

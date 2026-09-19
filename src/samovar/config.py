@@ -1518,6 +1518,14 @@ class PipelineConfig:
             yaml.dump(reannotate_config, f)
         configs['reannotate'] = str(reannotate_path)
 
+        start_s, end_s = resolve_window(self.startpoint, self.endpoint)
+        window_path = base_path / ".log" / "window.env"
+        window_path.write_text(
+            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\n",
+            encoding="utf-8",
+        )
+        configs["window"] = str(window_path)
+
         try:
             from samovar.citations import write_used_citations
             from samovar.methods import write_methods

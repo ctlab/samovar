@@ -1,0 +1,3 @@
+contract: annotation_converter
+md: Annotations {verb} converted with {tools}{cite_md}.
+tex: Annotations {verb} converted with {tools}{cite_tex}.

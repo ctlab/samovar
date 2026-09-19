@@ -195,6 +195,14 @@ def parse_slot_extra(extra: str) -> Dict[str, Any]:
             out["mag_quantifier"] = nxt
             i += 2
             continue
+        if tok in {"--taxon-quantifier", "--taxon_quantifier"} and nxt:
+            out["taxon_quantifier"] = nxt
+            i += 2
+            continue
+        if tok in {"--read-assigner", "--read_assigner"} and nxt:
+            out["read_assigner"] = nxt
+            i += 2
+            continue
         i += 1
     return out
 

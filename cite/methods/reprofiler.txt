@@ -1,0 +1,3 @@
+contract: reprofiler
+md: Per-read labels {verb} reprofiled with {tools}{cite_md}.
+tex: Per-read labels {verb} reprofiled with {tools}{cite_tex}.

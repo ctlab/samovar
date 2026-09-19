@@ -1,0 +1,3 @@
+contract: annotator
+md: For the taxonomic profile, {items} {verb} used{cite_md}.
+tex: For the taxonomic profile, {items} {verb} used{cite_tex}.

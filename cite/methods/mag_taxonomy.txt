@@ -1,0 +1,3 @@
+contract: mag_taxonomy
+md: MAG taxonomy {verb} assigned with {tools}{cite_md}.
+tex: MAG taxonomy {verb} assigned with {tools}{cite_tex}.

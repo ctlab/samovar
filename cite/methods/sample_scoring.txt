@@ -1,0 +1,3 @@
+contract: sample_scoring
+md: Generated samples {verb} scored with {tools}{cite_md}.
+tex: Generated samples {verb} scored with {tools}{cite_tex}.

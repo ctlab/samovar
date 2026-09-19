@@ -1,0 +1,3 @@
+contract: taxon_quantifier
+md: MAG abundances {verb} converted to taxon counts with {tools}{cite_md}.
+tex: MAG abundances {verb} converted to taxon counts with {tools}{cite_tex}.

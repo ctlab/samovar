@@ -1,0 +1,3 @@
+contract: mag_quantifier
+md: MAG abundance {verb} quantified with {tools}{cite_md}.
+tex: MAG abundance {verb} quantified with {tools}{cite_tex}.

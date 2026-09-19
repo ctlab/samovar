@@ -1,0 +1,3 @@
+contract: qc
+md: Reads {verb} quality-filtered with {tools}{cite_md}.
+tex: Reads {verb} quality-filtered with {tools}{cite_tex}.

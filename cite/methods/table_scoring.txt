@@ -1,0 +1,3 @@
+contract: table_scoring
+md: Regenerated abundance tables {verb} ranked with {tools}{cite_md}.
+tex: Regenerated abundance tables {verb} ranked with {tools}{cite_tex}.

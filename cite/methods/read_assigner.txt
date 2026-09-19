@@ -1,0 +1,3 @@
+contract: read_assigner
+md: Reads {verb} assigned to MAG taxonomy with {tools}{cite_md}.
+tex: Reads {verb} assigned to MAG taxonomy with {tools}{cite_tex}.

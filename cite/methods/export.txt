@@ -1,0 +1,3 @@
+contract: export
+md: Annotations {verb} exported with {tools} (formats {mode}){cite_md}.
+tex: Annotations {verb} exported with {tools} (formats {mode}){cite_tex}.

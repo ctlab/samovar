@@ -1,0 +1,3 @@
+contract: aligner
+md: Reads {verb} aligned with {tools}{cite_md}.
+tex: Reads {verb} aligned with {tools}{cite_tex}.

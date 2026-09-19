@@ -1,0 +1,3 @@
+contract: assembler
+md: Contigs {verb} assembled with {tools}{cite_md}.
+tex: Contigs {verb} assembled with {tools}{cite_tex}.

@@ -1,0 +1,3 @@
+contract: metagenome_generator
+md: Metagenome communities and reads {verb} generated with {tools}{cite_md}.
+tex: Metagenome communities and reads {verb} generated with {tools}{cite_tex}.

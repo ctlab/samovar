@@ -1,0 +1,3 @@
+contract: feature_importance
+md: Feature importance {verb} scored with {tools}{cite_md}.
+tex: Feature importance {verb} scored with {tools}{cite_tex}.

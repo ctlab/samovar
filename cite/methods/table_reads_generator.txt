@@ -1,0 +1,3 @@
+contract: table_reads_generator
+md: Abundance tables {verb} regenerated with {tools} (mode {mode}){cite_md}.
+tex: Abundance tables {verb} regenerated with {tools} (mode {mode}){cite_tex}.

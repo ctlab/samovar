@@ -1,0 +1,3 @@
+contract: scoring
+md: Annotation plots and scores {verb} produced with {tools}{cite_md}.
+tex: Annotation plots and scores {verb} produced with {tools}{cite_tex}.

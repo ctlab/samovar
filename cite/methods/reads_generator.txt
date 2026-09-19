@@ -1,0 +1,3 @@
+contract: reads_generator
+md: Sequencing reads {verb} generated with {tools}{cite_md}.
+tex: Sequencing reads {verb} generated with {tools}{cite_tex}.

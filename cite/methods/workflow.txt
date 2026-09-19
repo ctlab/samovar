@@ -1,0 +1,3 @@
+contract: workflow
+md: The pipeline {verb} orchestrated with {tools}{cite_md}.
+tex: The pipeline {verb} orchestrated with {tools}{cite_tex}.

@@ -1,0 +1,3 @@
+contract: gene_caller
+md: Genes {verb} called with {tools}{cite_md}.
+tex: Genes {verb} called with {tools}{cite_tex}.

@@ -1,0 +1,3 @@
+contract: binner_combine
+md: MAG sets {verb} combined with {tools}{cite_md}.
+tex: MAG sets {verb} combined with {tools}{cite_tex}.
