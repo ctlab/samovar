@@ -244,3 +244,25 @@ def test_globalpatterns_three_generators_three_scorers(tmp_path, monkeypatch):
     )
     assert custom_direct["ks_statistic"] == 0.0
     assert custom["winner_by_annotator"][annotator] == bray["winner_by_annotator"][annotator]
+
+
+def test_table_score_heatmap_png_keeps_grid_and_opaque_background(tmp_path):
+    import matplotlib.pyplot as plt
+
+    from samovar.table_scorers import _save_table_score_heatmap_png
+
+    matrix = pd.DataFrame(
+        [[-1.0, np.nan, -3.0], [np.nan, -2.0, np.nan], [-4.0, np.nan, np.nan]],
+        index=["bootstrap", "direct", "glm"],
+        columns=["bootstrap", "direct", "glm"],
+    )
+    path = tmp_path / "TableScore_kaiju.png"
+    _save_table_score_heatmap_png(matrix, path, "Table score — kaiju", "Method", "Method")
+    assert path.is_file()
+    img = plt.imread(path)
+    assert img.ndim == 3 and img.shape[0] > 50 and img.shape[1] > 50
+    if img.shape[-1] == 4:
+        assert float(img[:, :, 3].min()) == 1.0
+    # Failed cells stay in the grid: more than one color, not a flat square.
+    flat = img.reshape(-1, img.shape[-1])
+    assert len(np.unique(np.round(flat, 2), axis=0)) > 8

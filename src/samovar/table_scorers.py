@@ -834,37 +834,63 @@ def table_score_plot_dirs(abundance_dir: PathLike) -> List[Path]:
 
 def _save_table_score_heatmap_png(matrix: pd.DataFrame, path: Path, title: str, xlabel: str, ylabel: str) -> None:
     try:
-        from samovar.viz_annotation import _setup_cns, _use_agg_backend
+        from samovar.viz_annotation import _use_agg_backend
     except Exception:
         return
     try:
         _use_agg_backend()
-        cns = _setup_cns()
         import matplotlib.pyplot as plt
         from matplotlib.colors import LinearSegmentedColormap
     except Exception:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # cnsplots sets savefig.transparent; that drops axis labels on a dark viewer
+    # and masked NaNs then look like a 1×1 heatmap.
+    plt.rcParams["savefig.transparent"] = False
     values = matrix.to_numpy(dtype=float)
-    n = max(matrix.shape[0], matrix.shape[1], 1)
-    fig, ax = plt.subplots(figsize=(max(4.5, 0.7 * n + 2), max(4.0, 0.7 * n + 1.8)), facecolor="white")
+    n_rows, n_cols = values.shape
+    n = max(n_rows, n_cols, 1)
+    fig, ax = plt.subplots(
+        figsize=(max(5.2, 0.95 * n + 2.2), max(4.4, 0.75 * n + 2.0)),
+        facecolor="white",
+    )
     ax.set_facecolor("white")
-    cmap = LinearSegmentedColormap.from_list("samovar_table_score", ["#FFFFFF", "#78C679", "#004529"])
+    cmap = LinearSegmentedColormap.from_list("samovar_table_score", ["#F7FCF5", "#78C679", "#004529"])
+    cmap.set_bad("#D9D9D9")
     masked = np.ma.masked_invalid(values)
     im = ax.imshow(masked, cmap=cmap, aspect="equal", origin="upper")
-    ax.set_xticks(range(len(matrix.columns)))
-    ax.set_yticks(range(len(matrix.index)))
-    ax.set_xticklabels([str(c) for c in matrix.columns], rotation=35, ha="right")
-    ax.set_yticklabels([str(c) for c in matrix.index])
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
+    ax.set_xticks(range(n_cols))
+    ax.set_yticks(range(n_rows))
+    ax.set_xticklabels([str(c) for c in matrix.columns], rotation=35, ha="right", color="black")
+    ax.set_yticklabels([str(c) for c in matrix.index], color="black")
+    ax.set_xlabel(xlabel, color="black")
+    ax.set_ylabel(ylabel, color="black")
+    ax.set_title(title, color="black")
+    ax.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+    ax.grid(which="minor", color="white", linestyle="-", linewidth=1.5)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    finite = values[np.isfinite(values)]
+    dark_cut = float(np.nanmedian(finite)) if finite.size else 0.0
+    for i in range(n_rows):
+        for j in range(n_cols):
+            val = values[i, j]
+            if not math.isfinite(float(val)):
+                label, color = "—", "black"
+            else:
+                label = f"{val:.2f}"
+                color = "white" if val >= dark_cut and finite.size > 1 else "black"
+            ax.text(j, i, label, ha="center", va="center", color=color, fontsize=8)
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
-    if cns is not None and hasattr(cns, "savefig"):
-        cns.savefig(str(path))
-    else:
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(
+        path,
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+        transparent=False,
+        edgecolor="none",
+    )
     plt.close("all")
 
 
@@ -913,7 +939,11 @@ def write_table_score_plots(
                 matrix,
                 mqc,
                 section_name=f"Table score — {annotator}",
-                description=f"{metric_label} between table_reads_generator methods (diagonal vs observed).",
+                description=(
+                    f"{metric_label}: diagonal is that method alone; "
+                    "off-diagonal is the two methods concatenated. "
+                    "Missing cells are fits that failed, not unused methods."
+                ),
                 xlab="Method",
                 ylab="Method",
                 min_value=min_value,
