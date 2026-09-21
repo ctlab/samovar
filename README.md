@@ -10,7 +10,7 @@ Metagenomic classifiers disagree. SAMOVAR treats **multiple annotators as an ens
 
 What does the tool do? It gets the metagenome input & taxonomy profiling tools and SAMOVAR that (regenerate artficial metagenomes, evaluate & combine the tools).
 
-We strongly recommend to understand SAMOVAR main concepts before the installation & usage, because the workflow is large & depends on a lot of other different tools
+We strongly recommend to understand [SAMOVAR main concepts](https://github.com/ctlab/samovar/wiki) before the installation & usage, because the workflow is large & depends on a lot of other different tools
 
 ## Installation
 
@@ -27,7 +27,7 @@ chmod +x install.sh
 
 `install.sh` may ask you some questions, like e-mail for the NCBI API.
 
-Some tools are optional but may be useful (R package, SparseDOSSA2, CAMISIM, MultiQC, OPAL, NanoSim, ART, seqtk, Nextflow). Install them all with:
+Some tools are optional but are required for some actions. Install them all with:
 
 ```bash
 ./install.sh full
@@ -88,38 +88,25 @@ Each stage have built-in & custom options. Their usage & integration approaches 
 # Generate metagenome (skip for running SAMOVAR on real data as ensemble)
 samovar generate \
     --genome_dir $SAMOVAR/data/test_genomes/meta \
-    --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \
+    --host_genome $SAMOVAR/data/test_genomes/host/9606.fna \ # optional
     --output_dir samovar_out
+# -> output: bash script for the in silico generated metagenome
 
 # Prepare workflow & scripts, create generation config
 samovar prepare \
     --output_dir samovar_out \
-    --kraken2-test "kraken2 $DB_KRAKEN2" \
+    --kraken2-test "kraken2 $DB_KRAKEN2" \ # format: --NAME "type database_path"
     --kaiju-test "kaiju $DB_KAIJU"
+# -> output: bash script for the downstream pipeline
 
 # Do SAMOVARing (resumes from `.log/checkpoints`; `--redo` reruns every step)
 samovar exec --output_dir samovar_out
-
-# Apply that trained pipeline to a new sample (no retraining)
-samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_out
-
-# Same stages, but regenerate abundance tables and refit the ML reprofiler
-samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_full --full
+# -> pipeline execution
 
 # MultiQC report: optional
 # samovar multiqc --output_dir samovar_out -- --export --interactive
+# -> interactive multiqc report
 ```
-
-### `samovar apply`
-
-Takes **one new sample** (a FASTQ directory) and a completed pipeline run (`--pipeline`, the original `--output_dir` from prepare/exec). Configs, databases, annotators, export/scoring contracts, and the trained reprofiler are loaded from that run.
-
-* **Normal** (`samovar apply`): QC → the configured annotators → combine → the saved `reprofiled_annotations/trained_model.joblib` → export and scoring contracts. The ML component is **not** fitted again.
-* **`--full`**: the same prefix, then abundance-table regeneration (the run’s ModDirect analogue under `regenerated/.regenerated_abundance`) and a **refit** via `samovar.reprofilers.run_reprofiler`, then the remaining contracts. Profiles need not match normal apply.
-
-Required source state: `.log/configs/config_init.yaml`, and for normal mode `reprofiled_annotations/trained_model.joblib`. `--full` also needs `regenerated_annotations` (labeled training tables from the original run). Outputs land in `--output_dir` (aliases `--outdir` / `--directory`); the source run is not overwritten. Provenance is written to `.log/apply.yaml`.
-
-A generate → apply `--full` → merge (`initial` / `regenerated`) → exec walkthrough is in [`examples/apply_and_merge`](examples/apply_and_merge/).
 
 ## R package
 
@@ -127,4 +114,8 @@ The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://g
 
 ## References
 
-BibTeX for built-in tools lives in [`cite/`](cite/citations.json) (`cite/*.bib`). Refresh after install with `./install.sh --rebuild-citations 1` (default) or `python -m samovar.citations rebuild`. Also cite every annotator used in the ensemble.
+BibTeX for built-in tools lives in [`cite/`](cite/citations.json) (`cite/*.bib`). Refresh after install with `./install.sh --rebuild-citations 1` if needed (default) or `python -m samovar.citations rebuild`. 
+
+Do not forget to cite every annotator used in the ensemble.
+
+*SAMOVAR itself is now approaching the publication, but have no valid citation.*
