@@ -10,7 +10,7 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
+output_dir="$(samovar_example_outdir)"
 mkdir -p "$output_dir/.genomes" "$output_dir/.log"
 
 # Same genome panel as examples/realistic (3 assemblies per NCBI group).
@@ -49,7 +49,7 @@ fi
 K2_ROOT="${SAMOVAR_KRAKEN2_DB_ROOT}"
 # Catalog names already on this cluster. pracken (~353 GB) is imported if present
 # but skipped by default (SAMOVAR_INCLUDE_PRACKEN=1 to annotate with it).
-# SAMOVAR_CI_LIGHT_INDEXES=1 downloads only Kraken2 viral (~0.5 GB).
+# SAMOVAR_CI_LIGHT_INDEXES=1 uses phage_test (built like examples/phage).
 declare -A K2_URLS=(
   [standard_8GB]="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz"
   [virus]="https://genome-idx.s3.amazonaws.com/kraken/k2_viral_20251015.tar.gz"
@@ -63,10 +63,9 @@ declare -A K2_DIRS=(
 
 preprocess_args=()
 if samovar_light_public_indexes; then
-  for name in virus; do
-    samovar_ensure_database kraken2 "$name" "${K2_DIRS[$name]}" "hash.k2d" "${K2_URLS[$name]}"
-  done
-  preprocess_args+=(--kraken2-viral "kraken2 virus")
+  samovar_ensure_public_indexes
+  preprocess_args+=(--kraken2-phage "kraken2 phage_test")
+  preprocess_args+=(--kaiju-phage "kaiju phage_test")
 else
   for name in standard_8GB virus; do
     samovar_ensure_database kraken2 "$name" "${K2_DIRS[$name]}" "hash.k2d" "${K2_URLS[$name]}"
@@ -99,3 +98,4 @@ samovar prepare \
 
 samovar_run_exec "$output_dir"
 samovar multiqc --output_dir "$output_dir" -- --export --interactive
+samovar_harvest_example "$output_dir" "$SCRIPT_DIR"

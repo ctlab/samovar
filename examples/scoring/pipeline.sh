@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
+output_dir="$(samovar_example_outdir)"
 rm -rf "$output_dir/"
 
 chmod +x "${SCRIPT_DIR}/count_annotations.py"
@@ -18,7 +18,7 @@ samovar tools import -n counts \
   --inputs '*annotations' \
   --flags "--min-files 0"
 
-toy_db="$(cd "${SCRIPT_DIR}/../toy" && pwd)/run/.database"
+toy_db="$(samovar_toy_database_dir)"
 samovar_ensure_toy_annotators "$toy_db"
 
 samovar generate \
@@ -36,3 +36,4 @@ samovar prepare \
 
 samovar_run_exec "$output_dir"
 samovar multiqc --output_dir "$output_dir" -- --export --interactive
+samovar_harvest_example "$output_dir" "$SCRIPT_DIR"

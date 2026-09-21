@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
+output_dir="$(samovar_example_outdir)"
 rm -rf "$output_dir/"
 mkdir -p "$output_dir/.database"
 
@@ -27,3 +27,4 @@ samovar prepare \
 
 samovar_run_exec "$output_dir"
 samovar multiqc --output_dir "$output_dir" -- --export --interactive
+samovar_harvest_example "$output_dir" "$SCRIPT_DIR"

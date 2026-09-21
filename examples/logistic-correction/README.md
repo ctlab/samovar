@@ -29,8 +29,8 @@ R² falls: logistic inflates taxa on the original samples. Kraken2 and the
 ensemble were already the better profiles; recall fitted on the regenerated mix
 over-inflates some taxa (worse L1 and R²).
 
-`SAMOVAR_TOY=1` uses the toy Kraken2/Kaiju indexes. If `examples/realistic/run`
-already has annotations, the script only recomputes this comparison.
+`SAMOVAR_TOY=1` uses the toy Kraken2/Kaiju indexes. If `examples_outdir/realistic`
+already has annotations, the script reuses that run and only rewrites exports.
 
 ```bash
 samovar prepare --output_dir RUN --export logistic   # default

@@ -201,10 +201,19 @@ install_sparsedossa2() {
         echo "See https://github.com/biobakery/SparseDOSSA2 and https://github.com/biobakery/biobakery/wiki/SparseDOSSA2"
         return 1
     fi
+    # SparseDOSSA2 Depends (DESCRIPTION): ks, mvtnorm, huge, future.apply, magrittr,
+    # truncnorm, igraph, Rmpfr. Rmpfr needs system libmpfr/libgmp (apt or conda).
     if [ "${SAMOVAR_OFFLINE:-0}" = "0" ]; then
-        echo "Ensuring SparseDOSSA2 R dependencies (future, future.apply, tmvtnorm, remotes, …) ..."
+        echo "Ensuring SparseDOSSA2 R dependencies ..."
         R --vanilla -s -e "if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', repos='https://cloud.r-project.org')" || true
-        R --vanilla -s -e "pkgs <- c('future', 'future.apply', 'tmvtnorm', 'glmnet', 'VGAM', 'mvtnorm', 'optparse'); for (p in pkgs) if (!requireNamespace(p, quietly=TRUE)) install.packages(p, repos='https://cloud.r-project.org')" || true
+        R --vanilla -s -e "
+pkgs <- c('ks', 'mvtnorm', 'huge', 'future', 'future.apply', 'magrittr', 'truncnorm', 'igraph', 'Rmpfr')
+missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]
+if (length(missing)) {
+  message('Installing CRAN deps: ', paste(missing, collapse=', '))
+  install.packages(missing, repos='https://cloud.r-project.org')
+}
+" || true
     fi
     local info
     info="$(R --vanilla -s -e 'if (requireNamespace("SparseDOSSA2", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("SparseDOSSA2")), find.package("SparseDOSSA2")) } else cat("MISSING")' 2>/dev/null || true)"
@@ -215,8 +224,12 @@ install_sparsedossa2() {
         return 1
     else
         echo "Installing SparseDOSSA2 from https://github.com/biobakery/SparseDOSSA2 ..."
-        if ! R --vanilla -s -e "library(remotes); remotes::install_github('biobakery/SparseDOSSA2', upgrade='never', dependencies=TRUE)"; then
+        # Do not swallow stderr: failed Rmpfr/huge builds are the usual GHA failure mode.
+        if ! R --vanilla -e "library(remotes); remotes::install_github('biobakery/SparseDOSSA2', upgrade='never', dependencies=TRUE)"; then
             echo "GitHub SparseDOSSA2 install failed."
+            echo "On Debian/Ubuntu install build deps first:"
+            echo "  sudo apt-get install -y libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran"
+            echo "Or conda: conda install -c conda-forge r-rmpfr r-igraph r-huge r-ks r-mvtnorm r-truncnorm"
             echo "Install later with: ./install.sh SparseDOSSA2"
             echo "Wiki: https://github.com/biobakery/biobakery/wiki/SparseDOSSA2"
             return 1
@@ -224,6 +237,7 @@ install_sparsedossa2() {
         info="$(R --vanilla -s -e 'if (requireNamespace("SparseDOSSA2", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("SparseDOSSA2"))) } else cat("MISSING")' 2>/dev/null || true)"
         echo "SparseDOSSA2: $info"
         if ! echo "$info" | grep -q '^INSTALLED'; then
+            echo "SparseDOSSA2 package still missing after install_github (often Rmpfr without libmpfr-dev)."
             return 1
         fi
     fi

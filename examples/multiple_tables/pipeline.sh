@@ -8,10 +8,10 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
+output_dir="$(samovar_example_outdir)"
 rm -rf "$output_dir/"
 
-toy_db="$(cd "${SCRIPT_DIR}/../toy" && pwd)/run/.database"
+toy_db="$(samovar_toy_database_dir)"
 samovar_ensure_toy_annotators "$toy_db"
 
 export SAMOVAR_ALLOW_TEST_GENOMES=1
@@ -42,6 +42,7 @@ samovar prepare \
 
 samovar_run_exec "$output_dir"
 samovar multiqc --output_dir "$output_dir" -- --export --interactive
+samovar_harvest_example "$output_dir" "$SCRIPT_DIR"
 if [[ -f "$output_dir/regenerated/.regenerated_abundance/table_selection.json" ]]; then
   echo "Table selection:"
   cat "$output_dir/regenerated/.regenerated_abundance/table_selection.json"

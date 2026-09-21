@@ -6,7 +6,7 @@
 # same annotations (one run; correction is Annotation → abundance export).
 #
 # Reuse an existing realistic run:
-#   SAMOVAR_REALISTIC_DIR=/path/to/examples/realistic/run bash pipeline.sh
+#   SAMOVAR_REALISTIC_DIR=/path/to/examples_outdir/realistic bash pipeline.sh
 # Quick toy annotators instead of public indexes:
 #   SAMOVAR_TOY=1 bash pipeline.sh
 set -euo pipefail
@@ -17,8 +17,8 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
-realistic_dir="${SAMOVAR_REALISTIC_DIR:-${SCRIPT_DIR}/../realistic/run}"
+output_dir="$(samovar_example_outdir)"
+realistic_dir="${SAMOVAR_REALISTIC_DIR:-${SAMOVAR}/examples_outdir/realistic}"
 
 chmod +x "${SCRIPT_DIR}/logistic_corrector.py" "${SCRIPT_DIR}/compare.py"
 samovar tools import -n logistic_correction \
@@ -45,7 +45,7 @@ fi
 mkdir -p "$output_dir"
 
 if [[ "${SAMOVAR_TOY:-0}" == "1" ]]; then
-  toy_db="$(cd "${SCRIPT_DIR}/../toy" && pwd)/run/.database"
+  toy_db="$(samovar_toy_database_dir)"
   samovar_ensure_toy_annotators "$toy_db"
   export SAMOVAR_ALLOW_TEST_GENOMES=1
   export SAMOVAR_REUSE_GENOMES=1
@@ -133,5 +133,6 @@ fi
 
 samovar_run_exec "$output_dir"
 python "${SCRIPT_DIR}/compare.py" --run "$output_dir" -o "${SCRIPT_DIR}/figures"
+samovar_harvest_example "$output_dir" "$SCRIPT_DIR" || true
 echo "Done: $output_dir"
 echo "Raw vs logistic figures: ${SCRIPT_DIR}/figures"

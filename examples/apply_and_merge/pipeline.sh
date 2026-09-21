@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
+output_dir="$(samovar_example_outdir)"
 rm -rf "$output_dir/"
 mkdir -p "$output_dir/.database"
 samovar_ensure_toy_annotators "$output_dir/.database"

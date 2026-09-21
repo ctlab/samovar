@@ -22,3 +22,5 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 | [apply_and_merge](apply_and_merge/) | Hold out one sample, `apply --full`, merge `initial` / `regenerated`, exec |
 
 Figures and MultiQC reports are copied next to each `pipeline.sh` after a run.
+Full run trees go to `examples_outdir/<name>/` (override with `SAMOVAR_OUTDIR`).
+In git, each example keeps only a few key plots under `figures/` plus `multiqc/multiqc_report.html`.

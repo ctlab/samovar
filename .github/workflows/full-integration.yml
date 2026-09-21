@@ -38,10 +38,14 @@ jobs:
         activate-environment: samovar
         environment-file: environment.yml
 
-    - name: Conda extras for full install
+    - name: System + conda deps (SparseDOSSA2 needs Rmpfr/libmpfr)
       run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran
         conda install -y -c conda-forge -c bioconda \
           r-base r-essentials openjdk \
+          r-rmpfr r-igraph r-huge r-ks r-mvtnorm r-truncnorm r-magrittr r-future.apply r-remotes \
           kraken2 kaiju
 
     - name: Install via install.sh full
@@ -96,10 +100,14 @@ jobs:
         activate-environment: samovar
         environment-file: environment.yml
 
-    - name: Conda extras for full install and examples
+    - name: System + conda deps (SparseDOSSA2 needs Rmpfr/libmpfr)
       run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran
         conda install -y -c conda-forge -c bioconda \
           r-base r-essentials openjdk \
+          r-rmpfr r-igraph r-huge r-ks r-mvtnorm r-truncnorm r-magrittr r-future.apply r-remotes \
           kraken2 kaiju
 
     - name: Install via install.sh full
@@ -183,10 +191,8 @@ jobs:
       SAMOVAR_N_SAMPLES: "2"
       SAMOVAR_N_READS: "200"
       SAMOVAR_MAX_GENOMES: "20"
-      # Tiny public indexes only (Kraken2 viral ~0.5 GB, Kaiju viruses ~0.3 GB).
+      # Use phage_test indexes (built like examples/phage), not S3 standard/refseq.
       SAMOVAR_CI_LIGHT_INDEXES: "1"
-      SAMOVAR_KRAKEN2_DB_ROOT: ${{ github.workspace }}/.ci-dbs/kraken2
-      SAMOVAR_KAIJU_DB: ${{ github.workspace }}/.ci-dbs/kaiju/viruses
 
     steps:
     - uses: actions/checkout@v4
@@ -211,10 +217,9 @@ jobs:
         chmod +x install.sh
         ./install.sh full
 
-    - name: Examples (public light indexes)
+    - name: Examples (public pipelines on phage_test indexes)
       timeout-minutes: 150
       run: |
-        mkdir -p "$SAMOVAR_KRAKEN2_DB_ROOT" "$SAMOVAR_KAIJU_DB"
         bash examples/realistic/pipeline.sh
         bash examples/assembly/pipeline.sh
         bash examples/databases_comparison/pipeline.sh

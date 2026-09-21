@@ -45,14 +45,32 @@ project/
 genomes/
 taxdump.tar.gz
 
-# Example run trees and caches
+# Full example run trees (pipelines default here; not under examples/)
+examples_outdir/
+
+# Accidental / legacy run trees still under examples/
 examples/**/run/
+examples/**/_ci_*/
+examples/_ci_public_run/
 examples/**/results/
 examples/**/__pycache__/
 examples/**/*.pyc
 examples/**/.snakemake/
 examples/**/.cache/
+examples/**/.generate/
+examples/**/.log/
+examples/**/.database/
+examples/**/.genomes/
+# Harvested MultiQC: keep only multiqc_report.html in git
 examples/**/multiqc/multiqc_data/
+examples/**/multiqc/*_data/
+examples/**/multiqc/*_plots/
+examples/**/multiqc/*.zip
+examples/**/multiqc/*.json
+examples/**/multiqc/*.txt
+examples/**/multiqc/*.pdf
+examples/**/multiqc/*.png
+examples/**/multiqc/*.svg
 
 # Local branch copies of toy-like runs
 /branch/

@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
+output_dir="$(samovar_example_outdir)"
 mkdir -p "$output_dir/.genomes"
 
 ORG_GROUPS=(Archaea Bacteria Viridiplantae Alveolata Fungi Metazoa Viruses)
@@ -43,9 +43,7 @@ if ! samovar_seed_public_genomes "$output_dir/.genomes" 21; then
   done
 fi
 
-samovar_public_index_vars
-samovar_ensure_database kraken2 "$K2_NAME" "$K2_DIR" "hash.k2d" "$K2_URL"
-samovar_ensure_database kaiju "$KAIJU_NAME" "$KAIJU_DIR" "*.fmi" "$KAIJU_URL"
+samovar_ensure_public_indexes
 
 samovar generate \
     --genome_dir "${output_dir}/.genomes" \
@@ -64,3 +62,4 @@ samovar prepare \
 
 samovar_run_exec "$output_dir"
 samovar multiqc --output_dir "$output_dir" -- --export --interactive
+samovar_harvest_example "$output_dir" "$SCRIPT_DIR"

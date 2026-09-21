@@ -15,8 +15,8 @@ cd "$SAMOVAR"
 samovar_setup_env
 
 PHASE="${SAMOVAR_PHASE:-all}"
-out1="${SAMOVAR_OUTDIR_1:-${SCRIPT_DIR}/run/database1}"
-out2="${SAMOVAR_OUTDIR_2:-${SCRIPT_DIR}/run/database2}"
+out1="${SAMOVAR_OUTDIR_1:-${SAMOVAR}/examples_outdir/phage/database1}"
+out2="${SAMOVAR_OUTDIR_2:-${SAMOVAR}/examples_outdir/phage/database2}"
 n_samples="${N_SAMPLES:-2}"
 total_reads="${TOTAL_READS:-2000}"
 host_fraction="${HOST_FRACTION:-0.15}"
@@ -93,7 +93,7 @@ EOF
 phase_add_annotator() {
   # Same community as database1, but start with kaiju phage_test only, then
   # add kraken2 toy via prepare --add-annotator (does not touch database1).
-  local dest="${SAMOVAR_OUTDIR_ADD:-${SCRIPT_DIR}/run/add_annotator}"
+  local dest="${SAMOVAR_OUTDIR_ADD:-${SAMOVAR}/examples_outdir/phage/add_annotator}"
   local src_reads="${out1}/initial"
   mkdir -p "$dest"
   if [[ -s "${src_reads}/1_full_R1.fastq" ]]; then
@@ -331,4 +331,5 @@ esac
 
 if [[ -d "$out1" ]]; then
   samovar multiqc --output_dir "$out1" -- --export --interactive || true
+  samovar_harvest_example "$out1" "$SCRIPT_DIR" || true
 fi
