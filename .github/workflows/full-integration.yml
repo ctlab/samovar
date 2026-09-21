@@ -17,6 +17,8 @@ env:
   NCBI_EMAIL: test@samovar.com
   SAMOVAR_INSTALL_DEV: "1"
   SAMOVAR_UPDATE_SHELL: "0"
+  # remotes/gh otherwise use a revoked bundled PAT (HTTP 401). Valid GHA token if anything still hits the API.
+  GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   pytest-full:

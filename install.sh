@@ -120,6 +120,45 @@ case ":$PATH:" in
     *) export PATH="$PY_BIN:$PATH" ;;
 esac
 
+# remotes::install_github talks to api.github.com and will use a bundled GitHub
+# PAT that GitHub has revoked (HTTP 401 "Bad credentials"). Public repos install
+# with git clone + remotes::install_local, which never hits that API.
+r_install_github_local() {
+    local repo="$1"
+    local ref="${2:-}"
+    local deps="${3:-TRUE}"
+    local tmp dest dest_esc archive_ref
+    tmp="$(mktemp -d)"
+    dest="${tmp}/pkg"
+    archive_ref="${ref:-HEAD}"
+    echo "Installing ${repo}${ref:+@${ref}} via git clone (avoids remotes GitHub PAT / API 401) ..."
+    if [ -n "$ref" ] && [ "$ref" != "HEAD" ]; then
+        git clone --depth 1 --branch "$ref" --quiet "https://github.com/${repo}.git" "$dest" || true
+    else
+        git clone --depth 1 --quiet "https://github.com/${repo}.git" "$dest" || true
+    fi
+    if [ ! -f "${dest}/DESCRIPTION" ]; then
+        echo "git clone failed; trying GitHub source tarball ..."
+        rm -rf "$dest"
+        mkdir -p "$tmp"
+        if curl -fsSL "https://codeload.github.com/${repo}/tar.gz/${archive_ref}" | tar -xz -C "$tmp"; then
+            dest="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+        fi
+    fi
+    if [ -z "${dest:-}" ] || [ ! -f "${dest}/DESCRIPTION" ]; then
+        echo "Could not fetch ${repo} source (need git or curl + a public GitHub tarball)."
+        rm -rf "$tmp"
+        return 1
+    fi
+    dest_esc="$(printf '%s' "$dest" | sed "s/'/'\\\\''/g")"
+    if ! R --vanilla -e "library(remotes); remotes::install_local('${dest_esc}', upgrade='never', dependencies=${deps})"; then
+        rm -rf "$tmp"
+        return 1
+    fi
+    rm -rf "$tmp"
+    return 0
+}
+
 install_samovar_r_package() {
     local repo="${SAMOVAR_R_REPO:-ctlab/samovar}"
     local branch="${SAMOVAR_R_BRANCH:-r-package}"
@@ -145,8 +184,8 @@ install_samovar_r_package() {
         fi
         echo "Installing samovaR from https://github.com/${repo}/tree/${branch} ..."
         R --vanilla -s -e "if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', repos='https://cloud.r-project.org')"
-        if ! R --vanilla -s -e "library(remotes); remotes::install_github('${repo}', ref='${branch}', upgrade='never', dependencies=NA)"; then
-            echo "GitHub install failed; trying a local checkout of origin/${branch}..."
+        if ! r_install_github_local "$repo" "$branch" "NA"; then
+            echo "GitHub clone/tarball install failed; trying a local checkout of origin/${branch}..."
             local tmp
             tmp="$(mktemp -d)"
             if git -C "$ROOT" fetch origin "$branch" 2>/dev/null; then
@@ -225,7 +264,8 @@ if (length(missing)) {
     else
         echo "Installing SparseDOSSA2 from https://github.com/biobakery/SparseDOSSA2 ..."
         # Do not swallow stderr: failed Rmpfr/huge builds are the usual GHA failure mode.
-        if ! R --vanilla -e "library(remotes); remotes::install_github('biobakery/SparseDOSSA2', upgrade='never', dependencies=TRUE)"; then
+        # Do not use remotes::install_github: bundled PAT → HTTP 401 on GHA.
+        if ! r_install_github_local "biobakery/SparseDOSSA2" "" "TRUE"; then
             echo "GitHub SparseDOSSA2 install failed."
             echo "On Debian/Ubuntu install build deps first:"
             echo "  sudo apt-get install -y libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran"
@@ -237,7 +277,7 @@ if (length(missing)) {
         info="$(R --vanilla -s -e 'if (requireNamespace("SparseDOSSA2", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("SparseDOSSA2"))) } else cat("MISSING")' 2>/dev/null || true)"
         echo "SparseDOSSA2: $info"
         if ! echo "$info" | grep -q '^INSTALLED'; then
-            echo "SparseDOSSA2 package still missing after install_github (often Rmpfr without libmpfr-dev)."
+            echo "SparseDOSSA2 package still missing after install (often Rmpfr without libmpfr-dev)."
             return 1
         fi
     fi
