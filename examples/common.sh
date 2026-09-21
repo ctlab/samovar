@@ -30,6 +30,62 @@ samovar_setup_env() {
   export SAMOVAR_KRAKEN2_DB_ROOT="${SAMOVAR_KRAKEN2_DB_ROOT:-/mnt/tank/scratch/partition-metagenomics/databases/kraken2}"
 }
 
+# CI / laptop public examples: Kraken2 viral + Kaiju viruses (~1 GB total).
+# Set SAMOVAR_CI_LIGHT_INDEXES=1 (full-integration examples-public job).
+samovar_light_public_indexes() {
+  [[ "${SAMOVAR_CI_LIGHT_INDEXES:-0}" == "1" ]]
+}
+
+# Resolve public Kraken2/Kaiju destinations used by realistic / assembly / db comparison.
+# Sets: K2_NAME K2_DIR K2_URL KAIJU_NAME KAIJU_DIR KAIJU_URL
+samovar_public_index_vars() {
+  if samovar_light_public_indexes; then
+    K2_NAME="virus"
+    K2_DIR="${SAMOVAR_KRAKEN2_DB_ROOT}/virus_2025oct"
+    K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_viral_20251015.tar.gz"
+    KAIJU_NAME="viruses"
+    KAIJU_DIR="${SAMOVAR_KAIJU_DB:-${SAMOVAR_KRAKEN2_DB_ROOT%/kraken2}/kaiju/viruses}"
+    KAIJU_URL="https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_viruses_2024-08-15.tgz"
+  else
+    K2_NAME="standard_8GB"
+    K2_DIR="${SAMOVAR_KRAKEN2_DB_ROOT}/standard_8GB_2025oct"
+    K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz"
+    KAIJU_NAME="refseq"
+    KAIJU_DIR="${SAMOVAR_KAIJU_DB:-/mnt/tank/scratch/partition-metagenomics/databases/kaiju/refseq_2024aug}"
+    KAIJU_URL="https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_2024-08-14.tgz"
+  fi
+}
+
+# Fill DEST with bundled meta genomes (no NCBI) when SAMOVAR_CI_LIGHT_INDEXES=1.
+# Returns 0 if seeded / already enough files, 1 if caller should do the full NCBI fetch.
+samovar_seed_public_genomes() {
+  local dest="$1"
+  local min_count="${2:-3}"
+  mkdir -p "$dest"
+  local existing
+  existing="$(find "$dest" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
+  if [[ "$existing" -ge "$min_count" ]]; then
+    echo "Found ${existing} genomes under ${dest}; skipping fetch"
+    return 0
+  fi
+  if ! samovar_light_public_indexes; then
+    return 1
+  fi
+  echo "CI light indexes: seeding ${dest} from data/test_genomes/meta (skip NCBI fetch)"
+  shopt -s nullglob
+  local f base
+  for f in "${SAMOVAR}/data/test_genomes/meta"/*.{fa,fna,fasta,fa.gz,fna.gz,fasta.gz}; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    if [[ ! -e "${dest}/${base}" ]]; then
+      cp -a "$f" "${dest}/${base}"
+    fi
+  done
+  shopt -u nullglob
+  existing="$(find "$dest" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
+  [[ "$existing" -ge 1 ]]
+}
+
 # Print REPORT if a registered database has a path but no lazy-download recipe.
 samovar_report_missing_lazy() {
   python - <<'PY'

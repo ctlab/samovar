@@ -20,7 +20,7 @@
 #   ./install.sh anvio           optional anvi'o binner (sidecar)
 #   ./install.sh CheckM2         optional CheckM2 (sidecar)
 #   ./install.sh GTDB-Tk         optional GTDB-Tk (sidecar; set GTDBTK_DATA_PATH)
-#   ./install.sh SparseDOSSA2    optional SparseDOSSA2 (table generators + CV scorer)
+#   ./install.sh SparseDOSSA2    SparseDOSSA2 (also included in ./install.sh full)
 #   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
 #   ./install.sh --rebuild-citations 1 refresh cite/*.bib after install (default)
 #   ./install.sh --rebuild-citations 0 skip doi.org / R citation() / CLI harvest
@@ -202,9 +202,9 @@ install_sparsedossa2() {
         return 1
     fi
     if [ "${SAMOVAR_OFFLINE:-0}" = "0" ]; then
-        echo "Ensuring SparseDOSSA2 R dependencies (future, future.apply, tmvtnorm, remotes) ..."
+        echo "Ensuring SparseDOSSA2 R dependencies (future, future.apply, tmvtnorm, remotes, …) ..."
         R --vanilla -s -e "if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes', repos='https://cloud.r-project.org')" || true
-        R --vanilla -s -e "pkgs <- c('future', 'future.apply', 'tmvtnorm'); for (p in pkgs) if (!requireNamespace(p, quietly=TRUE)) install.packages(p, repos='https://cloud.r-project.org')" || true
+        R --vanilla -s -e "pkgs <- c('future', 'future.apply', 'tmvtnorm', 'glmnet', 'VGAM', 'mvtnorm', 'optparse'); for (p in pkgs) if (!requireNamespace(p, quietly=TRUE)) install.packages(p, repos='https://cloud.r-project.org')" || true
     fi
     local info
     info="$(R --vanilla -s -e 'if (requireNamespace("SparseDOSSA2", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("SparseDOSSA2")), find.package("SparseDOSSA2")) } else cat("MISSING")' 2>/dev/null || true)"
@@ -239,7 +239,12 @@ install_sparsedossa2() {
 try:
     from samovar.sparsedossa2 import register_sparsedossa2_tools
 except ImportError as exc:
-    print("Warning: samovar is not importable yet; re-run ./install.sh SparseDOSSA2:", exc)
+    # Optional-only early path (./install.sh SparseDOSSA2 before pip -e .) may hit this.
+    print(
+        "Warning: samovar is not importable yet; R package is installed. "
+        "Re-run ./install.sh SparseDOSSA2 after the Python package to register tools:",
+        exc,
+    )
     raise SystemExit(0)
 
 register_sparsedossa2_tools()
@@ -838,7 +843,15 @@ else
 fi
 
 if [ "${SAMOVAR_INSTALL_SPARSEDOSSA2:-0}" != "0" ]; then
-    install_sparsedossa2 || echo "Warning: optional SparseDOSSA2 install did not complete."
+    if ! install_sparsedossa2; then
+        echo "ERROR: SparseDOSSA2 install failed (required by ./install.sh full / SAMOVAR_INSTALL_SPARSEDOSSA2=1)."
+        echo "Wiki: https://github.com/biobakery/biobakery/wiki/SparseDOSSA2"
+        exit 1
+    fi
+    if ! "$PYTHON_PATH" -c "from samovar.sparsedossa2 import sparsedossa2_available; raise SystemExit(0 if sparsedossa2_available() else 1)"; then
+        echo "ERROR: SparseDOSSA2 R package is not importable after install."
+        exit 1
+    fi
 else
     echo "Skipping SparseDOSSA2 (not required). Use ./install.sh SparseDOSSA2 for table generators + CV scoring."
 fi

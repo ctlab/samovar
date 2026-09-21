@@ -159,6 +159,10 @@ def test_lazy_download_known_url():
     assert "k2_standard_08_GB_20251015" in recipe
     assert "curl" in recipe
     assert "tar -xzf" in recipe
+    viruses = lazy_download_for("kaiju", "viruses")
+    assert "kaiju_db_viruses_2024-08-15" in viruses
+    viral = lazy_download_for("kraken2", "virus")
+    assert "k2_viral_20251015" in viral
 
 
 def test_lazy_download_plain_tar_and_versioned_qiime():

@@ -1,4 +1,4 @@
-# Full pytest + examples (build test). Same triggers as before.
+# Full pytest + example pipelines (separate jobs).
 # Not used on ordinary PR/push (those run python-package.yml / mandatory tests).
 
 name: Full integration
@@ -12,6 +12,12 @@ concurrency:
   group: full-integration
   cancel-in-progress: false
 
+env:
+  CI: "true"
+  NCBI_EMAIL: test@samovar.com
+  SAMOVAR_INSTALL_DEV: "1"
+  SAMOVAR_UPDATE_SHELL: "0"
+
 jobs:
   pytest-full:
     runs-on: ubuntu-latest
@@ -19,12 +25,6 @@ jobs:
     defaults:
       run:
         shell: bash -l {0}
-
-    env:
-      CI: "true"
-      NCBI_EMAIL: test@samovar.com
-      SAMOVAR_INSTALL_DEV: "1"
-      SAMOVAR_UPDATE_SHELL: "0"
 
     steps:
     - uses: actions/checkout@v4
@@ -49,6 +49,14 @@ jobs:
         chmod +x install.sh
         ./install.sh full
 
+    - name: Verify SparseDOSSA2 from full install
+      run: |
+        python - <<'PY'
+        from samovar.sparsedossa2 import sparsedossa2_available
+        assert sparsedossa2_available(), "SparseDOSSA2 missing after ./install.sh full"
+        print("SparseDOSSA2 OK")
+        PY
+
     - name: Lint with flake8 (critical)
       run: |
         flake8 src tests workflow bin \
@@ -59,18 +67,14 @@ jobs:
       run: |
         pytest --tb=short --cov=src
 
-  build-test:
+  examples-toy:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash -l {0}
 
     env:
-      CI: "true"
-      NCBI_EMAIL: test@samovar.com
-      SAMOVAR_INSTALL_DEV: "1"
-      SAMOVAR_UPDATE_SHELL: "0"
       SAMOVAR_CORES: "2"
       SAMOVAR_GENERATE_CORES: "2"
       SAMOVAR_SD2_WORKERS: "2"
@@ -79,8 +83,6 @@ jobs:
       SAMOVAR_MAX_GENOMES: "20"
       N_SAMPLES: "2"
       TOTAL_READS: "200"
-      SAMOVAR_KRAKEN2_DB_ROOT: ${{ github.workspace }}/.ci-dbs/kraken2
-      SAMOVAR_KAIJU_DB: ${{ github.workspace }}/.ci-dbs/kaiju/refseq
 
     steps:
     - uses: actions/checkout@v4
@@ -105,9 +107,13 @@ jobs:
         chmod +x install.sh
         ./install.sh full
 
-    - name: Install optional assembly sidecars
+    - name: Verify SparseDOSSA2 (multiple_tables needs it)
       run: |
-        ./install.sh MegaHIT Prodigal minimap2 CoverM DAS_Tool anvio CheckM2 GTDB-Tk
+        python - <<'PY'
+        from samovar.sparsedossa2 import sparsedossa2_available
+        assert sparsedossa2_available(), "SparseDOSSA2 missing after ./install.sh full"
+        print("SparseDOSSA2 OK")
+        PY
 
     - name: Examples (toy indexes)
       timeout-minutes: 90
@@ -119,14 +125,94 @@ jobs:
         SAMOVAR_TOY=1 bash examples/logistic-correction/pipeline.sh
         SAMOVAR_N_SAMPLES=4 bash examples/apply_and_merge/pipeline.sh
 
+  examples-phage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    env:
+      SAMOVAR_CORES: "2"
+      SAMOVAR_GENERATE_CORES: "2"
+      SAMOVAR_N_SAMPLES: "2"
+      SAMOVAR_N_READS: "200"
+      SAMOVAR_MAX_GENOMES: "20"
+      N_SAMPLES: "2"
+      TOTAL_READS: "200"
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: "3.12"
+        auto-update-conda: true
+        activate-environment: samovar
+        environment-file: environment.yml
+
+    - name: Conda extras for full install and examples
+      run: |
+        conda install -y -c conda-forge -c bioconda \
+          r-base r-essentials openjdk \
+          kraken2 kaiju
+
+    - name: Install via install.sh full
+      run: |
+        chmod +x install.sh
+        ./install.sh full
+
     - name: Examples (phage + add-annotator)
       timeout-minutes: 90
       run: |
         bash examples/phage/pipeline.sh
         SAMOVAR_PHASE=add-annotator bash examples/phage/pipeline.sh
 
-    - name: Examples (public indexes)
-      timeout-minutes: 180
+  examples-public:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    env:
+      SAMOVAR_CORES: "2"
+      SAMOVAR_GENERATE_CORES: "2"
+      SAMOVAR_N_SAMPLES: "2"
+      SAMOVAR_N_READS: "200"
+      SAMOVAR_MAX_GENOMES: "20"
+      # Tiny public indexes only (Kraken2 viral ~0.5 GB, Kaiju viruses ~0.3 GB).
+      SAMOVAR_CI_LIGHT_INDEXES: "1"
+      SAMOVAR_KRAKEN2_DB_ROOT: ${{ github.workspace }}/.ci-dbs/kraken2
+      SAMOVAR_KAIJU_DB: ${{ github.workspace }}/.ci-dbs/kaiju/viruses
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: "3.12"
+        auto-update-conda: true
+        activate-environment: samovar
+        environment-file: environment.yml
+
+    - name: Conda extras for full install and examples
+      run: |
+        conda install -y -c conda-forge -c bioconda \
+          r-base r-essentials openjdk \
+          kraken2 kaiju
+
+    - name: Install via install.sh full
+      run: |
+        chmod +x install.sh
+        ./install.sh full
+
+    - name: Examples (public light indexes)
+      timeout-minutes: 150
       run: |
         mkdir -p "$SAMOVAR_KRAKEN2_DB_ROOT" "$SAMOVAR_KAIJU_DB"
         bash examples/realistic/pipeline.sh

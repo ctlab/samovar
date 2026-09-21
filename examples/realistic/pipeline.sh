@@ -12,10 +12,7 @@ output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
 mkdir -p "$output_dir/.genomes"
 
 ORG_GROUPS=(Archaea Bacteria Viridiplantae Alveolata Fungi Metazoa Viruses)
-existing_genomes="$(find "${output_dir}/.genomes" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
-if [[ "$existing_genomes" -ge 21 ]]; then
-  echo "Found ${existing_genomes} genomes under ${output_dir}/.genomes; skipping fetch"
-else
+if ! samovar_seed_public_genomes "$output_dir/.genomes" 21; then
   for org_group in "${ORG_GROUPS[@]}"; do
     tmp_dir="${output_dir}/.genomes/_tmp_${org_group}"
     rm -rf "$tmp_dir"
@@ -46,13 +43,9 @@ else
   done
 fi
 
-K2_DIR="${SAMOVAR_KRAKEN2_DB_ROOT}/standard_8GB_2025oct"
-K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08gb_20251015.tar.gz"
-samovar_ensure_database kraken2 standard_8GB "$K2_DIR" "hash.k2d" "$K2_URL"
-
-KAIJU_DIR="${SAMOVAR_KAIJU_DB:-/mnt/tank/scratch/partition-metagenomics/databases/kaiju/refseq_2024aug}"
-KAIJU_URL="https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_2024-08-14.tgz"
-samovar_ensure_database kaiju refseq "$KAIJU_DIR" "*.fmi" "$KAIJU_URL"
+samovar_public_index_vars
+samovar_ensure_database kraken2 "$K2_NAME" "$K2_DIR" "hash.k2d" "$K2_URL"
+samovar_ensure_database kaiju "$KAIJU_NAME" "$KAIJU_DIR" "*.fmi" "$KAIJU_URL"
 
 samovar generate \
     --genome_dir "${output_dir}/.genomes" \
@@ -64,8 +57,8 @@ samovar generate \
 
 samovar prepare \
     --output_dir "$output_dir" \
-    --kraken2-test "kraken2 standard_8GB" \
-    --kaiju-test "kaiju refseq" \
+    --kraken2-test "kraken2 ${K2_NAME}" \
+    --kaiju-test "kaiju ${KAIJU_NAME}" \
     --max-genomes "${SAMOVAR_MAX_GENOMES:-40}" \
     --cores "${SAMOVAR_CORES:-16}"
 

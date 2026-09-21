@@ -107,7 +107,7 @@ else
   fi
 
   K2_DIR="${SAMOVAR_KRAKEN2_DB_ROOT}/standard_8GB_2025oct"
-  K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08gb_20251015.tar.gz"
+  K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz"
   samovar_ensure_database kraken2 standard_8GB "$K2_DIR" "hash.k2d" "$K2_URL"
 
   KAIJU_DIR="${SAMOVAR_KAIJU_DB:-/mnt/tank/scratch/partition-metagenomics/databases/kaiju/refseq_2024aug}"

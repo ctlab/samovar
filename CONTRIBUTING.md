@@ -52,7 +52,7 @@ pytest -m optional
 pytest
 ```
 
-**Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`: `./install.sh full` plus assembly sidecars, then `pytest` (all markers) and every example `pipeline.sh`.
+**Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`: `./install.sh full` (includes SparseDOSSA2), then parallel jobs for full pytest and example pipelines (`examples-toy`, `examples-phage`, `examples-public`). The public job sets `SAMOVAR_CI_LIGHT_INDEXES=1` so only Kraken2 viral + Kaiju viruses indexes are downloaded.
 
 Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (built-in baselines and small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
 

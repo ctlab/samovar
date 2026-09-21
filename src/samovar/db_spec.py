@@ -62,6 +62,10 @@ DEFAULT_LAZY_DOWNLOAD: Dict[Tuple[str, ...], str] = {
     ): "https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_fungi_2024-08-16.tgz",
     (
         "kaiju",
+        "viruses",
+    ): "https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_viruses_2024-08-15.tgz",
+    (
+        "kaiju",
         "refseq",
     ): "https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_2024-08-14.tgz",
     (
