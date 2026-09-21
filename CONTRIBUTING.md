@@ -52,7 +52,7 @@ pytest -m optional
 pytest
 ```
 
-**Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`: `./install.sh full` (includes SparseDOSSA2; GHA installs `libmpfr-dev` / conda `r-rmpfr` first), then parallel jobs for full pytest and example pipelines (`examples-toy`, `examples-phage`, `examples-public`). The public job sets `SAMOVAR_CI_LIGHT_INDEXES=1` so realistic/assembly/databases_comparison use locally built `phage_test` indexes instead of downloading standard_8GB/refseq.
+**Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`. Only `pytest-full` uses `./install.sh full`. Each example job installs the tools that `samovar prepare` records for those pipelines: core (`iss`, `snakemake`) plus `MultiQC`, conda `kraken2`/`kaiju` where the prepared annotator list names them, and `SparseDOSSA2` only on `examples-sparsedossa` (`examples/multiple_tables`, after `libmpfr-dev` and conda `r-rmpfr`). `examples-public` sets `SAMOVAR_CI_LIGHT_INDEXES=1` so realistic/assembly/databases_comparison use locally built `phage_test` indexes instead of downloading standard_8GB/refseq.
 
 Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (built-in baselines and small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
 

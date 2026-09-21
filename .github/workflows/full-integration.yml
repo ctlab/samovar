@@ -1,4 +1,5 @@
-# Full pytest + example pipelines (separate jobs).
+# Full pytest uses ./install.sh full. Example jobs install only what those
+# pipelines call (MultiQC; SparseDOSSA2 only for examples/multiple_tables).
 # Not used on ordinary PR/push (those run python-package.yml / mandatory tests).
 
 name: Full integration
@@ -83,6 +84,56 @@ jobs:
     env:
       SAMOVAR_CORES: "2"
       SAMOVAR_GENERATE_CORES: "2"
+      SAMOVAR_N_SAMPLES: "2"
+      SAMOVAR_N_READS: "200"
+      SAMOVAR_MAX_GENOMES: "20"
+      N_SAMPLES: "2"
+      TOTAL_READS: "200"
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: "3.12"
+        auto-update-conda: true
+        activate-environment: samovar
+        environment-file: environment.yml
+
+    - name: Install tools named by prepare
+      run: |
+        # methods.md after prepare for toy, scoring, reprofiling, logistic-correction, apply_and_merge:
+        #   iss, snakemake, kraken2, kaiju, direct, shannon_ks, logistic
+        #   reprofiling also names the imported reprofiler "linear" (Python, scikit-learn from environment.yml)
+        # iss / snakemake / direct / shannon_ks / logistic come from ./install.sh (core).
+        # kraken2 and kaiju are external annotators.
+        # Every pipeline.sh then runs samovar multiqc.
+        conda install -y -c conda-forge -c bioconda kraken2 kaiju
+        chmod +x install.sh
+        ./install.sh
+        ./install.sh MultiQC
+
+    - name: Examples (toy indexes)
+      timeout-minutes: 90
+      run: |
+        bash examples/toy/pipeline.sh
+        bash examples/scoring/pipeline.sh
+        bash examples/reprofiling/pipeline.sh
+        SAMOVAR_TOY=1 bash examples/logistic-correction/pipeline.sh
+        SAMOVAR_N_SAMPLES=4 bash examples/apply_and_merge/pipeline.sh
+
+  examples-sparsedossa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    env:
+      SAMOVAR_CORES: "2"
+      SAMOVAR_GENERATE_CORES: "2"
       SAMOVAR_SD2_WORKERS: "2"
       SAMOVAR_N_SAMPLES: "2"
       SAMOVAR_N_READS: "200"
@@ -102,38 +153,34 @@ jobs:
         activate-environment: samovar
         environment-file: environment.yml
 
-    - name: System + conda deps (SparseDOSSA2 needs Rmpfr/libmpfr)
+    - name: Install tools named by prepare
       run: |
+        # methods.md after prepare:
+        #   iss, snakemake, kraken2, kaiju, direct, bootstrap, glm,
+        #   sparsedossa2-fit, sparsedossa2-stool, sparsedossa2-cv, logistic
+        # Rmpfr/libmpfr must exist before ./install.sh SparseDOSSA2 or the CRAN build fails.
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
           libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran
         conda install -y -c conda-forge -c bioconda \
-          r-base r-essentials openjdk \
-          r-rmpfr r-igraph r-huge r-ks r-mvtnorm r-truncnorm r-magrittr r-future.apply r-remotes \
+          r-base r-rmpfr r-igraph r-huge r-ks r-mvtnorm r-truncnorm r-magrittr r-future.apply r-remotes \
           kraken2 kaiju
-
-    - name: Install via install.sh full
-      run: |
         chmod +x install.sh
-        ./install.sh full
+        ./install.sh
+        ./install.sh MultiQC SparseDOSSA2
 
-    - name: Verify SparseDOSSA2 (multiple_tables needs it)
+    - name: Verify SparseDOSSA2
       run: |
         python - <<'PY'
         from samovar.sparsedossa2 import sparsedossa2_available
-        assert sparsedossa2_available(), "SparseDOSSA2 missing after ./install.sh full"
+        assert sparsedossa2_available(), "SparseDOSSA2 missing after ./install.sh SparseDOSSA2"
         print("SparseDOSSA2 OK")
         PY
 
-    - name: Examples (toy indexes)
+    - name: Example (multiple table generators)
       timeout-minutes: 90
       run: |
-        bash examples/toy/pipeline.sh
-        bash examples/scoring/pipeline.sh
-        bash examples/reprofiling/pipeline.sh
         bash examples/multiple_tables/pipeline.sh
-        SAMOVAR_TOY=1 bash examples/logistic-correction/pipeline.sh
-        SAMOVAR_N_SAMPLES=4 bash examples/apply_and_merge/pipeline.sh
 
   examples-phage:
     runs-on: ubuntu-latest
@@ -163,16 +210,16 @@ jobs:
         activate-environment: samovar
         environment-file: environment.yml
 
-    - name: Conda extras for full install and examples
+    - name: Install tools named by prepare
       run: |
-        conda install -y -c conda-forge -c bioconda \
-          r-base r-essentials openjdk \
-          kraken2 kaiju
-
-    - name: Install via install.sh full
-      run: |
+        # methods.md after prepare:
+        #   database1: iss, snakemake, kraken2, kaiju, gc, kmer2, direct, shannon_ks, logistic
+        #   database2 / add-annotator: iss, snakemake, kraken2 and/or kaiju
+        # gc and kmer2 are samovar.gc / samovar.kmer2 (core). kraken2-build and kaiju index tools ship with the conda packages.
+        conda install -y -c conda-forge -c bioconda kraken2 kaiju
         chmod +x install.sh
-        ./install.sh full
+        ./install.sh
+        ./install.sh MultiQC
 
     - name: Examples (phage + add-annotator)
       timeout-minutes: 90
@@ -208,16 +255,16 @@ jobs:
         activate-environment: samovar
         environment-file: environment.yml
 
-    - name: Conda extras for full install and examples
+    - name: Install tools named by prepare
       run: |
-        conda install -y -c conda-forge -c bioconda \
-          r-base r-essentials openjdk \
-          kraken2 kaiju
-
-    - name: Install via install.sh full
-      run: |
+        # config_init.yaml after prepare:
+        #   realistic: kraken2, kaiju, iss, direct, shannon_ks
+        #   assembly: those plus assembly with identity slots (no MegaHIT / GTDB-Tk / CoverM)
+        #   databases_comparison: kraken2 only (two indexes), iss, direct, shannon_ks
+        conda install -y -c conda-forge -c bioconda kraken2 kaiju
         chmod +x install.sh
-        ./install.sh full
+        ./install.sh
+        ./install.sh MultiQC
 
     - name: Examples (public pipelines on phage_test indexes)
       timeout-minutes: 150
