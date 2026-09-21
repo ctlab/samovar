@@ -186,7 +186,7 @@ def assert_distinct_sample_names(sources: Sequence[Path], mode: str) -> List[str
         for name in sample_names_for_run(src, mode):
             prev = owner.get(name)
             if prev is not None and prev != src:
-                raise MergeError(SAMPLE_NAME_ERROR)
+                raise MergeError(f"{SAMPLE_NAME_ERROR}: {name!r}")
             if name not in owner:
                 owner[name] = src
                 ordered.append(name)
@@ -218,11 +218,18 @@ def _keep_through(step: str) -> Set[str]:
     return set(CHECKPOINT_STEPS[: idx + 1])
 
 
-def _is_abundance_rel(rel: Path) -> bool:
+def _abundance_root(rel: Path) -> Optional[Path]:
+    """Abundance directory containing ``rel``, if any.
+
+    Top-level ``*.csv`` files are the sample tables. Plots, MultiQC JSON, and
+    ``.table_candidates`` live in subfolders and use the same names in every
+    run (``TableScore_<annotator>.png``), so they must not be copied as samples.
+    """
     posix = rel.as_posix()
-    if posix in ABUNDANCE_RELS:
-        return True
-    return rel.parent.as_posix() in ABUNDANCE_RELS
+    for root in ABUNDANCE_RELS:
+        if posix == root or posix.startswith(root + "/"):
+            return Path(root)
+    return None
 
 
 def _should_skip_dir(name: str) -> bool:
@@ -234,7 +241,7 @@ def _copy_file(src: Path, dest: Path, *, allow_existing: bool) -> None:
     if dest.exists():
         if allow_existing:
             return
-        raise MergeError(SAMPLE_NAME_ERROR)
+        raise MergeError(f"{SAMPLE_NAME_ERROR}: file {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.is_symlink():
         shutil.copy2(src, dest, follow_symlinks=False)
@@ -253,7 +260,9 @@ def _merge_abundance_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
             continue
         overlap = set(n_sample_columns(out)) & set(n_sample_columns(frame))
         if overlap:
-            raise MergeError(SAMPLE_NAME_ERROR)
+            raise MergeError(
+                f"{SAMPLE_NAME_ERROR}: abundance columns {sorted(overlap)}"
+            )
         out = out.merge(frame, on="taxid", how="outer")
     if out is None:
         return pd.DataFrame(columns=["taxid"])
@@ -355,7 +364,10 @@ def _merge_trees(
                 if _is_combined_table(path.name):
                     combined.setdefault(dest / rel_path, []).append(path)
                     continue
-                if _is_abundance_rel(rel_path):
+                abundance_root = _abundance_root(rel_path)
+                if abundance_root is not None:
+                    if rel_path.parent != abundance_root:
+                        continue
                     if path.suffix == ".csv":
                         try:
                             frame = pd.read_csv(path)

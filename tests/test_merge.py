@@ -172,6 +172,21 @@ def test_merge_regenerated_unions_both_combined_tables(tmp_path):
     assert "reprofile" not in done
 
 
+def test_merge_regenerated_skips_shared_table_score_plots(tmp_path):
+    a = _seed_run(tmp_path / "a", "s1")
+    b = _seed_run(tmp_path / "b", "s2")
+    for run in (a, b):
+        plots = run / "regenerated" / ".regenerated_abundance" / "table_score_plots"
+        plots.mkdir(parents=True)
+        (plots / "TableScore_kaiju.png").write_bytes(b"\x89PNG\r\n")
+        (plots / "TableScore_quality_scores_mqc.json").write_text("{}\n")
+    dest = tmp_path / "merged_regen"
+    merge_runs([a, b], dest, "regenerated")
+    assert not (dest / "regenerated" / ".regenerated_abundance" / "table_score_plots").exists()
+    abund = pd.read_csv(dest / "regenerated" / ".regenerated_abundance" / "dummy.csv")
+    assert "N_s1" in abund.columns and "N_s2" in abund.columns
+
+
 def test_merge_regenerated_alias_and_cli(tmp_path):
     a = _seed_run(tmp_path / "a", "left")
     b = _seed_run(tmp_path / "b", "right")
