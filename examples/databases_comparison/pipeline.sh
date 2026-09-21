@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Public Kraken2 indexes vs one realistic community (NCBI genomes).
-# Indexes live under SAMOVAR_KRAKEN2_DB_ROOT (override on other machines).
+# Names and download URLs only; local runs reuse indexes already in the catalog.
 # Launch with SAMOVAR_SLURM=1 SAMOVAR_SLURM_CPUS=16 for the cluster exec step.
 set -euo pipefail
 
@@ -46,19 +46,14 @@ if ! samovar_seed_public_genomes "$output_dir/.genomes" 21; then
   done
 fi
 
-K2_ROOT="${SAMOVAR_KRAKEN2_DB_ROOT}"
-# Catalog names already on this cluster. pracken (~353 GB) is imported if present
-# but skipped by default (SAMOVAR_INCLUDE_PRACKEN=1 to annotate with it).
+# Catalog names + official URLs. A preinstalled index is reused from the
+# SamovaR catalog; otherwise the URL is lazy-downloaded.
+# pracken (~353 GB) is used only when already installed (SAMOVAR_INCLUDE_PRACKEN=1).
 # SAMOVAR_CI_LIGHT_INDEXES=1 uses phage_test (built like examples/phage).
 declare -A K2_URLS=(
   [standard_8GB]="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz"
   [virus]="https://genome-idx.s3.amazonaws.com/kraken/k2_viral_20251015.tar.gz"
   [pracken]="https://genome-idx.s3.amazonaws.com/kraken/k2_NCBI_reference_20251007.tar.gz"
-)
-declare -A K2_DIRS=(
-  [standard_8GB]="${K2_ROOT}/standard_8GB_2025oct"
-  [virus]="${K2_ROOT}/virus_2025oct"
-  [pracken]="${K2_ROOT}/pracken_2025oct"
 )
 
 preprocess_args=()
@@ -68,17 +63,18 @@ if samovar_light_public_indexes; then
   preprocess_args+=(--kaiju-phage "kaiju phage_test")
 else
   for name in standard_8GB virus; do
-    samovar_ensure_database kraken2 "$name" "${K2_DIRS[$name]}" "hash.k2d" "${K2_URLS[$name]}"
+    resolved="$(samovar_ensure_named_database kraken2 "$name" "hash.k2d" "${K2_URLS[$name]}")"
+    # CLI suffixes must not contain extra underscores (Snakemake sample wildcards).
+    case "$name" in
+      standard_8GB) preprocess_args+=(--kraken2-std8gb "kraken2 ${resolved}") ;;
+      virus) preprocess_args+=(--kraken2-viral "kraken2 ${resolved}") ;;
+    esac
   done
-  # CLI suffixes must not contain extra underscores (Snakemake sample wildcards).
-  preprocess_args+=(--kraken2-std8gb "kraken2 standard_8GB")
-  preprocess_args+=(--kraken2-viral "kraken2 virus")
   if [[ "${SAMOVAR_INCLUDE_PRACKEN:-0}" == "1" ]]; then
-    if [[ -f "${K2_DIRS[pracken]}/hash.k2d" ]]; then
-      samovar_ensure_database kraken2 pracken "${K2_DIRS[pracken]}" "hash.k2d" "${K2_URLS[pracken]}"
-      preprocess_args+=(--kraken2-pracken "kraken2 pracken")
+    if resolved="$(samovar_ensure_named_database kraken2 pracken "hash.k2d" "${K2_URLS[pracken]}" 0)"; then
+      preprocess_args+=(--kraken2-pracken "kraken2 ${resolved}")
     else
-      echo "REPORT: pracken is not on disk and is >50 GB; not downloading. Set SAMOVAR_INCLUDE_PRACKEN=1 after placing it under ${K2_DIRS[pracken]}"
+      echo "REPORT: pracken is not installed and is >50 GB; not downloading."
     fi
   fi
 fi

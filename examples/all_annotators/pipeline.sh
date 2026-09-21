@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Four annotators on one NCBI bacterial community.
+# Databases are catalog names plus their official download URLs.
+# A local run reuses an index already registered in the SamovaR catalog.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -7,74 +10,59 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-output_dir="${SAMOVAR_OUTDIR:-${SCRIPT_DIR}/run}"
-mkdir -p "$output_dir/.database" "$output_dir/.genomes"
+output_dir="$(samovar_example_outdir)"
+mkdir -p "$output_dir/.genomes"
 
-# Get genomes from NCBI (not from a local store)
-python -m samovar.genome_fetcher \
-    --output-dir "$output_dir/.genomes" \
-    --N 10 \
-    --group "Bacteria" \
-    --email "$NCBI_EMAIL" \
-    --silent
-
-# Databases: env overrides, else build from downloaded genomes + package host FASTA
-cat > "$output_dir/.database/config.yaml" << EOF
-input_dir:
-  - "${output_dir}/.genomes"
-  - "${SAMOVAR}/data/test_genomes/host"
-output_dir: "${output_dir}/database_prep"
-mutation_rate: 0.02
-include_percent: 70.0
-EOF
-
-if [[ -n "${SAMOVAR_KRAKEN2_DB:-}" ]]; then
-    DB_KRAKEN2="$SAMOVAR_KRAKEN2_DB"
-else
-    DB_KRAKEN2="$output_dir/.database/kraken2_db"
-    samovar build_database --type kraken2 \
-        --config_path "$output_dir/.database/config.yaml" \
-        --db_path "$DB_KRAKEN2"
+if ! samovar_seed_public_genomes "$output_dir/.genomes" 10; then
+  existing="$(find "$output_dir/.genomes" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
+  if [[ "$existing" -lt 10 ]]; then
+    python -m samovar.genome_fetcher \
+      --output-dir "$output_dir/.genomes" \
+      --N 10 \
+      --group "Bacteria" \
+      --max-genome-mb 50 \
+      --email "$NCBI_EMAIL" \
+      --silent
+  fi
 fi
 
-if [[ -n "${SAMOVAR_KAIJU_DB:-}" ]]; then
-    DB_KAIJU="$SAMOVAR_KAIJU_DB"
-else
-    DB_KAIJU="$output_dir/.database/kaiju_db"
-    samovar build_database --type kaiju \
-        --config_path "$output_dir/.database/config.yaml" \
-        --db_path "$DB_KAIJU"
-fi
+K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz"
+KAIJU_URL="https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_2024-08-14.tgz"
+KRAKEN_URL="https://ccb.jhu.edu/data/minikraken/minikraken_20171013_4GB.tgz"
+KUNIQ_URL="https://genome-idx.s3.amazonaws.com/kraken/kuniq_microbialdb_minus_kdb.20230808.tgz"
 
-if [[ -n "${SAMOVAR_KRAKENUNIQ_DB:-}" ]]; then
-    DB_KRAKENUNIQ="$SAMOVAR_KRAKENUNIQ_DB"
-else
-    DB_KRAKENUNIQ="$output_dir/.database/krakenuniq_db"
-    samovar build_database --type krakenunique \
-        --config_path "$output_dir/.database/config.yaml" \
-        --db_path "$DB_KRAKENUNIQ"
-fi
+k2="$(samovar_ensure_named_database kraken2 standard_8GB hash.k2d "$K2_URL")"
+kaiju_name="$(samovar_ensure_named_database kaiju refseq '*.fmi' "$KAIJU_URL")"
+kraken_name="$(samovar_ensure_named_database kraken minikraken_4GB database.kdb "$KRAKEN_URL")"
+kuniq_name="$(samovar_ensure_named_database krakenuniq microbial database.kdb "$KUNIQ_URL")"
 
-# Kraken 1 has no in-package builder; download MiniKraken unless SAMOVAR_KRAKEN_DB is set.
-MINIKRAKEN_URL="${MINIKRAKEN_URL:-https://ccb.jhu.edu/software/kraken/dl/minikraken_20171019_4GB.tgz}"
-if [[ -n "${SAMOVAR_KRAKEN_DB:-}" ]]; then
-    DB_KRAKEN="$SAMOVAR_KRAKEN_DB"
-else
-    DB_KRAKEN="$output_dir/.database/kraken_db"
-    samovar_fetch_archive "$MINIKRAKEN_URL" "$DB_KRAKEN" "database.kdb"
+if ! command -v kraken >/dev/null 2>&1; then
+  kraken_prefix="${SAMOVAR}/examples_outdir/databases/kraken/kraken1-env"
+  if [[ ! -x "${kraken_prefix}/bin/kraken" ]]; then
+    echo "kraken (v1) is not on PATH; creating ${kraken_prefix}"
+    conda create -y -p "$kraken_prefix" -c conda-forge -c bioconda kraken
+  fi
+  export PATH="${kraken_prefix}/bin:${PATH}"
 fi
 
 samovar generate \
     --genome_dir "$output_dir/.genomes" \
     --host_genome "$SAMOVAR/data/test_genomes/host/9606.fna" \
-    --n_samples 3 \
-    --output_dir "$output_dir"
-
-samovar preprocess \
+    --n_samples "${SAMOVAR_N_SAMPLES:-3}" \
+    --total_reads "${SAMOVAR_N_READS:-2000}" \
     --output_dir "$output_dir" \
-    --kraken2 "kraken2 $DB_KRAKEN2" \
-    --kaiju "kaiju $DB_KAIJU" \
-    --kraken "kraken $DB_KRAKEN" \
-    --krakenuniq "krakenuniq $DB_KRAKENUNIQ"
+    --cores "${SAMOVAR_GENERATE_CORES:-4}"
 
-samovar exec --output_dir "$output_dir"
+samovar prepare \
+    --output_dir "$output_dir" \
+    --kraken2 "kraken2 ${k2}" \
+    --kaiju "kaiju ${kaiju_name}" \
+    --kraken "kraken ${kraken_name}" \
+    --krakenuniq "krakenuniq ${kuniq_name}" \
+    --max-genomes "${SAMOVAR_MAX_GENOMES:-40}" \
+    --cores "${SAMOVAR_CORES:-16}"
+
+samovar_run_exec "$output_dir"
+samovar multiqc --output_dir "$output_dir" -- --export --interactive
+samovar_harvest_example "$output_dir" "$SCRIPT_DIR"
+echo "Done: $output_dir"

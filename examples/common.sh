@@ -8,7 +8,8 @@
 #   SAMOVAR                 repo root (inferred from this file)
 #   CONDA_PREFIX            prepended to PATH
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
-#   SAMOVAR_KRAKEN2_DB_ROOT default cluster Kraken2 store (override on other hosts)
+#   SAMOVAR_KRAKEN2_DB_ROOT  unused by examples; indexes resolve from the
+#                            install catalog, then official lazy-download
 #   SAMOVAR_SLURM=1         wrap `samovar exec` in sbatch (not used inside example
 #                           scripts themselves — set this when launching)
 #   SAMOVAR_SLURM_CPUS / SAMOVAR_SLURM_MEM / SAMOVAR_SLURM_TIME / SLURM_PARTITION
@@ -27,7 +28,6 @@ samovar_setup_env() {
   export PATH="${SAMOVAR}/bin${conda_bin:+:${conda_bin}}:${PATH}"
   export PYTHONPATH="${SAMOVAR}/src${PYTHONPATH:+:${PYTHONPATH}}"
   export NCBI_EMAIL="${NCBI_EMAIL:-${ENTREZ_EMAIL:-${SAMOVAR_EMAIL:-anonymous@example.com}}}"
-  export SAMOVAR_KRAKEN2_DB_ROOT="${SAMOVAR_KRAKEN2_DB_ROOT:-/mnt/tank/scratch/partition-metagenomics/databases/kraken2}"
 }
 
 # Full run trees live under examples_outdir/<name>/, not under examples/<name>/.
@@ -59,24 +59,20 @@ samovar_light_public_indexes() {
   [[ "${SAMOVAR_CI_LIGHT_INDEXES:-0}" == "1" ]]
 }
 
-# Resolve annotator DB names/paths for realistic / assembly / db comparison.
-# Light mode → phage_test (built under DEST/.database or reused from examples/phage).
-# Sets: K2_NAME K2_DIR KAIJU_NAME KAIJU_DIR  (K2_URL/KAIJU_URL empty for phage)
+# Catalog names + official URLs. Paths are not set here: a preinstalled index
+# comes from the SamovaR database catalog; otherwise lazy-download uses the URL.
+# Light mode → phage_test (built under examples_outdir, same as examples/phage).
+# Sets: K2_NAME KAIJU_NAME K2_URL KAIJU_URL
 samovar_public_index_vars() {
   if samovar_light_public_indexes; then
-    local root="${SAMOVAR_PUBLIC_DB_ROOT:-$(samovar_phage_database_root)}"
     K2_NAME="phage_test"
-    K2_DIR="${root}/.database/kraken2_db"
     K2_URL=""
     KAIJU_NAME="phage_test"
-    KAIJU_DIR="${root}/.database/kaiju_db"
     KAIJU_URL=""
   else
     K2_NAME="standard_8GB"
-    K2_DIR="${SAMOVAR_KRAKEN2_DB_ROOT}/standard_8GB_2025oct"
     K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz"
     KAIJU_NAME="refseq"
-    KAIJU_DIR="${SAMOVAR_KAIJU_DB:-/mnt/tank/scratch/partition-metagenomics/databases/kaiju/refseq_2024aug}"
     KAIJU_URL="https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_2024-08-14.tgz"
   fi
 }
@@ -148,9 +144,83 @@ samovar_ensure_public_indexes() {
     samovar_ensure_phage_indexes "$root"
     samovar_public_index_vars
   else
-    samovar_ensure_database kraken2 "$K2_NAME" "$K2_DIR" "hash.k2d" "$K2_URL"
-    samovar_ensure_database kaiju "$KAIJU_NAME" "$KAIJU_DIR" "*.fmi" "$KAIJU_URL"
+    K2_NAME="$(samovar_ensure_named_database kraken2 "$K2_NAME" "hash.k2d" "$K2_URL")"
+    KAIJU_NAME="$(samovar_ensure_named_database kaiju "$KAIJU_NAME" "*.fmi" "$KAIJU_URL")"
   fi
+}
+
+# Resolve a catalog database without embedding a machine path.
+# Uses an installed catalog copy when its marker is on disk (another version of
+# the same tool counts, so a local run can use a preinstalled index).
+# Otherwise lazy-downloads URL into examples_outdir/databases/<tool>/<name>.
+# Stdout is the catalog name to pass to prepare. Logs go to stderr.
+# Usage: samovar_ensure_named_database TOOL NAME MARKER [URL] [DOWNLOAD]
+# DOWNLOAD=0 returns 1 instead of fetching when nothing is installed.
+samovar_ensure_named_database() {
+  local tool="$1"
+  local name="$2"
+  local marker="$3"
+  local url="${4:-}"
+  local download="${5:-1}"
+  local line
+  line="$(python - "$tool" "$name" "$marker" "$url" "$download" "${SAMOVAR}" <<'PY'
+import sys
+from pathlib import Path
+
+from samovar.db_spec import iter_database_records, lookup_database_record, official_url_for
+from samovar.paths import load_config
+
+tool, name, marker, url, download, samovar = sys.argv[1:]
+cfg = load_config()
+
+def has_marker(path: str) -> bool:
+    root = Path(path).expanduser()
+    if not root.is_dir():
+        return False
+    # Marker files sit at the index root. Do not walk the whole tree.
+    return any(root.glob(marker)) or any(root.glob(f"*/{marker}"))
+
+def emit(status: str, resolved: str, path: str, href: str) -> None:
+    print("\t".join((status, resolved, path, href)))
+
+grouped = iter_database_records(cfg).get(tool) or {}
+rec = lookup_database_record(cfg, tool, name) or {}
+href = url or str(rec.get("url") or "") or official_url_for(
+    tool, name, str(rec.get("_version") or ""), url
+)
+path = str(rec.get("path") or "")
+if path and has_marker(path):
+    emit("installed", str(rec.get("name") or name), path, href)
+    raise SystemExit(0)
+if download != "1":
+    emit("missing", name, "", href)
+    raise SystemExit(0)
+for other in grouped.values():
+    opath = str(other.get("path") or "")
+    oname = str(other.get("name") or "")
+    if oname == name or not opath or not has_marker(opath):
+        continue
+    # Local stand-in: another installed version of this tool. Keep its own URL.
+    emit("installed", oname, opath, str(other.get("url") or ""))
+    raise SystemExit(0)
+dest = str(Path(samovar) / "examples_outdir" / "databases" / tool / name)
+emit("download", name, dest, href)
+PY
+)"
+  local status resolved dest href
+  IFS=$'\t' read -r status resolved dest href <<<"$line"
+  if [[ "$status" == "missing" ]]; then
+    echo "REPORT: ${tool}/${name} is not installed and download is off" >&2
+    return 1
+  fi
+  if [[ "$status" == "installed" ]]; then
+    echo "Using installed ${tool} index ${resolved}" >&2
+    echo "$resolved"
+    return 0
+  fi
+  echo "lazy-download ${tool}/${resolved} (not installed)" >&2
+  samovar_ensure_database "$tool" "$resolved" "$dest" "$marker" "$href" >&2
+  echo "$resolved"
 }
 
 # Fill DEST with phage community genomes when SAMOVAR_CI_LIGHT_INDEXES=1.

@@ -75,8 +75,7 @@ examples/**/multiqc/*.svg
 # Local branch copies of toy-like runs
 /branch/
 
-# Technical / non-canonical examples (not part of the published set)
-examples/all_annotators/
+# Technical examples kept out of the published set
 examples/phage_test/
 examples/metagenome_generator/
 examples/generate_mock_community.sh

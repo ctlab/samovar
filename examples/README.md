@@ -19,6 +19,7 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 | [assembly](assembly/) | Assembly annotator: taxID plus Feature `MAG_ID` |
 | [databases_comparison](databases_comparison/) | Same community, several Kraken2 indexes |
 | [realistic](realistic/) | NCBI genomes with public Kraken2 and Kaiju indexes |
+| [all_annotators](all_annotators/) | Kraken2, Kaiju, KrakenUniq, and Kraken 1 on one community |
 | [apply_and_merge](apply_and_merge/) | Hold out one sample, `apply --full`, merge `initial` / `regenerated`, exec |
 
 Figures and MultiQC reports are copied next to each `pipeline.sh` after a run.
