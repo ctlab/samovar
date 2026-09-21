@@ -1,4 +1,4 @@
-# Full integration: install.sh extras, all pytest, all examples.
+# Full pytest + examples (build test). Same triggers as before.
 # Not used on ordinary PR/push (those run python-package.yml / mandatory tests).
 
 name: Full integration
@@ -13,7 +13,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  full-integration:
+  pytest-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    env:
+      CI: "true"
+      NCBI_EMAIL: test@samovar.com
+      SAMOVAR_INSTALL_DEV: "1"
+      SAMOVAR_UPDATE_SHELL: "0"
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: "3.12"
+        auto-update-conda: true
+        activate-environment: samovar
+        environment-file: environment.yml
+
+    - name: Conda extras for full install
+      run: |
+        conda install -y -c conda-forge -c bioconda \
+          r-base r-essentials openjdk \
+          kraken2 kaiju
+
+    - name: Install via install.sh full
+      run: |
+        chmod +x install.sh
+        ./install.sh full
+
+    - name: Lint with flake8
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: All pytest (mandatory and optional)
+      timeout-minutes: 120
+      run: |
+        pytest --tb=short --cov=src
+
+  build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     defaults:
@@ -63,21 +109,15 @@ jobs:
       run: |
         ./install.sh MegaHIT Prodigal minimap2 CoverM DAS_Tool anvio CheckM2 GTDB-Tk
 
-    - name: All pytest (mandatory and optional)
-      timeout-minutes: 120
-      run: |
-        pytest --tb=short --cov=src
-
     - name: Examples (toy indexes)
       timeout-minutes: 90
       run: |
         bash examples/toy/pipeline.sh
-        bash examples/assembly/pipeline.sh
         bash examples/scoring/pipeline.sh
         bash examples/reprofiling/pipeline.sh
         bash examples/multiple_tables/pipeline.sh
         SAMOVAR_TOY=1 bash examples/logistic-correction/pipeline.sh
-        bash examples/apply_and_merge/pipeline.sh
+        SAMOVAR_N_SAMPLES=4 bash examples/apply_and_merge/pipeline.sh
 
     - name: Examples (phage + add-annotator)
       timeout-minutes: 90
@@ -90,4 +130,5 @@ jobs:
       run: |
         mkdir -p "$SAMOVAR_KRAKEN2_DB_ROOT" "$SAMOVAR_KAIJU_DB"
         bash examples/realistic/pipeline.sh
+        bash examples/assembly/pipeline.sh
         bash examples/databases_comparison/pipeline.sh

@@ -28,6 +28,7 @@ samovar generate \
     --n_samples "$n_samples" \
     --total_reads "${SAMOVAR_N_READS:-400}" \
     --output_dir "$generated"
+bash "$generated/.generate/generate.sh"
 
 rm -rf "$train" "$holdout"
 cp -a "$generated" "$train"

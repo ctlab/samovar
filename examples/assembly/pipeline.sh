@@ -86,7 +86,6 @@ samovar prepare \
 
 samovar_run_exec "$output_dir"
 samovar multiqc --output_dir "$output_dir" -- --export --interactive
-python "$SAMOVAR/examples/_harvest_example.py" "$output_dir" "$SCRIPT_DIR"
 
 python - <<PY
 from pathlib import Path

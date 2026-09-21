@@ -156,7 +156,7 @@ def test_metaphlan_flags_injected(tmp_path, monkeypatch):
 
 def test_lazy_download_known_url():
     recipe = lazy_download_for("kraken2", "standard_8GB", "2025oct")
-    assert "k2_standard_08gb_20251015" in recipe
+    assert "k2_standard_08_GB_20251015" in recipe
     assert "curl" in recipe
     assert "tar -xzf" in recipe
 

@@ -47,7 +47,7 @@ DEFAULT_LAZY_DOWNLOAD: Dict[Tuple[str, ...], str] = {
     (
         "kraken2",
         "standard_8GB",
-    ): "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08gb_20251015.tar.gz",
+    ): "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz",
     (
         "kraken2",
         "virus",
@@ -191,10 +191,15 @@ def curl_file_recipe(url: str) -> str:
     )
 
 
+# Langmead renamed Standard-8 archives from 08gb_ to 08_GB_ (2025-07+).
+_URL_REWRITES = {
+    "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08gb_20251015.tar.gz": "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz",
+}
+
 def official_url_for(tool: str, name: str, version: str = "", url: str = "") -> str:
     href = str(url or "").strip()
     if href:
-        return href
+        return _URL_REWRITES.get(href, href)
     bare = split_db_key(name)[0]
     tool_name = str(tool).strip()
     ver = str(version or "").strip()
