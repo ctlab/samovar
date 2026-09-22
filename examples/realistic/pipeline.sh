@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Realistic-scale layout: NCBI genomes + public Kraken2/Kaiju already in the catalog.
+# NCBI genomes + public Kraken2/Kaiju.
+# SAMOVAR_CI_LIGHT_INDEXES=1 uses the phage_test community (examples/phage).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,56 +10,44 @@ cd "$SAMOVAR"
 samovar_setup_env
 
 output_dir="$(samovar_example_outdir)"
-mkdir -p "$output_dir/.genomes"
+host="${SAMOVAR}/data/test_genomes/host/9606.fna"
+# Assemblies that sit in both phage_test indexes.
+phage_acc=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
 
-ORG_GROUPS=(Archaea Bacteria Viridiplantae Alveolata Fungi Metazoa Viruses)
-if ! samovar_seed_public_genomes "$output_dir/.genomes" 21; then
-  for org_group in "${ORG_GROUPS[@]}"; do
-    tmp_dir="${output_dir}/.genomes/_tmp_${org_group}"
-    rm -rf "$tmp_dir"
-    mkdir -p "$tmp_dir"
-    echo "Fetching 3 genomes for ${org_group}..."
-    python -m samovar.genome_fetcher \
-      --output-dir "$tmp_dir" \
-      --N 3 \
-      --group "$org_group" \
-      --max-genome-mb 100 \
-      --email "$NCBI_EMAIL" \
-      --silent
-    sleep 2
-    shopt -s nullglob
-    for f in "${tmp_dir}"/*-processed.fasta "${tmp_dir}"/*-processed.fasta.gz \
-             "${tmp_dir}"/*.fa.gz "${tmp_dir}"/*.fna.gz "${tmp_dir}"/*.fasta.gz \
-             "${tmp_dir}"/*.fa "${tmp_dir}"/*.fna "${tmp_dir}"/*.fasta; do
-      [[ -f "$f" ]] || continue
-      base="$(basename "$f")"
-      dest="${output_dir}/.genomes/${base}"
-      if [[ -e "$dest" ]]; then
-        dest="${output_dir}/.genomes/${org_group}_${base}"
-      fi
-      mv "$f" "$dest"
-    done
-    shopt -u nullglob
-    rm -rf "$tmp_dir"
-  done
-fi
-
-samovar_ensure_public_indexes
-
-samovar generate \
-    --genome_dir "${output_dir}/.genomes" \
-    --host_genome "${SAMOVAR}/data/test_genomes/host/9606.fna" \
+if samovar_light_public_indexes; then
+  SAMOVAR_PHASE=indexes bash "${SAMOVAR}/examples/phage/pipeline.sh"
+  samovar generate \
+    --accessions "${phage_acc[@]}" \
+    --reindex 0 \
+    --host_genome "$host" \
+    --host_fraction 0.15 \
     --n_samples "${SAMOVAR_N_SAMPLES:-4}" \
     --total_reads "${SAMOVAR_N_READS:-8000}" \
     --output_dir "$output_dir" \
     --cores "${SAMOVAR_GENERATE_CORES:-4}"
-
-samovar prepare \
+  samovar prepare \
+    --output_dir "$output_dir" \
+    --kraken2-test "kraken2 phage_test" \
+    --kaiju-test "kaiju phage_test" \
+    --max-genomes "${SAMOVAR_MAX_GENOMES:-40}" \
+    --cores "${SAMOVAR_CORES:-16}"
+else
+  samovar_ensure_public_indexes
+  samovar generate \
+    --accessions "${phage_acc[@]}" GCF_000005845.2 \
+    --reindex 0 \
+    --host_genome "$host" \
+    --n_samples "${SAMOVAR_N_SAMPLES:-4}" \
+    --total_reads "${SAMOVAR_N_READS:-8000}" \
+    --output_dir "$output_dir" \
+    --cores "${SAMOVAR_GENERATE_CORES:-4}"
+  samovar prepare \
     --output_dir "$output_dir" \
     --kraken2-test "kraken2 ${K2_NAME}" \
     --kaiju-test "kaiju ${KAIJU_NAME}" \
     --max-genomes "${SAMOVAR_MAX_GENOMES:-40}" \
     --cores "${SAMOVAR_CORES:-16}"
+fi
 
 samovar_run_exec "$output_dir"
 samovar multiqc --output_dir "$output_dir" -- --export --interactive

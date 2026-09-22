@@ -2,9 +2,9 @@
 # Named phage_test indexes + generate --reindex 0/1 and samovar reindex.
 #
 # Phases (SAMOVAR_PHASE, default all):
-#   database1  download generate genomes, build kaiju/kraken2 as phage_test,
-#               samovar generate --reindex 1, prepare, exec
-#   database2   samovar generate --reindex 0 with phage_test DBs
+#   indexes    build kaiju/kraken2 as phage_test and import them
+#   database1  indexes, then samovar generate --reindex 1, prepare, exec
+#   database2  samovar generate --reindex 0 with phage_test DBs
 #   add-annotator  reuse database1 reads; kaiju phage_test then --add-annotator kraken2 toy
 set -euo pipefail
 
@@ -170,7 +170,7 @@ assert (root / ".log" / "samovar_v1.sh").is_file()
 PY
 }
 
-phase_database1() {
+phase_indexes() {
   mkdir -p "$out1/.database" "$out1/.genomes"
   local have_k2 have_kj
   have_k2=0
@@ -181,10 +181,8 @@ phase_database1() {
   if [[ "$have_k2" == 1 && "$have_kj" == 1 && "${SAMOVAR_REBUILD_DB:-0}" != "1" ]]; then
     echo "==> Reusing phage_test indexes in ${out1}/.database"
     import_phage_dbs "$out1"
-  else
-    echo "==> Download generate accessions into ${out1}"
-  python_download "$out1" "${GEN1[@]}"
-
+    return 0
+  fi
   echo "==> Download kaiju genomes (include GCF_000867865.1)"
   python_download "$out1/.database/kaiju_src" "${KAIJU[@]}"
   echo "==> Download kraken2 genomes"
@@ -206,8 +204,10 @@ phase_database1() {
     --db_path "$out1/.database/kraken2_db" \
     --index phage_test --flags ""
   import_phage_dbs "$out1"
-  fi
+}
 
+phase_database1() {
+  phase_indexes
   rm -rf "$out1/initial" "$out1/.generate" "$out1/.log/checkpoints"
   echo "==> generate --reindex 1"
   samovar generate \
@@ -314,6 +314,7 @@ PY
 }
 
 case "$PHASE" in
+  indexes) phase_indexes; exit 0 ;;
   database1) phase_database1 ;;
   database2) phase_database2 ;;
   reindex) phase_reindex ;;
@@ -324,7 +325,7 @@ case "$PHASE" in
     phase_reindex
     ;;
   *)
-    echo "Unknown SAMOVAR_PHASE=$PHASE (database1|database2|reindex|add-annotator|all)"
+    echo "Unknown SAMOVAR_PHASE=$PHASE (indexes|database1|database2|reindex|add-annotator|all)"
     exit 1
     ;;
 esac

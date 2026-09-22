@@ -49,10 +49,6 @@ samovar_toy_database_dir() {
   echo "${SAMOVAR}/examples_outdir/toy/.database"
 }
 
-samovar_phage_database_root() {
-  echo "${SAMOVAR_PUBLIC_DB_ROOT:-${SAMOVAR}/examples_outdir/phage/database1}"
-}
-
 # CI public examples: use locally built phage_test indexes (same as examples/phage).
 # Set SAMOVAR_CI_LIGHT_INDEXES=1 (full-integration examples-public job).
 samovar_light_public_indexes() {
@@ -77,76 +73,15 @@ samovar_public_index_vars() {
   fi
 }
 
-# Build or reuse phage_test kraken2+kaiju indexes and import them.
-samovar_ensure_phage_indexes() {
-  local root="${1:-$(samovar_phage_database_root)}"
-  mkdir -p "$root/.database"
-  local have_k2=0 have_kj=0
-  [[ -e "$root/.database/kraken2_db/hash.k2d" ]] && have_k2=1
-  find -L "$root/.database/kaiju_db" -name '*.fmi' 2>/dev/null | grep -q . && have_kj=1
-  if [[ "$have_k2" == 1 && "$have_kj" == 1 && "${SAMOVAR_REBUILD_DB:-0}" != "1" ]]; then
-    echo "Reusing phage_test indexes in ${root}/.database"
-  else
-    local kaiju_acc=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000867865.1)
-    local kraken_acc=(GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
-    echo "Building phage_test indexes under ${root}/.database"
-    python -m samovar.genome_fetcher \
-      --output-dir "$root/.database/kaiju_src" \
-      --accessions "${kaiju_acc[@]}" \
-      --reindex 0 \
-      --email "$NCBI_EMAIL"
-    python -m samovar.genome_fetcher \
-      --output-dir "$root/.database/kraken2_src" \
-      --accessions "${kraken_acc[@]}" \
-      --reindex 0 \
-      --email "$NCBI_EMAIL"
-    cat > "$root/.database/kaiju.yaml" << EOF
-input_dir:
-  - "${root}/.database/kaiju_src/.genomes/processed"
-output_dir: "${root}/database_prep_kaiju"
-mutation_rate: 0.0
-include_percent: 100.0
-EOF
-    cat > "$root/.database/kraken2.yaml" << EOF
-input_dir:
-  - "${root}/.database/kraken2_src/.genomes/processed"
-output_dir: "${root}/database_prep_kraken2"
-mutation_rate: 0.0
-include_percent: 100.0
-EOF
-    samovar build --type kaiju \
-      --config_path "$root/.database/kaiju.yaml" \
-      --db_path "$root/.database/kaiju_db" \
-      --index phage_test --flags ""
-    samovar build --type kraken2 \
-      --config_path "$root/.database/kraken2.yaml" \
-      --db_path "$root/.database/kraken2_db" \
-      --index phage_test --flags ""
-  fi
-  local lazy
-  lazy="$(cat <<EOF
-#!/bin/bash
-set -euo pipefail
-echo "Rebuild phage_test with: SAMOVAR_REBUILD_DB=1 and examples/phage or samovar_ensure_phage_indexes"
-EOF
-)"
-  samovar tools import -n phage_test --type database --tool kaiju \
-    --exec-path "$root/.database/kaiju_db" --lazy-download "$lazy"
-  samovar tools import -n phage_test --type database --tool kraken2 \
-    --exec-path "$root/.database/kraken2_db" --lazy-download "$lazy"
-}
-
-# Ensure public-example indexes (phage_test in light mode, else S3 lazy-download).
+# Ensure catalog names for the full public indexes (S3 lazy-download if missing).
+# Light mode only sets phage_test; examples/phage builds that index.
 samovar_ensure_public_indexes() {
   samovar_public_index_vars
   if samovar_light_public_indexes; then
-    local root="${SAMOVAR_PUBLIC_DB_ROOT:-$(samovar_phage_database_root)}"
-    samovar_ensure_phage_indexes "$root"
-    samovar_public_index_vars
-  else
-    K2_NAME="$(samovar_ensure_named_database kraken2 "$K2_NAME" "hash.k2d" "$K2_URL")"
-    KAIJU_NAME="$(samovar_ensure_named_database kaiju "$KAIJU_NAME" "*.fmi" "$KAIJU_URL")"
+    return 0
   fi
+  K2_NAME="$(samovar_ensure_named_database kraken2 "$K2_NAME" "hash.k2d" "$K2_URL")"
+  KAIJU_NAME="$(samovar_ensure_named_database kaiju "$KAIJU_NAME" "*.fmi" "$KAIJU_URL")"
 }
 
 # Resolve a catalog database without embedding a machine path.
@@ -221,48 +156,6 @@ PY
   echo "lazy-download ${tool}/${resolved} (not installed)" >&2
   samovar_ensure_database "$tool" "$resolved" "$dest" "$marker" "$href" >&2
   echo "$resolved"
-}
-
-# Fill DEST with phage community genomes when SAMOVAR_CI_LIGHT_INDEXES=1.
-# Returns 0 if seeded / already enough files, 1 if caller should do the full NCBI fetch.
-samovar_seed_public_genomes() {
-  local dest="$1"
-  local min_count="${2:-3}"
-  mkdir -p "$dest"
-  local existing
-  existing="$(find "$dest" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
-  if [[ "$existing" -ge "$min_count" ]]; then
-    echo "Found ${existing} genomes under ${dest}; skipping fetch"
-    return 0
-  fi
-  if ! samovar_light_public_indexes; then
-    return 1
-  fi
-  echo "CI phage indexes: fetching phage accessions into ${dest}"
-  local phage_acc=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
-  local tmp="${dest}/_tmp_phage"
-  rm -rf "$tmp"
-  python -m samovar.genome_fetcher \
-    --output-dir "$tmp" \
-    --accessions "${phage_acc[@]}" \
-    --reindex 0 \
-    --email "$NCBI_EMAIL"
-  shopt -s nullglob
-  local f base
-  for f in "${tmp}"/*-processed.fasta "${tmp}"/*-processed.fasta.gz \
-           "${tmp}/.genomes/processed"/* \
-           "${tmp}"/*.fa.gz "${tmp}"/*.fna.gz "${tmp}"/*.fasta.gz \
-           "${tmp}"/*.fa "${tmp}"/*.fna "${tmp}"/*.fasta; do
-    [[ -f "$f" ]] || continue
-    base="$(basename "$f")"
-    if [[ ! -e "${dest}/${base}" ]]; then
-      cp -a "$f" "${dest}/${base}"
-    fi
-  done
-  shopt -u nullglob
-  rm -rf "$tmp"
-  existing="$(find "$dest" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
-  [[ "$existing" -ge 1 ]]
 }
 
 # Print REPORT if a registered database has a path but no lazy-download recipe.

@@ -64,65 +64,44 @@ if [[ "${SAMOVAR_TOY:-0}" == "1" ]]; then
       --kraken2-test "kraken2 toy" \
       --kaiju-test "kaiju toy"
 else
-  mkdir -p "$output_dir/.genomes"
-  ORG_GROUPS=(Archaea Bacteria Viridiplantae Alveolata Fungi Metazoa Viruses)
-  existing_genomes="$(find "${output_dir}/.genomes" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
-  genome_src="${output_dir}/.genomes"
-  if [[ "$existing_genomes" -lt 21 && -d "${realistic_dir}/.genomes" ]]; then
-    existing_real="$(find "${realistic_dir}/.genomes" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
-    if [[ "$existing_real" -ge 21 ]]; then
-      echo "Reusing genomes from ${realistic_dir}/.genomes"
-      genome_src="${realistic_dir}/.genomes"
-    fi
-  fi
-  if [[ "$genome_src" == "${output_dir}/.genomes" && "$existing_genomes" -lt 21 ]]; then
-    for org_group in "${ORG_GROUPS[@]}"; do
-      tmp_dir="${output_dir}/.genomes/_tmp_${org_group}"
-      rm -rf "$tmp_dir"
-      mkdir -p "$tmp_dir"
-      echo "Fetching 3 genomes for ${org_group}..."
-      python -m samovar.genome_fetcher \
-        --output-dir "$tmp_dir" \
-        --N 3 \
-        --group "$org_group" \
-        --max-genome-mb 100 \
-        --email "$NCBI_EMAIL" \
-        --silent
-      sleep 2
-      shopt -s nullglob
-      for f in "${tmp_dir}"/*-processed.fasta "${tmp_dir}"/*-processed.fasta.gz \
-               "${tmp_dir}"/*.fa.gz "${tmp_dir}"/*.fna.gz "${tmp_dir}"/*.fasta.gz \
-               "${tmp_dir}"/*.fa "${tmp_dir}"/*.fna "${tmp_dir}"/*.fasta; do
-        [[ -f "$f" ]] || continue
-        base="$(basename "$f")"
-        dest="${output_dir}/.genomes/${base}"
-        if [[ -e "$dest" ]]; then
-          dest="${output_dir}/.genomes/${org_group}_${base}"
-        fi
-        mv "$f" "$dest"
-      done
-      shopt -u nullglob
-      rm -rf "$tmp_dir"
-    done
-  fi
-
-  samovar_ensure_public_indexes
-
-  samovar generate \
-      --genome_dir "$genome_src" \
-      --host_genome "${SAMOVAR}/data/test_genomes/host/9606.fna" \
+  host="${SAMOVAR}/data/test_genomes/host/9606.fna"
+  phage_acc=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
+  if samovar_light_public_indexes; then
+    SAMOVAR_PHASE=indexes bash "${SAMOVAR}/examples/phage/pipeline.sh"
+    samovar generate \
+      --accessions "${phage_acc[@]}" \
+      --reindex 0 \
+      --host_genome "$host" \
+      --host_fraction 0.15 \
       --n_samples "${SAMOVAR_N_SAMPLES:-4}" \
       --total_reads "${SAMOVAR_N_READS:-8000}" \
       --output_dir "$output_dir" \
       --cores "${SAMOVAR_GENERATE_CORES:-4}"
-
-  samovar prepare \
+    samovar prepare \
+      --output_dir "$output_dir" \
+      --kraken2-test "kraken2 phage_test" \
+      --kaiju-test "kaiju phage_test" \
+      --max-genomes "${SAMOVAR_MAX_GENOMES:-40}" \
+      --cores "${SAMOVAR_CORES:-16}" \
+      --export logistic
+  else
+    samovar_ensure_public_indexes
+    samovar generate \
+      --accessions "${phage_acc[@]}" GCF_000005845.2 \
+      --reindex 0 \
+      --host_genome "$host" \
+      --n_samples "${SAMOVAR_N_SAMPLES:-4}" \
+      --total_reads "${SAMOVAR_N_READS:-8000}" \
+      --output_dir "$output_dir" \
+      --cores "${SAMOVAR_GENERATE_CORES:-4}"
+    samovar prepare \
       --output_dir "$output_dir" \
       --kraken2-test "kraken2 ${K2_NAME}" \
       --kaiju-test "kaiju ${KAIJU_NAME}" \
       --max-genomes "${SAMOVAR_MAX_GENOMES:-40}" \
       --cores "${SAMOVAR_CORES:-16}" \
       --export logistic
+  fi
 fi
 
 samovar_run_exec "$output_dir"

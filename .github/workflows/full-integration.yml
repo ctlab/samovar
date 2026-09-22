@@ -269,6 +269,7 @@ jobs:
     - name: Examples (public pipelines on phage_test indexes)
       timeout-minutes: 150
       run: |
+        # phage_test is built inside each pipeline (SAMOVAR_PHASE=indexes).
         bash examples/realistic/pipeline.sh
         bash examples/assembly/pipeline.sh
         bash examples/databases_comparison/pipeline.sh

@@ -10,9 +10,8 @@ samovar_setup_env
 
 output_dir="$(samovar_example_outdir)"
 rm -rf "$output_dir/"
-mkdir -p "$output_dir/.database"
 
-samovar_ensure_toy_annotators "$output_dir/.database"
+samovar_ensure_toy_annotators "$(samovar_toy_database_dir)"
 
 samovar generate \
     --genome_dir "$SAMOVAR/data/test_genomes/meta" \

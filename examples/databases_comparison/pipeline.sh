@@ -11,40 +11,9 @@ cd "$SAMOVAR"
 samovar_setup_env
 
 output_dir="$(samovar_example_outdir)"
-mkdir -p "$output_dir/.genomes" "$output_dir/.log"
-
-# Same genome panel as examples/realistic (3 assemblies per NCBI group).
-ORG_GROUPS=(Archaea Bacteria Viridiplantae Alveolata Fungi Metazoa Viruses)
-if ! samovar_seed_public_genomes "$output_dir/.genomes" 21; then
-  for org_group in "${ORG_GROUPS[@]}"; do
-    tmp_dir="${output_dir}/.genomes/_tmp_${org_group}"
-    rm -rf "$tmp_dir"
-    mkdir -p "$tmp_dir"
-    echo "Fetching 3 genomes for ${org_group}..."
-    python -m samovar.genome_fetcher \
-      --output-dir "$tmp_dir" \
-      --N 3 \
-      --group "$org_group" \
-      --max-genome-mb 100 \
-      --email "$NCBI_EMAIL" \
-      --silent
-    sleep 2
-    shopt -s nullglob
-    for f in "${tmp_dir}"/*-processed.fasta "${tmp_dir}"/*-processed.fasta.gz \
-             "${tmp_dir}"/*.fa.gz "${tmp_dir}"/*.fna.gz "${tmp_dir}"/*.fasta.gz \
-             "${tmp_dir}"/*.fa "${tmp_dir}"/*.fna "${tmp_dir}"/*.fasta; do
-      [[ -f "$f" ]] || continue
-      base="$(basename "$f")"
-      dest="${output_dir}/.genomes/${base}"
-      if [[ -e "$dest" ]]; then
-        dest="${output_dir}/.genomes/${org_group}_${base}"
-      fi
-      mv "$f" "$dest"
-    done
-    shopt -u nullglob
-    rm -rf "$tmp_dir"
-  done
-fi
+mkdir -p "$output_dir/.log"
+host="${SAMOVAR}/data/test_genomes/host/9606.fna"
+phage_acc=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
 
 # Catalog names + official URLs. A preinstalled index is reused from the
 # SamovaR catalog; otherwise the URL is lazy-downloaded.
@@ -58,7 +27,7 @@ declare -A K2_URLS=(
 
 preprocess_args=()
 if samovar_light_public_indexes; then
-  samovar_ensure_public_indexes
+  SAMOVAR_PHASE=indexes bash "${SAMOVAR}/examples/phage/pipeline.sh"
   preprocess_args+=(--kraken2-phage "kraken2 phage_test")
   preprocess_args+=(--kaiju-phage "kaiju phage_test")
 else
@@ -79,9 +48,19 @@ else
   fi
 fi
 
+gen_acc=("${phage_acc[@]}")
+host_args=()
+if samovar_light_public_indexes; then
+  host_args=(--host_fraction 0.15)
+else
+  gen_acc+=(GCF_000005845.2)
+fi
+
 samovar generate \
-    --genome_dir "$output_dir/.genomes" \
-    --host_genome "$SAMOVAR/data/test_genomes/host/9606.fna" \
+    --accessions "${gen_acc[@]}" \
+    --reindex 0 \
+    --host_genome "$host" \
+    "${host_args[@]}" \
     --n_samples "${SAMOVAR_N_SAMPLES:-4}" \
     --total_reads "${SAMOVAR_N_READS:-8000}" \
     --output_dir "$output_dir" \

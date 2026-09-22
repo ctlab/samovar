@@ -11,20 +11,8 @@ cd "$SAMOVAR"
 samovar_setup_env
 
 output_dir="$(samovar_example_outdir)"
-mkdir -p "$output_dir/.genomes"
-
-if ! samovar_seed_public_genomes "$output_dir/.genomes" 10; then
-  existing="$(find "$output_dir/.genomes" -maxdepth 1 \( -name '*.fa' -o -name '*.fa.gz' -o -name '*.fna' -o -name '*.fna.gz' -o -name '*.fasta' -o -name '*.fasta.gz' \) 2>/dev/null | wc -l)"
-  if [[ "$existing" -lt 10 ]]; then
-    python -m samovar.genome_fetcher \
-      --output-dir "$output_dir/.genomes" \
-      --N 10 \
-      --group "Bacteria" \
-      --max-genome-mb 50 \
-      --email "$NCBI_EMAIL" \
-      --silent
-  fi
-fi
+# RefSeq bacteria present in the public Kraken2 / Kaiju / KrakenUniq indexes.
+bact_acc=(GCF_000005845.2 GCF_000006945.2 GCF_000009045.1)
 
 K2_URL="https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08_GB_20251015.tar.gz"
 KAIJU_URL="https://kaiju-idx.s3.eu-central-1.amazonaws.com/2024/kaiju_db_refseq_2024-08-14.tgz"
@@ -46,7 +34,8 @@ if ! command -v kraken >/dev/null 2>&1; then
 fi
 
 samovar generate \
-    --genome_dir "$output_dir/.genomes" \
+    --accessions "${bact_acc[@]}" \
+    --reindex 0 \
     --host_genome "$SAMOVAR/data/test_genomes/host/9606.fna" \
     --n_samples "${SAMOVAR_N_SAMPLES:-3}" \
     --total_reads "${SAMOVAR_N_READS:-2000}" \
