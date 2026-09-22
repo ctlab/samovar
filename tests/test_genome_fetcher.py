@@ -369,6 +369,40 @@ def test_generate_random_taxids_no_email():
         generate_random_taxids()
 
 
+def test_download_genomes_routes_accession_and_taxid(tmp_path, monkeypatch):
+    from samovar.genome_fetcher import download_cli, download_genomes
+
+    calls = []
+
+    def _acc(accession, dest, email, **kwargs):
+        calls.append(("acc", accession, dest, kwargs.get("index")))
+        return str(tmp_path / f"{accession}.fa.gz")
+
+    def _tax(taxid, dest, email, **kwargs):
+        calls.append(("tax", taxid, dest, kwargs.get("index")))
+        return str(tmp_path / f"{taxid}.fa.gz")
+
+    monkeypatch.setattr("samovar.genome_fetcher.fetch_assembly_processed", _acc)
+    monkeypatch.setattr("samovar.genome_fetcher.fetch_genome", _tax)
+    paths = download_genomes(
+        ["GCF_000819615.1", "562"],
+        str(tmp_path),
+        "test@example.com",
+    )
+    assert [item[0] for item in calls] == ["acc", "tax"]
+    assert calls[0][1] == "GCF_000819615.1"
+    assert calls[1][1] == "562"
+    assert all(item[3] is False for item in calls)
+    assert len(paths) == 2
+
+    code = download_cli(
+        ["GCF_000819615.1,9606", "--output-dir", str(tmp_path), "--index"]
+    )
+    assert code == 0
+    assert calls[-1][0] == "tax" and calls[-1][1] == "9606" and calls[-1][3] is True
+    assert calls[-2][0] == "acc" and calls[-2][3] is True
+
+
 def test_assembly_taxonomy_reads_ftp_report(monkeypatch):
     from io import BytesIO
     from samovar.genome_fetcher import assembly_taxonomy

@@ -7,6 +7,7 @@ import logging
 import re
 import shutil
 import socket
+import sys
 from typing import Any, Collection, FrozenSet, List, Optional, Sequence, Tuple
 import urllib.request
 from Bio import Entrez
@@ -1234,10 +1235,130 @@ def generate_random_taxids(
         socket.setdefaulttimeout(old_timeout)
 
 
-def main():
+def _download_tokens(raws: Sequence[str]) -> List[str]:
+    out: List[str] = []
+    for raw in raws:
+        for part in str(raw).replace(",", " ").split():
+            if part:
+                out.append(part)
+    return out
+
+
+def download_genomes(
+    tokens: Sequence[str],
+    output_dir: str,
+    email: str = "",
+    *,
+    index: bool = False,
+    silent: bool = False,
+    max_genome_mb: Any = None,
+    genome_skip_list: Any = None,
+) -> List[str]:
+    """Download processed FASTA for assembly accessions and numeric taxids.
+
+    Accessions use ``fetch_assembly_processed``; taxids use ``fetch_genome``.
+    Files are written under ``output_dir``. ``index`` registers them in the
+    install catalog (same flag those functions already take).
+    """
+    email = email or default_entrez_email()
+    dest = str(output_dir)
+    paths: List[str] = []
+    for token in _download_tokens(tokens):
+        if is_assembly_accession(token):
+            path = fetch_assembly_processed(
+                token,
+                dest,
+                email,
+                silent=silent,
+                keep_raw=False,
+                index=index,
+                max_genome_mb=max_genome_mb,
+                genome_skip_list=genome_skip_list,
+            )
+        elif token.split(".")[0].isdigit():
+            path = fetch_genome(
+                token.split(".")[0],
+                dest,
+                email,
+                silent=silent,
+                gzip_genomes=True,
+                index=index,
+                max_genome_mb=max_genome_mb,
+                genome_skip_list=genome_skip_list,
+            )
+        else:
+            logger.error("Not an accession or taxid: %s", token)
+            path = None
+        if path:
+            paths.append(str(path))
+        else:
+            logger.warning("Could not download %s", token)
+    return paths
+
+
+def download_cli(argv: Optional[Sequence[str]] = None) -> int:
+    """``samovar genome download``."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="samovar genome download",
+        description="Download processed FASTA for NCBI assembly accessions and taxids.",
+    )
+    parser.add_argument(
+        "tokens",
+        nargs="+",
+        help="Assembly accessions (GCF_/GCA_) and/or numeric taxids",
+    )
+    parser.add_argument(
+        "--output-dir",
+        "--output_dir",
+        default="genomes",
+        help="Directory for {accession}.fa.gz / processed taxid FASTA (default: genomes)",
+    )
+    parser.add_argument(
+        "--email",
+        default=None,
+        help="NCBI Entrez email (default: NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL)",
+    )
+    parser.add_argument(
+        "--index",
+        action="store_true",
+        help="Register downloaded genomes in the install catalog",
+    )
+    parser.add_argument(
+        "--max-genome-mb",
+        type=argparse_max_genome_mb,
+        default=UNLIMITED_GENOME_MB,
+        help="Skip new NCBI assemblies larger than this many MB (default: unlimited)",
+    )
+    parser.add_argument(
+        "--genome-skip-list",
+        default=None,
+        help="Comma-separated taxids/accessions to skip on new NCBI downloads",
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    paths = download_genomes(
+        args.tokens,
+        args.output_dir,
+        args.email or default_entrez_email(),
+        index=bool(args.index),
+        max_genome_mb=args.max_genome_mb,
+        genome_skip_list=args.genome_skip_list,
+    )
+    for path in paths:
+        print(path)
+    wanted = _download_tokens(args.tokens)
+    return 0 if paths and len(paths) == len(wanted) else 1
+
+
+def main(argv: Optional[Sequence[str]] = None):
     """Main function to process genomes from random taxids."""
     import argparse
-    
+
+    cli = list(sys.argv[1:] if argv is None else argv)
+    if cli and cli[0] == "download":
+        return download_cli(cli[1:])
+
     parser = argparse.ArgumentParser(description='Process genomes from random taxids')
     parser.add_argument('--group', type=str, default='Bacteria',
                       help='Taxonomic group to sample from (default: Bacteria)')
@@ -1288,7 +1409,7 @@ def main():
         help='Write uncompressed processed FASTA',
     )
     
-    args = parser.parse_args()
+    args = parser.parse_args(cli)
     args.email = args.email or default_entrez_email()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1376,4 +1497,4 @@ def main():
         logger.info(f"Processing complete! Got {successes}/{args.N} genomes.")
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main() or 0)

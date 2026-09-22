@@ -18,30 +18,20 @@ total_reads="${TOTAL_READS:-2000}"
 
 mkdir -p "$db"
 if [[ ! -e "$db/kraken2_db/hash.k2d" ]] || ! find -L "$db/kaiju_db" -name '*.fmi' 2>/dev/null | grep -q .; then
-  samovar generate \
-    --accessions GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000867865.1 \
-    --reindex 0 \
-    --n_samples 1 \
-    --total_reads 100 \
-    --output_dir "$db/kaiju_src" \
-    --cores 1
-  samovar generate \
-    --accessions GCF_000840245.1 GCF_000836945.1 GCF_000844825.1 \
-    --reindex 0 \
-    --n_samples 1 \
-    --total_reads 100 \
-    --output_dir "$db/kraken2_src" \
-    --cores 1
+  samovar genome download --output-dir "$db/kaiju_src" \
+    GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000867865.1
+  samovar genome download --output-dir "$db/kraken2_src" \
+    GCF_000840245.1 GCF_000836945.1 GCF_000844825.1
   cat > "$db/kaiju.yaml" << EOF
 input_dir:
-  - ${db}/kaiju_src/.genomes/processed
+  - ${db}/kaiju_src
 output_dir: ${db}/kaiju_prep
 mutation_rate: 0.0
 include_percent: 100.0
 EOF
   cat > "$db/kraken2.yaml" << EOF
 input_dir:
-  - ${db}/kraken2_src/.genomes/processed
+  - ${db}/kraken2_src
 output_dir: ${db}/kraken2_prep
 mutation_rate: 0.0
 include_percent: 100.0
