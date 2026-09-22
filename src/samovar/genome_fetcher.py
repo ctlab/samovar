@@ -4,6 +4,7 @@ Genome fetching and taxonomy parsing functionality
 
 import os
 import logging
+import re
 import shutil
 import socket
 from typing import Any, Collection, FrozenSet, List, Optional, Sequence, Tuple
@@ -468,6 +469,53 @@ def _assembly_ftp_path(taxid: str | int, email: str, silent: bool = False) -> Op
     return ftp_path or None
 
 
+def _genomes_ftp_dir(accession: str) -> Optional[str]:
+    """Assembly directory on ftp.ncbi.nlm.nih.gov, without Entrez.
+
+    ``GCF_000819615.1`` lives under ``.../GCF/000/819/615/GCF_000819615.1_<name>``.
+    The directory listing is not subject to the Entrez 429 limit that breaks CI.
+    """
+    accession = normalize_accession(accession) or str(accession or "").strip()
+    if "_" not in accession:
+        return None
+    prefix, rest = accession.split("_", 1)
+    digits = rest.split(".", 1)[0]
+    if not digits.isdigit():
+        return None
+    digits = digits.zfill(9)
+    chunks = "/".join(digits[i : i + 3] for i in range(0, len(digits), 3))
+    base = f"https://ftp.ncbi.nlm.nih.gov/genomes/all/{prefix}/{chunks}/"
+    req = urllib.request.Request(base, headers={"User-Agent": "samovar"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as handle:
+            html = handle.read().decode("utf-8", "replace")
+    except Exception as exc:
+        logger.warning("NCBI FTP listing failed for %s: %s", accession, exc)
+        return None
+    match = re.search(rf'href="({re.escape(accession)}[^"/]*)/"', html)
+    if not match:
+        logger.warning("NCBI FTP listing has no folder for %s", accession)
+        return None
+    return base + match.group(1)
+
+
+def _taxid_from_ftp_report(ftp_dir: str) -> str:
+    name = ftp_dir.rstrip("/").split("/")[-1]
+    url = f"{ftp_dir.rstrip('/')}/{name}_assembly_report.txt"
+    req = urllib.request.Request(url, headers={"User-Agent": "samovar"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as handle:
+            text = handle.read(4096).decode("utf-8", "replace")
+    except Exception as exc:
+        logger.warning("NCBI assembly report failed for %s: %s", name, exc)
+        return ""
+    for line in text.splitlines():
+        if line.startswith("# Taxid:"):
+            taxid = line.split(":", 1)[1].strip()
+            return taxid if taxid.isdigit() else ""
+    return ""
+
+
 def _assembly_record(accession: str, email: str, silent: bool = False) -> Optional[dict]:
     accession = normalize_accession(accession) or accession
     Entrez.email = email
@@ -478,7 +526,7 @@ def _assembly_record(accession: str, email: str, silent: bool = False) -> Option
         handle.close()
         return record
 
-    record = _entrez_retry(search, max_retries=8, initial_delay=5)
+    record = _entrez_retry(search, max_retries=3, initial_delay=2)
     if not record.get("IdList"):
         if not silent:
             logger.warning("No NCBI assembly for %s", accession)
@@ -492,13 +540,21 @@ def _assembly_record(accession: str, email: str, silent: bool = False) -> Option
         handle.close()
         return parsed
 
-    summary = _entrez_retry(summary, max_retries=8, initial_delay=5)
+    summary = _entrez_retry(summary, max_retries=3, initial_delay=2)
     docs = summary["DocumentSummarySet"]["DocumentSummary"]
     return docs[0] if docs else None
 
 
 def _assembly_ftp_for_accession(accession: str, email: str, silent: bool = False) -> Optional[str]:
-    doc = _assembly_record(accession, email, silent=silent)
+    listed = _genomes_ftp_dir(accession)
+    if listed:
+        return listed
+    try:
+        doc = _assembly_record(accession, email, silent=silent)
+    except Exception as exc:
+        if not silent:
+            logger.warning("Entrez assembly lookup failed for %s: %s", accession, exc)
+        return None
     if not doc:
         return None
     return doc.get("FtpPath_RefSeq") or doc.get("FtpPath_GenBank") or None
@@ -595,6 +651,11 @@ def fetch_assembly_processed(
 
 def assembly_taxonomy(accession: str, email: str = "", silent: bool = True) -> Tuple[str, str]:
     """Return ``(taxid, species_taxid)`` for an assembly accession."""
+    ftp_dir = _genomes_ftp_dir(accession)
+    if ftp_dir:
+        taxid = _taxid_from_ftp_report(ftp_dir)
+        if taxid:
+            return taxid, taxid
     try:
         doc = _assembly_record(
             accession, email or default_entrez_email(), silent=silent

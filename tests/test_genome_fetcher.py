@@ -369,6 +369,45 @@ def test_generate_random_taxids_no_email():
         generate_random_taxids()
 
 
+def test_assembly_taxonomy_reads_ftp_report(monkeypatch):
+    from io import BytesIO
+    from samovar.genome_fetcher import assembly_taxonomy
+
+    listing = (
+        '<a href="GCF_000819615.1_ViralProj14015/">'
+        "GCF_000819615.1_ViralProj14015/</a>"
+    )
+    report = "# Taxid:          2886930\n# Organism name:  Escherichia phage phiX174\n"
+
+    class _Resp:
+        def __init__(self, payload: str):
+            self._payload = payload.encode()
+
+        def read(self, _n: int = -1) -> bytes:
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    calls = {"n": 0}
+
+    def _urlopen(req, timeout=60):
+        calls["n"] += 1
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if url.endswith("_assembly_report.txt"):
+            return _Resp(report)
+        return _Resp(listing)
+
+    monkeypatch.setattr("samovar.genome_fetcher.urllib.request.urlopen", _urlopen)
+    taxid, species = assembly_taxonomy("GCF_000819615.1", "test@example.com")
+    assert taxid == "2886930"
+    assert species == "2886930"
+    assert calls["n"] == 2
+
+
 @pytest.mark.optional
 def test_generate_random_taxids_invalid_group(test_output_dir):
     """Test generating taxids for invalid group"""
