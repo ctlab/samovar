@@ -9,7 +9,6 @@ import pandas as pd
 import pytest
 import yaml
 
-from samovar.paths import annotation_regenerate_r
 from samovar.table2iss import (
     _resolve_r_executable,
     process_abundance_table,
@@ -18,13 +17,11 @@ from samovar.table2iss import (
 
 
 def _r_script_from_branch() -> Optional[Path]:
+    """Materialize the in-tree driver (the script ``install.sh`` writes)."""
     from samovar.table2iss import R_REGENERATE_DRIVER
 
-    found = annotation_regenerate_r()
-    if found is not None and Path(found).is_file():
-        return Path(found)
     dest = Path(tempfile.gettempdir()) / "samovar_annotation_regenerate.R"
-    dest.write_text(R_REGENERATE_DRIVER)
+    dest.write_text(R_REGENERATE_DRIVER, encoding="utf-8")
     return dest
 
 
@@ -307,7 +304,9 @@ def test_samovar_annotation_regenerate_integration(
     test_data_dir, test_output_dir, mock_config, r_regenerator_script
 ):
     """Integration: regenerated tables feed process_abundance_table."""
-    config_path = _write_config({**mock_config, "regeneration_mode": "samovar"})
+    config_path = _write_config(
+        {**mock_config, "regeneration_mode": "samovar", "seed": 1}
+    )
 
     try:
         for stale in test_output_dir.glob("*.csv"):
@@ -324,10 +323,8 @@ def test_samovar_annotation_regenerate_integration(
         test_file = output_files[0]
 
         with tempfile.TemporaryDirectory() as genome_dir:
-            with patch("samovar.table2iss.fetch_genome") as mock_fetch, \
-                 patch("samovar.table2iss.get_genome_file") as mock_get, \
+            with patch("samovar.genome_fetcher.fetch_genome") as mock_fetch, \
                  patch("samovar.table2iss.regenerate_metagenome") as mock_regenerate:
-                mock_get.return_value = None
                 mock_fetch.return_value = os.path.join(genome_dir, "dummy.fasta")
                 with open(os.path.join(genome_dir, "dummy.fasta"), "w") as f:
                     f.write(">dummy\nATCG\n")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import yaml
@@ -70,7 +71,8 @@ def main() -> None:
     tmp = Path(args.output_dir) / ".regeneration_config.yaml"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as handle:
-        yaml.dump(cfg, handle)
+        # Quote N: YAML 1.1 reads a bare key N as boolean false.
+        handle.write(re.sub(r"(?m)^N:", '"N":', yaml.dump(cfg)))
 
     samovar_annotation_regenerate(
         annotation_dir=args.annotation_dir,

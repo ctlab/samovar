@@ -8,6 +8,7 @@ Each regenerator takes an abundance table (``taxid`` × ``N_<sample>``), an
 from __future__ import annotations
 
 import importlib.util
+import re
 import shlex
 import subprocess
 import sys
@@ -445,7 +446,9 @@ class SamovarRTableRegenerator(TableRegenerator):
         cfg_tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", delete=False, encoding="utf-8"
         )
-        yaml.safe_dump(r_cfg, cfg_tmp)
+        # Quote N: YAML 1.1 reads a bare key N as boolean false.
+        dumped = yaml.safe_dump(r_cfg, sort_keys=False)
+        cfg_tmp.write(re.sub(r"(?m)^N:", '"N":', dumped))
         cfg_tmp.close()
         drv_tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".R", delete=False, encoding="utf-8"

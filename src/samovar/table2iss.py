@@ -63,7 +63,16 @@ if (is.null(config_samovar)) {
 } else {
   config <- unpack_config(config_samovar)
 }
-if (!("N" %in% names(config))) config$N <- 1
+# YAML 1.1 treats a bare key N as boolean false, so the sample count
+# arrives under the name "FALSE" and config$N partial-matches N_reads.
+if (!("N" %in% names(config))) {
+  false_idx <- which(tolower(names(config)) == "false")
+  if (length(false_idx)) {
+    config$N <- suppressWarnings(as.integer(config[[false_idx[[1]]]]))
+    config[[false_idx[[1]]]] <- NULL
+  }
+}
+if (!("N" %in% names(config)) || length(config$N) != 1 || is.na(config$N)) config$N <- 1
 if (!("N_reads" %in% names(config))) config$N_reads <- 100
 if (!("plot_log" %in% names(config))) config$plot_log <- FALSE
 if ("output_dir" %in% names(config)) output_dir <- config$output_dir
@@ -113,7 +122,11 @@ for (i in seq_along(samovar_data_list)) {
   tryCatch({
     config$samovar_data <- samovar_data_list[[i]]$copy()
     samovar <- do.call(samovar_preprocess, config)
-    new_data <- samovar_boil(samovar, N = config$N)
+    if (!is.null(config$seed)) {
+      new_data <- samovar_boil(samovar, N = config$N, seed = config$seed)
+    } else {
+      new_data <- samovar_boil(samovar, N = config$N)
+    }
     result_df <- as.data.frame(round(new_data$data * config$N_reads))
     result_df <- tibble::rownames_to_column(result_df, "taxid")
     colnames(result_df)[-1] <- paste0("N_", colnames(result_df)[-1])
@@ -129,7 +142,16 @@ for (i in seq_along(samovar_data_list)) {
 '''
 
 
-SKIP_TAXIDS = {"0", "nan", "None", ""}
+SKIP_TAXIDS = {
+    "0",
+    "nan",
+    "none",
+    "na",
+    "other",
+    "",
+    "unclassified",
+    "unclassified_root",
+}
 CONTIG_SPACER = "N" * 500
 
 
@@ -795,7 +817,7 @@ def _resolve_genomes_for_taxids(
         if limit is not None and len(available) >= limit:
             break
         taxid = str(taxid).split(".")[0]
-        if taxid in SKIP_TAXIDS or taxid in available:
+        if taxid.lower() in SKIP_TAXIDS or taxid in available:
             continue
         genome_file = resolve_genome_file(
             taxid,
