@@ -79,6 +79,7 @@ show_usage() {
     echo "  samovar prepare --add-annotator --kraken2-test 'kraken2 toy' --directory [...]"
     echo "  samovar branch --start-point regenerate_tables /path/run /path/run_branch"
     echo "  samovar multiqc --output_dir [...] -- --export"
+    echo "  samovar import --status"
     echo "  samovar tools import -n kaiju --exec kaiju --exec-path /usr/bin/kaiju --type annotator --lazy-install 'conda install bioconda::kaiju'"
     echo "  samovar tools import -n standard_8GB --type database --tool kraken2 --exec-path /path/to/db --lazy-download @fetch.sh"
     echo "  samovar export /path/to/run -o run.tgz --config full"
@@ -219,8 +220,8 @@ case "${1:-}" in
                 ;;
             "help"|"-h"|"--help"|"")
                 echo "Usage: samovar tools <command>"
-                echo "  import     Register a binary in the install config"
-                echo "  --status   Required/optional programs"
+                echo "  import     Register a binary, or --status to list tools and databases"
+                echo "  --status   Required/optional programs on PATH"
                 echo "  --sort     Sort paired FASTQ by read ID"
                 echo "See wiki/tools_import.md"
                 ;;

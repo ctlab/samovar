@@ -5,7 +5,7 @@ from pathlib import Path
 from samovar.annotators_wrapper import CustomAnnotator, get_annotator_instance
 from samovar.main_config import parse_tool_entry
 from samovar.paths import write_config, update_config
-from samovar.tools_import import import_tool, main as import_main
+from samovar.tools_import import format_import_status, import_database, import_tool, main as import_main
 from samovar.tool_spec import bare_tool_name
 
 
@@ -616,4 +616,35 @@ def test_prepare_used_citations_includes_imported_bibtex(tmp_path, monkeypatch):
     text = path.read_text()
     assert "Toy annotator A" in text
     assert "myclf" in text
+
+
+def test_import_status_lists_tools_and_databases(tmp_path, monkeypatch, capsys):
+    binary = tmp_path / "mykaiju"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    db = tmp_path / "kraken2_db"
+    db.mkdir()
+    cfg_path = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg_path))
+    write_config({"root": str(tmp_path), "tools": {}, "databases": {}}, also_repo_build=False)
+    import_tool(
+        name="kaiju",
+        tool_type="annotator",
+        env="",
+        exec_name="kaiju",
+        exec_path=str(binary),
+        also_repo_build=False,
+    )
+    import_database(
+        name="phage_test",
+        tool="kraken2",
+        exec_path=str(db),
+        also_repo_build=False,
+    )
+    assert import_main(["--status"]) == 0
+    out = capsys.readouterr().out
+    tool_line = next(line for line in out.splitlines() if line.endswith(str(binary.resolve())))
+    assert "\tannotator\tok\t" in tool_line
+    assert f"kraken2\tphage_test\tok\t{db.resolve()}" in out
+    assert "(none)" in format_import_status({})
 

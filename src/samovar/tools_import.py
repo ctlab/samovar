@@ -223,15 +223,60 @@ def import_database(
     return stored
 
 
+def format_import_status(cfg: Optional[dict] = None) -> str:
+    """List tools and databases stored in the install config."""
+    from samovar.db_spec import iter_database_records
+    from samovar.main_config import iter_tool_records
+    from samovar.paths import load_config
+
+    if cfg is None:
+        cfg = load_config()
+    lines = ["Tools", "name\ttype\tstatus\tpath"]
+    tools = iter_tool_records(cfg)
+    if not tools:
+        lines.append("(none)")
+    else:
+        for name in sorted(tools):
+            rec = tools[name]
+            exe = rec.get("exec") or {}
+            path = str(exe.get("path") or "")
+            kind = str(rec.get("type") or "")
+            mark = _path_status(path)
+            lines.append(f"{name}\t{kind}\t{mark}\t{path}")
+    lines.extend(["", "Databases", "tool\tname\tstatus\tpath"])
+    rows = []
+    for tool, grouped in iter_database_records(cfg).items():
+        for key, rec in grouped.items():
+            path = str(rec.get("path") or "")
+            rows.append((tool, key or str(rec.get("name") or ""), _path_status(path), path))
+    if not rows:
+        lines.append("(none)")
+    else:
+        for tool, name, mark, path in sorted(rows):
+            lines.append(f"{tool}\t{name}\t{mark}\t{path}")
+    return "\n".join(lines)
+
+
+def _path_status(path: str) -> str:
+    if not str(path or "").strip():
+        return "missing"
+    return "ok" if Path(path).expanduser().exists() else "missing"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="samovar tools import",
-        description="Register an executable in the SamovaR install config (tools.*).",
+        prog="samovar import",
+        description="Register a tool or database, or list what is already imported.",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="List imported tools and databases, then exit.",
     )
     parser.add_argument(
         "-n",
         "--name",
-        required=True,
+        default="",
         help="Config key (e.g. kaiju). Used as --<name>-test in prepare.",
     )
     parser.add_argument(
@@ -254,7 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-t",
         "--type",
-        required=True,
+        default="",
         help=(
             f"Tool group: {', '.join(TOOL_GROUPS)} "
             "(aliases: a, reads, meta, table, table-scoring, sample-score, sample-filter, "
@@ -366,7 +411,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.status:
+        print(format_import_status())
+        return 0
+    if not str(args.name or "").strip() or not str(args.type or "").strip():
+        parser.error("-n/--name and -t/--type are required unless --status")
     try:
         if is_database_type(args.type):
             lazy = args.lazy_download or args.lazy_install
