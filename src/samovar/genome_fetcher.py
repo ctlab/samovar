@@ -89,7 +89,7 @@ def _entrez_retry(func, max_retries=3, initial_delay=1):
             if rate_limited and attempt < max_retries - 1:
                 logger.warning(f"Rate limited / transient NCBI error, retrying in {delay} seconds...")
                 time.sleep(delay)
-                delay = min(delay * 2, 8)
+                delay = min(delay * 2, 60)
                 continue
             raise
     
@@ -471,16 +471,28 @@ def _assembly_ftp_path(taxid: str | int, email: str, silent: bool = False) -> Op
 def _assembly_record(accession: str, email: str, silent: bool = False) -> Optional[dict]:
     accession = normalize_accession(accession) or accession
     Entrez.email = email
-    handle = Entrez.esearch(db="assembly", term=f"{accession}[Assembly Accession]", retmax=1)
-    record = Entrez.read(handle)
-    handle.close()
+
+    def search():
+        handle = Entrez.esearch(db="assembly", term=f"{accession}[Assembly Accession]", retmax=1)
+        record = Entrez.read(handle)
+        handle.close()
+        return record
+
+    record = _entrez_retry(search, max_retries=8, initial_delay=5)
     if not record.get("IdList"):
         if not silent:
             logger.warning("No NCBI assembly for %s", accession)
         return None
-    handle = Entrez.esummary(db="assembly", id=record["IdList"][0])
-    summary = Entrez.read(handle)
-    handle.close()
+
+    assembly_id = record["IdList"][0]
+
+    def summary():
+        handle = Entrez.esummary(db="assembly", id=assembly_id)
+        parsed = Entrez.read(handle)
+        handle.close()
+        return parsed
+
+    summary = _entrez_retry(summary, max_retries=8, initial_delay=5)
     docs = summary["DocumentSummarySet"]["DocumentSummary"]
     return docs[0] if docs else None
 
