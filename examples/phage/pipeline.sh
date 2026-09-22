@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Named phage_test indexes + generate --reindex 0/1 and samovar reindex.
-#
-# Phases (SAMOVAR_PHASE, default all):
-#   indexes    build kaiju/kraken2 as phage_test and import them
-#   database1  indexes, then samovar generate --reindex 1, prepare, exec
-#   database2  samovar generate --reindex 0 with phage_test DBs
-#   add-annotator  reuse database1 reads; kaiju phage_test then --add-annotator kraken2 toy
+# Two phage communities on named phage_test Kaiju and Kraken2 indexes.
+# Kaiju includes GCF_000867865.1; Kraken2 includes GCF_000844825.1.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,323 +9,84 @@ source "${SCRIPT_DIR}/../common.sh"
 cd "$SAMOVAR"
 samovar_setup_env
 
-PHASE="${SAMOVAR_PHASE:-all}"
-out1="${SAMOVAR_OUTDIR_1:-${SAMOVAR}/examples_outdir/phage/database1}"
-out2="${SAMOVAR_OUTDIR_2:-${SAMOVAR}/examples_outdir/phage/database2}"
+part1="${SAMOVAR_OUTDIR_1:-${SAMOVAR}/examples_outdir/phage/database1}"
+part2="${SAMOVAR_OUTDIR_2:-${SAMOVAR}/examples_outdir/phage/database2}"
+db="${SAMOVAR}/examples_outdir/phage/database"
+host="${SAMOVAR}/data/test_genomes/host/9606.fna"
 n_samples="${N_SAMPLES:-2}"
 total_reads="${TOTAL_READS:-2000}"
-host_fraction="${HOST_FRACTION:-0.15}"
-host="${SAMOVAR}/data/test_genomes/host/9606.fna"
 
-GEN1=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
-KAIJU=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000867865.1)
-KRAKEN=(GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
-GEN2=(GCF_000819615.1 GCA_035764635.1 GCF_000836945.1 GCF_000844825.1 GCF_000867865.1)
-
-python_download() {
-  local dest="$1"
-  shift
-  python -m samovar.genome_fetcher \
-    --output-dir "$dest" \
-    --accessions "$@" \
+mkdir -p "$db"
+if [[ ! -e "$db/kraken2_db/hash.k2d" ]] || ! find -L "$db/kaiju_db" -name '*.fmi' 2>/dev/null | grep -q .; then
+  samovar generate \
+    --accessions GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000867865.1 \
     --reindex 0 \
-    --email "$NCBI_EMAIL"
-}
-
-drop_acc() {
-  python - <<'PY' "$1"
-import sys
-from pathlib import Path
-from samovar.genome_index import drop_indexed, resolve_indexed_path
-acc = sys.argv[1]
-path = resolve_indexed_path(acc)
-drop_indexed(acc)
-if path:
-    try:
-        Path(path).unlink()
-        print(f"dropped {acc} file {path}")
-    except OSError as exc:
-        print(f"dropped {acc} index; file: {exc}")
-else:
-    print(f"dropped {acc} (not on disk)")
-PY
-}
-
-write_db_yaml() {
-  local yaml="$1"
-  local src="$2"
-  local prep="$3"
-  cat > "$yaml" << EOF
+    --n_samples 1 \
+    --total_reads 100 \
+    --output_dir "$db/kaiju_src" \
+    --cores 1
+  samovar generate \
+    --accessions GCF_000840245.1 GCF_000836945.1 GCF_000844825.1 \
+    --reindex 0 \
+    --n_samples 1 \
+    --total_reads 100 \
+    --output_dir "$db/kraken2_src" \
+    --cores 1
+  cat > "$db/kaiju.yaml" << EOF
 input_dir:
-  - "${src}"
-output_dir: "${prep}"
+  - ${db}/kaiju_src/.genomes/processed
+output_dir: ${db}/kaiju_prep
 mutation_rate: 0.0
 include_percent: 100.0
 EOF
-}
-
-import_phage_dbs() {
-  local root="$1"
-  local kaiju_lazy kraken_lazy
-  kaiju_lazy="$(cat <<EOF
-#!/bin/bash
-set -euo pipefail
-echo "Rebuild kaiju phage_test with examples/phage/pipeline.sh (SAMOVAR_PHASE=database1)"
+  cat > "$db/kraken2.yaml" << EOF
+input_dir:
+  - ${db}/kraken2_src/.genomes/processed
+output_dir: ${db}/kraken2_prep
+mutation_rate: 0.0
+include_percent: 100.0
 EOF
-)"
-  kraken_lazy="$(cat <<EOF
-#!/bin/bash
-set -euo pipefail
-echo "Rebuild kraken2 phage_test with examples/phage/pipeline.sh (SAMOVAR_PHASE=database1)"
-EOF
-)"
-  samovar tools import -n phage_test --type database --tool kaiju \
-    --exec-path "$root/.database/kaiju_db" --lazy-download "$kaiju_lazy"
-  samovar tools import -n phage_test --type database --tool kraken2 \
-    --exec-path "$root/.database/kraken2_db" --lazy-download "$kraken_lazy"
-}
-
-phase_add_annotator() {
-  # Same community as database1, but start with kaiju phage_test only, then
-  # add kraken2 toy via prepare --add-annotator (does not touch database1).
-  local dest="${SAMOVAR_OUTDIR_ADD:-${SAMOVAR}/examples_outdir/phage/add_annotator}"
-  local src_reads="${out1}/initial"
-  mkdir -p "$dest"
-  if [[ -s "${src_reads}/1_full_R1.fastq" ]]; then
-    echo "==> reuse database1 reads in ${dest}/reads"
-    mkdir -p "${dest}/reads"
-    cp -a "${src_reads}/"* "${dest}/reads/"
-  else
-    echo "==> generate reads for add-annotator into ${dest}"
-    samovar generate \
-      --accessions "${GEN1[@]}" \
-      --reindex 1 \
-      --raw-genomes 0 \
-      --host_genome "$host" \
-      --output_dir "$dest" \
-      --n_samples "$n_samples" \
-      --total_reads "$total_reads" \
-      --host_fraction "$host_fraction" \
-      --cores 1
-    mkdir -p "${dest}/reads"
-    cp -a "${dest}/initial/"* "${dest}/reads/" 2>/dev/null || true
-  fi
-
-  rm -rf "${dest}/.log/checkpoints" "${dest}/.log/samovar_v"*.sh
-  echo "==> prepare kaiju phage_test only"
-  samovar prepare \
-    --input_dir "${dest}/reads" \
-    --output_dir "$dest" \
-    --kaiju-test "kaiju phage_test" \
-    --N_reads "${total_reads}" \
-    --cores 1 \
-    --no-multiqc
-
-  samovar_run_exec "$dest"
-
-  echo "==> add-annotator kraken2 toy"
-  samovar prepare \
-    --add-annotator \
-    --output_dir "$dest" \
-    --kraken2-test "kraken2 toy"
-
-  samovar_run_exec "$dest"
-
-  python - <<PY
-from pathlib import Path
-import pandas as pd
-root = Path("$dest")
-init = list((root / "initial_annotations").glob("*.annotation.csv"))
-assert init, "no initial annotation tables"
-df = pd.read_csv(init[0])
-cols = [c for c in df.columns if str(c).lower().startswith("taxid_")]
-print("initial taxid columns", cols)
-assert any("kaiju" in c.lower() for c in cols), cols
-assert any("kraken2" in c.lower() for c in cols), cols
-assert (root / ".log" / "samovar.sh").is_file()
-assert (root / ".log" / "samovar_v1.sh").is_file()
-  regen = list((root / "regenerated_annotations").glob("*.annotation.csv"))
-  if regen:
-      rdf = pd.read_csv(regen[0])
-      rcols = [c for c in rdf.columns if str(c).lower().startswith("taxid_")]
-      print("regenerated taxid columns", rcols)
-      assert any("kraken2" in c.lower() for c in rcols), rcols
-  for stage in ("regenerated_annotations", "reprofiled_annotations"):
-      comb = root / stage / "combined_annotation_table.csv"
-      if comb.is_file():
-          ccols = [
-              c
-              for c in pd.read_csv(comb, nrows=0).columns
-              if str(c).lower().startswith("taxid_")
-          ]
-          print(stage, "combined", ccols)
-          assert any("kaiju" in c.lower() for c in ccols), ccols
-          assert any("kraken2" in c.lower() for c in ccols), ccols
-  print("add-annotator ok", root)
-PY
-}
-
-phase_indexes() {
-  mkdir -p "$out1/.database" "$out1/.genomes"
-  local have_k2 have_kj
-  have_k2=0
-  have_kj=0
-  [[ -e "$out1/.database/kraken2_db/hash.k2d" ]] && have_k2=1
-  find -L "$out1/.database/kaiju_db" -name '*.fmi' 2>/dev/null | grep -q . && have_kj=1
-
-  if [[ "$have_k2" == 1 && "$have_kj" == 1 && "${SAMOVAR_REBUILD_DB:-0}" != "1" ]]; then
-    echo "==> Reusing phage_test indexes in ${out1}/.database"
-    import_phage_dbs "$out1"
-    return 0
-  fi
-  echo "==> Download kaiju genomes (include GCF_000867865.1)"
-  python_download "$out1/.database/kaiju_src" "${KAIJU[@]}"
-  echo "==> Download kraken2 genomes"
-  python_download "$out1/.database/kraken2_src" "${KRAKEN[@]}"
-
-  write_db_yaml "$out1/.database/kaiju.yaml" \
-    "$out1/.database/kaiju_src/.genomes/processed" \
-    "$out1/database_prep_kaiju"
-  write_db_yaml "$out1/.database/kraken2.yaml" \
-    "$out1/.database/kraken2_src/.genomes/processed" \
-    "$out1/database_prep_kraken2"
-
   samovar build --type kaiju \
-    --config_path "$out1/.database/kaiju.yaml" \
-    --db_path "$out1/.database/kaiju_db" \
+    --config_path "$db/kaiju.yaml" \
+    --db_path "$db/kaiju_db" \
     --index phage_test --flags ""
   samovar build --type kraken2 \
-    --config_path "$out1/.database/kraken2.yaml" \
-    --db_path "$out1/.database/kraken2_db" \
+    --config_path "$db/kraken2.yaml" \
+    --db_path "$db/kraken2_db" \
     --index phage_test --flags ""
-  import_phage_dbs "$out1"
-}
-
-phase_database1() {
-  phase_indexes
-  rm -rf "$out1/initial" "$out1/.generate" "$out1/.log/checkpoints"
-  echo "==> generate --reindex 1"
-  samovar generate \
-    --accessions "${GEN1[@]}" \
-    --reindex 1 \
-    --raw-genomes 0 \
-    --host_genome "$host" \
-    --output_dir "$out1" \
-    --n_samples "$n_samples" \
-    --total_reads "$total_reads" \
-    --host_fraction "$host_fraction" \
-    --cores 1
-
-  samovar prepare \
-    --output_dir "$out1" \
-    --kraken2-test "kraken2 phage_test" \
-    --kaiju-test "kaiju phage_test" \
-    --kmer2-test kmer2 \
-    --gc-test gc
-
-  samovar_run_exec "$out1"
-
-  echo "==> Check index + outdir after database1"
-  python - <<PY
-from pathlib import Path
-from samovar.genome_index import processed_storage_dir, resolve_indexed_path, run_processed_dir
-accs = "GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1".split()
-store = processed_storage_dir()
-run = run_processed_dir("$out1")
-missing = []
-for acc in accs:
-    idx = resolve_indexed_path(acc)
-    staged = run / f"{acc}.fa.gz"
-    stored = store / f"{acc}.fa.gz"
-    print(f"{acc} indexed={idx} staged={staged.is_file()} stored={stored.is_file()}")
-    if idx is None or not staged.is_file() or not stored.is_file():
-        missing.append(acc)
-if missing:
-    raise SystemExit("database1 missing index/files: " + ",".join(missing))
-print("genome_dir for ISS is", run)
-PY
-
-  drop_acc GCF_000867865.1
-}
-
-phase_database2() {
-  rm -rf "$out2"
-  mkdir -p "$out2"
-
-  echo "==> generate --reindex 0 with phage_test DBs"
-  samovar generate \
-    --accessions "${GEN2[@]}" \
-    --reindex 0 \
-    --raw-genomes 0 \
-    --host_genome "$host" \
-    --output_dir "$out2" \
-    --n_samples "$n_samples" \
-    --total_reads "$total_reads" \
-    --host_fraction "$host_fraction" \
-    --cores 1
-
-  python - <<PY
-from pathlib import Path
-from samovar.genome_index import genome_data_map, run_processed_dir
-run = run_processed_dir("$out2")
-names = sorted(p.name for p in run.glob("*.fa.gz"))
-print("database2 processed:", names)
-data = genome_data_map()
-new = [n for n in names if n.startswith("GCF_000867865") or n.startswith("GCA_035764635")]
-print("new-or-unstored names in run:", new)
-if "GCF_000867865.1" in data:
-    raise SystemExit("GCF_000867865.1 should not be in the main index after --reindex 0")
-PY
-
-  samovar prepare \
-    --output_dir "$out2" \
-    --kraken2-test "kraken2 phage_test" \
-    --kaiju-test "kaiju phage_test"
-
-  samovar_run_exec "$out2"
-}
-
-phase_reindex() {
-  echo "==> samovar reindex ${out2}"
-  before="$(python - <<'PY'
-from samovar.genome_index import genome_data_map
-print(len(genome_data_map()))
-PY
-)"
-  samovar reindex "$out2"
-  python - <<PY
-from pathlib import Path
-from samovar.genome_index import genome_data_map, processed_storage_dir, resolve_indexed_path, run_processed_dir
-acc = "GCF_000867865.1"
-idx = resolve_indexed_path(acc)
-store = processed_storage_dir() / f"{acc}.fa.gz"
-run = run_processed_dir("$out2") / f"{acc}.fa.gz"
-print("after reindex", acc, "indexed=", idx, "stored=", store.is_file(), "run_left=", run.is_file())
-if idx is None or not store.is_file():
-    raise SystemExit("reindex did not move/index GCF_000867865.1")
-print("index size", len(genome_data_map()))
-PY
-  echo "index size before reindex: ${before}"
-}
-
-case "$PHASE" in
-  indexes) phase_indexes; exit 0 ;;
-  database1) phase_database1 ;;
-  database2) phase_database2 ;;
-  reindex) phase_reindex ;;
-  add-annotator) phase_add_annotator ;;
-  all)
-    phase_database1
-    phase_database2
-    phase_reindex
-    ;;
-  *)
-    echo "Unknown SAMOVAR_PHASE=$PHASE (indexes|database1|database2|reindex|add-annotator|all)"
-    exit 1
-    ;;
-esac
-
-if [[ -d "$out1" ]]; then
-  samovar multiqc --output_dir "$out1" -- --export --interactive || true
-  samovar_harvest_example "$out1" "$SCRIPT_DIR" || true
 fi
+samovar import -n phage_test --type database --tool kaiju --exec-path "$db/kaiju_db"
+samovar import -n phage_test --type database --tool kraken2 --exec-path "$db/kraken2_db"
+
+samovar generate \
+  --accessions GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1 \
+  --reindex 1 \
+  --host_genome "$host" \
+  --host_fraction 0.15 \
+  --output_dir "$part1" \
+  --n_samples "$n_samples" \
+  --total_reads "$total_reads" \
+  --cores 1
+samovar prepare \
+  --output_dir "$part1" \
+  --kraken2-test "kraken2 phage_test" \
+  --kaiju-test "kaiju phage_test"
+samovar exec --output_dir "$part1"
+
+samovar generate \
+  --accessions GCF_000819615.1 GCA_035764635.1 GCF_000836945.1 GCF_000844825.1 GCF_000867865.1 \
+  --reindex 0 \
+  --host_genome "$host" \
+  --host_fraction 0.15 \
+  --output_dir "$part2" \
+  --n_samples "$n_samples" \
+  --total_reads "$total_reads" \
+  --cores 1
+samovar prepare \
+  --output_dir "$part2" \
+  --kraken2-test "kraken2 phage_test" \
+  --kaiju-test "kaiju phage_test"
+samovar exec --output_dir "$part2"
+
+samovar multiqc --output_dir "$part1" -- --export --interactive || true
+samovar_harvest_example "$part1" "$SCRIPT_DIR" || true

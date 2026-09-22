@@ -49,7 +49,7 @@ samovar_toy_database_dir() {
   echo "${SAMOVAR}/examples_outdir/toy/.database"
 }
 
-# CI public examples: use locally built phage_test indexes (same as examples/phage).
+# CI public examples: catalog name phage_test, imported by examples/phage/pipeline.sh.
 # Set SAMOVAR_CI_LIGHT_INDEXES=1 (full-integration examples-public job).
 samovar_light_public_indexes() {
   [[ "${SAMOVAR_CI_LIGHT_INDEXES:-0}" == "1" ]]
@@ -57,7 +57,7 @@ samovar_light_public_indexes() {
 
 # Catalog names + official URLs. Paths are not set here: a preinstalled index
 # comes from the SamovaR database catalog; otherwise lazy-download uses the URL.
-# Light mode → phage_test (built under examples_outdir, same as examples/phage).
+# Light mode → phage_test (imported by examples/phage/pipeline.sh).
 # Sets: K2_NAME KAIJU_NAME K2_URL KAIJU_URL
 samovar_public_index_vars() {
   if samovar_light_public_indexes; then
@@ -74,7 +74,7 @@ samovar_public_index_vars() {
 }
 
 # Ensure catalog names for the full public indexes (S3 lazy-download if missing).
-# Light mode only sets phage_test; examples/phage builds that index.
+# Light mode only selects the name phage_test. examples/phage/pipeline.sh imports it.
 samovar_ensure_public_indexes() {
   samovar_public_index_vars
   if samovar_light_public_indexes; then

@@ -214,18 +214,17 @@ jobs:
       run: |
         # methods.md after prepare:
         #   database1: iss, snakemake, kraken2, kaiju, gc, kmer2, direct, shannon_ks, logistic
-        #   database2 / add-annotator: iss, snakemake, kraken2 and/or kaiju
+        #   database2: iss, snakemake, kraken2, kaiju
         # gc and kmer2 are samovar.gc / samovar.kmer2 (core). kraken2-build and kaiju index tools ship with the conda packages.
         conda install -y -c conda-forge -c bioconda kraken2 kaiju
         chmod +x install.sh
         ./install.sh
         ./install.sh MultiQC
 
-    - name: Examples (phage + add-annotator)
+    - name: Examples (phage)
       timeout-minutes: 90
       run: |
         bash examples/phage/pipeline.sh
-        SAMOVAR_PHASE=add-annotator bash examples/phage/pipeline.sh
 
   examples-public:
     runs-on: ubuntu-latest
@@ -269,7 +268,8 @@ jobs:
     - name: Examples (public pipelines on phage_test indexes)
       timeout-minutes: 150
       run: |
-        # phage_test is built inside each pipeline (SAMOVAR_PHASE=indexes).
+        # phage example imports phage_test; the pipelines below only generate/prepare/exec.
+        bash examples/phage/pipeline.sh
         bash examples/realistic/pipeline.sh
         bash examples/assembly/pipeline.sh
         bash examples/databases_comparison/pipeline.sh

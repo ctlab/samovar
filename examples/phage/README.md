@@ -1,6 +1,6 @@
 # Phage
 
-Build named `phage_test` indexes, then `generate --reindex` and `samovar reindex`. Kaiju and Kraken2 are built from overlapping but different accession lists so the tools disagree on purpose.
+Download phage assemblies, `samovar build --index phage_test` when those indexes are missing, `samovar import` them, then `generate` / `prepare` / `exec` twice. Kaiju’s index includes `GCF_000867865.1`; Kraken2’s includes `GCF_000844825.1`. The first run uses `--reindex 1`, the second `--reindex 0`.
 
 ```bash
 bash examples/phage/pipeline.sh

@@ -37,7 +37,7 @@ prep_args=(
 )
 
 if samovar_light_public_indexes; then
-  SAMOVAR_PHASE=indexes bash "${SAMOVAR}/examples/phage/pipeline.sh"
+  # phage_test is imported by examples/phage/pipeline.sh
   samovar generate --accessions "${phage_acc[@]}" --host_fraction 0.15 "${gen_args[@]}"
   samovar prepare \
     --kraken2-test "kraken2 phage_test" \

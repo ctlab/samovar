@@ -75,11 +75,17 @@ Do not create a new parallel directory or implementation layer when an existing 
 
 ## 5. Examples and documentation
 
-Examples demonstrate public Samovar functionality but are not part of the implementation or test infrastructure.
+Examples demonstrate the public `samovar` bin. They are not an implementation layer and not test infrastructure. Read this section before changing `examples/`.
 
-Changes to public behavior, CLI commands, configuration, contracts, or workflow semantics should update the relevant documentation/Wiki.
+An example is a short sequence of `samovar` commands (`generate`, `prepare`, `exec`, `build`, `import`, `reindex`, `multiqc`, and the other commands in `samovar help`). Do not wrap that sequence in shell functions. Do not call `python -m samovar…` or inline Python for a step the bin already performs.
 
-Keep examples small and focused on demonstrating the intended public interface.
+Catalog names and flags go on the command line. Register a database with `samovar import` (alias of `samovar tools import`). `samovar build --index NAME` records the same catalog entry.
+
+If a step cannot be written as a `samovar` command and needs a large helper, stop. That is missing bin behavior: add the command and a test instead of growing `examples/common.sh` or the example script.
+
+`examples/common.sh` is only for process setup that is not a pipeline step: `PATH`, the output directory, optional `sbatch` around `exec`, and copying figures after the run.
+
+Keep each example small. Changes to public CLI, configuration, contracts, or workflow semantics also update the README or Wiki.
 
 ## 6. Validate the whole change
 

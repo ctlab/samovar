@@ -15,7 +15,7 @@ host="${SAMOVAR}/data/test_genomes/host/9606.fna"
 phage_acc=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
 
 if samovar_light_public_indexes; then
-  SAMOVAR_PHASE=indexes bash "${SAMOVAR}/examples/phage/pipeline.sh"
+  # phage_test is imported by examples/phage/pipeline.sh
   samovar generate \
     --accessions "${phage_acc[@]}" \
     --reindex 0 \

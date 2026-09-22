@@ -15,7 +15,7 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 | [reprofiling](reprofiling/) | A custom ML reprofiler |
 | [logistic-correction](logistic-correction/) | Single-annotator logistic abundance correction |
 | [multiple_tables](multiple_tables/) | Scoring several abundance-table methods |
-| [phage](phage/) | Named SamovaR databases and `reindex` |
+| [phage](phage/) | Named `phage_test` indexes, then `generate` / `prepare` / `exec` twice |
 | [assembly](assembly/) | Assembly annotator: taxID plus Feature `MAG_ID` |
 | [databases_comparison](databases_comparison/) | Same community, several Kraken2 indexes |
 | [realistic](realistic/) | NCBI genomes with public Kraken2 and Kaiju indexes |

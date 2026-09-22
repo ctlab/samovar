@@ -27,7 +27,7 @@ declare -A K2_URLS=(
 
 preprocess_args=()
 if samovar_light_public_indexes; then
-  SAMOVAR_PHASE=indexes bash "${SAMOVAR}/examples/phage/pipeline.sh"
+  # phage_test is imported by examples/phage/pipeline.sh
   preprocess_args+=(--kraken2-phage "kraken2 phage_test")
   preprocess_args+=(--kaiju-phage "kaiju phage_test")
 else
