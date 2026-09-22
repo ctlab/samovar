@@ -1252,7 +1252,7 @@ def install_status_rows() -> List[Dict[str, Any]]:
 
 
 def format_install_status() -> str:
-    """Human-readable required/optional tool table for ``install.sh`` and ``samovar tools --status``."""
+    """Required/optional programs for ``install.sh``. CLI status appends this report."""
     rows = install_status_rows()
     lines = [
         "SamovaR tool status",

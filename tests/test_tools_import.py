@@ -5,7 +5,13 @@ from pathlib import Path
 from samovar.annotators_wrapper import CustomAnnotator, get_annotator_instance
 from samovar.main_config import parse_tool_entry
 from samovar.paths import write_config, update_config
-from samovar.tools_import import format_import_status, import_database, import_tool, main as import_main
+from samovar.tools_import import (
+    format_import_status,
+    format_status,
+    import_database,
+    import_tool,
+    main as import_main,
+)
 from samovar.tool_spec import bare_tool_name
 
 
@@ -641,10 +647,32 @@ def test_import_status_lists_tools_and_databases(tmp_path, monkeypatch, capsys):
         exec_path=str(db),
         also_repo_build=False,
     )
-    assert import_main(["--status"]) == 0
+    assert import_main(["status"]) == 0
     out = capsys.readouterr().out
+    assert out == format_status() + "\n"
+    assert "Required:" in out
+    assert "Databases" in out
     tool_line = next(line for line in out.splitlines() if line.endswith(str(binary.resolve())))
     assert "\tannotator\tok\t" in tool_line
     assert f"kraken2\tphage_test\tok\t{db.resolve()}" in out
+    listed = format_import_status(
+        {
+            "databases": {
+                "kraken2": {
+                    "phage_test": {
+                        "path": str(db),
+                        "flags": "--memory-mapping",
+                        "url": "https://example.test/db.tar.gz",
+                        "lazy-download": "echo rebuild",
+                        "type": "database",
+                    }
+                }
+            }
+        }
+    )
+    assert "kraken2\tphage_test\tok\t" in listed
+    assert "--memory-mapping" in listed
+    assert "https://example.test/db.tar.gz" in listed
+    assert listed.rstrip().endswith("\tyes")
     assert "(none)" in format_import_status({})
 

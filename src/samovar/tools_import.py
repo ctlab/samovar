@@ -243,18 +243,35 @@ def format_import_status(cfg: Optional[dict] = None) -> str:
             kind = str(rec.get("type") or "")
             mark = _path_status(path)
             lines.append(f"{name}\t{kind}\t{mark}\t{path}")
-    lines.extend(["", "Databases", "tool\tname\tstatus\tpath"])
+    lines.extend(["", "Databases", "tool\tname\tstatus\tpath\tflags\turl\tlazy-download"])
     rows = []
     for tool, grouped in iter_database_records(cfg).items():
         for key, rec in grouped.items():
             path = str(rec.get("path") or "")
-            rows.append((tool, key or str(rec.get("name") or ""), _path_status(path), path))
+            rows.append(
+                (
+                    tool,
+                    key or str(rec.get("name") or ""),
+                    _path_status(path),
+                    path,
+                    str(rec.get("flags") or ""),
+                    str(rec.get("url") or ""),
+                    "yes" if str(rec.get("lazy-download") or "").strip() else "no",
+                )
+            )
     if not rows:
         lines.append("(none)")
     else:
-        for tool, name, mark, path in sorted(rows):
-            lines.append(f"{tool}\t{name}\t{mark}\t{path}")
+        for tool, name, mark, path, flags, url, lazy in sorted(rows):
+            lines.append(f"{tool}\t{name}\t{mark}\t{path}\t{flags}\t{url}\t{lazy}")
     return "\n".join(lines)
+
+
+def format_status(cfg: Optional[dict] = None) -> str:
+    """Same report for ``samovar tools --status`` and ``samovar import status``."""
+    from samovar.paths import format_install_status
+
+    return format_import_status(cfg) + "\n\n" + format_install_status()
 
 
 def _path_status(path: str) -> str:
@@ -271,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--status",
         action="store_true",
-        help="List imported tools and databases, then exit.",
+        help="List imported tools and databases (also: samovar import status).",
     )
     parser.add_argument(
         "-n",
@@ -411,10 +428,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    else:
+        argv = list(argv)
+    if argv[:1] == ["status"]:
+        argv = ["--status", *argv[1:]]
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.status:
-        print(format_import_status())
+        print(format_status())
         return 0
     if not str(args.name or "").strip() or not str(args.type or "").strip():
         parser.error("-n/--name and -t/--type are required unless --status")

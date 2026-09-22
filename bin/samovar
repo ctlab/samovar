@@ -52,7 +52,7 @@ show_usage() {
     echo "  branch      Copy a run up to --start-point; prepare in the copy continues from there"
     echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
     echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
-    echo "  tools       import a binary; --sort reads; --status for programs"
+    echo "  tools       import a binary; --sort reads; --status (same as import status)"
     echo "  import      Alias of tools import"
     echo "  export      Pack a Hydra run snapshot (+ optional databases) into an archive"
     echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
@@ -80,7 +80,7 @@ show_usage() {
     echo "  samovar prepare --add-annotator --kraken2-test 'kraken2 toy' --directory [...]"
     echo "  samovar branch --start-point regenerate_tables /path/run /path/run_branch"
     echo "  samovar multiqc --output_dir [...] -- --export"
-    echo "  samovar import --status"
+    echo "  samovar import status"
     echo "  samovar tools import -n kaiju --exec kaiju --exec-path /usr/bin/kaiju --type annotator --lazy-install 'conda install bioconda::kaiju'"
     echo "  samovar tools import -n standard_8GB --type database --tool kraken2 --exec-path /path/to/db --lazy-download @fetch.sh"
     echo "  samovar export /path/to/run -o run.tgz --config full"
@@ -216,14 +216,14 @@ case "${1:-}" in
                 shift
                 "$PYTHON" "$SCRIPT_DIR/samovar_sort_reads" "$@"
                 ;;
-            "--status")
+            "--status"|"status")
                 PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
-                    "$PYTHON" -c "from samovar.paths import format_install_status; print(format_install_status())"
+                    "$PYTHON" -m samovar.tools_import status
                 ;;
             "help"|"-h"|"--help"|"")
                 echo "Usage: samovar tools <command>"
-                echo "  import     Register a binary, or --status to list tools and databases"
-                echo "  --status   Required/optional programs on PATH"
+                echo "  import     Register a binary or database"
+                echo "  --status   Same report as: samovar import status"
                 echo "  --sort     Sort paired FASTQ by read ID"
                 echo "See wiki/tools_import.md"
                 ;;
