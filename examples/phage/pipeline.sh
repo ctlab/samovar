@@ -17,7 +17,10 @@ n_samples="${N_SAMPLES:-2}"
 total_reads="${TOTAL_READS:-2000}"
 
 mkdir -p "$db"
-if [[ ! -e "$db/kraken2_db/hash.k2d" ]] || ! find -L "$db/kaiju_db" -name '*.fmi' 2>/dev/null | grep -q .; then
+# Rebuild only when phage_test is absent or its stored path is missing.
+if ! samovar import --status | grep -Eq $'^kaiju\tphage_test(:[^[:space:]]*)?\tok\t' \
+  || ! samovar import --status | grep -Eq $'^kraken2\tphage_test(:[^[:space:]]*)?\tok\t'
+then
   samovar genome download --output-dir "$db/kaiju_src" \
     GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000867865.1
   samovar genome download --output-dir "$db/kraken2_src" \
@@ -44,9 +47,9 @@ EOF
     --config_path "$db/kraken2.yaml" \
     --db_path "$db/kraken2_db" \
     --index phage_test --flags ""
+  samovar import -n phage_test --type database --tool kaiju --exec-path "$db/kaiju_db"
+  samovar import -n phage_test --type database --tool kraken2 --exec-path "$db/kraken2_db"
 fi
-samovar import -n phage_test --type database --tool kaiju --exec-path "$db/kaiju_db"
-samovar import -n phage_test --type database --tool kraken2 --exec-path "$db/kraken2_db"
 
 samovar generate \
   --accessions GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1 \
