@@ -551,7 +551,10 @@ class AssemblyAnnotator(BaseAnnotator):
         )
         extra = self.extra or ""
         cmd = self.cmd or self.default_cmd
-        if "assembly_profiling" not in str(cmd) and str(cmd).split()[-1] in {
+        # Prepare stores the bare name (`assembly_profiling`). That is not a
+        # PATH binary; the implementation is this module.
+        bare = os.path.basename(str(cmd).split()[-1]) if str(cmd).strip() else ""
+        if "samovar.assembly_profiling" not in str(cmd) and bare in {
             "assembly",
             "assembly_profiling",
         }:
