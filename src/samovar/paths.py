@@ -61,6 +61,7 @@ KNOWN_TOOLS = (
     "seqtk",
     "samtools",
     "megahit",
+    "flye",
     "minimap2",
     "coverm",
     "R",

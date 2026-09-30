@@ -77,6 +77,17 @@ SIDECARS = {
         "group": "assembler",
         "hint": "Optional MegaHIT assembler (./install.sh MegaHIT).",
     },
+    "flye": {
+        "python": None,
+        "packages": ["flye"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "flye",
+        "config_path_key": "flye_path",
+        "tool_keys": ("flye",),
+        "group": "assembler",
+        "hint": "Optional Flye / metaFlye assembler (./install.sh metaFlye).",
+    },
     "prodigal": {
         "python": None,
         "packages": ["prodigal"],
@@ -388,6 +399,9 @@ def install_named(name: str) -> Path:
         "gtdb-tk": "gtdbtk",
         "gtdb_tk": "gtdbtk",
         "mega-hit": "megahit",
+        "metaflye": "flye",
+        "meta-flye": "flye",
+        "metflye": "flye",
         "cover-m": "coverm",
     }
     key = aliases.get(key, key)

@@ -104,6 +104,12 @@ def test_factory_and_match_annotation():
     assert isinstance(inst, AssemblyAnnotator)
     outs = inst.get_expected_outputs("1_full", "/tmp/out")
     assert outs[0].endswith("1_full_assembly-test.assembly.out")
+    bare = AssemblyAnnotator(
+        {"run_name": "assembly-test", "type": "assembly_profiling", "cmd": "assembly_profiling"},
+        {},
+    )
+    shell = bare.get_snakemake_shell_cmd("/tmp/r1.fq", "/tmp/r2.fq", outs)
+    assert " -m samovar.assembly_profiling annotator " in shell
     assert match_annotation("1_full_assembly-test.assembly.out") == "assembly"
 
 
@@ -309,6 +315,39 @@ def test_anvio_empty_contigs_skips_database(tmp_path, monkeypatch):
     monkeypatch.setattr("samovar.assembly_profiling.which_tool", boom)
     run_anvio_binner(str(contigs), str(dest))
     assert (dest / "mag1.fa").is_file()
+
+
+def test_metaflye_invokes_flye_like_megahit(tmp_path, monkeypatch):
+    """metaFlye is the Flye binary plus --meta, then the contig FASTA at -o."""
+    calls = []
+
+    def fake_which(name, default=""):
+        assert name == "flye"
+        return "/usr/bin/flye"
+
+    def fake_run(cmd, **_kwargs):
+        calls.append([str(part) for part in cmd])
+        work = Path(cmd[cmd.index("-o") + 1])
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "assembly.fasta").write_text(">c1\nACGT\n", encoding="utf-8")
+
+    monkeypatch.setattr("samovar.assembly_profiling.which_tool", fake_which)
+    monkeypatch.setattr("samovar.assembly_profiling._run", fake_run)
+    r1 = tmp_path / "sample_1.fastq"
+    r2 = tmp_path / "empty_2.fastq"
+    r1.write_text("@r0\nACGT\n+\nIIII\n", encoding="utf-8")
+    r2.write_bytes(b"")
+    dest = tmp_path / "contigs.fa"
+    run_assembler(str(r1), str(r2), str(dest), threads=3, name="metaflye", extra=["--nano-raw"])
+    cmd = calls[0]
+    assert cmd[0] == "/usr/bin/flye"
+    assert "--meta" in cmd
+    assert "--nano-hq" not in cmd
+    assert "--nano-raw" in cmd
+    assert cmd[cmd.index("-t") + 1] == "3"
+    assert str(r1) in cmd
+    assert str(r2) not in cmd
+    assert dest.read_text(encoding="utf-8").startswith(">")
 
 
 @pytest.mark.optional

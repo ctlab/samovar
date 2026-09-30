@@ -221,6 +221,8 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "chopper": "qc",
     "nanofilt": "qc",
     "megahit": "assembler",
+    "flye": "assembler",
+    "metaflye": "assembler",
     "prodigal": "gene_caller",
     "anvio": "binner",
     "metabat2": "binner",

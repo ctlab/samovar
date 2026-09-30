@@ -13,6 +13,7 @@
 #   ./install.sh ART             optional ART Illumina simulator in a separate conda env
 #   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
 #   ./install.sh MegaHIT         optional MegaHIT assembler (sidecar)
+#   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
 #   ./install.sh Prodigal        optional Prodigal gene caller (sidecar)
 #   ./install.sh minimap2        optional minimap2 + samtools (sidecar)
 #   ./install.sh CoverM          optional CoverM MAG quantifier (sidecar)
@@ -589,6 +590,7 @@ normalize_optional_arg() {
         nextflow) echo "nextflow" ;;
         seqtk) echo "seqtk" ;;
         megahit|mega-hit) echo "megahit" ;;
+        metaflye|meta-flye|flye) echo "flye" ;;
         prodigal) echo "prodigal" ;;
         minimap2) echo "minimap2" ;;
         coverm|cover-m) echo "coverm" ;;
@@ -632,6 +634,7 @@ run_optional_named() {
         seqtk) install_seqtk ;;
         nextflow) install_nextflow ;;
         megahit) "$PYTHON_PATH" -m samovar.sidecar megahit ;;
+        flye) "$PYTHON_PATH" -m samovar.sidecar flye ;;
         prodigal) "$PYTHON_PATH" -m samovar.sidecar prodigal ;;
         minimap2) "$PYTHON_PATH" -m samovar.sidecar minimap2 ;;
         coverm) "$PYTHON_PATH" -m samovar.sidecar coverm ;;
