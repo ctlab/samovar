@@ -4,6 +4,5 @@
   "python3",
   "g++",
   "c++",
-  "clang++",
-  "seqtk"
+  "clang++"
 ]
