@@ -3,10 +3,12 @@
     "dastool_sieber2018.bib"
   ],
   "R": [
-    "r_core_team.bib"
+    "r_core_team.bib",
+    "r_core_harvest.bib"
   ],
   "Rscript": [
-    "r_core_team.bib"
+    "r_core_team.bib",
+    "r_core_harvest.bib"
   ],
   "adaboost": [
     "sklearn_pedregosa2011.bib"
@@ -41,7 +43,8 @@
     "cami2_meyer2022.bib"
   ],
   "centrifuge": [
-    "centrifuge_kim2016.bib"
+    "centrifuge_kim2016.bib",
+    "centrifuge_cli_harvest.bib"
   ],
   "checkm2": [
     "checkm2_chklovski2023.bib"
@@ -61,6 +64,9 @@
   ],
   "fastp": [
     "fastp_chen2018.bib"
+  ],
+  "flye": [
+    "flye_kolmogorov2019.bib"
   ],
   "g++": [],
   "gtdbtk": [
@@ -91,6 +97,10 @@
   "metabat2": [
     "metabat2_kang2019.bib"
   ],
+  "metaflye": [
+    "metaflye_kolmogorov2020.bib",
+    "flye_kolmogorov2019.bib"
+  ],
   "metaphlan": [
     "metaphlan_blanco2023.bib",
     "metaphlan_beghini2021.bib"
@@ -98,6 +108,9 @@
   "metaphlan4": [
     "metaphlan_blanco2023.bib",
     "metaphlan_beghini2021.bib"
+  ],
+  "metax": [
+    "metax_deng2026.bib"
   ],
   "minimap2": [
     "minimap2_li2018.bib"
@@ -136,13 +149,16 @@
     "sklearn_pedregosa2011.bib"
   ],
   "samovar": [
-    "samovar_chechenina2023.bib"
+    "samovar_chechenina2023.bib",
+    "samovar_r_harvest.bib"
   ],
   "samtools": [
     "samtools_danecek2021.bib",
     "samtools_li2009.bib"
   ],
-  "seqtk": [],
+  "seqtk": [
+    "seqtk_li2012.bib"
+  ],
   "simulator.py": [
     "nanosim_yang2017.bib"
   ],
@@ -151,22 +167,28 @@
     "snakemake_molder2021.bib"
   ],
   "sparsedossa2": [
-    "sparsedossa2_ma2021.bib"
+    "sparsedossa2_ma2021.bib",
+    "sparsedossa2_r_harvest.bib"
   ],
   "sparsedossa2-cv": [
-    "sparsedossa2_ma2021.bib"
+    "sparsedossa2_ma2021.bib",
+    "sparsedossa2_r_harvest.bib"
   ],
   "sparsedossa2-fit": [
-    "sparsedossa2_ma2021.bib"
+    "sparsedossa2_ma2021.bib",
+    "sparsedossa2_r_harvest.bib"
   ],
   "sparsedossa2-ibd": [
-    "sparsedossa2_ma2021.bib"
+    "sparsedossa2_ma2021.bib",
+    "sparsedossa2_r_harvest.bib"
   ],
   "sparsedossa2-stool": [
-    "sparsedossa2_ma2021.bib"
+    "sparsedossa2_ma2021.bib",
+    "sparsedossa2_r_harvest.bib"
   ],
   "sparsedossa2-vaginal": [
-    "sparsedossa2_ma2021.bib"
+    "sparsedossa2_ma2021.bib",
+    "sparsedossa2_r_harvest.bib"
   ],
   "trimmomatic": [
     "trimmomatic_bolger2014.bib"

@@ -88,6 +88,18 @@ SIDECARS = {
         "group": "assembler",
         "hint": "Optional Flye / metaFlye assembler (./install.sh metaFlye).",
     },
+    "metax": {
+        "python": None,
+        "packages": ["metax=0.9.23=beta_0", "ma=1.1.4"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "metax",
+        "extra_channels": ("zldeng",),
+        "config_path_key": "metax_path",
+        "tool_keys": ("metax",),
+        "group": "annotator",
+        "hint": "Optional Metax 0.9.23 profiler (./install.sh Metax). Pinned below 2.x so prebuilt RefSeq indexes (metax_db.json + ma) still load. Needs maCMD from bioconda ma=1.1.4.",
+    },
     "prodigal": {
         "python": None,
         "packages": ["prodigal"],
@@ -311,9 +323,12 @@ def _conda_packages_cmd(
     action: str,
     prefix: Path,
     packages: Sequence[str],
+    extra_channels: Sequence[str] = (),
 ) -> List[str]:
     cmd = [conda, action, "-y", "-p", str(prefix)]
     cmd.extend(["-c", "conda-forge", "-c", "bioconda"])
+    for channel in extra_channels:
+        cmd.extend(["-c", str(channel)])
     cmd.extend(packages)
     return cmd
 
@@ -344,7 +359,13 @@ def create_sidecar_env(
     if py and not any(p.startswith("python") for p in pkgs):
         pkgs.insert(0, f"python={py}")
     action = "install" if prefix.is_dir() else "create"
-    cmd = _conda_packages_cmd(conda, action, prefix, pkgs)
+    cmd = _conda_packages_cmd(
+        conda,
+        action,
+        prefix,
+        pkgs,
+        extra_channels=tuple(spec.get("extra_channels") or ()),
+    )
     verb = "Repairing" if action == "install" else "Creating"
     print(f"{verb} sidecar env:", " ".join(cmd))
     subprocess.check_call(cmd)
@@ -400,6 +421,7 @@ def install_named(name: str) -> Path:
         "gtdb_tk": "gtdbtk",
         "mega-hit": "megahit",
         "metaflye": "flye",
+        "metax": "metax",
         "meta-flye": "flye",
         "metflye": "flye",
         "cover-m": "coverm",

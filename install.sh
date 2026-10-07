@@ -14,6 +14,7 @@
 #   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
 #   ./install.sh MegaHIT         optional MegaHIT assembler (sidecar)
 #   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
+#   ./install.sh Metax          optional Metax profiler (sidecar; custom.sh -p metax)
 #   ./install.sh Prodigal        optional Prodigal gene caller (sidecar)
 #   ./install.sh minimap2        optional minimap2 + samtools (sidecar)
 #   ./install.sh CoverM          optional CoverM MAG quantifier (sidecar)
@@ -599,6 +600,7 @@ normalize_optional_arg() {
         checkm2|checkm) echo "checkm2" ;;
         gtdbtk|gtdb-tk|gtdb_tk) echo "gtdbtk" ;;
         sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
+        metax) echo "metax" ;;
         full|all|everything) echo "full" ;;
         *) echo "" ;;
     esac
@@ -643,6 +645,7 @@ run_optional_named() {
         checkm2) "$PYTHON_PATH" -m samovar.sidecar checkm2 ;;
         gtdbtk) "$PYTHON_PATH" -m samovar.sidecar gtdbtk ;;
         sparsedossa2) install_sparsedossa2 ;;
+        metax) "$PYTHON_PATH" -m samovar.sidecar metax ;;
         *) return 1 ;;
     esac
 }
@@ -673,6 +676,7 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_SEQTK=1
     export SAMOVAR_INSTALL_NEXTFLOW=1
     export SAMOVAR_INSTALL_SPARSEDOSSA2=1
+    export SAMOVAR_INSTALL_METAX=1
 }
 
 INSTALL_FULL=0
@@ -911,6 +915,12 @@ if [ "${SAMOVAR_INSTALL_SPARSEDOSSA2:-0}" != "0" ]; then
     fi
 else
     echo "Skipping SparseDOSSA2 (not required). Use ./install.sh SparseDOSSA2 for table generators + CV scoring."
+fi
+
+if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar metax || echo "Warning: optional Metax sidecar install did not complete."
+else
+    echo "Skipping Metax (not required). Use ./install.sh Metax for the custom.sh annotator."
 fi
 
 # Write main config.json (location: $SAMOVAR_CONFIG) and build/config_path

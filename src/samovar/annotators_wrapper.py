@@ -18,6 +18,7 @@ CONSTANT_TAXID_TOOL_NAMES = CONSTANT_TAXID_NAMES
 CUSTOM_WRAPPER_SCRIPTS = {
     "custom.sh",
     "centrifuge.sh",
+    "metax.sh",
     "metauto.sh",
     "assembly_hybrid.sh",
 }
@@ -25,6 +26,7 @@ CUSTOM_WRAPPER_SCRIPTS = {
 # These names always go through custom.sh (native CLIs are not the SamovaR flags).
 CUSTOM_SH_ROUTER_TOOLS = {
     "centrifuge",
+    "metax",
     "metauto",
     "assembly_hybrid",
 } | DUMMY_TOOL_NAMES
