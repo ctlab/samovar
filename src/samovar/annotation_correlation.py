@@ -6,9 +6,12 @@ the old pairwise annotator cross-tab heatmaps with one generalised matrix.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -17,6 +20,7 @@ from samovar.annotation_columns import feat_annotator_columns, is_feat_column, i
 
 PathLike = Union[str, Path]
 MAX_FEAT_COLUMNS = 20
+DEFAULT_SPEARMAN_SAMPLE_ROWS = 10_000
 CORRELATION_TYPES = frozenset(
     {"cv", "cross-validation", "correlation", "spearman", "corr"}
 )
@@ -207,6 +211,7 @@ def _select_and_order(
     numeric: pd.DataFrame,
     max_feat: int,
     importance: Optional[pd.Series] = None,
+    rho_abs: Optional[Mapping[str, float]] = None,
 ) -> List[str]:
     feat_set = {
         c
@@ -216,14 +221,17 @@ def _select_and_order(
     true_cols = [c for c in columns if str(c).lower() == "true"]
     core = [c for c in columns if c not in feat_set and str(c).lower() != "true"]
     feat = [c for c in columns if c in feat_set]
-    rho_abs: Dict[str, float] = {}
-    if "true" in numeric.columns:
+    scored: Dict[str, float] = {}
+    if rho_abs:
+        scored = {str(k): float(v) for k, v in rho_abs.items()}
+    elif "true" in numeric.columns:
         target = numeric["true"]
         for col in list(core) + feat:
-            rho_abs[col] = abs(_spearman_pair(numeric[col], target))
+            scored[col] = abs(_spearman_pair(numeric[col], target))
     else:
         for col in feat:
-            rho_abs[col] = float(numeric[col].var(skipna=True) or 0.0)
+            scored[col] = float(numeric[col].var(skipna=True) or 0.0)
+    rho_abs = scored
     lookup = _importance_lookup(importance)
     feat_ranked = sorted(
         feat,
@@ -240,31 +248,242 @@ def _select_and_order(
     return selected + true_cols
 
 
-def spearman_annotation_correlation(
-    annotation,
+def _full_table_requested(flag: Optional[bool]) -> bool:
+    """True only when the caller or SAMOVAR_SPEARMAN_FULL asks for the old path."""
+    if flag is not None:
+        return bool(flag)
+    return os.environ.get("SAMOVAR_SPEARMAN_FULL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def sample_annotation_rows(
+    frame: pd.DataFrame,
+    sample_rows: int,
+    seed: int,
+) -> List[Tuple[str, pd.DataFrame]]:
+    """One draw of at most ``sample_rows`` rows from each sample. Never concatenates them."""
+    limit = max(1, int(sample_rows))
+    rng = np.random.default_rng(int(seed))
+    if "sample" in frame.columns and frame["sample"].notna().any():
+        key = frame["sample"].fillna("__missing__").astype(str)
+        groups = list(frame.groupby(key, sort=True))
+    else:
+        groups = [("all", frame)]
+    drawn: List[Tuple[str, pd.DataFrame]] = []
+    for name, sub in groups:
+        sub = sub.reset_index(drop=True)
+        n = len(sub)
+        if n == 0:
+            continue
+        if n > limit:
+            pick = np.sort(rng.choice(n, size=limit, replace=False))
+            sub = sub.iloc[pick]
+        drawn.append((str(name), sub))
+    return drawn
+
+
+def _spearman_binary() -> Path:
+    from samovar.paths import repo_root
+
+    return repo_root() / "bin" / "samovar_spearman"
+
+
+def ensure_spearman_binary() -> Path:
+    """Build ``bin/samovar_spearman`` when the source is newer. OpenMP when the compiler allows it."""
+    from samovar.paths import cxx_compiler, repo_root
+
+    binary = _spearman_binary()
+    source = repo_root() / "src" / "cpp" / "spearman.cpp"
+    if not source.is_file():
+        raise FileNotFoundError(f"Spearman source not found: {source}")
+    needs = (not binary.is_file()) or source.stat().st_mtime > binary.stat().st_mtime
+    if not needs:
+        return binary
+    cxx = cxx_compiler()
+    if not cxx:
+        raise FileNotFoundError("No C++ compiler found (g++, c++, or clang++). Set CXX.")
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [cxx, "-O3", "-std=c++17", "-fopenmp", "-o", str(binary), str(source)]
+    try:
+        subprocess.check_call(cmd)
+    except subprocess.CalledProcessError:
+        subprocess.check_call([cxx, "-O3", "-std=c++17", "-o", str(binary), str(source)])
+    return binary
+
+
+def _format_numeric_cell(value: float) -> str:
+    if value != value:
+        return "nan"
+    return repr(float(value))
+
+
+def _spearman_cpp_matrices(
+    samples: Sequence[Tuple[str, pd.DataFrame]],
+    columns: Sequence[str],
     *,
-    max_feat: int = MAX_FEAT_COLUMNS,
-    importance: Optional[pd.Series] = None,
-    importance_dir: Optional[PathLike] = None,
-) -> pd.DataFrame:
-    """Pairwise Spearman ρ among tax annotators, top feat_ columns, and true taxid."""
-    frame = _as_frame(annotation)
-    names = correlation_columns(frame)
-    if len(names) < 2:
-        return pd.DataFrame()
-    numeric = pd.DataFrame({name: _rankable_series(frame[name]) for name in names})
-    scores = importance if importance is not None else load_feature_importance_scores(importance_dir)
-    names = _select_and_order(names, numeric, max_feat, scores)
-    if len(names) < 2:
-        return pd.DataFrame()
-    numeric = numeric.loc[:, names]
+    threads: Optional[int] = None,
+    against_last: bool = False,
+) -> Dict[str, pd.DataFrame]:
+    """Pairwise Spearman of ``columns`` inside each already-sampled frame."""
+    names = [str(c) for c in columns]
+    if len(names) < 2 or not samples:
+        return {}
+    binary = ensure_spearman_binary()
+    n_threads = int(threads or os.cpu_count() or 1)
+    lines = [f"SAMPLES {len(samples)}"]
+    for sample_name, numeric in samples:
+        lines.append(f"SAMPLE\t{sample_name}\t{len(numeric)}")
+        lines.append("\t".join(names))
+        values = numeric.loc[:, names].to_numpy(dtype=float, copy=False)
+        for row in values:
+            lines.append("\t".join(_format_numeric_cell(float(v)) for v in row))
+    payload = "\n".join(lines) + "\n"
+    with tempfile.TemporaryDirectory(prefix="samovar-spearman-") as tmp:
+        src = Path(tmp) / "in.txt"
+        src.write_text(payload, encoding="utf-8")
+        with src.open("rb") as handle:
+            cmd = [str(binary), "--threads", str(max(1, n_threads))]
+            if against_last:
+                cmd.append("--against-last")
+            proc = subprocess.run(
+                cmd,
+                stdin=handle,
+                capture_output=True,
+                check=False,
+            )
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err or f"samovar_spearman exited {proc.returncode}")
+    text = (proc.stdout or b"").decode("utf-8", errors="replace").splitlines()
+    out: Dict[str, pd.DataFrame] = {}
+    i = 0
+    while i < len(text):
+        if not text[i].startswith("SAMPLE\t"):
+            i += 1
+            continue
+        sample_name = text[i].split("\t", 1)[1]
+        header = text[i + 1].split("\t")
+        block = []
+        i += 2
+        while i < len(text) and not text[i].startswith("SAMPLE\t"):
+            block.append([float(x) for x in text[i].split("\t")])
+            i += 1
+        out[sample_name] = pd.DataFrame(block, index=header, columns=header)
+    return out
+
+
+def _fisher_mean(matrices: Sequence[pd.DataFrame], columns: Sequence[str]) -> pd.DataFrame:
+    names = [str(c) for c in columns]
+    acc = np.zeros((len(names), len(names)), dtype=float)
+    weight = np.zeros((len(names), len(names)), dtype=float)
+    for matrix in matrices:
+        aligned = matrix.reindex(index=names, columns=names)
+        values = aligned.to_numpy(dtype=float)
+        finite = np.isfinite(values)
+        clipped = np.clip(values, -1.0 + 1e-7, 1.0 - 1e-7)
+        acc += np.where(finite, np.arctanh(clipped), 0.0)
+        weight += finite.astype(float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.tanh(np.divide(acc, weight, out=np.zeros_like(acc), where=weight > 0))
+    mean = np.where(weight > 0, mean, 0.0)
+    np.fill_diagonal(mean, 1.0)
+    return pd.DataFrame(mean, index=names, columns=names)
+
+
+def _pairwise_frame(numeric: pd.DataFrame, names: Sequence[str]) -> pd.DataFrame:
     n = len(names)
     arr = np.eye(n, dtype=float)
     for i, left in enumerate(names):
         for j in range(i + 1, n):
             rho = _spearman_pair(numeric[left], numeric[names[j]])
             arr[i, j] = arr[j, i] = rho
-    return pd.DataFrame(arr, index=names, columns=names)
+    return pd.DataFrame(arr, index=list(names), columns=list(names))
+
+
+def spearman_annotation_correlation(
+    annotation,
+    *,
+    max_feat: int = MAX_FEAT_COLUMNS,
+    importance: Optional[pd.Series] = None,
+    importance_dir: Optional[PathLike] = None,
+    full_table: Optional[bool] = None,
+    sample_rows: int = DEFAULT_SPEARMAN_SAMPLE_ROWS,
+    seed: int = 42,
+    threads: Optional[int] = None,
+    by_sample: Optional[Dict[str, pd.DataFrame]] = None,
+) -> pd.DataFrame:
+    """Pairwise Spearman ρ among tax annotators, top feat_ columns, and true taxid.
+
+    By default each sample contributes a random ``sample_rows`` reads, Spearman
+    runs in ``samovar_spearman``, and the published matrix is the Fisher-z mean
+    of those per-sample matrices. ``full_table=True`` (or ``SAMOVAR_SPEARMAN_FULL``)
+    correlates the concatenated table in Python instead.
+    """
+    frame = _as_frame(annotation)
+    names = correlation_columns(frame)
+    if len(names) < 2:
+        return pd.DataFrame()
+    scores = importance if importance is not None else load_feature_importance_scores(importance_dir)
+    if _full_table_requested(full_table):
+        numeric = pd.DataFrame({name: _rankable_series(frame[name]) for name in names})
+        names = _select_and_order(names, numeric, max_feat, scores)
+        if len(names) < 2:
+            return pd.DataFrame()
+        return _pairwise_frame(numeric, names)
+
+    drawn = sample_annotation_rows(frame, sample_rows, seed)
+    if not drawn:
+        return pd.DataFrame()
+    sample_numeric: List[Tuple[str, pd.DataFrame]] = []
+    for sample_name, sub in drawn:
+        sample_numeric.append(
+            (sample_name, pd.DataFrame({name: _rankable_series(sub[name]) for name in names}))
+        )
+    # Wide k-mer tables: correlate each column with true, keep the top feats,
+    # then run the pairwise matrix only on that short list.
+    wide = len(names) > 64 and "true" in names
+    ordered_cols = ([c for c in names if c != "true"] + ["true"]) if wide else list(names)
+    matrices = _spearman_cpp_matrices(
+        sample_numeric,
+        ordered_cols,
+        threads=threads,
+        against_last=wide,
+    )
+    ordered_all = [matrices[name] for name, _numeric in sample_numeric if name in matrices]
+    rho_abs: Dict[str, float] = {}
+    if ordered_all and "true" in names:
+        acc = {col: 0.0 for col in names if col != "true"}
+        for matrix in ordered_all:
+            for col in acc:
+                value = matrix.loc[col, "true"] if col in matrix.index and "true" in matrix.columns else 0.0
+                acc[col] += abs(float(value))
+        scale = float(len(ordered_all))
+        rho_abs = {col: value / scale for col, value in acc.items()}
+    probe = sample_numeric[0][1]
+    selected = _select_and_order(names, probe, max_feat, scores, rho_abs or None)
+    if len(selected) < 2:
+        return pd.DataFrame()
+    if wide:
+        matrices = _spearman_cpp_matrices(
+            sample_numeric,
+            selected,
+            threads=threads,
+        )
+    matrices = {name: matrix.reindex(index=selected, columns=selected) for name, matrix in matrices.items()}
+    ordered = [matrices[name] for name, _numeric in sample_numeric if name in matrices]
+    if by_sample is not None:
+        by_sample.clear()
+        by_sample.update(matrices)
+    if len(ordered) == 1:
+        only = ordered[0].reindex(index=selected, columns=selected)
+        only = only.astype(float)
+        np.fill_diagonal(only.values, 1.0)
+        return only.fillna(0.0)
+    return _fisher_mean(ordered, selected)
 
 
 def _save_cns_heatmap(matrix: pd.DataFrame, path: Path, title: str) -> None:
@@ -384,12 +603,22 @@ def plot_spearman_annotation_correlation(
     max_feat: int = MAX_FEAT_COLUMNS,
     importance: Optional[pd.Series] = None,
     importance_dir: Optional[PathLike] = None,
+    full_table: Optional[bool] = None,
+    sample_rows: int = DEFAULT_SPEARMAN_SAMPLE_ROWS,
+    seed: int = 42,
+    threads: Optional[int] = None,
 ) -> Optional[pd.DataFrame]:
+    per_sample: Dict[str, pd.DataFrame] = {}
     matrix = spearman_annotation_correlation(
         annotation,
         max_feat=max_feat,
         importance=importance,
         importance_dir=importance_dir if importance_dir is not None else output_dir,
+        full_table=full_table,
+        sample_rows=sample_rows,
+        seed=seed,
+        threads=threads,
+        by_sample=per_sample,
     )
     if matrix.empty:
         return None
@@ -398,7 +627,22 @@ def plot_spearman_annotation_correlation(
     if read_type:
         stem = f"{stem}.{read_type}"
         title = f"{title} — {read_type}"
-    write_spearman_correlation(matrix, output_dir, stem=stem, section_name=title)
+    if _full_table_requested(full_table):
+        description = ""
+    else:
+        description = (
+            f"Spearman rank correlation on a random {int(sample_rows)} reads from each sample, "
+            "computed in parallel in C++ and averaged with a Fisher z-transform. "
+            "Columns are tax annotators, the top 20 feat_ columns, and true taxid when present."
+        )
+    write_spearman_correlation(
+        matrix, output_dir, stem=stem, section_name=title, description=description
+    )
+    if len(per_sample) > 1:
+        folder = Path(output_dir)
+        for sample_name, sample_matrix in per_sample.items():
+            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", sample_name).strip("_") or "sample"
+            sample_matrix.to_csv(folder / f"{stem}.{safe}.tsv", sep="\t")
     return matrix
 
 
