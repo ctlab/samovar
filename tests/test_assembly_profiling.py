@@ -171,8 +171,8 @@ def test_identity_composite_emits_mag_id_feature(tmp_path):
     assert tax_cols
     mag_col = next(c for c in feat_cols if "MAG_ID" in c)
     mag_ids = set(parsed.DataFrame[mag_col].astype(str))
-    assert mag_ids <= {"mag1", "mag2"}
     assert mag_ids
+    assert all(str(mag).startswith("M") and str(mag)[1:].isdigit() for mag in mag_ids)
     assert set(parsed.DataFrame[tax_cols[0]].astype(str)) == {"562"}
 
 

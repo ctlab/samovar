@@ -138,6 +138,7 @@ def assembly_slot_extra(
     mag_taxonomy: str = "",
     aligner: str = "",
     mag_quantifier: str = "",
+    mag_mode: str = "",
 ) -> str:
     parts: List[str] = []
     if assembler:
@@ -157,6 +158,8 @@ def assembly_slot_extra(
         parts.extend(["--aligner", str(aligner)])
     if mag_quantifier:
         parts.extend(["--mag-quantifier", str(mag_quantifier)])
+    if mag_mode:
+        parts.extend(["--mag-mode", str(mag_mode)])
     return " ".join(parts)
 
 
@@ -205,6 +208,10 @@ def parse_slot_extra(extra: str) -> Dict[str, Any]:
             continue
         if tok in {"--read-assigner", "--read_assigner"} and nxt:
             out["read_assigner"] = nxt
+            i += 2
+            continue
+        if tok in {"--mag-mode", "--mag_mode"} and nxt:
+            out["mag_mode"] = nxt
             i += 2
             continue
         i += 1
@@ -1405,7 +1412,13 @@ def _iter_sam_alignments(bam: Path) -> Iterable[Tuple[str, str]]:
         yield parts[0], parts[2]
 
 
-def run_read_assigner(bam: str, taxonomy: str, dest: str, mag_dir: str = "") -> Path:
+def run_read_assigner(
+    bam: str,
+    taxonomy: str,
+    dest: str,
+    mag_dir: str = "",
+    feature: str = "MAG_ID",
+) -> Path:
     """Write Annotation + Feature table: ``seq``, ``taxID``, ``MAG_ID``.
 
     Headered TSV so the combine step labels tax as ``taxID_<tool>_<n>`` and
@@ -1415,7 +1428,7 @@ def run_read_assigner(bam: str, taxonomy: str, dest: str, mag_dir: str = "") -> 
     mapping = contig_to_mag_map(as_path(mag_dir)) if mag_dir else {}
     dest_path = as_path(dest)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = ["seq\ttaxID\tMAG_ID"]
+    rows = [f"seq\ttaxID\t{feature}"]
     for seq, rname in _iter_sam_alignments(as_path(bam)):
         if rname in {"*", ""}:
             continue
@@ -1505,6 +1518,29 @@ def run_assembly_annotator(
         run_gene_caller(str(selected), str(mag_genes), threads=threads, name=gene_caller)
     except (FileNotFoundError, subprocess.CalledProcessError, OSError):
         mag_genes.mkdir(parents=True, exist_ok=True)
+    dest_path = as_path(out)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    from samovar.MAG.homology import catalog_fasta_dir, stabilize_mags
+
+    mode = str(slots.get("mag_mode") or os.environ.get("SAMOVAR_MAG_MODE") or "homology").lower()
+    mode = mode.replace("_", "-")
+    catalog = Path(os.environ.get("SAMOVAR_MAG_CATALOG") or (work / "mag_catalog.tsv"))
+    feature = "MAG_ID"
+    reference_mags = selected
+    stored = catalog_fasta_dir(catalog)
+    if mode == "map-initial" and any(stored.glob("*.fa")):
+        reference_mags = stored
+        feature = "MAP_MAG_ID"
+    else:
+        stable = work / "bins_stable"
+        stabilize_mags(selected, catalog, stable)
+        reference_mags = stable
+        if mode == "map-initial":
+            feature = "MAP_MAG_ID"
+    if not any(_fasta_has_records(p) for p in _iter_mag_fastas(reference_mags)):
+        dest_path.write_text(f"seq\ttaxID\t{feature}\n", encoding="utf-8")
+        return dest_path
+    selected = reference_mags
     tax_table = work / "mag_taxonomy.tsv"
     try:
         run_mag_taxonomy(str(selected), str(tax_table), db=db, threads=threads, name=mag_taxonomy)
@@ -1513,18 +1549,15 @@ def run_assembly_annotator(
         for fasta in _iter_mag_fastas(selected):
             rows.append(f"{fasta.stem}\t0\t")
         tax_table.write_text("\n".join(rows) + "\n", encoding="utf-8")
-    dest_path = as_path(out)
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    if not any(_fasta_has_records(p) for p in _iter_mag_fastas(selected)):
-        dest_path.write_text("seq\ttaxID\tMAG_ID\n", encoding="utf-8")
-        return dest_path
     bam = work / "reads_to_mag.bam"
     run_aligner(r1, r2, str(selected), str(bam), threads=threads, name=aligner)
     mag_abund = work / "mag_abundance.tsv"
     run_mag_quantifier(str(bam), str(selected), str(mag_abund), name=mag_quantifier)
     taxon_abund = work / "taxon_abundance.tsv"
     run_taxon_quantifier(str(mag_abund), str(tax_table), str(taxon_abund))
-    return run_read_assigner(str(bam), str(tax_table), str(out), mag_dir=str(selected))
+    return run_read_assigner(
+        str(bam), str(tax_table), str(out), mag_dir=str(selected), feature=feature
+    )
 
 
 def _stage_parser() -> argparse.ArgumentParser:

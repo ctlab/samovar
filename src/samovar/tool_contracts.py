@@ -143,6 +143,12 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "in": "BAM -b, MAG taxonomy -x, TSV -o.",
         "out": "Headered TSV seq, taxID, MAG_ID (Annotation tax + Feature MAG_ID).",
     },
+    "mag_homology": {
+        "in": "Query MAG directory -c, optional reference catalog or MAG directory -r, "
+        "assignment table -o. Optional --fasta-out and --catalog.",
+        "out": "TSV query, mag_id, reference, rms_z, match. mag_id is stable across "
+        "assemblies when the tetranucleotide profiles agree within the normal-model error.",
+    },
     "feature_importance": {
         "in": "score_feature_importance(model, annotation, initial_abundance, "
         "regenerated_abundance, config). model is the selected estimator "
@@ -176,6 +182,7 @@ GROUP_TO_TESTNODE = {
     "mag_quantifier": "tests/test_tool_contracts.py::test_mag_quantifier_contract",
     "taxon_quantifier": "tests/test_tool_contracts.py::test_taxon_quantifier_contract",
     "read_assigner": "tests/test_tool_contracts.py::test_read_assigner_contract",
+    "mag_homology": "tests/test_tool_contracts.py::test_mag_homology_contract",
     "feature_importance": "tests/test_tool_contracts.py::test_feature_importance_contract",
 }
 

@@ -599,6 +599,26 @@ def test_read_assigner_contract(request, tmp_path):
     }
 
 
+def test_mag_homology_contract(request, tmp_path):
+    _skip_if_other_type(request, "mag_homology")
+    path = _tool_path(request, "mag_homology")
+    mag_dir = tmp_path / "mags"
+    mag_dir.mkdir()
+    same = "ACGT" * 400
+    other = "GGGG" * 400
+    (mag_dir / "bin_a.fa").write_text(f">bin_a\n{same}\n")
+    (mag_dir / "bin_b.fa").write_text(f">bin_b\n{same}\n")
+    (mag_dir / "bin_c.fa").write_text(f">bin_c\n{other}\n")
+    dest = tmp_path / "assign.tsv"
+    _run_py_main(path, ["-c", str(mag_dir), "-o", str(dest), "-t", "1"])
+    frame = pd.read_csv(dest, sep="\t")
+    assert list(frame.columns)[:2] == ["query", "mag_id"]
+    ids = dict(zip(frame["query"].astype(str), frame["mag_id"].astype(str)))
+    assert ids["bin_a"] == ids["bin_b"]
+    assert ids["bin_c"] != ids["bin_a"]
+    assert str(ids["bin_a"]).startswith("M")
+
+
 def test_feature_importance_contract(request, tmp_path):
     _skip_if_other_type(request, "feature_importance")
     path = _tool_path(request, "feature_importance")

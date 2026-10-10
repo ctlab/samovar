@@ -1291,6 +1291,7 @@ class PipelineConfig:
             mag_taxonomy=getattr(args, "assembly_mag_taxonomy", None) or "",
             aligner=getattr(args, "assembly_aligner", None) or "",
             mag_quantifier=getattr(args, "assembly_mag_quantifier", None) or "",
+            mag_mode=getattr(args, "assembly_mag_mode", None) or "",
         )
         if slot:
             for ann in config.annotators or []:
@@ -1677,6 +1678,8 @@ mkdir -p "$CKPT"
 export SAMOVAR_START="${{SAMOVAR_START:-{start_s}}}"
 export SAMOVAR_END="${{SAMOVAR_END:-{end_s}}}"
 export SAMOVAR_INPUT_DIR="${{SAMOVAR_INPUT_DIR:-{input_dir_export}}}"
+export SAMOVAR_MAG_CATALOG="$out_dir/MAG/catalog.tsv"
+export SAMOVAR_MAG_MODE="${{SAMOVAR_MAG_MODE:-homology}}"
 
 ckpt_skip() {{
   if ! "$PYTHON_PATH" -m samovar.exec_control active "$1"; then

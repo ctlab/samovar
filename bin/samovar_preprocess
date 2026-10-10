@@ -518,6 +518,13 @@ def main():
         default=None,
         help='Assembly annotator: MAG abundance (default coverm)',
     )
+    parser.add_argument(
+        '--mag-mode',
+        dest='assembly_mag_mode',
+        default=None,
+        choices=('homology', 'map-initial', 'map_initial'),
+        help='MAG feature: homology (stable tetranucleotide ids) or map-initial (map reads onto the initial MAGs)',
+    )
 
     # Parse known args first to get output_dir
     from samovar.tool_spec import parse_known_with_custom
@@ -567,6 +574,7 @@ def main():
         "binner-combine", "binner_combine",
         "mag-taxonomy", "mag_taxonomy",
         "aligner", "mag-quantifier", "mag_quantifier",
+        "mag-mode", "mag_mode",
         "branch",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",

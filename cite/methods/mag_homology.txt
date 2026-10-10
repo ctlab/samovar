@@ -1,0 +1,3 @@
+contract: mag_homology
+md: MAG bins {verb} given stable ids from tetranucleotide profiles with {tools}{cite_md}.
+tex: MAG bins {verb} given stable ids from tetranucleotide profiles with {tools}{cite_tex}.
