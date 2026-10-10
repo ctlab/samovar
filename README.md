@@ -4,7 +4,7 @@
 [![ITMO](https://raw.githubusercontent.com/aimclub/open-source-ops/43bb283758b43d75ec1df0a6bb4ae3eb20066323/badges/ITMO_badge.svg)](https://itmo.ru/)
 [![conda](https://github.com/ctlab/samovar/actions/workflows/python-package.yml/badge.svg?branch=main)](https://github.com/ctlab/samovar/actions/workflows/python-package.yml?label=conda)
 [![stability testing](https://img.shields.io/github/actions/workflow/status/ctlab/samovar/full-integration.yml?label=stability)](https://github.com/ctlab/samovar/actions/workflows/full-integration.yml)
-[![version](https://img.shields.io/badge/version-0.11-blue)](pyproject.toml)
+[![version](https://img.shields.io/badge/version-0.12-blue)](pyproject.toml)
 [![license](https://img.shields.io/github/license/ctlab/samovar)](LICENSE.md)
 [![conda](https://img.shields.io/badge/conda-environment.yml-44A833?logo=anaconda&logoColor=white)](environment.yml)
 
