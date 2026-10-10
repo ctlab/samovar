@@ -681,6 +681,29 @@ def run_qc_pair(
     )
 
 
+def _fastq_closed(path: Path) -> bool:
+    """True when the file ends on a full 4-line FASTQ record.
+
+    A fastp hang can leave a multi-hundred-megabyte file that still starts
+    with valid reads. ``fastq_has_reads`` only checks the front of the file.
+    """
+    try:
+        if not path.is_file():
+            return False
+        size = path.stat().st_size
+        if size < 32:
+            return False
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - 8192))
+            tail = handle.read().splitlines()
+    except OSError:
+        return False
+    if len(tail) < 4:
+        return False
+    header, seq, plus, qual = tail[-4:]
+    return header.startswith(b"@") and plus == b"+" and len(seq) == len(qual) and len(seq) > 0
+
+
 def trim_directory(
     src: Path,
     dest: Path,
@@ -704,6 +727,9 @@ def trim_directory(
             r2 = found
         dest_r1 = dest_p / r1.name
         dest_r2 = dest_p / r2.name if r2 is not None else None
+        if _fastq_closed(dest_r1) and (dest_r2 is None or _fastq_closed(dest_r2)):
+            written.append(str(dest_r1))
+            continue
         tool = qc_name_for_sample(sample, stage_qc=stage_qc, postfix_map=mapping)
         written.extend(
             run_qc_pair(tool, r1, r2, dest_r1, dest_r2, cfg)

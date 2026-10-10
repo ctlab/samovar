@@ -23,6 +23,9 @@ from samovar.paths import resolve_executable
 MAG_SUFFIXES = (".fa", ".fna", ".fasta", ".fa.gz", ".fna.gz")
 BINARY_NAMES = {
     "megahit": "megahit",
+    "flye": "flye",
+    "metaflye": "flye",
+    "meta-flye": "flye",
     "minimap2": "minimap2",
     "samtools": "samtools",
     "coverm": "coverm",
@@ -82,6 +85,7 @@ def which_tool(name: str, default: str = "") -> str:
         "checkm2",
         "minimap2",
         "megahit",
+        "flye",
         "prodigal",
     ):
         candidates.append(envs / folder / "bin" / binary)
@@ -321,6 +325,45 @@ def run_megahit(
     return out
 
 
+def run_metaflye(
+    r1: str,
+    r2: str = "",
+    dest: str = "",
+    threads: int = 1,
+    extra: Optional[Sequence[str]] = None,
+    exe: str = "",
+) -> Path:
+    """Assemble FASTQ with metaFlye (``flye --meta``); write contig FASTA to dest.
+
+    Same shape as ``run_megahit``: native Flye CLI, contig FASTA copied to the
+    assembler-contract ``-o``. ONT R10 uses ``--nano-hq`` unless ``extra``
+    already names a read type. A non-empty R2 is a second file of that type.
+    """
+    out = as_path(dest)
+    work = out.parent / (out.stem + ".metaflye")
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True, exist_ok=True)
+    extra_args = [str(x) for x in (extra or [])]
+    cmd = [which_tool("flye", exe), "--meta", "-o", str(work), "-t", str(int(threads))]
+    if not any(
+        arg.startswith("--nano-") or arg.startswith("--pacbio-") for arg in extra_args
+    ):
+        cmd.append("--nano-hq")
+    cmd.append(str(r1))
+    if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size > 0:
+        cmd.append(str(r2))
+    cmd.extend(extra_args)
+    _run(cmd)
+    contigs = work / "assembly.fasta"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if contigs.is_file() and contigs.stat().st_size > 0:
+        shutil.copy2(contigs, out)
+    else:
+        _touch_empty_fasta(out)
+    return out
+
+
 def run_assembler(
     r1: str,
     r2: str = "",
@@ -339,6 +382,8 @@ def run_assembler(
         return dest_path
     if key in {"megahit", "assembler", ""}:
         return run_megahit(r1, r2, dest, threads=threads, extra=extra)
+    if key in {"metaflye", "flye", "meta-flye"}:
+        return run_metaflye(r1, r2, dest, threads=threads, extra=extra)
     exe = which_tool(name)
     out = as_path(dest)
     out.parent.mkdir(parents=True, exist_ok=True)

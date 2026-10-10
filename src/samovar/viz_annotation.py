@@ -576,6 +576,7 @@ def viz_annotation(
     rank: str = "genus",
     use_names: bool = True,
     reord: str = "fpc",
+    spearman_full: Optional[bool] = None,
 ) -> dict:
     """Mirror ``viz_annotation()`` in R: F1 / R2 / CV / confidence / scores plots."""
     results: dict = {}
@@ -864,12 +865,12 @@ def viz_annotation(
 
         if out_dir:
             matrix = plot_spearman_annotation_correlation(
-                work, out_dir, importance_dir=out_dir
+                work, out_dir, importance_dir=out_dir, full_table=spearman_full
             )
         else:
             from samovar.annotation_correlation import spearman_annotation_correlation
 
-            matrix = spearman_annotation_correlation(work)
+            matrix = spearman_annotation_correlation(work, full_table=spearman_full)
         if matrix is not None and not matrix.empty:
             results["correlation"] = matrix
             if out_dir and len(platform_types) >= 2 and "read_type" in work.columns:
@@ -878,7 +879,11 @@ def viz_annotation(
                     if sub.empty:
                         continue
                     plot_spearman_annotation_correlation(
-                        sub, out_dir, read_type=rt, importance_dir=out_dir
+                        sub,
+                        out_dir,
+                        read_type=rt,
+                        importance_dir=out_dir,
+                        full_table=spearman_full,
                     )
 
     conf_cols = [c for c in work.columns if str(c).endswith("_conf") or "_conf" in str(c)]
@@ -908,6 +913,7 @@ def compare_annotations(
     types: Sequence[str] = ("f1", "R2", "cv", "scores"),
     rank: str = "genus",
     split: bool = False,
+    spearman_full: Optional[bool] = None,
 ) -> pd.DataFrame:
     """CLI analog of ``workflow/compare_annotations.R``."""
     from samovar.annotation_correlation import (
@@ -952,6 +958,7 @@ def compare_annotations(
         plot=False,
         split=split,
         rank=rank,
+        spearman_full=spearman_full,
     )
     if csv_file:
         Path(csv_file).parent.mkdir(parents=True, exist_ok=True)

@@ -17,6 +17,11 @@ def main(argv=None) -> int:
     parser.add_argument("--show_top", type=int, default=0)
     parser.add_argument("--rank", default="genus")
     parser.add_argument("--split", action="store_true")
+    parser.add_argument(
+        "--spearman-full",
+        action="store_true",
+        help="Spearman on the concatenated per-read table (default: 10000 reads per sample, in C++)",
+    )
     args = parser.parse_args(argv)
 
     if args.output_dir:
@@ -30,6 +35,7 @@ def main(argv=None) -> int:
         types=("f1", "R2", "cv", "scores"),
         rank=args.rank,
         split=args.split,
+        spearman_full=True if args.spearman_full else None,
     )
     return 0
 

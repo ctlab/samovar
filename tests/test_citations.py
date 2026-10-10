@@ -54,9 +54,12 @@ def test_rebuild_offline_writes_json(tmp_path):
         assert disk[name] == []
 
 
-def test_missing_tools_are_runtimes_and_seqtk():
+def test_missing_tools_are_runtimes():
     missing = set(missing_tools())
-    assert "seqtk" in missing
+    assert "seqtk" not in missing
+    assert "metax" not in missing
+    assert "flye" not in missing
+    assert "metaflye" not in missing
     assert "bash" in missing
     assert "python" in missing
     assert "g++" in missing

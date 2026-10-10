@@ -123,6 +123,77 @@ case "$TOOL" in
     ;;
 
   # ----------------------------------------
+  # 4. Metax profiler (classify.txt -> seq, taxID)
+  # ----------------------------------------
+  "metax")
+    echo "[INFO] Starting Metax classification..."
+    ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    METAX_BIN=""
+    if [ -n "${METAX:-}" ] && [ -x "${METAX}" ]; then
+      METAX_BIN="${METAX}"
+    elif [ -n "${SAMOVAR_ENVS:-}" ] && [ -x "${SAMOVAR_ENVS}/metax/bin/metax" ]; then
+      METAX_BIN="${SAMOVAR_ENVS}/metax/bin/metax"
+    elif [ -x "${ROOT}/.cache/samovar/envs/metax/bin/metax" ]; then
+      METAX_BIN="${ROOT}/.cache/samovar/envs/metax/bin/metax"
+    elif command -v metax >/dev/null 2>&1; then
+      METAX_BIN="$(command -v metax)"
+    fi
+    if [ -z "$METAX_BIN" ]; then
+      echo "[ERROR] metax is not installed (./install.sh Metax)" >&2
+      exit 127
+    fi
+    export PATH="$(dirname "$METAX_BIN"):${PATH}"
+    DB_JSON="$DB"
+    DMP="${METAX_DMP_DIR:-}"
+    if [ -d "$DB" ]; then
+      if [ -f "$DB/metax_db.json" ]; then
+        DB_JSON="$DB/metax_db.json"
+      else
+        jsons=("$DB"/*.json)
+        if [ -f "${jsons[0]}" ]; then
+          DB_JSON="${jsons[0]}"
+        fi
+      fi
+      if [ -z "$DMP" ] && [ -f "$DB/nodes.dmp" ]; then
+        DMP="$DB"
+      elif [ -z "$DMP" ] && [ -f "$DB/taxonomy/nodes.dmp" ]; then
+        DMP="$DB/taxonomy"
+      fi
+    elif [[ "$DB" == *.json ]]; then
+      DB_JSON="$DB"
+      parent="$(dirname "$DB")"
+      if [ -z "$DMP" ] && [ -f "$parent/nodes.dmp" ]; then
+        DMP="$parent"
+      elif [ -z "$DMP" ] && [ -f "$parent/taxonomy/nodes.dmp" ]; then
+        DMP="$parent/taxonomy"
+      fi
+    fi
+    if [ -z "$DMP" ] || [ ! -f "$DMP/nodes.dmp" ]; then
+      echo "[ERROR] Metax needs a taxonomy dump (--dmp-dir). Set METAX_DMP_DIR or place nodes.dmp next to the database." >&2
+      exit 2
+    fi
+    echo "[INFO] Metax db=${DB_JSON} dmp=${DMP}"
+    PREFIX="$TMP_DIR/metax"
+    if [ -s "$R2" ]; then
+      "$METAX_BIN" profile --db "$DB_JSON" --dmp-dir "$DMP" \
+        --in-seq "${R1},${R2}" --is-paired --sequencer Illumina \
+        --outprefix "$PREFIX" --threads "$THREADS"
+    else
+      "$METAX_BIN" profile --db "$DB_JSON" --dmp-dir "$DMP" \
+        --in-seq "$R1" --sequencer Illumina \
+        --outprefix "$PREFIX" --threads "$THREADS"
+    fi
+    CLASSIFY="${PREFIX}.classify.txt"
+    if [ ! -s "$CLASSIFY" ]; then
+      echo "[WARNING] Metax wrote no classify.txt (fractional indexes omit it)."
+      touch "$OUT"
+    else
+      awk -F'\t' 'NR==1 && ($2 !~ /^[0-9]+$/ || $1 ~ /^(read|seq|query)$/) {next} $2 ~ /^[0-9]+$/ && $2 != "0" {print $1 "\t" $2}' \
+        "$CLASSIFY" > "$OUT"
+    fi
+    ;;
+
+  # ----------------------------------------
   # 3. Assembly + Mapping Hybrid (MEGAHIT -> Bowtie2 -> Contig Taxonomy)
   # ----------------------------------------
   "assembly_hybrid")

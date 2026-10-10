@@ -18,6 +18,7 @@ CONSTANT_TAXID_TOOL_NAMES = CONSTANT_TAXID_NAMES
 CUSTOM_WRAPPER_SCRIPTS = {
     "custom.sh",
     "centrifuge.sh",
+    "metax.sh",
     "metauto.sh",
     "assembly_hybrid.sh",
 }
@@ -25,6 +26,7 @@ CUSTOM_WRAPPER_SCRIPTS = {
 # These names always go through custom.sh (native CLIs are not the SamovaR flags).
 CUSTOM_SH_ROUTER_TOOLS = {
     "centrifuge",
+    "metax",
     "metauto",
     "assembly_hybrid",
 } | DUMMY_TOOL_NAMES
@@ -551,7 +553,10 @@ class AssemblyAnnotator(BaseAnnotator):
         )
         extra = self.extra or ""
         cmd = self.cmd or self.default_cmd
-        if "assembly_profiling" not in str(cmd) and str(cmd).split()[-1] in {
+        # Prepare stores the bare name (`assembly_profiling`). That is not a
+        # PATH binary; the implementation is this module.
+        bare = os.path.basename(str(cmd).split()[-1]) if str(cmd).strip() else ""
+        if "samovar.assembly_profiling" not in str(cmd) and bare in {
             "assembly",
             "assembly_profiling",
         }:

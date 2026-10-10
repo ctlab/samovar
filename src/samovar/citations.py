@@ -37,6 +37,9 @@ DOI_RECORDS: Dict[str, str] = {
     "metaphlan_blanco2023.bib": "10.1038/s41587-023-01688-w",
     "metaphlan_beghini2021.bib": "10.7554/eLife.65088",
     "centrifuge_kim2016.bib": "10.1101/gr.210641.116",
+    "metax_deng2026.bib": "10.1016/j.cell.2026.08.024",
+    "flye_kolmogorov2019.bib": "10.1038/s41587-019-0072-8",
+    "metaflye_kolmogorov2020.bib": "10.1038/s41592-020-00971-x",
     "iss_gourle2019.bib": "10.1093/bioinformatics/bty630",
     "art_huang2012.bib": "10.1093/bioinformatics/btr708",
     "samtools_danecek2021.bib": "10.1093/gigascience/giab008",
@@ -92,6 +95,15 @@ STATIC_RECORDS: Dict[str, str] = {
   pages={22--24}
 }
 """,
+    "seqtk_li2012.bib": """@misc{seqtk,
+  author       = {Li, Heng},
+  title        = {seqtk: Toolkit for processing sequences in FASTA/Q formats},
+  year         = {2012},
+  publisher    = {GitHub},
+  journal      = {GitHub repository},
+  howpublished = {\\url{https://github.com/lh3/seqtk}}
+}
+""",
     "r_core_team.bib": """@Manual{R-core,
   title = {R: A Language and Environment for Statistical Computing},
   author = {{R Core Team}},
@@ -112,6 +124,10 @@ TOOL_FILES: Dict[str, List[str]] = {
     "metaphlan": ["metaphlan_blanco2023.bib", "metaphlan_beghini2021.bib"],
     "metaphlan4": ["metaphlan_blanco2023.bib", "metaphlan_beghini2021.bib"],
     "centrifuge": ["centrifuge_kim2016.bib"],
+    "metax": ["metax_deng2026.bib"],
+    "flye": ["flye_kolmogorov2019.bib"],
+    "metaflye": ["metaflye_kolmogorov2020.bib", "flye_kolmogorov2019.bib"],
+    "seqtk": ["seqtk_li2012.bib"],
     "iss": ["iss_gourle2019.bib"],
     "art": ["art_huang2012.bib"],
     "art_illumina": ["art_huang2012.bib"],

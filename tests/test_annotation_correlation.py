@@ -90,6 +90,58 @@ def test_writes_multiqc_and_optional_plots(tmp_path):
     assert (dest / "spearman_correlation.tsv").is_file()
 
 
+def test_default_spearman_is_per_sample_not_concatenated():
+    """Within each sample the columns rise together; across samples they do not."""
+    left = pd.DataFrame(
+        {
+            "sample": ["a"] * 4,
+            "taxID_kaiju_0": [1, 2, 3, 4],
+            "taxID_kraken2_1": [10, 11, 12, 13],
+        }
+    )
+    right = pd.DataFrame(
+        {
+            "sample": ["b"] * 4,
+            "taxID_kaiju_0": [5, 6, 7, 8],
+            "taxID_kraken2_1": [1, 2, 3, 4],
+        }
+    )
+    df = pd.concat([left, right], ignore_index=True)
+    sampled = spearman_annotation_correlation(df, full_table=False)
+    pooled = spearman_annotation_correlation(df, full_table=True)
+    assert float(sampled.loc["taxID_kaiju_0", "taxID_kraken2_1"]) > 0.9
+    assert float(pooled.loc["taxID_kaiju_0", "taxID_kraken2_1"]) < 0.0
+    assert float(sampled.loc["taxID_kaiju_0", "taxID_kaiju_0"]) == 1.0
+
+
+def test_spearman_samples_at_most_requested_rows(monkeypatch):
+    import samovar.annotation_correlation as corr
+
+    seen = {}
+
+    def _fake(samples, columns, *, threads=None, against_last=False):
+        seen["rows"] = [len(frame) for _name, frame in samples]
+        names = list(columns)
+        eye = pd.DataFrame(
+            [[1.0 if i == j else 0.5 for j in range(len(names))] for i in range(len(names))],
+            index=names,
+            columns=names,
+        )
+        return {name: eye.copy() for name, _frame in samples}
+
+    monkeypatch.setattr(corr, "_spearman_cpp_matrices", _fake)
+    df = pd.DataFrame(
+        {
+            "sample": ["s"] * 50,
+            "taxID_kaiju_0": list(range(50)),
+            "taxID_kraken2_1": list(range(50, 100)),
+        }
+    )
+    out = corr.spearman_annotation_correlation(df, sample_rows=10, seed=42, full_table=False)
+    assert seen["rows"] == [10]
+    assert out.shape == (2, 2)
+
+
 def test_stage_gate():
     assert annotation_stage_allows_correlation(
         "run/regenerated_annotations", "run/regenerated_annotations_plots"
