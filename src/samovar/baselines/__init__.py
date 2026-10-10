@@ -34,6 +34,7 @@ BASELINE_TOOLS: Dict[str, Path] = {
     "taxon_quantifier": _DIR / "identity_taxon_quantifier.py",
     "read_assigner": _DIR / "identity_read_assigner.py",
     "mag_homology": _DIR.parent / "MAG" / "homology.py",
+    "mag_mapping": _DIR.parent / "MAG" / "mapping.py",
     "feature_importance": _DIR / "native_feature_importance.py",
 }
 

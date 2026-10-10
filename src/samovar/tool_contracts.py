@@ -149,6 +149,11 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "TSV query, mag_id, reference, rms_z, match. mag_id is stable across "
         "assemblies when the tetranucleotide profiles agree within the normal-model error.",
     },
+    "mag_mapping": {
+        "in": "FASTQ -i/-I, initial MAG directory -r, optional taxonomy -x, TSV -o, -t threads.",
+        "out": "Headered TSV seq, taxID, MAP_MAG_ID. The id is the initial MAG that "
+        "contains the read, not a bin name from a new assembly.",
+    },
     "feature_importance": {
         "in": "score_feature_importance(model, annotation, initial_abundance, "
         "regenerated_abundance, config). model is the selected estimator "
@@ -183,6 +188,7 @@ GROUP_TO_TESTNODE = {
     "taxon_quantifier": "tests/test_tool_contracts.py::test_taxon_quantifier_contract",
     "read_assigner": "tests/test_tool_contracts.py::test_read_assigner_contract",
     "mag_homology": "tests/test_tool_contracts.py::test_mag_homology_contract",
+    "mag_mapping": "tests/test_tool_contracts.py::test_mag_mapping_contract",
     "feature_importance": "tests/test_tool_contracts.py::test_feature_importance_contract",
 }
 

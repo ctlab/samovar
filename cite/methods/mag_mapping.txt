@@ -1,0 +1,3 @@
+contract: mag_mapping
+md: Reads {verb} mapped onto the initial MAGs with {tools}{cite_md}.
+tex: Reads {verb} mapped onto the initial MAGs with {tools}{cite_tex}.

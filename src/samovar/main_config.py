@@ -75,6 +75,7 @@ TOOL_GROUPS = (
     "taxon_quantifier",
     "read_assigner",
     "mag_homology",
+    "mag_mapping",
     "feature_importance",
     "workflow",
 )
@@ -175,6 +176,8 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "read-assigner": "read_assigner",
     "mag_homology": "mag_homology",
     "mag-homology": "mag_homology",
+    "mag_mapping": "mag_mapping",
+    "mag-mapping": "mag_mapping",
     "workflow": "workflow",
     "wf": "workflow",
 }

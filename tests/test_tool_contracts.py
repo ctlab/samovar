@@ -619,6 +619,29 @@ def test_mag_homology_contract(request, tmp_path):
     assert str(ids["bin_a"]).startswith("M")
 
 
+def test_mag_mapping_contract(request, tmp_path, tiny_fastq):
+    _skip_if_other_type(request, "mag_mapping")
+    path = _tool_path(request, "mag_mapping")
+    mag_dir = tmp_path / "mags"
+    mag_dir.mkdir()
+    (mag_dir / "M0001.fa").write_text(">M0001\n" + ("ACGT" * 40) + "\n")
+    (mag_dir / "M0002.fa").write_text(">M0002\n" + ("GGGG" * 40) + "\n")
+    r1, _r2 = tiny_fastq
+    r1.write_text("@r0\nACGTACGTACGT\n+\nIIIIIIIIIIII\n")
+    tax = tmp_path / "tax.tsv"
+    tax.write_text("mag_id\ttaxid\tlineage\nM0001\t562\td__Bacteria\nM0002\t4932\t\n")
+    dest = tmp_path / "mapped.tsv"
+    _run_py_main(
+        path,
+        ["-i", str(r1), "-I", str(_r2), "-r", str(mag_dir), "-x", str(tax), "-o", str(dest), "-t", "1"],
+    )
+    frame = pd.read_table(dest)
+    assert "MAP_MAG_ID" in frame.columns
+    hit = frame.loc[frame["seq"].astype(str) == "r0"].iloc[0]
+    assert str(hit["MAP_MAG_ID"]) == "M0001"
+    assert str(hit["taxID"]) == "562"
+
+
 def test_feature_importance_contract(request, tmp_path):
     _skip_if_other_type(request, "feature_importance")
     path = _tool_path(request, "feature_importance")

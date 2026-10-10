@@ -1455,6 +1455,7 @@ def run_assembly_annotator(
     aligner: str = "minimap2",
     mag_quantifier: str = "coverm",
     work_dir: str = "",
+    mag_mode: str = "",
 ) -> Path:
     """Full nested pipeline; writes headered seq/taxID/MAG_ID TSV at dest."""
     out = as_path(dest)
@@ -1522,7 +1523,9 @@ def run_assembly_annotator(
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     from samovar.MAG.homology import catalog_fasta_dir, stabilize_mags
 
-    mode = str(slots.get("mag_mode") or os.environ.get("SAMOVAR_MAG_MODE") or "homology").lower()
+    mode = str(
+        slots.get("mag_mode") or mag_mode or os.environ.get("SAMOVAR_MAG_MODE") or "homology"
+    ).lower()
     mode = mode.replace("_", "-")
     catalog = Path(os.environ.get("SAMOVAR_MAG_CATALOG") or (work / "mag_catalog.tsv"))
     feature = "MAG_ID"
@@ -1549,6 +1552,10 @@ def run_assembly_annotator(
         for fasta in _iter_mag_fastas(selected):
             rows.append(f"{fasta.stem}\t0\t")
         tax_table.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    if feature == "MAP_MAG_ID" and str(aligner).lower() in {"identity", "baseline", "dummy"}:
+        from samovar.MAG.mapping import write_mapping_table
+
+        return write_mapping_table(r1, r2, str(selected), str(tax_table), str(out), feature=feature)
     bam = work / "reads_to_mag.bam"
     run_aligner(r1, r2, str(selected), str(bam), threads=threads, name=aligner)
     mag_abund = work / "mag_abundance.tsv"
@@ -1582,6 +1589,7 @@ def _stage_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mag-taxonomy", dest="mag_taxonomy", default="gtdbtk")
     parser.add_argument("--aligner", default="minimap2")
     parser.add_argument("--mag-quantifier", dest="mag_quantifier", default="coverm")
+    parser.add_argument("--mag-mode", dest="mag_mode", default="")
     parser.add_argument("--work-dir", dest="work_dir", default="")
     return parser
 
@@ -1633,6 +1641,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             aligner=args.aligner,
             mag_quantifier=args.mag_quantifier,
             work_dir=args.work_dir,
+            mag_mode=args.mag_mode,
         )
     return 0
 

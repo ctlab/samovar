@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from samovar.MAG.homology import assign_ids, stabilize_mags
+from samovar.MAG.mapping import map_reads
 from samovar.MAG.tetra import DEFAULT_THRESHOLD, kmer_counts, profile_rms_z, read_fasta_sequence
 from samovar.reprofiling import train_models
 
@@ -57,6 +58,12 @@ def test_regenerated_bins_reuse_initial_ids(tmp_path):
     assert first["bin17"] != first["bin3"]
     _write(regen, "contig_zz.fa", _mutate(ecoli, seed=2))
     _write(regen, "contig_aa.fa", _mutate(yeast, seed=3))
+    # The yeast-only reassembly must keep yeast's id, not become M0001 by recounting.
+    yeast_only = tmp_path / "yeast_only"
+    _write(yeast_only, "other_name.fa", _mutate(yeast, seed=4))
+    yeast_ids = _ids_for(yeast_only, catalog, tmp_path / "stable_yeast")
+    assert yeast_ids["other_name"] == first["bin3"]
+    assert yeast_ids["other_name"] != first["bin17"]
     second = _ids_for(regen, catalog, tmp_path / "stable_regen")
     assert second["contig_zz"] == first["bin17"]
     assert second["contig_aa"] == first["bin3"]
@@ -116,6 +123,75 @@ def test_random_forest_gains_from_stable_mag_id():
     scrambled = _score(shuffled)
     assert with_mag > without + 0.15
     assert with_mag > scrambled + 0.15
+
+
+def _fastq(path: Path, records) -> None:
+    lines = []
+    for name, sequence in records:
+        lines.extend([f"@{name}", sequence, "+", "I" * len(sequence)])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_mapping_onto_initial_mags_on_toy_and_phage(tmp_path):
+    """Reads from a regenerated copy keep the initial MAG id, and RandomForest uses it."""
+    sequences = {path.stem: _slice(path) for path in TOY}
+    phage_files = sorted(PHAGE.glob("*.fa.gz")) if PHAGE.is_dir() else []
+    for path in phage_files:
+        if path.name.startswith("GCF_000819615"):
+            continue
+        sequences[path.stem] = _slice(path)
+        break
+    assert len(sequences) >= 2
+    assert phage_files or len(sequences) >= 2
+    initial = tmp_path / "initial_mags"
+    catalog = tmp_path / "MAG" / "catalog.tsv"
+    names = list(sequences)
+    for i, name in enumerate(names):
+        _write(initial, f"bin_{i}.fa", sequences[name])
+    stable = _ids_for(initial, catalog, tmp_path / "stable")
+    by_mag = {sequences[name]: stable[f"bin_{i}"] for i, name in enumerate(names)}
+    records = []
+    truth = []
+    taxa = {names[0]: 562, names[1]: 4932}
+    for i, name in enumerate(names):
+        read = sequences[name][100:180]
+        records.append((f"r{i}", read))
+        truth.append(taxa.get(name, 10000 + i))
+    fastq = tmp_path / "r.fastq"
+    _fastq(fastq, records)
+    placed = {read_id: mag for read_id, _seq, mag in map_reads(str(fastq), "", tmp_path / "stable", fallback=False)}
+    for i, name in enumerate(names):
+        assert placed[f"r{i}"] == by_mag[sequences[name]]
+
+    rng = np.random.default_rng(1)
+    n = 60
+    owners = [names[i % len(names)] for i in range(n)]
+    true = np.array([taxa.get(owner, 10000 + names.index(owner)) for owner in owners])
+    pool = sorted(set(int(v) for v in true))
+    noisy = true.copy()
+    for i in range(n):
+        if rng.random() < 0.5:
+            choices = [tax for tax in pool if tax != int(true[i])]
+            noisy[i] = choices[int(rng.integers(0, len(choices)))]
+    mag = [by_mag[sequences[owner]] for owner in owners]
+    frame = pd.DataFrame(
+        {
+            "seq": [f"q{i}" for i in range(n)],
+            "taxid_dummy": noisy,
+            "feat_assembly_0_MAP_MAG_ID": mag,
+            "length": 80,
+            "true": true,
+        }
+    )
+    _model, _models, metrics, features = train_models(
+        frame, test_size=0.25, random_state=0, methods="random_forest"
+    )
+    assert "feat_assembly_0_MAP_MAG_ID" in features
+    bare = frame.drop(columns=["feat_assembly_0_MAP_MAG_ID"])
+    _model, _models, bare_metrics, _features = train_models(
+        bare, test_size=0.25, random_state=0, methods="random_forest"
+    )
+    assert metrics["RandomForest"] > bare_metrics["RandomForest"] + 0.15
 
 
 def test_assign_ids_does_not_use_filename(tmp_path):
