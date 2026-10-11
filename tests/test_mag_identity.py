@@ -14,7 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 TOY = [
     ROOT / "data/test_genomes/meta/562.fna",
     ROOT / "data/test_genomes/meta/4932.fna",
+    ROOT / "data/test_genomes/host/9606.fna",
+    ROOT / "data/test_genomes/meta/2886930.fna",
 ]
+# Optional local phage example. Not in git; GCF_000819615 matches bundled 2886930.
 PHAGE = (
     ROOT
     / "examples_outdir/phage/database1/.database/kaiju_src/.genomes/processed"
@@ -72,12 +75,12 @@ def test_regenerated_bins_reuse_initial_ids(tmp_path):
 def test_toy_and_phage_profiles_separate_genomes():
     sequences = {path.name: _slice(path) for path in TOY}
     phage_files = sorted(PHAGE.glob("*.fa.gz")) if PHAGE.is_dir() else []
-    # GCF_000819615 is the same short sequence as toy 2886930; keep a distinct phage.
+    # GCF_000819615 is the same short sequence as bundled 2886930.
     for path in phage_files:
         if path.name.startswith("GCF_000819615"):
             continue
         sequences[path.name] = _slice(path)
-        if len(sequences) >= 4:
+        if len(sequences) >= 6:
             break
     assert len(sequences) >= 3
     names = list(sequences)
