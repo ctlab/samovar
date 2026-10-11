@@ -114,9 +114,16 @@ case "$TOOL" in
     echo "[INFO] Centrifuge index prefix: ${INDEX}"
     # --report-file: centrifuge otherwise writes centrifuge_report.tsv into CWD
     # (often the repo root when snakemake cds there). Keep all litter in TMP_DIR.
-    centrifuge -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" \
-      -S "$TMP_DIR/centrifuge.out" \
-      --report-file "$TMP_DIR/centrifuge_report.tsv"
+    # Unpaired CAMI files have no R2: -U, not -1/-2.
+    if [ -s "$R2" ]; then
+      centrifuge -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" \
+        -S "$TMP_DIR/centrifuge.out" \
+        --report-file "$TMP_DIR/centrifuge_report.tsv"
+    else
+      centrifuge -x "$INDEX" -U "$R1" -p "$THREADS" \
+        -S "$TMP_DIR/centrifuge.out" \
+        --report-file "$TMP_DIR/centrifuge_report.tsv"
+    fi
     
     # Parse output: skip header (NR>1), only print classified reads (taxID != 0)
     awk -F'\t' '{if ($3 != 0 && NR>1) print $1 "\t" $3}' "$TMP_DIR/centrifuge.out" > "$OUT"
