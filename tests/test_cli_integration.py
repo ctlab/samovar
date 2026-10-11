@@ -6,10 +6,12 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from samovar.build_database import build_database_from_config
 from samovar.config import PipelineConfig, setup_pipeline
+from samovar.version import get_version
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -53,6 +55,21 @@ def test_cli_help_lists_prepare_build_exec():
     assert "apply" in out
     assert "merge" in out
     assert "methods" in out
+    assert f"SAMOVAR {get_version()}" in out
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help", "help"])
+def test_cli_help_flags_print_version(flag):
+    _ensure_config_json()
+    result = subprocess.run(
+        ["bash", str(REPO / "bin" / "samovar"), flag],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert f"SAMOVAR {get_version()}" in result.stdout
+    assert "prepare" in result.stdout
 
 
 def test_prepare_writes_pipeline_and_configs(tmp_path):

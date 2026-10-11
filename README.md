@@ -31,6 +31,8 @@ chmod +x install.sh
 
 `install.sh` may ask you some questions, like e-mail for the NCBI API.
 
+`samovar -h`, `samovar --help`, and `samovar help` print the SAMOVAR version and the command list.
+
 Some tools are optional but are required for some actions. Install them all with:
 
 ```bash

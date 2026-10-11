@@ -40,8 +40,32 @@ _find_cfg() {
     return 1
 }
 
+_samovar_version() {
+    local root pyproject ver
+    root="${SAMOVAR_ROOT:-$SCRIPT_DIR/..}"
+    pyproject="$root/pyproject.toml"
+    ver=""
+    if [ -f "$pyproject" ]; then
+        ver="$(
+            grep -E '^version[[:space:]]*=' "$pyproject" 2>/dev/null \
+                | head -n1 \
+                | sed -E 's/^version[[:space:]]*=[[:space:]]*["'\'']([^"'\'']+)["'\''].*/\1/'
+        )"
+    fi
+    if [ -z "$ver" ] && command -v python3 >/dev/null 2>&1; then
+        ver="$(
+            PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" \
+                python3 -c 'from samovar.version import get_version; print(get_version())' 2>/dev/null || true
+        )"
+    fi
+    printf '%s\n' "${ver:-unknown}"
+}
+
 show_usage() {
+    echo "SAMOVAR $(_samovar_version)"
+    echo ""
     echo "Usage: samovar [command] [options]"
+    echo "       samovar -h | --help | help"
     echo ""
     echo "Commands:"
     echo "  prepare     Generate main pipeline configuration (alias: preprocess)"
@@ -62,7 +86,7 @@ show_usage() {
     echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
     echo "  merge       Combine two or more run directories (modes: initial, regenerated)"
     echo "  methods     Write methods.md from a prepared run (alias: samovar-method)"
-    echo "  help        Show this help message"
+    echo "  help        Show this help message (also: -h, --help)"
     echo ""
     echo "Examples:"
     echo "  samovar generate --genome_dir [...] --directory [...] --host_genome [...]"
@@ -105,7 +129,7 @@ CFG=""
 if CFG="$(_find_cfg)"; then
     :
 else
-    if [ "${1:-}" = "help" ] || [ -z "${1:-}" ]; then
+    if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ -z "${1:-}" ]; then
         ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
         export SAMOVAR_ROOT="$ROOT"
         show_usage
@@ -294,7 +318,7 @@ case "${1:-}" in
         shift
         "$PYTHON" "$SCRIPT_DIR/samovar_reindex" "$@"
         ;;
-    "help"|"")
+    "help"|"-h"|"--help"|"")
         show_usage
         ;;
     *)
