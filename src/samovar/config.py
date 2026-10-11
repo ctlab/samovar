@@ -801,6 +801,14 @@ class PipelineConfig:
                     ):
                         type_name = "gc"
                         cmd = f"{sys.executable} -m samovar.gc"
+                    length_aliases = {"length", "read_length", "readlen", "read-length"}
+                    if (
+                        run_name.lower().replace("-", "_") in length_aliases
+                        or type_name.lower().replace("-", "_") in length_aliases
+                        or "samovar.length" in cmd_join
+                    ):
+                        type_name = "length"
+                        cmd = f"{sys.executable} -m samovar.length"
                     enc_aliases = {
                         "kmer_encoder",
                         "kmer-encoder",

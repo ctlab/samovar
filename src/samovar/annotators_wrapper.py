@@ -580,6 +580,7 @@ class AssemblyAnnotator(BaseAnnotator):
 
 
 GC_TOOL_NAMES = {"gc", "gc_content", "gc-content", "gcfrac", "gc_fraction"}
+LENGTH_TOOL_NAMES = {"length", "read_length", "readlen", "read-length"}
 
 
 class GcAnnotator(BaseAnnotator):
@@ -600,6 +601,41 @@ class GcAnnotator(BaseAnnotator):
         cmd = self.cmd
         first = os.path.basename(str(cmd).split()[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower().replace("-", "_") in GC_TOOL_NAMES:
+            cmd = self.default_cmd
+        run = (
+            f"{cmd} "
+            f"-i {shlex.quote(str(input_r1))} "
+            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"-o {shlex.quote(str(out_file))} "
+            f"-t {int(self.threads)} "
+            f"{extra}"
+        )
+        return skip_empty_reads_cmd(input_r1, [out_file], run)
+
+    def parse_output(self, file_path: str) -> pd.DataFrame:
+        from samovar.parse_annotators import read_custom_raw
+
+        return read_custom_raw(file_path)
+
+
+class LengthAnnotator(BaseAnnotator):
+    """Per-read length Feature extractor (R1 + R2 bases)."""
+
+    @property
+    def default_cmd(self) -> str:
+        return f"{sys.executable} -m samovar.length"
+
+    def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.length.out")]
+
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        out_file = outputs[0]
+        extra = self.extra or ""
+        cmd = self.cmd
+        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        if not cmd or first.split(".")[0].lower().replace("-", "_") in LENGTH_TOOL_NAMES:
             cmd = self.default_cmd
         run = (
             f"{cmd} "
@@ -725,6 +761,10 @@ def get_annotator_instance(
         "gc-content": GcAnnotator,
         "gcfrac": GcAnnotator,
         "gc_fraction": GcAnnotator,
+        "length": LengthAnnotator,
+        "read_length": LengthAnnotator,
+        "readlen": LengthAnnotator,
+        "read-length": LengthAnnotator,
         "kmer2": Kmer2Annotator,
         "kmer_counter": Kmer2Annotator,
         "dinuc": Kmer2Annotator,
