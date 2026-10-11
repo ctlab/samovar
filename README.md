@@ -21,13 +21,15 @@ We strongly recommend to understand [SAMOVAR main concepts](https://github.com/c
 Python 3.10+; **conda is recommended**.
 
 ```bash
-git clone https://github.com/ctlab/samovar
+git clone --branch main https://github.com/ctlab/samovar
 cd samovar
 conda env create -f environment.yml
 conda activate samovar
 chmod +x install.sh
 ./install.sh
 ```
+
+`install.sh` installs the checkout you just cloned. Replace `main` with another branch name to install that branch instead.
 
 `install.sh` may ask you some questions, like e-mail for the NCBI API.
 
