@@ -34,28 +34,35 @@ class AskTool:
     install: str
     # Executables that ship next to ``which[0]`` (kraken2-build beside kraken2).
     companions: Tuple[str, ...] = ()
+    # ``core`` is ``./install.sh ask``. ``full`` is only ``./install.sh full ask``.
+    scope: str = "full"
 
 
 # One row per program the pipeline can launch. ``companions`` are not separate
 # dialogues: after this row is imported they are offered yes/no from the same
 # directory and the same conda/base answer.
-# ``install=""`` means import-only (MetaPhlAn is optional and is not installed).
+# ``scope="core"`` is the obligatory ``./install.sh ask`` set. Every other row
+# is asked only by ``./install.sh full ask``. ``install=""`` is import-only.
 ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool(
         "kraken2", ("kraken2",), "annotator", "conda:kraken2",
         companions=("kraken2-build", "kraken2-inspect"),
+        scope="core",
     ),
     AskTool(
         "kaiju", ("kaiju",), "annotator", "conda:kaiju",
         companions=("kaiju-mkbwt", "kaiju-mkfmi"),
+        scope="core",
     ),
     AskTool(
         "kraken", ("kraken",), "annotator", "conda:kraken",
         companions=("kraken-build",),
+        scope="core",
     ),
     AskTool(
         "krakenuniq", ("krakenuniq",), "annotator", "conda:krakenuniq",
         companions=("krakenuniq-build", "jellyfish"),
+        scope="core",
     ),
     AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
     AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),
@@ -99,6 +106,21 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool("checkm2", ("checkm2",), "binner_qc", "optional:checkm2"),
     AskTool("gtdbtk", ("gtdbtk",), "mag_taxonomy", "optional:gtdbtk"),
 )
+
+
+def tools_for_ask(*, full: bool) -> Tuple[AskTool, ...]:
+    """Obligatory rows, or every supported program when ``full`` is set."""
+    if full:
+        return ASK_TOOLS
+    return tuple(tool for tool in ASK_TOOLS if tool.scope == "core")
+
+
+def ask_full_requested(argv: Optional[Sequence[str]] = None) -> bool:
+    """True for ``./install.sh full ask`` (env or ``--full``)."""
+    if argv and "--full" in argv:
+        return True
+    flag = os.environ.get("SAMOVAR_INSTALL_ASK_FULL", "").strip().lower()
+    return flag in {"1", "true", "yes"}
 
 
 def parse_env_answer(text: str) -> Optional[EnvAnswer]:
@@ -532,12 +554,16 @@ def ask_smoketest(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    del argv
+    full = ask_full_requested(argv)
     if not prompts_enabled():
         print("install.sh ask: not a terminal; skipping tool prompts.")
         return 0
-    print("Import tools already on this machine, or install them into the samovar environment.")
-    for spec in ASK_TOOLS:
+    tools = tools_for_ask(full=full)
+    if full:
+        print("Full ask: every supported program (anvio, centrifuge, gtdbtk, metax, and the rest).")
+    else:
+        print("Ask: obligatory annotators. ./install.sh full ask also asks about every supported program.")
+    for spec in tools:
         print("")
         try:
             ask_tool(spec, ask=input)

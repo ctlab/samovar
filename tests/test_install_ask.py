@@ -4,12 +4,14 @@ from pathlib import Path
 from samovar.install_ask import (
     ASK_TOOLS,
     AskTool,
+    ask_full_requested,
     ask_smoketest,
     ask_tool,
     format_smoketest_report,
     parse_env_answer,
     pick_which,
     record_tool,
+    tools_for_ask,
 )
 from samovar.main_config import lookup_tool_record, tool_path
 from samovar.paths import load_config
@@ -193,6 +195,13 @@ def test_ask_table_is_unique_and_typed():
         assert name in names
     for name in ("kraken2", "centrifuge", "metax", "megahit", "bowtie2"):
         assert name in names
+    core = {tool.name for tool in tools_for_ask(full=False)}
+    assert core == {"kraken2", "kaiju", "kraken", "krakenuniq"}
+    full = {tool.name for tool in tools_for_ask(full=True)}
+    for name in ("anvio", "centrifuge", "gtdbtk", "metax", "kraken2"):
+        assert name in full
+    assert ask_full_requested(["--full"])
+    assert not ask_full_requested([])
 
 
 def test_companion_uses_the_same_conda_place(tmp_path):
