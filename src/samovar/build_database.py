@@ -548,33 +548,69 @@ def build_database_kaiju(
     
     logger.info(f"Kaiju database successfully built at {db_path}")
 
+class KrakenUniqLibrarySkip(Exception):
+    """One taxon cannot be indexed. The rest of the library can still be built."""
+
+    def __init__(self, taxid: str, path: str, reason: str):
+        self.taxid = str(taxid)
+        self.path = str(path)
+        self.reason = str(reason)
+        super().__init__(f"{self.taxid}\t{self.reason}\t{self.path}")
+
+
+def _krakenuniq_taxid_name(taxid: str) -> str:
+    text = str(taxid or "").strip().replace("/", "_").replace("\\", "_")
+    return text or "unknown"
+
+
+def _is_protein_fasta(path: str) -> bool:
+    name = str(path or "").lower()
+    return name.endswith(".faa") or name.endswith(".faa.gz")
+
+
+def krakenuniq_added_dir(db_path: str) -> Path:
+    """``library/added/`` — one uncompressed FASTA per taxid, as krakenuniq-build scans it."""
+    added = Path(db_path) / "library" / "added"
+    added.mkdir(parents=True, exist_ok=True)
+    return added
+
+
 def process_fasta_krakenunique(input_file: str, taxid: str, genome_name: str, db_path: str) -> tuple[str, str]:
-    """Process FASTA file for KrakenUniq database building.
-    
-    This function preprocesses a FASTA file and creates a genomes.map file entry.
-    
-    Args:
-        input_file (str): Path to the input FASTA file.
-        taxid (str): Taxonomy ID to be added to sequence headers.
-        genome_name (str): Name of the genome/assembly.
-        db_path (str): Path to the database directory.
-    
+    """Write one uncompressed nucleotide FASTA and its seqid map under ``library/added/``.
+
+    ``krakenuniq-build`` finds ``*.fa`` under ``library/`` and concatenates
+    ``library/**/*.map`` into ``seqid2taxid.map``. Protein FASTA and missing
+    files are not invented; they raise ``KrakenUniqLibrarySkip``.
+
     Returns:
-        tuple[str, str]: Paths to the processed FASTA file and genomes.map file.
+        Paths to ``library/added/{taxid}.fa`` and ``library/added/{taxid}.map``.
     """
-    # Preprocess the FASTA file
-    processed_fasta = os.path.join(db_path, os.path.basename(input_file))
+    if _is_protein_fasta(input_file):
+        raise KrakenUniqLibrarySkip(taxid, input_file, "proteome")
+    if not os.path.exists(input_file):
+        raise KrakenUniqLibrarySkip(taxid, input_file, "missing")
+
+    added = krakenuniq_added_dir(db_path)
+    stem = _krakenuniq_taxid_name(taxid)
+    processed_fasta = str(added / f"{stem}.fa")
     preprocess_fasta(input_file, processed_fasta, mutation_rate=0, include_percent=100)
-    
-    # Create genomes.map entry
-    map_file = os.path.join(db_path, "genomes.map")
-    with open(map_file, 'a') as map_out:
+
+    map_file = str(added / f"{stem}.map")
+    wrote = 0
+    with open(map_file, "w", encoding="utf-8") as map_out:
         for record in iter_seqio_fasta(processed_fasta):
-            # Get sequence ID (header without '>' up to first space)
             seq_id = record.id.split()[0]
-            # Write to genomes.map
+            if not seq_id or len(record.seq) == 0:
+                continue
             map_out.write(f"{seq_id}\t{taxid}\t{genome_name}\n")
-    
+            wrote += 1
+    if wrote == 0:
+        for path in (processed_fasta, map_file):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        raise KrakenUniqLibrarySkip(taxid, input_file, "empty")
     return processed_fasta, map_file
 
 def add_database_krakenunique(
@@ -582,31 +618,27 @@ def add_database_krakenunique(
     taxid: str,
     genome_name: str,
     db_path: str = "krakenuniq_db"
-) -> None:
-    """Add sequences to the KrakenUniq database library.
-    
-    This function processes a FASTA file and adds its sequences to the KrakenUniq database library
-    with proper taxonomy IDs and creates a genomes.map file.
-    
-    Args:
-        input_file (str): Path to the input FASTA file.
-        taxid (str): Taxonomy ID to associate with the sequences.
-        genome_name (str): Name of the genome/assembly.
-        db_path (str, optional): Path to the KrakenUniq database. Defaults to "krakenuniq_db".
-    
+) -> tuple[str, str]:
+    """Add one nucleotide genome to ``library/added/{taxid}.fa``.
+
     Raises:
-        FileNotFoundError: If the input file does not exist.
+        KrakenUniqLibrarySkip: Genome file is missing, empty, or protein-only.
     """
-    # Create database directory if it doesn't exist
     os.makedirs(db_path, exist_ok=True)
-    
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"Input file not found: {input_file}")
-    
-    # Process the input file
-    process_fasta_krakenunique(input_file, taxid, genome_name, db_path)
-    
-    logger.info(f"Sequences successfully added to KrakenUniq database at {db_path}")
+    processed, map_file = process_fasta_krakenunique(input_file, taxid, genome_name, db_path)
+    logger.info("Added KrakenUniq genome %s (%s) to %s", taxid, genome_name, processed)
+    return processed, map_file
+
+
+def write_krakenuniq_skips(db_path: str, skips: List[KrakenUniqLibrarySkip]) -> Path:
+    """Taxa left out of the library. Not placed under ``library/``, so the build does not index them."""
+    dest = Path(db_path) / "missing-taxa.tsv"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["taxid\treason\tpath"]
+    for item in skips:
+        lines.append(f"{item.taxid}\t{item.reason}\t{item.path}")
+    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return dest
 
 def build_database_krakenunique(
     db_path: str = "krakenuniq_db",
@@ -640,6 +672,23 @@ def build_database_krakenunique(
     jellyfish_path = _on_disk("jellyfish")
     if not jellyfish_path:
         raise RuntimeError("jellyfish not found. Import it next to krakenuniq (./install.sh full ask).")
+
+    library = Path(db_path) / "library"
+    if not any(library.rglob("*.fa")) and not any(library.rglob("*.fna")):
+        raise FileNotFoundError(
+            f"No nucleotide FASTA under {library}. "
+            "KrakenUniq indexes library/*.fa; see missing-taxa.tsv for genomes that were skipped."
+        )
+    taxonomy = Path(db_path) / "taxonomy"
+    if not (taxonomy / "nodes.dmp").is_file() or not (taxonomy / "names.dmp").is_file():
+        raise FileNotFoundError(
+            f"KrakenUniq needs {taxonomy}/nodes.dmp and names.dmp "
+            "(symlinks to the configured taxdump)."
+        )
+    # An empty or stale list hides the library. build_db.sh rebuilds it when absent.
+    stale_list = Path(db_path) / "library-files.txt"
+    if stale_list.exists():
+        stale_list.unlink()
 
     # Set up environment variables
     env = os.environ.copy()
@@ -769,16 +818,31 @@ def build_database_from_config(
         build_database_kraken2(db_path=db_path, threads=threads, kmer_len=35, 
                              minimizer_len=31, minimizer_spaces=7, skip_maps=True)
     elif db_type == "krakenunique":
-        # Create output directory
         os.makedirs(db_path, exist_ok=True)
-        # Get taxonomy database
-        get_taxonomy_db(db_path=db_path)
-        # Add each genome to the database
+        skips: List[KrakenUniqLibrarySkip] = []
+        added = 0
         for input_file, taxid in zip(input_files, taxids):
-            # Use filename as genome name
             genome_name = os.path.basename(input_file)
-            add_database_krakenunique(input_file, taxid, genome_name, db_path=db_path)
-        # Build the database
+            try:
+                add_database_krakenunique(input_file, taxid, genome_name, db_path=db_path)
+            except KrakenUniqLibrarySkip as exc:
+                skips.append(exc)
+                logger.warning(
+                    "KrakenUniq skipping taxid %s (%s): %s",
+                    exc.taxid,
+                    exc.reason,
+                    exc.path,
+                )
+                continue
+            added += 1
+        write_krakenuniq_skips(db_path, skips)
+        if added == 0:
+            raise ValueError(
+                "No nucleotide genomes left to index for krakenunique. "
+                f"Skipped {len(skips)} taxa; see {db_path}/missing-taxa.tsv."
+            )
+        # Dumps belong in taxonomy/, not next to the FASTA. Reuse the configured taxdump.
+        get_taxonomy_db(db_path=os.path.join(db_path, "taxonomy"))
         build_database_krakenunique(db_path=db_path, threads=threads)
     elif db_type in {"kmer_encoder", "metauto", "kmerenc"}:
         from samovar.kmer_encoder import train_encoder
