@@ -13,6 +13,26 @@
   "adaboost": [
     "sklearn_pedregosa2011.bib"
   ],
+  "anvi-cluster-contigs": [
+    "anvio_eren2015.bib",
+    "anvio_eren2021.bib"
+  ],
+  "anvi-gen-contigs-database": [
+    "anvio_eren2015.bib",
+    "anvio_eren2021.bib"
+  ],
+  "anvi-merge": [
+    "anvio_eren2015.bib",
+    "anvio_eren2021.bib"
+  ],
+  "anvi-profile": [
+    "anvio_eren2015.bib",
+    "anvio_eren2021.bib"
+  ],
+  "anvi-summarize": [
+    "anvio_eren2015.bib",
+    "anvio_eren2021.bib"
+  ],
   "anvio": [
     "anvio_eren2015.bib",
     "anvio_eren2021.bib"
