@@ -372,14 +372,19 @@ def record_tool(
     is what the config exposes as ``tool_envs.<name>``.
     """
     del prefix  # recorded via the executable path (…/bin/<exe>)
-    import_tool(
-        name=spec.name,
-        tool_type=spec.type,
-        env=env,
-        exec_name=exec_name or spec.name,
-        exec_path=path,
-    )
-    print(f"  recorded tools.{spec.name} -> {path}")
+    names = [spec.name]
+    for alias in spec.which:
+        if alias and alias not in names:
+            names.append(alias)
+    for name in names:
+        import_tool(
+            name=name,
+            tool_type=spec.type,
+            env=env,
+            exec_name=exec_name or name,
+            exec_path=path,
+        )
+        print(f"  recorded tools.{name} -> {path}")
 
 
 def conda_env_prefix(env_name: str) -> str:

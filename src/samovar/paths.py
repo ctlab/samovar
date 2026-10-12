@@ -695,6 +695,15 @@ def discover_tools() -> Dict[str, str]:
     wgs = discover_wgsim()
     if wgs:
         found.setdefault("wgsim", wgs)
+    # which_tool asks for these names, not the short config keys.
+    for name in ("anvi-gen-contigs-database", "DAS_Tool"):
+        path = shutil.which(name)
+        if path:
+            found.setdefault(name, path)
+    if found.get("anvi-gen-contigs-database"):
+        found.setdefault("anvio", found["anvi-gen-contigs-database"])
+    if found.get("DAS_Tool"):
+        found.setdefault("dastool", found["DAS_Tool"])
     return found
 
 

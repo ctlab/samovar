@@ -26,6 +26,19 @@ def main():
     )
     parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
     parser.add_argument(
+        '--autoimport',
+        type=int,
+        choices=(0, 1),
+        default=None,
+        help=(
+            'Omit to ask about each program or database named here that is not '
+            'imported yet (same dialogue as ./install.sh ask). '
+            '1: record anything that can be resolved (command path, one PATH hit, '
+            'or a conda env of the same name) and ask only about the rest. '
+            '0: import nothing.'
+        ),
+    )
+    parser.add_argument(
         '--threads',
         type=int,
         default=None,
@@ -553,7 +566,7 @@ def main():
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "output-dir", "outdir", "directory",
-        "cores", "threads",
+        "cores", "threads", "autoimport",
         "max_genomes", "max-genomes", "top", "max-genome-mb", "max_genome_mb",
         "genome-skip-list", "genome_skip_list",
         "N_reads", "n_reads", "N",
@@ -632,6 +645,9 @@ def main():
                 counted += 1
         print(f"Indexed {counted} processed genome(s) from --index")
 
+    from samovar.prepare_import import offer_prepare_imports
+
+    offer_prepare_imports(args)
     result = setup_pipeline(args)
     print(f"Generated configs: {result['configs']}")
     print(f"Generated pipeline: {result['pipeline']}")

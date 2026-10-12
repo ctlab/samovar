@@ -383,6 +383,7 @@ def test_assembly_tools_resolve_from_conda_prefix(tmp_path, monkeypatch):
         ("megahit", "megahit"),
         ("minimap2", "minimap2"),
         ("anvio", "anvi-gen-contigs-database"),
+        ("dastool", "DAS_Tool"),
     )
     for tool_name, binary in cases:
         prefix = tmp_path / "envs" / tool_name
@@ -394,7 +395,53 @@ def test_assembly_tools_resolve_from_conda_prefix(tmp_path, monkeypatch):
         spec = next(tool for tool in ASK_TOOLS if tool.name == tool_name)
         record_tool(spec, str(exe), env="conda", prefix=str(prefix), exec_name=binary)
         assert which_tool(tool_name) == str(exe.resolve())
+        assert which_tool(binary) == str(exe.resolve())
         assert str(exe.parent) in collect_runtime_path_dirs()
+
+
+def test_full_install_discovers_anvio_and_dastool_lookup_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    (tmp_path / "config.json").write_text("{}\n")
+    hits = {
+        "anvi-gen-contigs-database": "/opt/anvio/bin/anvi-gen-contigs-database",
+        "DAS_Tool": "/opt/das/DAS_Tool",
+    }
+    import samovar.paths as paths
+
+    monkeypatch.setattr(paths.shutil, "which", lambda name: hits.get(name))
+    found = paths.discover_tools()
+    assert found["anvi-gen-contigs-database"] == hits["anvi-gen-contigs-database"]
+    assert found["anvio"] == hits["anvi-gen-contigs-database"]
+    assert found["DAS_Tool"] == hits["DAS_Tool"]
+    assert found["dastool"] == hits["DAS_Tool"]
+
+
+def test_install_config_mirrors_short_keys_onto_lookup_names(tmp_path):
+    from samovar.main_config import build_install_config, iter_tool_records, tool_path
+
+    cfg = build_install_config(
+        root=str(tmp_path),
+        python_path="/usr/bin/python3",
+        version="test",
+        existing={
+            "tools": {
+                "anvio": {
+                    "exec": {"env": "", "parser": "bash", "path": "/opt/anvio/bin/anvi-gen-contigs-database"},
+                    "type": "binner",
+                },
+                "dastool": {
+                    "exec": {"env": "", "parser": "bash", "path": "/opt/das/DAS_Tool"},
+                    "type": "binner_combine",
+                },
+            }
+        },
+    )
+    records = iter_tool_records(cfg)
+    assert tool_path(records["anvi-gen-contigs-database"], "anvi-gen-contigs-database") == (
+        "/opt/anvio/bin/anvi-gen-contigs-database"
+    )
+    assert tool_path(records["DAS_Tool"], "DAS_Tool") == "/opt/das/DAS_Tool"
 
 
 def test_smoketest_prompt_skips_unless_yes():

@@ -61,15 +61,43 @@ def as_path(value: Any) -> Path:
     return Path(str(value)).expanduser()
 
 
+def _resolved_executable(token: str, tool_key: str) -> str:
+    """Absolute executable from config, or empty when the token was not resolved."""
+    resolved = str(resolve_executable(token, tool_key=tool_key) or "").split()
+    first = resolved[0] if resolved else ""
+    if not first:
+        return ""
+    path = Path(first).expanduser()
+    try:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+    except OSError:
+        return ""
+    return ""
+
+
 def which_tool(name: str, default: str = "") -> str:
     binary = BINARY_NAMES.get(name, name)
     raw = default or binary
-    resolved = resolve_executable(raw, tool_key=name) or resolve_executable(
-        binary, tool_key=binary
-    )
-    first = str(resolved).split()[0] if resolved else ""
-    if first and Path(first).expanduser().is_file() and os.access(first, os.X_OK):
-        return first
+    # resolve_executable returns the original token when nothing matches, so each
+    # key has to be checked on its own. anvio stores anvi-gen-contigs-database;
+    # dastool stores DAS_Tool.
+    keys = [name, binary, raw]
+    if str(binary).startswith("anvi-"):
+        keys.append("anvio")
+    if binary == "DAS_Tool":
+        keys.append("dastool")
+    seen = set()
+    for key in keys:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        hit = _resolved_executable(binary, key)
+        if not hit:
+            continue
+        if key in {"anvio", "dastool"} and Path(hit).name != binary:
+            continue
+        return hit
     from samovar.paths import sidecar_envs_dir
 
     envs = sidecar_envs_dir()

@@ -232,6 +232,11 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "metaflye": "assembler",
     "prodigal": "gene_caller",
     "anvio": "binner",
+    "anvi-gen-contigs-database": "binner",
+    "anvi-profile": "binner",
+    "anvi-merge": "binner",
+    "anvi-cluster-contigs": "binner",
+    "anvi-summarize": "binner",
     "metabat2": "binner",
     "checkm2": "binner_qc",
     "dastool": "binner_combine",
@@ -320,6 +325,41 @@ def _split_dirs(value: Any) -> List[str]:
 
 def tool_group_for(name: str) -> str:
     return TOOL_GROUP_BY_NAME.get(name, TOOL_GROUP_BY_NAME.get(Path(name).name, "runtime"))
+
+
+def mirror_assembly_lookup_keys(cfg: Dict[str, Any]) -> None:
+    """Copy anvio / DAS Tool paths onto the names ``which_tool`` actually calls.
+
+    Ask records ``tools.anvio`` and ``tools.dastool``. The binner calls
+    ``anvi-gen-contigs-database`` and ``DAS_Tool``. Default ``./install.sh full``
+    writes whichever of the pair discovery found.
+    """
+    present: Dict[str, str] = {}
+    for name, spec in iter_tools(cfg).items():
+        path = tool_path(spec, name)
+        if path:
+            present[name] = path
+    pairs = (
+        ("anvio", "anvi-gen-contigs-database"),
+        ("dastool", "DAS_Tool"),
+    )
+    for left, right in pairs:
+        path = present.get(left) or present.get(right)
+        if not path:
+            continue
+        for key in (left, right):
+            if present.get(key):
+                continue
+            env, workflow = infer_tool_env(path)
+            set_tool(
+                cfg,
+                key,
+                path=path,
+                env=env,
+                workflow=workflow,
+                group=tool_group_for(key),
+            )
+            present[key] = path
 
 
 def normalize_tool_group(value: str) -> str:
@@ -1515,6 +1555,7 @@ def build_install_config(
             continue
         env, workflow = infer_tool_env(path, conda_prefix=conda_prefix)
         set_tool(cfg, name, path=path, env=env, workflow=workflow, group=tool_group_for(name))
+    mirror_assembly_lookup_keys(cfg)
 
     # Compilers also as tools
     if compilers.get("python"):
