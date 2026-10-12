@@ -32,17 +32,47 @@ class AskTool:
     which: Tuple[str, ...]
     type: str
     install: str
+    # Executables that ship next to ``which[0]`` (kraken2-build beside kraken2).
+    companions: Tuple[str, ...] = ()
+    # custom.sh calls these by bare name, so the bin directory must land on PATH.
+    path_required: bool = False
 
 
-# name, PATH binaries, tool group, install action. Append a row to add a tool.
+# One row per program the pipeline can launch. ``companions`` are not separate
+# dialogues: after this row is imported they are offered yes/no from the same
+# directory and the same conda/base answer.
+# ``install=""`` means import-only (MetaPhlAn is optional and is not installed).
 ASK_TOOLS: Tuple[AskTool, ...] = (
-    AskTool("kraken2", ("kraken2",), "annotator", "conda:kraken2"),
-    AskTool("kaiju", ("kaiju",), "annotator", "conda:kaiju"),
-    AskTool("kraken", ("kraken",), "annotator", "conda:kraken"),
-    AskTool("krakenuniq", ("krakenuniq",), "annotator", "conda:krakenuniq"),
-    AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", "conda:metaphlan"),
-    AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),
-    AskTool("metax", ("metax",), "annotator", "optional:metax"),
+    AskTool(
+        "kraken2", ("kraken2",), "annotator", "conda:kraken2",
+        companions=("kraken2-build", "kraken2-inspect"),
+        path_required=True,
+    ),
+    AskTool(
+        "kaiju", ("kaiju",), "annotator", "conda:kaiju",
+        companions=("kaiju-mkbwt", "kaiju-mkfmi"),
+    ),
+    AskTool(
+        "kraken", ("kraken",), "annotator", "conda:kraken",
+        companions=("kraken-build",),
+    ),
+    AskTool(
+        "krakenuniq", ("krakenuniq",), "annotator", "conda:krakenuniq",
+        companions=("krakenuniq-build", "jellyfish"),
+    ),
+    AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
+    AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge", path_required=True),
+    AskTool("metax", ("metax",), "annotator", "optional:metax", path_required=True),
+    AskTool(
+        "bowtie2", ("bowtie2",), "aligner", "conda:bowtie2",
+        companions=("bowtie2-build",),
+        path_required=True,
+    ),
+    AskTool("fastp", ("fastp",), "qc", "conda:fastp"),
+    AskTool("cutadapt", ("cutadapt",), "qc", "conda:cutadapt"),
+    AskTool("trimmomatic", ("trimmomatic",), "qc", "conda:trimmomatic"),
+    AskTool("chopper", ("chopper",), "qc", "conda:chopper"),
+    AskTool("nanofilt", ("NanoFilt",), "qc", "conda:nanofilt"),
     AskTool("opal", ("opal.py",), "scoring", "optional:opal"),
     AskTool("multiqc", ("multiqc",), "scoring", "optional:multiqc"),
     AskTool("camisim", ("camisim",), "metagenome_generator", "optional:camisim"),
@@ -53,13 +83,23 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool("wgsim", ("wgsim",), "reads_generator", "conda:wgsim"),
     AskTool("sparsedossa2", ("sparsedossa2",), "table_reads_generator", "optional:sparsedossa2"),
     AskTool("R", ("R",), "runtime", "optional:r-package"),
-    AskTool("megahit", ("megahit",), "assembler", "optional:megahit"),
+    AskTool("megahit", ("megahit",), "assembler", "optional:megahit", path_required=True),
     AskTool("flye", ("flye",), "assembler", "optional:flye"),
     AskTool("prodigal", ("prodigal",), "gene_caller", "optional:prodigal"),
     AskTool("minimap2", ("minimap2",), "aligner", "optional:minimap2"),
+    AskTool("samtools", ("samtools",), "aligner", "conda:samtools"),
     AskTool("coverm", ("coverm",), "mag_quantifier", "optional:coverm"),
     AskTool("dastool", ("DAS_Tool",), "binner_combine", "optional:dastool"),
-    AskTool("anvio", ("anvi-gen-contigs-database",), "binner", "optional:anvio"),
+    AskTool("metabat2", ("metabat2",), "binner", "conda:metabat2"),
+    AskTool(
+        "anvio", ("anvi-gen-contigs-database",), "binner", "optional:anvio",
+        companions=(
+            "anvi-profile",
+            "anvi-merge",
+            "anvi-cluster-contigs",
+            "anvi-summarize",
+        ),
+    ),
     AskTool("checkm2", ("checkm2",), "binner_qc", "optional:checkm2"),
     AskTool("gtdbtk", ("gtdbtk",), "mag_taxonomy", "optional:gtdbtk"),
 )
@@ -180,6 +220,8 @@ def record_tool(
         exec_path=path,
     )
     print(f"  recorded tools.{spec.name} -> {path}")
+    if spec.path_required:
+        print(f"  {spec.name} is invoked by name; {Path(path).parent} is added to PATH")
 
 
 def conda_env_prefix(env_name: str) -> str:
@@ -274,6 +316,58 @@ def locate_installed(spec: AskTool) -> Tuple[str, str]:
     return "", ""
 
 
+def conda_layout(path: str) -> Tuple[str, str]:
+    """``(<env>, <prefix>)`` when ``path`` is ``<conda-prefix>/bin/<exe>``."""
+    parent = Path(path).parent
+    if parent.name != "bin":
+        return "", ""
+    prefix = parent.parent
+    if (prefix / "conda-meta").is_dir():
+        return "conda", str(prefix)
+    return "", ""
+
+
+def sibling_executable(primary_path: str, name: str) -> str:
+    candidate = Path(primary_path).parent / name
+    try:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+    except OSError:
+        return ""
+    return ""
+
+
+def offer_companions(
+    spec: AskTool,
+    primary_path: str,
+    *,
+    env: str,
+    prefix: str,
+    ask: Callable[[str], str],
+    record,
+    sibling_fn: Callable[[str, str], str] = sibling_executable,
+) -> None:
+    """Yes/no for helper binaries that sit next to the one just imported."""
+    for name in spec.companions:
+        path = sibling_fn(primary_path, name)
+        if not path:
+            continue
+        prompt = (
+            f"Import {name} from the same place as {spec.name} ({path})? [Y/n] "
+        )
+        if not is_yes(ask(prompt), default=True):
+            print(f"  {name}: skipped")
+            continue
+        companion = AskTool(
+            name,
+            (name,),
+            spec.type,
+            "",
+            path_required=spec.path_required,
+        )
+        record(companion, path, env=env, prefix=prefix, exec_name=name)
+
+
 def ask_tool(
     spec: AskTool,
     *,
@@ -284,8 +378,26 @@ def ask_tool(
     record=record_tool,
     install=install_action,
     locate=locate_installed,
+    sibling_fn: Callable[[str, str], str] = sibling_executable,
 ) -> str:
     """Prompt for one tool. Returns ``imported-which``, ``imported-env``, ``installed``, or ``skipped``."""
+
+    def commit(path: str, *, env: str, prefix: str, exec_name: str) -> None:
+        if not env:
+            detected_env, detected_prefix = conda_layout(path)
+            if detected_env:
+                env, prefix = detected_env, detected_prefix
+        record(spec, path, env=env, prefix=prefix, exec_name=exec_name)
+        offer_companions(
+            spec,
+            path,
+            env=env,
+            prefix=prefix,
+            ask=ask,
+            record=record,
+            sibling_fn=sibling_fn,
+        )
+
     hits = list(which_fn(spec.which))
     if hits:
         while True:
@@ -295,7 +407,7 @@ def ask_tool(
             if picked == "":
                 print("Answer Y, a number from the list, or n.")
                 continue
-            record(spec, picked, env="", prefix="", exec_name=Path(picked).name)
+            commit(picked, env="", prefix="", exec_name=Path(picked).name)
             return "imported-which"
 
     while True:
@@ -309,15 +421,18 @@ def ask_tool(
         try:
             if kind == "base":
                 path, prefix = resolve_base_fn(exe)
-                record(spec, path, env="", prefix=prefix, exec_name=exe)
+                commit(path, env="", prefix=prefix, exec_name=exe)
             else:
                 path, prefix = resolve_conda_fn(env_name, exe)
-                record(spec, path, env="conda", prefix=prefix, exec_name=exe)
+                commit(path, env="conda", prefix=prefix, exec_name=exe)
         except (OSError, FileNotFoundError, ValueError) as exc:
             print(f"  {exc}")
             continue
         return "imported-env"
 
+    if not spec.install:
+        print(f"  {spec.name}: skipped (optional; not installed automatically)")
+        return "skipped"
     if is_yes(ask(f"Install {spec.name} into the samovar environment? [y/N] "), default=False):
         try:
             install(spec)
@@ -327,7 +442,7 @@ def ask_tool(
         path, prefix = locate(spec)
         if path:
             env = "conda" if prefix else ""
-            record(spec, path, env=env, prefix=prefix, exec_name=Path(path).name)
+            commit(path, env=env, prefix=prefix, exec_name=Path(path).name)
             return "installed"
         print(f"  {spec.name}: installer finished; executable not found to record.")
         return "installed"
@@ -344,23 +459,52 @@ def prompts_enabled() -> bool:
         return False
 
 
+def refresh_install_path() -> None:
+    """Rewrite the PATH line in the install env so newly imported bins are visible.
+
+    ``custom.sh`` launches centrifuge, megahit, bowtie2, and kraken2 by name.
+    """
+    from samovar.paths import collect_runtime_path_dirs, user_config_dir
+
+    env_path = user_config_dir() / "env"
+    if not env_path.is_file():
+        return
+    path_export = ":".join(collect_runtime_path_dirs() + ["$PATH"])
+    new_line = f'export PATH="{path_export}"'
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    for index, line in enumerate(lines):
+        if line.startswith("export PATH="):
+            lines[index] = new_line
+            replaced = True
+            break
+    if not replaced:
+        lines.append(new_line)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     del argv
     if not prompts_enabled():
         print("install.sh ask: not a terminal; skipping tool prompts.")
         return 0
     print("Import tools already on this machine, or install them into the samovar environment.")
-    for spec in ASK_TOOLS:
-        print("")
-        try:
-            ask_tool(spec, ask=input)
-        except KeyboardInterrupt:
+    code = 0
+    try:
+        for spec in ASK_TOOLS:
             print("")
-            return 130
-        except EOFError:
-            print("")
-            return 0
-    return 0
+            try:
+                ask_tool(spec, ask=input)
+            except KeyboardInterrupt:
+                print("")
+                code = 130
+                break
+            except EOFError:
+                print("")
+                break
+    finally:
+        refresh_install_path()
+    return code
 
 
 if __name__ == "__main__":

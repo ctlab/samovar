@@ -60,6 +60,15 @@ fi
 
 echo "[INFO] Running custom wrapper for tool: ${TOOL}"
 
+# centrifuge, megahit, bowtie2, bowtie2-build, and kraken2 are bare names.
+# ./install.sh ask records them so their bin directory is on PATH.
+require_on_path() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "[ERROR] $1 must be on PATH (./install.sh ask imports it next to its main tool)" >&2
+    exit 127
+  fi
+}
+
 # ==========================================
 # TOOL ROUTER
 # ==========================================
@@ -112,6 +121,7 @@ case "$TOOL" in
       INDEX="${DB%.1.cf}"
     fi
     echo "[INFO] Centrifuge index prefix: ${INDEX}"
+    require_on_path centrifuge
     # --report-file: centrifuge otherwise writes centrifuge_report.tsv into CWD
     # (often the repo root when snakemake cds there). Keep all litter in TMP_DIR.
     # Unpaired CAMI files have no R2: -U, not -1/-2.
@@ -206,7 +216,11 @@ case "$TOOL" in
   "assembly_hybrid")
     echo "[INFO] Starting Assembly-Hybrid pipeline..."
     
-    # Step A: Assembly
+    # Step A: Assembly. These four are PATH names, not config lookups.
+    require_on_path megahit
+    require_on_path bowtie2-build
+    require_on_path bowtie2
+    require_on_path kraken2
     megahit -1 "$R1" -2 "$R2" -t "$THREADS" -o "$TMP_DIR/megahit" -f
     CONTIGS="$TMP_DIR/megahit/final.contigs.fa"
 

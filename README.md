@@ -56,7 +56,7 @@ Built-in ensemble members (wired through `samovar prepare`):
 | **Kraken2** | k-mer LCA classifier |
 | **Kaiju** | protein-level (translated) classifier |
 | **Kraken / KrakenUniq** | additional k-mer votes |
-| **MetaPhlAn** | marker-gene profiler |
+| **MetaPhlAn** | optional marker-gene profiler (not part of the core install) |
 | **Custom** | extra votes; can be easily additionally implemented for the developers |
 
 Workflow:

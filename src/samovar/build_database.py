@@ -41,8 +41,15 @@ def run_command(cmd: List[str], check: bool = True) -> subprocess.CompletedProce
     Raises:
         subprocess.CalledProcessError: If check=True and command returns non-zero exit code.
     """
-    logger.info(f"Running command: {' '.join(cmd)}")
-    return subprocess.run(cmd, check=check, text=True)
+    argv = [str(part) for part in cmd]
+    if argv:
+        from samovar.paths import resolve_executable
+
+        resolved = str(resolve_executable(argv[0]) or "").split()
+        if resolved and resolved[0]:
+            argv[0] = resolved[0]
+    logger.info(f"Running command: {' '.join(argv)}")
+    return subprocess.run(argv, check=check, text=True)
 
 def get_taxonomy_db(
     db_path: str="kraken_db",
@@ -616,24 +623,30 @@ def build_database_krakenunique(
     Note:
         Building a large database can be memory-intensive and time-consuming.
     """
-    # Check if krakenuniq is installed
-    try:
-        subprocess.run(['which', 'krakenuniq-build'], check=True, capture_output=True)
-    except subprocess.CalledProcessError:
-        raise RuntimeError("krakenuniq-build not found. Please install KrakenUniq first.")
+    from samovar.paths import resolve_executable
 
-    # Check if jellyfish is installed
-    try:
-        jellyfish_path = subprocess.run(['which', 'jellyfish'], check=True, capture_output=True, text=True).stdout.strip()
-    except subprocess.CalledProcessError:
-        raise RuntimeError("jellyfish not found. Please install Jellyfish first.")
+    def _on_disk(name: str) -> str:
+        head = str(resolve_executable(name) or "").split()
+        path = Path(head[0]) if head else Path()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+        return ""
+
+    build_bin = _on_disk("krakenuniq-build")
+    if not build_bin:
+        raise RuntimeError(
+            "krakenuniq-build not found. Import it next to krakenuniq (./install.sh ask)."
+        )
+    jellyfish_path = _on_disk("jellyfish")
+    if not jellyfish_path:
+        raise RuntimeError("jellyfish not found. Import it next to krakenuniq (./install.sh ask).")
 
     # Set up environment variables
     env = os.environ.copy()
     env['JELLYFISH_BIN'] = jellyfish_path
 
     build_cmd = [
-        "krakenuniq-build",
+        build_bin,
         "--db", db_path,
         "--threads", str(threads),
         "--taxids-for-genomes",

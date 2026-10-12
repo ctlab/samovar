@@ -47,6 +47,7 @@ def test_which_yes_records_that_binary():
         KAIJU,
         ask=ask,
         which_fn=lambda names: ["/usr/bin/kaiju"],
+        sibling_fn=lambda path, name: "",
         record=lambda spec, path, **kwargs: recorded.append((spec.name, path, kwargs)),
     )
     assert result == "imported-which"
@@ -61,6 +62,7 @@ def test_decline_which_then_conda_env(tmp_path):
         KAIJU,
         ask=lambda prompt: next(answers),
         which_fn=lambda names: ["/usr/bin/kaiju"],
+        sibling_fn=lambda path, name: "",
         resolve_conda_fn=lambda env, exe: (str(tmp_path / "bin" / exe), str(tmp_path)),
         record=lambda spec, path, **kwargs: recorded.append((path, kwargs)),
     )
@@ -79,6 +81,7 @@ def test_no_then_skip_install():
         KAIJU,
         ask=lambda prompt: next(answers),
         which_fn=lambda names: [],
+        sibling_fn=lambda path, name: "",
         install=lambda spec: called.append(spec.name),
         record=lambda *args, **kwargs: called.append("record"),
     )
@@ -102,6 +105,7 @@ def test_no_then_install_into_samovar():
         ask=lambda prompt: next(answers),
         which_fn=which_fn,
         install=install,
+        sibling_fn=lambda path, name: "",
         locate=lambda spec: ("/opt/samovar/bin/kaiju", "/opt/samovar"),
         record=lambda spec, path, **kwargs: recorded.append((path, kwargs["env"], kwargs["prefix"])),
     )
@@ -116,6 +120,7 @@ def test_base_exec_updates_config():
         KAIJU,
         ask=lambda prompt: "base kaiju",
         which_fn=lambda names: [],
+        sibling_fn=lambda path, name: "",
         resolve_base_fn=lambda exe: ("/envs/samovar/bin/kaiju", "/envs/samovar"),
         record=lambda spec, path, **kwargs: recorded.append(kwargs),
     )
@@ -130,6 +135,7 @@ def test_invalid_then_conda():
         KAIJU,
         ask=lambda prompt: next(answers),
         which_fn=lambda names: [],
+        sibling_fn=lambda path, name: "",
         resolve_conda_fn=lambda env, exe: ("/opt/envs/kaiju/bin/kaiju", "/opt/envs/kaiju"),
         record=lambda *args, **kwargs: None,
     )
@@ -166,5 +172,104 @@ def test_ask_table_is_unique_and_typed():
     assert len(names) == len(set(names))
     for tool in ASK_TOOLS:
         assert isinstance(tool, AskTool)
-        assert tool.install.startswith(("conda:", "optional:"))
+        assert tool.install == "" or tool.install.startswith(("conda:", "optional:"))
         assert tool.which
+    metaphlan = next(tool for tool in ASK_TOOLS if tool.name == "metaphlan")
+    assert metaphlan.install == ""
+    kraken2 = next(tool for tool in ASK_TOOLS if tool.name == "kraken2")
+    assert "kraken2-build" in kraken2.companions
+    for name in (
+        "minimap2",
+        "anvio",
+        "megahit",
+        "flye",
+        "prodigal",
+        "samtools",
+        "metabat2",
+        "bowtie2",
+    ):
+        assert name in names
+    for name in ("kraken2", "centrifuge", "metax", "megahit", "bowtie2"):
+        assert next(tool for tool in ASK_TOOLS if tool.name == name).path_required
+
+
+def test_companion_uses_the_same_conda_place(tmp_path):
+    bindir = tmp_path / "bin"
+    prefix = tmp_path
+    (prefix / "conda-meta").mkdir()
+    bindir.mkdir()
+    for name in ("kraken2", "kraken2-build"):
+        binary = bindir / name
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    answers = iter(["y", "y"])
+    recorded = []
+    spec = next(tool for tool in ASK_TOOLS if tool.name == "kraken2")
+    result = ask_tool(
+        spec,
+        ask=lambda prompt: next(answers),
+        which_fn=lambda names: [str(bindir / "kraken2")],
+        record=lambda tool, path, **kwargs: recorded.append((tool.name, kwargs["env"], path)),
+    )
+    assert result == "imported-which"
+    assert [item[0] for item in recorded] == ["kraken2", "kraken2-build"]
+    assert {item[1] for item in recorded} == {"conda"}
+    assert all(item[2].startswith(str(bindir)) for item in recorded)
+
+
+def test_companion_no_skips_helper(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name in ("kraken2", "kraken2-build"):
+        binary = bindir / name
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    answers = iter(["y", "n"])
+    recorded = []
+    spec = next(tool for tool in ASK_TOOLS if tool.name == "kraken2")
+    ask_tool(
+        spec,
+        ask=lambda prompt: next(answers),
+        which_fn=lambda names: [str(bindir / "kraken2")],
+        record=lambda tool, path, **kwargs: recorded.append(tool.name),
+    )
+    assert recorded == ["kraken2"]
+
+
+def test_metaphlan_is_not_installed_into_samovar():
+    called = []
+    spec = next(tool for tool in ASK_TOOLS if tool.name == "metaphlan")
+    result = ask_tool(
+        spec,
+        ask=lambda prompt: "n",
+        which_fn=lambda names: [],
+        install=lambda tool: called.append(tool.name),
+        record=lambda *args, **kwargs: called.append("record"),
+    )
+    assert result == "skipped"
+    assert called == []
+
+
+def test_assembly_tools_resolve_from_conda_prefix(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    from samovar.assembly_profiling import which_tool
+    from samovar.paths import collect_runtime_path_dirs
+
+    cases = (
+        ("megahit", "megahit"),
+        ("minimap2", "minimap2"),
+        ("anvio", "anvi-gen-contigs-database"),
+    )
+    for tool_name, binary in cases:
+        prefix = tmp_path / "envs" / tool_name
+        (prefix / "conda-meta").mkdir(parents=True)
+        exe = prefix / "bin" / binary
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        spec = next(tool for tool in ASK_TOOLS if tool.name == tool_name)
+        record_tool(spec, str(exe), env="conda", prefix=str(prefix), exec_name=binary)
+        assert which_tool(tool_name) == str(exe.resolve())
+        assert str(exe.parent) in collect_runtime_path_dirs()
