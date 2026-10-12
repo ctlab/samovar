@@ -41,6 +41,8 @@ Some tools are optional but are required for some actions. Install them all with
 ./install.sh full
 ```
 
+`./install.sh ask` does the same core install, then asks about each important tool. If `which` finds it, confirm that binary. Otherwise answer `conda ENV EXEC` (a conda env and the executable), `base EXEC` (the active samovar environment), or `n`. `n` asks whether to install it into the samovar environment. Any other accepted answer is written into the main config.
+
 Already-installed extras are reused and written into the install config. More details: [installation wiki](https://github.com/ctlab/samovar/wiki/How-to-install).
 
 The tool main config layout is described in [config wiki](https://github.com/ctlab/samovar/wiki/Configs-&-data).

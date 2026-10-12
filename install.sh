@@ -5,6 +5,7 @@
 # Usage:
 #   ./install.sh                 Python pipeline only
 #   ./install.sh full            core + every optional extra (reuse if already installed)
+#   ./install.sh ask             core, then ask how to import each important tool
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
 #   ./install.sh MultiQC         optional MultiQC HTML reports
@@ -31,6 +32,7 @@
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
 #   SAMOVAR_INSTALL_FULL=1     same as ./install.sh full
+#   SAMOVAR_INSTALL_ASK=1      same as ./install.sh ask
 #   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
 #   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
 #   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
@@ -602,6 +604,7 @@ normalize_optional_arg() {
         sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
         metax) echo "metax" ;;
         full|all|everything) echo "full" ;;
+        ask) echo "ask" ;;
         *) echo "" ;;
     esac
 }
@@ -680,8 +683,12 @@ enable_full_install_flags() {
 }
 
 INSTALL_FULL=0
+INSTALL_ASK=0
 if [ "${SAMOVAR_INSTALL_FULL:-0}" != "0" ]; then
     INSTALL_FULL=1
+fi
+if [ "${SAMOVAR_INSTALL_ASK:-0}" != "0" ]; then
+    INSTALL_ASK=1
 fi
 REBUILD_CITATIONS="${SAMOVAR_REBUILD_CITATIONS:-1}"
 FILTERED_ARGS=()
@@ -717,6 +724,10 @@ for arg in "$@"; do
         INSTALL_FULL=1
         continue
     fi
+    if [ "$mapped" = "ask" ]; then
+        INSTALL_ASK=1
+        continue
+    fi
     FILTERED_ARGS+=("$arg")
 done
 if [ "$SKIP_NEXT" = "1" ]; then
@@ -727,13 +738,15 @@ if [ "${#FILTERED_ARGS[@]}" -gt 0 ]; then
 else
     set --
 fi
-if [ "$INSTALL_FULL" = "1" ]; then
+if [ "$INSTALL_ASK" = "1" ]; then
+    echo "Ask install: Python pipeline, then a prompt for each important tool (PATH, conda env, or install into samovar)."
+elif [ "$INSTALL_FULL" = "1" ]; then
     echo "Full install: Python pipeline plus every optional extra (reuse if already present, then record in config)."
     enable_full_install_flags
 fi
 
 OPTIONAL_ONLY_ARGS=()
-if [ "$INSTALL_FULL" != "1" ] && [ "$#" -gt 0 ]; then
+if [ "$INSTALL_FULL" != "1" ] && [ "$INSTALL_ASK" != "1" ] && [ "$#" -gt 0 ]; then
     ALL_OPTIONAL=1
     for arg in "$@"; do
         mapped="$(normalize_optional_arg "$arg")"
@@ -855,6 +868,9 @@ else
     echo "Warning: no C++ compiler (g++/c++/clang++); annotation merge will try to compile on first use."
 fi
 
+if [ "$INSTALL_ASK" = "1" ]; then
+    echo "Ask mode: optional extras are imported from your answers after the core install."
+else
 if [ "${SAMOVAR_INSTALL_R:-0}" != "0" ]; then
     install_samovar_r_package || echo "Warning: optional R package install did not complete."
 else
@@ -921,6 +937,7 @@ if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then
     "$PYTHON_PATH" -m samovar.sidecar metax || echo "Warning: optional Metax sidecar install did not complete."
 else
     echo "Skipping Metax (not required). Use ./install.sh Metax for the custom.sh annotator."
+fi
 fi
 
 # Write main config.json (location: $SAMOVAR_CONFIG) and build/config_path
@@ -1164,6 +1181,10 @@ print(
     )
 )
 PY
+
+if [ "$INSTALL_ASK" = "1" ]; then
+    "$PYTHON_PATH" -m samovar.install_ask
+fi
 
 echo ""
 echo "Note: bulky genome caches should not live under \$HOME (quota)."
