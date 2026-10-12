@@ -27,6 +27,12 @@ def main():
     )
     parser.add_argument('--index', default=None, help='Name to record in the install config databases block')
     parser.add_argument('--flags', default="", help='Extra CLI flags stored with --index')
+    parser.add_argument(
+        '--threads',
+        type=int,
+        default=1,
+        help='Workers for kaiju-mkbwt -n and kraken2-build --threads (samovar prepare --cores)',
+    )
 
     args = parser.parse_args()
     # If type is 'kraken', use krakenunique processing
@@ -36,6 +42,7 @@ def main():
         db_type=db_type,
         db_path=args.db_path,
         example_omit=args.example_omit,
+        threads=max(1, int(args.threads)),
     )
     if args.index:
         from samovar.genome_index import register_database

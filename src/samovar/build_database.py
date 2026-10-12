@@ -664,6 +664,7 @@ def build_database_from_config(
     db_type: str = "kaiju",
     db_path: str = "tests_outs/db",
     example_omit: Optional[bool] = None,
+    threads: int = 1,
 ):
     """
     Build database from config file.
@@ -675,7 +676,10 @@ def build_database_from_config(
         example_omit: If True, apply toy-only taxon gaps (Escherichia off Kraken2,
             Phage Phi X off Kaiju). If None, honour SAMOVAR_EXAMPLE_OMIT or
             auto-detect ``test_genomes`` input directories.
+        threads: Workers for ``kaiju-mkbwt -n`` and ``kraken2-build --threads``.
+            Same count as ``samovar prepare --cores``.
     """
+    threads = max(1, int(threads))
     from samovar.example_db import (
         filter_example_omit,
         should_apply_example_omit,
@@ -757,12 +761,12 @@ def build_database_from_config(
                 fetch_missing=True,
             )
         get_taxonomy_db(db_path=db_path)
-        build_database_kaiju(db_path=db_path, threads=1, protein=False)
+        build_database_kaiju(db_path=db_path, threads=threads, protein=False)
     elif db_type == "kraken2":
         for input_file, taxid in zip(input_files, taxids):
             add_database_kraken2(input_file, taxid, db_path=db_path)
         get_taxonomy_db(db_path=db_path+"/taxonomy")
-        build_database_kraken2(db_path=db_path, threads=1, kmer_len=35, 
+        build_database_kraken2(db_path=db_path, threads=threads, kmer_len=35, 
                              minimizer_len=31, minimizer_spaces=7, skip_maps=True)
     elif db_type == "krakenunique":
         # Create output directory
@@ -775,7 +779,7 @@ def build_database_from_config(
             genome_name = os.path.basename(input_file)
             add_database_krakenunique(input_file, taxid, genome_name, db_path=db_path)
         # Build the database
-        build_database_krakenunique(db_path=db_path, threads=1)
+        build_database_krakenunique(db_path=db_path, threads=threads)
     elif db_type in {"kmer_encoder", "metauto", "kmerenc"}:
         from samovar.kmer_encoder import train_encoder
 

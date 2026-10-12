@@ -12,6 +12,7 @@ show_usage() {
     echo "  --db_path PATH    Path to store the database"
     echo "  --index NAME      Record this database in the install config"
     echo "  --flags FLAGS     Extra CLI flags stored with --index"
+    echo "  --threads N       Workers (kaiju-mkbwt -n, kraken2-build --threads). Same as prepare --cores"
     echo "  --example-omit    TEST/TOY ONLY: drop Escherichia from Kraken2 and Phage Phi X from Kaiju"
     echo "  --no-example-omit Keep every taxon even when building from data/test_genomes"
     echo ""
@@ -26,6 +27,7 @@ db_path=""
 omit_args=()
 index_name=""
 db_flags=""
+threads="1"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -53,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             db_flags="$2"
             shift 2
             ;;
+        --threads)
+            threads="$2"
+            shift 2
+            ;;
         *)
             echo "Error: Unknown option '$1'"
             show_usage
@@ -76,9 +82,14 @@ if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ]
 fi
 
 # Run snakemake
+if ! [[ "$threads" =~ ^[0-9]+$ ]] || [ "$threads" -lt 1 ]; then
+    echo "Error: --threads must be a positive integer (got ${threads})"
+    exit 1
+fi
+
 snakemake -s $(dirname "$0")/Snakefile \
     --configfile $config_path \
-    --cores 1
+    --cores "$threads"
 
 # Run the database build script
 extra=()
@@ -88,4 +99,4 @@ fi
 if [ -n "$db_flags" ]; then
     extra+=(--flags "$db_flags")
 fi
-python "$(dirname "$0")/samovar_build_database.py" --type "$type" --config_path "$config_path" --db_path "$db_path" "${omit_args[@]}" "${extra[@]}" 
+python "$(dirname "$0")/samovar_build_database.py" --type "$type" --config_path "$config_path" --db_path "$db_path" --threads "$threads" "${omit_args[@]}" "${extra[@]}" 
