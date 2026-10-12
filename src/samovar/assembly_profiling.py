@@ -241,12 +241,21 @@ def _is_mag_fasta(path: Path) -> bool:
 
 
 def _fasta_has_records(path: Path) -> bool:
+    """True when the FASTA has a header and at least one sequence base.
+
+    A header with an empty sequence is not a MAG. GTDB-Tk divides by genome
+    length, and minimap2 writes ``LN:0``, which samtools sort rejects.
+    """
     src = as_path(path)
     if not src.is_file() or src.stat().st_size == 0:
         return False
+    in_record = False
     with src.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if line.startswith(">"):
+                in_record = True
+                continue
+            if in_record and line.strip():
                 return True
     return False
 
@@ -1074,22 +1083,34 @@ def _concat_mag_fasta(mag_dir: Path, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     parts = []
     for fasta in _iter_mag_fastas(mag_dir):
+        if not _fasta_has_records(fasta):
+            continue
         mag = fasta.stem
         try:
             text = fasta.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        header = ""
+        seq: list[str] = []
+
+        def flush() -> None:
+            if header and any(piece.strip() for piece in seq):
+                parts.append(header)
+                parts.extend(seq)
+                parts.append("")
+
         for line in text.splitlines():
             if line.startswith(">"):
+                flush()
                 contig = line[1:].split()[0]
                 if contig.startswith(f"{mag}~"):
-                    parts.append(f">{contig}")
+                    header = f">{contig}"
                 else:
-                    parts.append(f">{mag}~{contig}")
+                    header = f">{mag}~{contig}"
+                seq = []
             else:
-                parts.append(line)
-        if parts and parts[-1] != "":
-            parts.append("")
+                seq.append(line)
+        flush()
     dest.write_text("\n".join(parts) + ("\n" if parts else ""), encoding="utf-8")
     return dest
 
