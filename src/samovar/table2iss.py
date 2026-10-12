@@ -193,6 +193,26 @@ def _iss_cmd(*args: str) -> List[str]:
     return [iss_executable(), *args, *_ISS_EXTRA_FLAGS]
 
 
+def _iss_worker_count(cpus: int, n_reads: int) -> int:
+    """How many ISS ``--cpus`` to request.
+
+    ISS turns ``n_reads // 2`` pairs into chunks of size ``ceil(pairs / cpus)``
+    and then concatenates one temp FASTQ per CPU. When that rounding yields
+    fewer chunks than CPUs, the extra paths are never written and the stitch
+    step crashes. Pick the largest worker count that still fills every file.
+    """
+    workers = max(1, int(cpus or 1))
+    pairs = max(0, int(n_reads)) // 2
+    if pairs < 1:
+        return 1
+    for count in range(min(workers, pairs), 0, -1):
+        chunk = -(-pairs // count)
+        n_chunks = -(-pairs // chunk)
+        if n_chunks == count:
+            return count
+    return 1
+
+
 def _run_iss(cmd: Sequence[str]) -> None:
     result = subprocess.run(list(cmd), check=False)
     if result.returncode != 0:
@@ -622,7 +642,7 @@ def generate_reads_genome(
                 "--model", model,
                 "--output", output_file,
                 "--n_reads", str(_iss_reads_for_pairs(amount)),
-                "--cpus", str(cpus),
+                "--cpus", str(_iss_worker_count(cpus, _iss_reads_for_pairs(amount))),
             )
             if seed is not None:
                 cmd.extend(["--seed", str(seed)])
@@ -686,10 +706,11 @@ def generate_reads_metagenome(
         [p[1] for p in pairs],
     )
     amount_by_id = {_iss_record_id(gid): n_reads for _, gid, n_reads in pairs}
+    read_amounts = [_iss_reads_for_pairs(amount_by_id[gid]) for gid in written_ids]
     total_reads = write_readcount_file(
         readcount_path,
         written_ids,
-        [_iss_reads_for_pairs(amount_by_id[gid]) for gid in written_ids],
+        read_amounts,
     )
     if (
         total_reads <= 0
@@ -705,7 +726,7 @@ def generate_reads_metagenome(
         "--readcount_file", readcount_path,
         "--model", model,
         "--output", output_prefix,
-        "--cpus", str(cpus),
+        "--cpus", str(_iss_worker_count(cpus, total_reads)),
     )
     if seed is not None:
         cmd.extend(["--seed", str(seed)])

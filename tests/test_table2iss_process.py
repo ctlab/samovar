@@ -4,8 +4,18 @@ import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from samovar.table2iss import process_abundance_table
+from samovar.table2iss import _iss_worker_count, process_abundance_table
 import pytest
+
+
+@pytest.mark.mandatory
+def test_iss_workers_match_chunks():
+    # 38 reads → 19 pairs. 24 CPUs would leave empty temp files.
+    assert _iss_worker_count(24, 38) == 19
+    assert _iss_worker_count(12, 38) == 10
+    assert _iss_worker_count(4, 1000) == 4
+    assert _iss_worker_count(8, 0) == 1
+    assert _iss_worker_count(8, 2) == 1
 
 def create_test_fasta(output_dir, taxid):
     """Create a test FASTA file for a specific taxid."""
