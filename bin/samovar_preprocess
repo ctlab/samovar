@@ -14,7 +14,11 @@ def main():
     # Input source (mutually exclusive)
     input_group = parser.add_mutually_exclusive_group(required=False)
     input_group.add_argument('--input_config', help='Path to input configuration file', required=False)
-    input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
+    input_group.add_argument(
+        '--input_dir', '-i', '--input-dir',
+        help='Directory containing input FASTQ files',
+        required=False,
+    )
     
     # Output
     from samovar.paths import add_output_dir_argument
@@ -24,7 +28,12 @@ def main():
         default=None,
         help='Output directory (default: samovar_out, or from --input_config)',
     )
-    parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
+    parser.add_argument(
+        '--cores', '-t',
+        type=int,
+        default=1,
+        help='Number of cores for snakemake / annotator threads',
+    )
     parser.add_argument(
         '--autoimport',
         type=int,
@@ -624,6 +633,7 @@ def main():
                 print(f"Error: Missing value for argument {remaining[i]}")
                 sys.exit(1)
         else:
+            print(f"Warning: ignoring unknown option {remaining[i]}", file=sys.stderr)
             i += 1
     
     # Add command arguments to args namespace

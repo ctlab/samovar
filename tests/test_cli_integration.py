@@ -225,6 +225,35 @@ def test_exec_runs_generated_samovar_sh(tmp_path):
     assert "Pipeline execution completed" in result.stdout
 
 
+def test_exec_short_directory_warns_prepare_flags(tmp_path):
+    log = tmp_path / ".log"
+    log.mkdir()
+    script = log / "samovar.sh"
+    script.write_text("#!/bin/bash\nexit 0\n")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO / "bin" / "samovar_exec"),
+            "-d",
+            str(tmp_path),
+            "--cores",
+            "8",
+            "-t",
+            "4",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Pipeline execution completed" in result.stdout
+    assert "prepare has priority" in result.stderr
+    assert "--cores" in result.stderr
+    assert "-t" in result.stderr
+    assert str(tmp_path) in result.stdout
+
+
 def test_prepare_to_exec_mocked_end_to_end(tmp_path):
     """prepare generates a script; exec runs it. External tools are not required."""
     out_dir = tmp_path / "run"

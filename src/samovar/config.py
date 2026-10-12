@@ -1984,7 +1984,11 @@ def parse_args() -> argparse.Namespace:
     # Input source (mutually exclusive)
     input_group = parser.add_mutually_exclusive_group(required=False)
     input_group.add_argument('--input_config', help='Path to input configuration file', required=False)
-    input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
+    input_group.add_argument(
+        '--input_dir', '-i', '--input-dir',
+        help='Directory containing input FASTQ files',
+        required=False,
+    )
     
     # Output
     add_output_dir_argument(

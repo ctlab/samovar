@@ -537,7 +537,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--input_dir",
+        "--input_dir", "-i", "--input-dir",
         required=True,
         help="Directory with one sample of paired FASTQ (*_R1 / *_R2)",
     )
@@ -555,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Regenerate tables from the new sample and refit the ML reprofiler",
     )
     parser.add_argument(
-        "--cores",
+        "--cores", "-t",
         type=int,
         default=1,
         help="Threads for annotators (default: 1)",

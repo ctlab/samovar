@@ -384,7 +384,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='SamovaR ISS Test Configuration')
     
     # Required arguments
-    parser.add_argument('--genome_dir', required=False, default=None,
+    parser.add_argument('--genome_dir', '-g', required=False, default=None,
                        help='Directory containing reference genomes')
     add_output_dir_argument(
         parser,
@@ -429,7 +429,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
                        help='Random seed for reproducibility')
     parser.add_argument('--model', default="hiseq",
                        help='Sequencing model to use')
-    parser.add_argument('--cores', type=int, default=1,
+    parser.add_argument('--cores', '-t', type=int, default=1,
                        help='Number of cores for snakemake')
     parser.add_argument(
         '--threads',

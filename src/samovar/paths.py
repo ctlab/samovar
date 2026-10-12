@@ -293,6 +293,8 @@ OUTPUT_DIR_FLAGS = (
     "--output-dir",
     "--outdir",
     "--directory",
+    "-o",
+    "-d",
 )
 
 
@@ -301,7 +303,7 @@ def add_output_dir_argument(parser: Any, **kwargs: Any) -> None:
     kwargs.setdefault("dest", "output_dir")
     kwargs.setdefault(
         "help",
-        "Pipeline run directory (aliases: --outdir, --directory)",
+        "Pipeline run directory (aliases: --outdir, --directory, -o, -d)",
     )
     parser.add_argument(*OUTPUT_DIR_FLAGS, **kwargs)
 
@@ -317,11 +319,11 @@ def argv_has_output_dir(argv: Sequence[str]) -> bool:
 
 
 def shell_outdir_override_snippet() -> str:
-    """Bash: honor ``--directory`` / ``--outdir`` / ``--output_dir`` after baked ``out_dir``."""
+    """Bash: honor ``--directory`` / ``-d`` / ``-o`` after baked ``out_dir``."""
     return r"""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --directory|--output_dir|--output-dir|--outdir)
+    --directory|--output_dir|--output-dir|--outdir|-o|-d)
       if [[ $# -lt 2 ]]; then
         echo "$0: $1 requires a path" >&2
         exit 1
@@ -329,12 +331,12 @@ while [[ $# -gt 0 ]]; do
       out_dir="$2"
       shift 2
       ;;
-    --directory=*|--output_dir=*|--output-dir=*|--outdir=*)
+    --directory=*|--output_dir=*|--output-dir=*|--outdir=*|-o=*|-d=*)
       out_dir="${1#*=}"
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--directory DIR]"
+      echo "Usage: $0 [--directory DIR | -d DIR | -o DIR]"
       exit 0
       ;;
     *)

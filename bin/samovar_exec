@@ -7,27 +7,17 @@ ROOT="${SAMOVAR_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PYTHON="${PYTHON_PATH:-python3}"
 ORIG_ARGS=("$@")
 
-_is_custom_flag() {
-    PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
-        "$PYTHON" -c "
-from samovar.tool_spec import load_custom_flags, _norm_flag
-import sys
-flag = sys.argv[1].split('=', 1)[0]
-raise SystemExit(0 if _norm_flag(flag) in load_custom_flags() else 1)
-" "$1" 2>/dev/null
-}
-
 # Parse arguments
 OUTPUT_DIR="."
 export SAMOVAR_REDO="${SAMOVAR_REDO:-0}"
 export SAMOVAR_CLEANUP_TMP="${SAMOVAR_CLEANUP_TMP:-0}"
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --output_dir|--output-dir|--outdir|--directory)
+        --output_dir|--output-dir|--outdir|--directory|-o|-d)
             OUTPUT_DIR="$2"
             shift 2
             ;;
-        --output_dir=*|--output-dir=*|--outdir=*|--directory=*)
+        --output_dir=*|--output-dir=*|--outdir=*|--directory=*|-o=*|-d=*)
             OUTPUT_DIR="${1#*=}"
             shift
             ;;
@@ -54,18 +44,18 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             echo "Usage: samovar exec --directory /path/to/output [--redo] [--cleanup-tmp] [--startpoint STEP] [--endpoint STEP]"
             echo ""
-            echo "  --directory / --output_dir / --outdir   Run directory (default: .)"
+            echo "  --directory / --output_dir / --outdir / -d / -o   Run directory (default: .)"
             echo "  --redo          Ignore completed checkpoints and rerun every exec step"
             echo "  --startpoint    First checkpoint to run (overrides prepare; aliases: tables, viz, ml, …)"
             echo "  --endpoint      Last checkpoint to run (e.g. combine_initial / tables)"
             echo "  --cleanup-tmp   After a successful run, remove .tmp / ISS scratch dirs"
             echo "  --no-cleanup-tmp  Keep temporary directories (default)"
-            echo "  Custom-flags from the install config (e.g. --threads) are accepted and ignored here;"
-            echo "  they are applied at prepare/generate via flags-translate."
+            echo "  Flags baked by prepare (--cores, annotators, …) are not applied here."
             exit 0
             ;;
         *)
-            if _is_custom_flag "$1"; then
+            if [[ "$1" == -* ]]; then
+                echo "Warning: $1 is not applied by exec. prepare has priority; the flag was not changed." >&2
                 if [[ "$1" == *=* ]]; then
                     shift
                 elif [[ $# -gt 1 && "$2" != -* ]]; then

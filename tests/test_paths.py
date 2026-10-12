@@ -377,6 +377,8 @@ def test_output_dir_cli_aliases_and_shell_override(tmp_path):
     assert parser.parse_args(["--directory", "/run/a"]).output_dir == "/run/a"
     assert parser.parse_args(["--outdir", "/run/b"]).output_dir == "/run/b"
     assert parser.parse_args(["--output-dir", "/run/c"]).output_dir == "/run/c"
+    assert parser.parse_args(["-o", "/run/d"]).output_dir == "/run/d"
+    assert parser.parse_args(["-d", "/run/e"]).output_dir == "/run/e"
 
     script = tmp_path / "samovar.sh"
     script.write_text(
@@ -395,3 +397,10 @@ def test_output_dir_cli_aliases_and_shell_override(tmp_path):
         check=True,
     )
     assert result.stdout.strip() == str(dest)
+    short = subprocess.run(
+        ["bash", str(script), "-d", str(dest)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert short.stdout.strip() == str(dest)
