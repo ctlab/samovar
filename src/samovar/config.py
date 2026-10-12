@@ -212,18 +212,41 @@ def _checkpoint_block(name: str, body: str) -> str:
     )
 
 
+# Shipped as ``python -m samovar.*``. They are not PATH binaries.
+_IN_TREE_ANNOTATOR_MODULES = {
+    "assembly": "samovar.assembly_profiling",
+    "assembly_profiling": "samovar.assembly_profiling",
+    "gc": "samovar.gc",
+    "kmer": "samovar.kmer2",
+    "kmer2": "samovar.kmer2",
+    "kmer_encoder": "samovar.kmer_encoder",
+    "length": "samovar.length",
+    "constant_taxid": "samovar.baselines.constant_taxid",
+    "constant9606": "samovar.baselines.constant_taxid",
+    "dummy": "samovar.baselines.constant_taxid",
+    "dummy9606": "samovar.baselines.constant_taxid",
+}
+
+
 def _portable_annotator_cmd(cmd: str) -> str:
     """Keep PATH names in YAML; exec resolves via PATH / install config.
 
     Absolute binaries the user passed explicitly are stored as-is.
-    Warns (does not fail) if the token is not on PATH and not in config.
+    In-tree modules are stored as ``python -m samovar.<module>``.
+    Warns (does not fail) if some other token is not on PATH and not in config.
     """
     from samovar.paths import resolve_executable
 
     text = (cmd or "").strip()
     if not text:
         return text
+    if "samovar." in text and text.split()[0] in {"python", "python3", sys.executable}:
+        return text
     token = text.split()[0]
+    module = _IN_TREE_ANNOTATOR_MODULES.get(Path(token).name)
+    if module:
+        rest = text.split()[1:]
+        return " ".join([sys.executable, "-m", module, *rest])
     path = Path(token).expanduser()
     if path.is_file():
         return text

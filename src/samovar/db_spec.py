@@ -377,6 +377,36 @@ def databases_to_rows(cfg: Optional[Mapping[str, Any]]) -> Dict[str, List[List[s
     return out
 
 
+def ready_catalog_database(
+    tool: str,
+    name: str,
+    cfg: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Directory of a catalog database whose index files are already on disk.
+
+    Returns ``""`` when ``name`` is not in the install config, or the recorded
+    path does not contain the tool's index. Callers build in that case.
+    """
+    if cfg is None:
+        from samovar.paths import load_config
+
+        cfg = load_config()
+    rec = lookup_database_record(cfg, tool, name)
+    if not rec:
+        return ""
+    path = Path(str(rec.get("path") or "")).expanduser()
+    if not path.is_dir():
+        return ""
+    kind = str(tool or "").strip().lower()
+    if kind == "kraken2":
+        ready = (path / "hash.k2d").is_file() or (path / "taxo.k2d").is_file()
+    elif kind == "kaiju":
+        ready = any(path.glob("*.fmi"))
+    else:
+        ready = any(path.iterdir())
+    return str(path) if ready else ""
+
+
 def lookup_database_record(
     cfg: Optional[Mapping[str, Any]],
     tool: str,

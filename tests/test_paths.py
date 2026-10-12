@@ -122,6 +122,17 @@ def test_portable_annotator_cmd_warns_when_missing(capsys, monkeypatch):
     assert "not on PATH" in err
 
 
+def test_portable_annotator_cmd_silent_for_in_tree_module(capsys, monkeypatch):
+    from samovar.config import _portable_annotator_cmd
+
+    monkeypatch.setattr("samovar.paths.load_config", lambda: {})
+    monkeypatch.setattr("samovar.config.shutil.which", lambda name: None)
+    out = _portable_annotator_cmd("assembly_profiling")
+    err = capsys.readouterr().err
+    assert "Warning:" not in err
+    assert " -m samovar.assembly_profiling" in out
+
+
 def test_portable_annotator_cmd_silent_when_absolute_exists(tmp_path, capsys):
     from samovar.config import _portable_annotator_cmd
 

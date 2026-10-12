@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from samovar.build_database import build_database_from_config
+from samovar.build_database import build_database_from_config, build_database_kaiju
 from samovar.example_db import (
     ESCHERICHIA_TAXIDS,
     EXAMPLE_OMIT_WARNING,
@@ -123,3 +123,26 @@ def test_prepare_custom_kraken2_kaiju_db_paths(tmp_path):
     assert "kraken2" in init and "kaiju" in init
     assert str(k2.resolve()) in init
     assert str(kj.resolve()) in init
+
+
+@pytest.mark.mandatory
+def test_kaiju_bwt_uses_prepare_thread_count(tmp_path, monkeypatch):
+    library = tmp_path / "library.faa"
+    library.write_text(">x\nACDE\n")
+    commands = []
+
+    def fake_run(cmd, check=True):
+        commands.append(list(cmd))
+        (tmp_path / "kaiju_db.fmi").write_text("idx")
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("samovar.build_database.run_command", fake_run)
+    build_database_kaiju(str(tmp_path), threads=8)
+    assert commands
+    mkbwt = commands[0]
+    assert mkbwt[0] == "kaiju-mkbwt"
+    assert mkbwt[mkbwt.index("-n") + 1] == "8"
