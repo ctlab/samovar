@@ -34,8 +34,6 @@ class AskTool:
     install: str
     # Executables that ship next to ``which[0]`` (kraken2-build beside kraken2).
     companions: Tuple[str, ...] = ()
-    # custom.sh calls these by bare name, so the bin directory must land on PATH.
-    path_required: bool = False
 
 
 # One row per program the pipeline can launch. ``companions`` are not separate
@@ -46,7 +44,6 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool(
         "kraken2", ("kraken2",), "annotator", "conda:kraken2",
         companions=("kraken2-build", "kraken2-inspect"),
-        path_required=True,
     ),
     AskTool(
         "kaiju", ("kaiju",), "annotator", "conda:kaiju",
@@ -61,12 +58,11 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
         companions=("krakenuniq-build", "jellyfish"),
     ),
     AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
-    AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge", path_required=True),
-    AskTool("metax", ("metax",), "annotator", "optional:metax", path_required=True),
+    AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),
+    AskTool("metax", ("metax",), "annotator", "optional:metax"),
     AskTool(
         "bowtie2", ("bowtie2",), "aligner", "conda:bowtie2",
         companions=("bowtie2-build",),
-        path_required=True,
     ),
     AskTool("fastp", ("fastp",), "qc", "conda:fastp"),
     AskTool("cutadapt", ("cutadapt",), "qc", "conda:cutadapt"),
@@ -83,7 +79,7 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool("wgsim", ("wgsim",), "reads_generator", "conda:wgsim"),
     AskTool("sparsedossa2", ("sparsedossa2",), "table_reads_generator", "optional:sparsedossa2"),
     AskTool("R", ("R",), "runtime", "optional:r-package"),
-    AskTool("megahit", ("megahit",), "assembler", "optional:megahit", path_required=True),
+    AskTool("megahit", ("megahit",), "assembler", "optional:megahit"),
     AskTool("flye", ("flye",), "assembler", "optional:flye"),
     AskTool("prodigal", ("prodigal",), "gene_caller", "optional:prodigal"),
     AskTool("minimap2", ("minimap2",), "aligner", "optional:minimap2"),
@@ -220,8 +216,6 @@ def record_tool(
         exec_path=path,
     )
     print(f"  recorded tools.{spec.name} -> {path}")
-    if spec.path_required:
-        print(f"  {spec.name} is invoked by name; {Path(path).parent} is added to PATH")
 
 
 def conda_env_prefix(env_name: str) -> str:
@@ -358,13 +352,7 @@ def offer_companions(
         if not is_yes(ask(prompt), default=True):
             print(f"  {name}: skipped")
             continue
-        companion = AskTool(
-            name,
-            (name,),
-            spec.type,
-            "",
-            path_required=spec.path_required,
-        )
+        companion = AskTool(name, (name,), spec.type, "")
         record(companion, path, env=env, prefix=prefix, exec_name=name)
 
 
@@ -459,52 +447,23 @@ def prompts_enabled() -> bool:
         return False
 
 
-def refresh_install_path() -> None:
-    """Rewrite the PATH line in the install env so newly imported bins are visible.
-
-    ``custom.sh`` launches centrifuge, megahit, bowtie2, and kraken2 by name.
-    """
-    from samovar.paths import collect_runtime_path_dirs, user_config_dir
-
-    env_path = user_config_dir() / "env"
-    if not env_path.is_file():
-        return
-    path_export = ":".join(collect_runtime_path_dirs() + ["$PATH"])
-    new_line = f'export PATH="{path_export}"'
-    lines = env_path.read_text(encoding="utf-8").splitlines()
-    replaced = False
-    for index, line in enumerate(lines):
-        if line.startswith("export PATH="):
-            lines[index] = new_line
-            replaced = True
-            break
-    if not replaced:
-        lines.append(new_line)
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     del argv
     if not prompts_enabled():
         print("install.sh ask: not a terminal; skipping tool prompts.")
         return 0
     print("Import tools already on this machine, or install them into the samovar environment.")
-    code = 0
-    try:
-        for spec in ASK_TOOLS:
+    for spec in ASK_TOOLS:
+        print("")
+        try:
+            ask_tool(spec, ask=input)
+        except KeyboardInterrupt:
             print("")
-            try:
-                ask_tool(spec, ask=input)
-            except KeyboardInterrupt:
-                print("")
-                code = 130
-                break
-            except EOFError:
-                print("")
-                break
-    finally:
-        refresh_install_path()
-    return code
+            return 130
+        except EOFError:
+            print("")
+            return 0
+    return 0
 
 
 if __name__ == "__main__":

@@ -739,7 +739,7 @@ else
     set --
 fi
 if [ "$INSTALL_ASK" = "1" ]; then
-    echo "Ask install: Python pipeline, then a prompt for each important tool (PATH, conda env, or install into samovar)."
+    echo "Ask install: Python pipeline, then a prompt for each important tool (recorded in the main config)."
 elif [ "$INSTALL_FULL" = "1" ]; then
     echo "Full install: Python pipeline plus every optional extra (reuse if already present, then record in config)."
     enable_full_install_flags

@@ -3,6 +3,7 @@
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -256,6 +257,29 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
         "printf 'other\\tref\\t0\\t1\\n' >> \"$OUT\"\n"
     )
     centrifuge.chmod(centrifuge.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    from samovar.tools_import import import_tool
+
+    old_cfg = os.environ.get("SAMOVAR_CONFIG")
+    old_root = os.environ.get("SAMOVAR_ROOT")
+    os.environ["SAMOVAR_CONFIG"] = str(cfg)
+    os.environ["SAMOVAR_ROOT"] = str(tmp_path)
+    try:
+        import_tool(
+            name="centrifuge",
+            tool_type="annotator",
+            exec_path=str(centrifuge),
+            also_repo_build=False,
+        )
+    finally:
+        if old_cfg is None:
+            os.environ.pop("SAMOVAR_CONFIG", None)
+        else:
+            os.environ["SAMOVAR_CONFIG"] = old_cfg
+        if old_root is None:
+            os.environ.pop("SAMOVAR_ROOT", None)
+        else:
+            os.environ["SAMOVAR_ROOT"] = old_root
 
     db = tmp_path / "db"
     db.mkdir()
@@ -266,7 +290,10 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
     _tiny_fastq(r2, n=2)
     out = tmp_path / "cf.out"
     env = os.environ.copy()
-    env["PATH"] = str(mock_bin) + os.pathsep + env.get("PATH", "")
+    env["SAMOVAR_CONFIG"] = str(cfg)
+    env["SAMOVAR_ROOT"] = str(tmp_path)
+    env["PYTHON_PATH"] = sys.executable
+    env["PATH"] = "/usr/bin:/bin"
     proc = subprocess.run(
         [
             "bash",

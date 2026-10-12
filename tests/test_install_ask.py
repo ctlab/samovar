@@ -190,7 +190,7 @@ def test_ask_table_is_unique_and_typed():
     ):
         assert name in names
     for name in ("kraken2", "centrifuge", "metax", "megahit", "bowtie2"):
-        assert next(tool for tool in ASK_TOOLS if tool.name == name).path_required
+        assert name in names
 
 
 def test_companion_uses_the_same_conda_place(tmp_path):

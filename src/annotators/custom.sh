@@ -60,13 +60,29 @@ fi
 
 echo "[INFO] Running custom wrapper for tool: ${TOOL}"
 
-# centrifuge, megahit, bowtie2, bowtie2-build, and kraken2 are bare names.
-# ./install.sh ask records them so their bin directory is on PATH.
-require_on_path() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "[ERROR] $1 must be on PATH (./install.sh ask imports it next to its main tool)" >&2
-    exit 127
-  fi
+# Same lookup as Python: tools.* / tool_envs in the main config, then PATH.
+cfg_tool() {
+  local name="$1"
+  local py="${PYTHON_PATH:-python3}"
+  "$py" - "$name" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+from samovar.paths import resolve_executable
+
+name = sys.argv[1]
+found = str(resolve_executable(name, tool_key=name) or "").split()
+head = found[0] if found else ""
+path = Path(head)
+if not (path.is_file() and os.access(path, os.X_OK)):
+    sys.stderr.write(
+        f"[ERROR] {name} is not in the SamovaR config. "
+        "Import it with ./install.sh ask or samovar tools import.\n"
+    )
+    raise SystemExit(127)
+print(path)
+PY
 }
 
 # ==========================================
@@ -121,16 +137,16 @@ case "$TOOL" in
       INDEX="${DB%.1.cf}"
     fi
     echo "[INFO] Centrifuge index prefix: ${INDEX}"
-    require_on_path centrifuge
+    CENTRIFUGE="$(cfg_tool centrifuge)"
     # --report-file: centrifuge otherwise writes centrifuge_report.tsv into CWD
     # (often the repo root when snakemake cds there). Keep all litter in TMP_DIR.
     # Unpaired CAMI files have no R2: -U, not -1/-2.
     if [ -s "$R2" ]; then
-      centrifuge -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" \
+      "$CENTRIFUGE" -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" \
         -S "$TMP_DIR/centrifuge.out" \
         --report-file "$TMP_DIR/centrifuge_report.tsv"
     else
-      centrifuge -x "$INDEX" -U "$R1" -p "$THREADS" \
+      "$CENTRIFUGE" -x "$INDEX" -U "$R1" -p "$THREADS" \
         -S "$TMP_DIR/centrifuge.out" \
         --report-file "$TMP_DIR/centrifuge_report.tsv"
     fi
@@ -144,21 +160,8 @@ case "$TOOL" in
   # ----------------------------------------
   "metax")
     echo "[INFO] Starting Metax classification..."
-    ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-    METAX_BIN=""
-    if [ -n "${METAX:-}" ] && [ -x "${METAX}" ]; then
-      METAX_BIN="${METAX}"
-    elif [ -n "${SAMOVAR_ENVS:-}" ] && [ -x "${SAMOVAR_ENVS}/metax/bin/metax" ]; then
-      METAX_BIN="${SAMOVAR_ENVS}/metax/bin/metax"
-    elif [ -x "${ROOT}/.cache/samovar/envs/metax/bin/metax" ]; then
-      METAX_BIN="${ROOT}/.cache/samovar/envs/metax/bin/metax"
-    elif command -v metax >/dev/null 2>&1; then
-      METAX_BIN="$(command -v metax)"
-    fi
-    if [ -z "$METAX_BIN" ]; then
-      echo "[ERROR] metax is not installed (./install.sh Metax)" >&2
-      exit 127
-    fi
+    METAX_BIN="$(cfg_tool metax)"
+    # maCMD ships next to the metax binary inside its conda prefix.
     export PATH="$(dirname "$METAX_BIN"):${PATH}"
     DB_JSON="$DB"
     DMP="${METAX_DMP_DIR:-}"
@@ -216,12 +219,11 @@ case "$TOOL" in
   "assembly_hybrid")
     echo "[INFO] Starting Assembly-Hybrid pipeline..."
     
-    # Step A: Assembly. These four are PATH names, not config lookups.
-    require_on_path megahit
-    require_on_path bowtie2-build
-    require_on_path bowtie2
-    require_on_path kraken2
-    megahit -1 "$R1" -2 "$R2" -t "$THREADS" -o "$TMP_DIR/megahit" -f
+    MEGAHIT="$(cfg_tool megahit)"
+    BOWTIE2_BUILD="$(cfg_tool bowtie2-build)"
+    BOWTIE2="$(cfg_tool bowtie2)"
+    KRAKEN2="$(cfg_tool kraken2)"
+    "$MEGAHIT" -1 "$R1" -2 "$R2" -t "$THREADS" -o "$TMP_DIR/megahit" -f
     CONTIGS="$TMP_DIR/megahit/final.contigs.fa"
 
     if [ ! -s "$CONTIGS" ]; then
@@ -231,11 +233,11 @@ case "$TOOL" in
     fi
 
     # Step B: Map reads to contigs
-    bowtie2-build -q "$CONTIGS" "$TMP_DIR/index"
-    bowtie2 -x "$TMP_DIR/index" -1 "$R1" -2 "$R2" -p "$THREADS" -S "$TMP_DIR/map.sam" 2>/dev/null
+    "$BOWTIE2_BUILD" -q "$CONTIGS" "$TMP_DIR/index"
+    "$BOWTIE2" -x "$TMP_DIR/index" -1 "$R1" -2 "$R2" -p "$THREADS" -S "$TMP_DIR/map.sam" 2>/dev/null
 
     # Step C: Classify contigs
-    kraken2 --db "$DB" --threads "$THREADS" "$CONTIGS" --output "$TMP_DIR/contigs.kraken2" --use-names > /dev/null
+    "$KRAKEN2" --db "$DB" --threads "$THREADS" "$CONTIGS" --output "$TMP_DIR/contigs.kraken2" --use-names > /dev/null
 
     if [ ! -s "$TMP_DIR/contigs.kraken2" ]; then
         echo "[WARNING] Kraken2 did not classify any contigs. Creating empty output."
