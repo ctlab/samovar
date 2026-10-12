@@ -31,6 +31,8 @@ chmod +x install.sh
 
 `install.sh` installs the checkout you just cloned. Replace `main` with another branch name to install that branch instead.
 
+An existing checkout updates in place with `samovar update` (branch `main`) or `samovar update --branch NAME`. That fetches the branch, creates the conda env only if it is missing, activates it, and runs `./install.sh full ask`.
+
 `install.sh` may ask you some questions, like e-mail for the NCBI API.
 
 `samovar -h`, `samovar --help`, and `samovar help` print the SAMOVAR version and the command list.

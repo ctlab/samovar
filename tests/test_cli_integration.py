@@ -55,6 +55,7 @@ def test_cli_help_lists_prepare_build_exec():
     assert "apply" in out
     assert "merge" in out
     assert "methods" in out
+    assert "update" in out
     assert f"SAMOVAR {get_version()}" in out
 
 

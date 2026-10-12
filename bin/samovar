@@ -82,6 +82,7 @@ show_usage() {
     echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
     echo "  genome      Download FASTA by accession or taxid (genome download)"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
+    echo "  update      Fetch origin (default branch main) in place, then ./install.sh full ask"
     echo "  convert     Convert Annotation (abundance, kraken2, CAMI, or a custom converter)"
     echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
     echo "  merge       Combine two or more run directories (modes: initial, regenerated)"
@@ -122,6 +123,8 @@ show_usage() {
     echo "  samovar merge --mode initial --output_dir merged_init run_a run_b"
     echo "  samovar merge --mode regenerated --output_dir merged_regen run_a run_b"
     echo "  samovar methods --output_dir RUN"
+    echo "  samovar update"
+    echo "  samovar update --branch main"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
 
@@ -129,6 +132,12 @@ CFG=""
 if CFG="$(_find_cfg)"; then
     :
 else
+    if [ "${1:-}" = "update" ]; then
+        ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+        export SAMOVAR_ROOT="$ROOT"
+        shift
+        exec "$SCRIPT_DIR/samovar_update" "$@"
+    fi
     if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ -z "${1:-}" ]; then
         ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
         export SAMOVAR_ROOT="$ROOT"
@@ -317,6 +326,10 @@ case "${1:-}" in
     "reindex")
         shift
         "$PYTHON" "$SCRIPT_DIR/samovar_reindex" "$@"
+        ;;
+    "update")
+        shift
+        exec "$SCRIPT_DIR/samovar_update" "$@"
         ;;
     "help"|"-h"|"--help"|"")
         show_usage

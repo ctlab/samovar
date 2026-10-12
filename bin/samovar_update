@@ -1,0 +1,104 @@
+#!/bin/bash
+# Update the SamovaR checkout in place and reinstall.
+#   samovar update
+#   samovar update --branch main
+set -euo pipefail
+
+ROOT="${SAMOVAR_ROOT:-}"
+if [ -z "$ROOT" ]; then
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+ORIGIN_URL="https://github.com/ctlab/samovar"
+BRANCH="main"
+
+usage() {
+    echo "Usage: samovar update [--branch NAME]"
+    echo "Fetch the latest commit of NAME (default: main) into this checkout, then run ./install.sh full ask."
+    echo "The conda env from environment.yml is created only when it is missing, then activated."
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --branch)
+            BRANCH="${2:-}"
+            shift 2
+            ;;
+        --branch=*)
+            BRANCH="${1#*=}"
+            shift
+            ;;
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Error: unknown option $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$BRANCH" ]; then
+    echo "Error: --branch needs a name" >&2
+    exit 1
+fi
+if [ ! -f "$ROOT/install.sh" ] || [ ! -f "$ROOT/environment.yml" ]; then
+    echo "Error: $ROOT is not a SamovaR checkout (install.sh or environment.yml is missing)." >&2
+    exit 1
+fi
+if [ ! -d "$ROOT/.git" ]; then
+    echo "Error: $ROOT is not a git checkout, so it cannot be updated in place." >&2
+    echo "Clone with: git clone --branch $BRANCH $ORIGIN_URL" >&2
+    exit 1
+fi
+if ! command -v git >/dev/null 2>&1; then
+    echo "Error: git is not on PATH." >&2
+    exit 1
+fi
+
+if ! git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
+    git -C "$ROOT" remote add origin "$ORIGIN_URL"
+fi
+
+echo "Updating $ROOT to origin/$BRANCH"
+git -C "$ROOT" fetch origin "$BRANCH"
+if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git -C "$ROOT" checkout "$BRANCH"
+else
+    git -C "$ROOT" checkout -b "$BRANCH" "origin/$BRANCH"
+fi
+git -C "$ROOT" pull --ff-only origin "$BRANCH"
+
+ENV_NAME="$(
+    grep -E '^name:[[:space:]]*' "$ROOT/environment.yml" | head -n1 | awk '{print $2}'
+)"
+ENV_NAME="${ENV_NAME:-samovar}"
+
+if [ "${CONDA_DEFAULT_ENV:-}" != "$ENV_NAME" ]; then
+    CONDA_BIN="$(command -v conda || true)"
+    if [ -z "$CONDA_BIN" ]; then
+        echo "Error: conda is not on PATH. Create the env with: conda env create -f environment.yml" >&2
+        exit 1
+    fi
+    CONDA_BASE="$("$CONDA_BIN" info --base)"
+    # shellcheck disable=SC1091
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+    if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
+        echo "Conda env $ENV_NAME already exists."
+    else
+        echo "Creating conda env $ENV_NAME"
+        conda env create -f "$ROOT/environment.yml"
+    fi
+    echo "Activating conda env $ENV_NAME"
+    conda activate "$ENV_NAME"
+else
+    echo "Conda env $ENV_NAME is already active."
+fi
+
+chmod +x "$ROOT/install.sh"
+echo "Running ./install.sh full ask"
+(
+    cd "$ROOT"
+    ./install.sh full ask
+)
