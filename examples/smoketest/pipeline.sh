@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Short generate → prepare → exec: one sample, direct regeneration, few reads.
+# Short generate → prepare → exec: one sample, concat regeneration, few reads.
 # Toy Kraken2/Kaiju indexes are reused only when the install config already
 # names them. Otherwise they are built with the same thread count as prepare.
 set -euo pipefail
@@ -52,20 +52,27 @@ for kind in kraken2 kaiju; do
   fi
 done
 
-# One sample, no host (a host genome starts a second ISS pass).
+# Two genomes, no host. A host genome starts a second ISS pass, and a third
+# genome only adds stitching. ISS itself does not get faster with more CPUs
+# at this read count: the error model loads on one thread, and extra workers
+# write empty temp FASTQs.
 samovar generate \
     --genome_dir "$SAMOVAR/data/test_genomes/meta" \
+    --genomes "$SAMOVAR/data/test_genomes/meta/4932.fna" \
+    --genomes "$SAMOVAR/data/test_genomes/meta/562.fna" \
     --n_samples 1 \
     --total_reads 100 \
-    --cores "$SAMOVAR_CORES" \
+    --cores 1 \
     --output_dir "$output_dir"
 
-# direct: one regenerated sample from the observed counts, not a new draw.
+# concat merges both annotators into one abundance table, so regeneration
+# writes one FASTQ. direct keeps a separate sample per annotator.
 samovar prepare \
     --output_dir "$output_dir" \
     --test-genomes \
     --cores "$SAMOVAR_CORES" \
-    --table_reads_generator direct \
+    --max-genomes 2 \
+    --table_reads_generator concat \
     --N 1 \
     --N_reads 100 \
     --no-multiqc \
