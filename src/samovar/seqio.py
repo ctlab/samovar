@@ -488,6 +488,81 @@ def concat_r1_fastqs(directory: PathLike, dest: PathLike) -> Path:
     return concat_fastq_files(list_r1_files(directory), dest)
 
 
+def _fastq_r2_name(name: str) -> bool:
+    return any(name.endswith(suffix) for suffix in FASTQ_R2_SUFFIXES)
+
+
+def _stem_before_r2(name: str) -> Optional[str]:
+    for suffix in FASTQ_R2_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return None
+
+
+def single_end_sample_names(directory: PathLike) -> List[str]:
+    """Sample stems in ``directory`` that have R1 and no non-empty R2."""
+    directory = as_path(directory)
+    names: List[str] = []
+    for r1 in list_r1_files(directory):
+        sample = sample_name_from_r1(r1)
+        mate = find_fastq_mate(directory, sample, "R2")
+        if mate is not None and mate.is_file() and mate.stat().st_size > 0:
+            continue
+        if sample not in names:
+            names.append(sample)
+    return names
+
+
+def drop_r2_if_source_single_end(output_dir: PathLike) -> List[Path]:
+    """Delete regenerated R2 when the matching input sample was single-end.
+
+    ISS and ONT simulators write ``*_R2.fastq`` even for an unpaired source.
+    A present R2 file, including an empty one, makes later stages call the
+    paired CLI. R1 is left in place; its record count is the pair count the
+    abundance table already uses.
+    """
+    dest = as_path(output_dir)
+    if not dest.is_dir():
+        return []
+    root = dest.resolve().parent
+    source: Optional[Path] = None
+    for name in ("initial_trimmed", "initial"):
+        candidate = root / name
+        if candidate.is_dir() and candidate.resolve() != dest.resolve() and list_r1_files(candidate):
+            source = candidate
+            break
+    if source is None:
+        return []
+    se_names = set(single_end_sample_names(source))
+    if not se_names:
+        return []
+    source_names = list_fastq_samples(source)
+    all_se = len(se_names) == len(source_names)
+    removed: List[Path] = []
+    for path in list(dest.iterdir()):
+        if not path.is_file() or not _fastq_r2_name(path.name):
+            continue
+        stem = _stem_before_r2(path.name) or ""
+        if all_se:
+            drop = True
+        else:
+            hits = [
+                sample
+                for sample in source_names
+                if stem == sample or stem.startswith(sample + "_")
+            ]
+            owner = max(hits, key=len) if hits else None
+            drop = owner in se_names
+        if not drop:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed.append(path)
+    return removed
+
+
 def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike) -> int:
     """Symlink (or copy) FASTQ pairs from ``src_dir`` into ``dst_dir``."""
     src = as_path(src_dir).resolve()

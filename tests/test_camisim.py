@@ -482,5 +482,5 @@ def test_hybrid_flattens_paired_and_single_end_reads(tmp_path):
 
     full_r1 = (out / "1_full_R1.fastq").read_text()
     assert "@a1" in full_r1 and "@a2" in full_r1 and "@n1" in full_r1
-    assert (out / "1_full_R2.fastq").read_text() == ""
+    assert not (out / "1_full_R2.fastq").exists()
 

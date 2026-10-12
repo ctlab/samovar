@@ -52,6 +52,17 @@ def skip_empty_reads_cmd(input_r1: str, outputs: Sequence[str], run_cmd: str) ->
     return f"if ! {probe}; then touch {outs}; else {run_cmd.strip()}; fi"
 
 
+def _has_r2(input_r2: str) -> bool:
+    return bool(str(input_r2 or "").strip())
+
+
+def _r2_flag(flag: str, input_r2: str) -> str:
+    """``-I path`` when paired; nothing when the Snakefile marked the sample single-end."""
+    if not _has_r2(input_r2):
+        return ""
+    return f"{flag} {shlex.quote(str(input_r2))} "
+
+
 def single_or_paired_reads_cmd(
     input_r1: str,
     input_r2: str,
@@ -60,7 +71,12 @@ def single_or_paired_reads_cmd(
     single_cmd: str,
     paired_cmd: str,
 ) -> str:
-    """Run a classifier in paired mode only when R2 contains reads."""
+    """Run a classifier in paired mode only when R2 contains reads.
+
+    An empty ``input_r2`` is single-end: the paired command is not emitted.
+    """
+    if not _has_r2(input_r2):
+        return skip_empty_reads_cmd(input_r1, outputs, single_cmd)
     r1 = shlex.quote(str(input_r1))
     r2 = shlex.quote(str(input_r2))
     outs = " ".join(shlex.quote(str(path)) for path in outputs)
@@ -292,9 +308,12 @@ class MetaPhlanAnnotator(BaseAnnotator):
             f"{self.cmd} "
             f"--input_type fastq "
             f"--nproc {self.threads} "
-            f"-1 {input_r1} "
-            f"-2 {input_r2} "
-            f"--bowtie2out {bowtie_file} "
+            + (
+                f"-1 {input_r1} -2 {input_r2} "
+                if _has_r2(input_r2)
+                else f"{input_r1} "
+            )
+            + f"--bowtie2out {bowtie_file} "
             f"-o {raw_file} "
             f"{self.extra} "
             f"&& "
@@ -357,11 +376,16 @@ class Kraken1Annotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
+        reads = (
+            f"--paired {input_r1} {input_r2}"
+            if _has_r2(input_r2)
+            else str(input_r1)
+        )
         cmd = (
             f"{self.cmd} "
             f"--db {self.db_path} "
             f"--threads {self.threads} "
-            f"--paired {input_r1} {input_r2} "
+            f"{reads} "
             f"--output {out_file} "
             f"{self.extra}"
         )
@@ -391,11 +415,16 @@ class KrakenUniqAnnotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
+        reads = (
+            f"--paired {input_r1} {input_r2}"
+            if _has_r2(input_r2)
+            else str(input_r1)
+        )
         cmd = (
             f"{self.cmd} "
             f"--db {self.db_path} "
             f"--threads {self.threads} "
-            f"--paired {input_r1} {input_r2} "
+            f"{reads} "
             f"--output {out_file} "
             f"{self.extra}"
         )
@@ -458,7 +487,7 @@ class CustomAnnotator(BaseAnnotator):
             return (
                 f"{cmd} "
                 f"-i {input_r1} "
-                f"-I {input_r2} "
+                f"{_r2_flag('-I', input_r2)}"
                 f"-d {self.db_path} "
                 f"-o {out_file} "
                 f"-p {self.tool_name} "
@@ -474,7 +503,7 @@ class CustomAnnotator(BaseAnnotator):
             return (
                 f"{self.cmd} "
                 f"-i {input_r1} "
-                f"-I {input_r2} "
+                f"{_r2_flag('-I', input_r2)}"
                 f"-d {self.db_path} "
                 f"-o {out_file} "
                 f"{tflag} "
@@ -484,7 +513,7 @@ class CustomAnnotator(BaseAnnotator):
         return (
             f"{cmd} "
             f"-i {input_r1} "
-            f"-I {input_r2} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-d {self.db_path} "
             f"-o {out_file} "
             f"-p {self.tool_name} "
@@ -525,7 +554,7 @@ class ConstantTaxidAnnotator(CustomAnnotator):
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-o {shlex.quote(str(out_file))} "
             f"--taxid {shlex.quote(self.taxid)} "
             f"{extra}"
@@ -564,7 +593,7 @@ class AssemblyAnnotator(BaseAnnotator):
         run = (
             f"{cmd} annotator "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-d {shlex.quote(str(self.db_path or ''))} "
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
@@ -605,7 +634,7 @@ class GcAnnotator(BaseAnnotator):
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
             f"{extra}"
@@ -640,7 +669,7 @@ class LengthAnnotator(BaseAnnotator):
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
             f"{extra}"
@@ -678,7 +707,7 @@ class Kmer2Annotator(BaseAnnotator):
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
             f"{extra}"
@@ -723,7 +752,7 @@ class KmerEncoderAnnotator(BaseAnnotator):
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-d {shlex.quote(str(db))} "
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "

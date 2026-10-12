@@ -1601,11 +1601,12 @@ def _harvest_camisim_reads(
         r1_dest = out_dir / f"{i}_{read_type}_R1.fastq"
         r2_dest = out_dir / f"{i}_{read_type}_R2.fastq"
         _concat_tagged(r1_src, r1_dest, read_type, rows)
+        written.append(r1_dest)
         if r2_src:
             _concat_tagged(r2_src, r2_dest, read_type, rows)
-        else:
-            _write_empty_fastq(r2_dest)
-        written.extend([r1_dest, r2_dest])
+            written.append(r2_dest)
+        elif r2_dest.exists():
+            r2_dest.unlink()
     return written
 
 
@@ -1667,8 +1668,8 @@ def _merge_hybrid_reads(
     A mixed paired-end/single-end library cannot be passed to classifiers as a
     paired FASTQ because R1 and R2 would contain different record counts. If a
     sample includes any single-end technology, flatten every sequence (both
-    paired ends plus the long reads) into R1 and leave R2 empty. Annotator
-    wrappers then select their single-end CLI form.
+    paired ends plus the long reads) into R1 and do not leave an R2 file.
+    Annotator wrappers then select their single-end CLI form.
     """
     outputs: List[str] = []
     for i in range(1, n_samples + 1):
@@ -1698,8 +1699,9 @@ def _merge_hybrid_reads(
             r1_dest = out_dir / f"{i}_full_R1.fastq"
             r2_dest = out_dir / f"{i}_full_R2.fastq"
             concat_fastq_files(r1_parts, r1_dest)
-            _write_empty_fastq(r2_dest)
-            outputs.extend([str(r1_dest), str(r2_dest)])
+            if r2_dest.exists():
+                r2_dest.unlink()
+            outputs.append(str(r1_dest))
             continue
         for mate in ("R1", "R2"):
             parts = [
@@ -1729,11 +1731,14 @@ def _promote_to_full(
         for mate in ("R1", "R2"):
             src = out_dir / f"{i}_{read_type}_{mate}.fastq"
             dest = out_dir / f"{i}_full_{mate}.fastq"
-            if src.is_file():
+            if src.is_file() and src.stat().st_size > 0:
                 shutil.copy2(src, dest)
-            else:
+                outputs.append(str(dest))
+            elif mate == "R1":
                 _write_empty_fastq(dest)
-            outputs.append(str(dest))
+                outputs.append(str(dest))
+            elif dest.exists():
+                dest.unlink()
     _remove_tech_fastq_copies(out_dir)
     return outputs
 

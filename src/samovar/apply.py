@@ -278,7 +278,7 @@ def _run_annotators(config: Dict[str, Any], dest: Path, cores: int, env: Dict[st
                 raise IncompatibleInputError(f"missing R1 for sample {sample}")
             outs = annotator.get_expected_outputs(sample, str(reports))
             Path(outs[0]).parent.mkdir(parents=True, exist_ok=True)
-            cmd = annotator.get_snakemake_shell_cmd(str(r1), str(r2) if r2 else str(r1), outs)
+            cmd = annotator.get_snakemake_shell_cmd(str(r1), str(r2) if r2 else "", outs)
             subprocess.check_call(cmd, shell=True, env=env)
 
 

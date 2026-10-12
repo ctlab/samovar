@@ -189,6 +189,10 @@ def test_kaiju_and_kraken2_commands_support_single_end_fastq(tmp_path):
     assert "fastq_has_reads" in kraken_cmd
     assert f"--paired {r1} {r2}" in kraken_cmd
     assert f"else {kraken.cmd}" in kraken_cmd
+    se = kraken.get_snakemake_shell_cmd(r1, "", outputs)
+    assert "--paired" not in se
+    se_kaiju = kaiju.get_snakemake_shell_cmd(r1, "", [str(tmp_path / "k.out")])
+    assert "-j " not in se_kaiju
 
 
 def test_snakemake_constant_taxid_rule(tmp_path):

@@ -36,11 +36,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required arguments
-if [ -z "$R1" ] || [ -z "$R2" ] || [ -z "$OUT" ] || [ -z "$TOOL" ]; then
-  echo "[ERROR] Missing required arguments: -i, -I, -o, or -p"
-  echo "Usage: ./custom.sh -i R1 -I R2 -d DB -o OUT -p TOOL_NAME [-t|--threads THREADS]"
+if [ -z "$R1" ] || [ -z "$OUT" ] || [ -z "$TOOL" ]; then
+  echo "[ERROR] Missing required arguments: -i, -o, or -p"
+  echo "Usage: ./custom.sh -i R1 [-I R2] -d DB -o OUT -p TOOL_NAME [-t|--threads THREADS]"
   exit 1
 fi
+# No -I: single-end. Paired tools branch on a non-empty R2 below.
 
 # Create a temporary working directory for this specific run
 TMP_DIR="$(dirname "$OUT")/tmp_$(basename "$OUT" .out)"
@@ -108,10 +109,14 @@ case "$TOOL" in
     mkdir -p "$FQ_DIR"
     if [[ "$R1" == *.gz ]]; then
       ln -sf "$(realpath "$R1")" "$FQ_DIR/R1.fastq.gz"
-      ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq.gz"
+      if [ -s "$R2" ]; then
+        ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq.gz"
+      fi
     else
       ln -sf "$(realpath "$R1")" "$FQ_DIR/R1.fastq"
-      ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq"
+      if [ -s "$R2" ]; then
+        ln -sf "$(realpath "$R2")" "$FQ_DIR/R2.fastq"
+      fi
     fi
 
     # Run the python script
@@ -223,7 +228,11 @@ case "$TOOL" in
     BOWTIE2_BUILD="$(cfg_tool bowtie2-build)"
     BOWTIE2="$(cfg_tool bowtie2)"
     KRAKEN2="$(cfg_tool kraken2)"
-    "$MEGAHIT" -1 "$R1" -2 "$R2" -t "$THREADS" -o "$TMP_DIR/megahit" -f
+    if [ -s "$R2" ]; then
+      "$MEGAHIT" -1 "$R1" -2 "$R2" -t "$THREADS" -o "$TMP_DIR/megahit" -f
+    else
+      "$MEGAHIT" -r "$R1" -t "$THREADS" -o "$TMP_DIR/megahit" -f
+    fi
     CONTIGS="$TMP_DIR/megahit/final.contigs.fa"
 
     if [ ! -s "$CONTIGS" ]; then
@@ -234,7 +243,11 @@ case "$TOOL" in
 
     # Step B: Map reads to contigs
     "$BOWTIE2_BUILD" -q "$CONTIGS" "$TMP_DIR/index"
-    "$BOWTIE2" -x "$TMP_DIR/index" -1 "$R1" -2 "$R2" -p "$THREADS" -S "$TMP_DIR/map.sam" 2>/dev/null
+    if [ -s "$R2" ]; then
+      "$BOWTIE2" -x "$TMP_DIR/index" -1 "$R1" -2 "$R2" -p "$THREADS" -S "$TMP_DIR/map.sam" 2>/dev/null
+    else
+      "$BOWTIE2" -x "$TMP_DIR/index" -U "$R1" -p "$THREADS" -S "$TMP_DIR/map.sam" 2>/dev/null
+    fi
 
     # Step C: Classify contigs
     "$KRAKEN2" --db "$DB" --threads "$THREADS" "$CONTIGS" --output "$TMP_DIR/contigs.kraken2" --use-names > /dev/null

@@ -1107,6 +1107,9 @@ def process_annotation_tables(
             output_dir, sample_names or ["1"], ["any"], gzip_reads=gzip_reads
         )
         warnings.warn("No annotation or abundance tables to process; emitted empty FASTQ files")
+        from samovar.seqio import drop_r2_if_source_single_end
+
+        drop_r2_if_source_single_end(output_dir)
         return
 
     annotator_cols: Dict[str, str] = {}
@@ -1136,6 +1139,9 @@ def process_annotation_tables(
     if not available_genomes:
         _emit_empty_for_annotators(output_dir, sample_names, annotators, gzip_reads=gzip_reads)
         warnings.warn("No genome files available for any taxid; emitted empty FASTQ files")
+        from samovar.seqio import drop_r2_if_source_single_end
+
+        drop_r2_if_source_single_end(output_dir)
         return
 
     from samovar.reads_generators import simulate_from_sample_tables
@@ -1157,6 +1163,9 @@ def process_annotation_tables(
         config=regen_cfg,
         genome_dir=genome_dir,
     )
+    from samovar.seqio import drop_r2_if_source_single_end
+
+    drop_r2_if_source_single_end(output_dir)
 
 
 def generate_iss_test_samples(

@@ -11,6 +11,7 @@ from samovar.seqio import (
     is_fasta_name,
     is_fastq_name,
     list_fasta_files,
+    drop_r2_if_source_single_end,
     list_fastq_samples,
     open_text,
     processed_genome_path,
@@ -149,6 +150,34 @@ def test_processed_genome_path():
     assert processed_genome_path("/g", "562").name == "562.fa.gz"
     assert processed_genome_path("/g", "GCF_000819615.1").name == "GCF_000819615.1.fa.gz"
     assert processed_genome_path("/g", "562", gzip_genomes=False).name == "562.fa"
+
+
+def test_drop_r2_when_source_is_single_end(tmp_path):
+    initial = tmp_path / "initial"
+    regen = tmp_path / "regenerated"
+    initial.mkdir()
+    regen.mkdir()
+    (initial / "sample_0_R1.fq.gz").write_bytes(b"\x1f\x8b")
+    (regen / "sample_0_concat_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (regen / "sample_0_concat_R2.fastq").write_text("@a\nT\n+\nI\n")
+    (regen / "sample_0_metax_R2.fastq.gz").write_bytes(b"\x1f\x8b")
+    removed = drop_r2_if_source_single_end(regen)
+    assert (regen / "sample_0_concat_R1.fastq").is_file()
+    assert not (regen / "sample_0_concat_R2.fastq").exists()
+    assert not (regen / "sample_0_metax_R2.fastq.gz").exists()
+    assert {p.name for p in removed} == {
+        "sample_0_concat_R2.fastq",
+        "sample_0_metax_R2.fastq.gz",
+    }
+    paired = tmp_path / "paired"
+    (paired / "initial").mkdir(parents=True)
+    (paired / "regenerated").mkdir()
+    (paired / "initial" / "s_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (paired / "initial" / "s_R2.fastq").write_text("@a\nT\n+\nI\n")
+    kept = paired / "regenerated" / "s_iss_R2.fastq"
+    kept.write_text("@a\nT\n+\nI\n")
+    assert drop_r2_if_source_single_end(paired / "regenerated") == []
+    assert kept.is_file()
 
 
 def test_list_fasta_includes_gzip(tmp_path):

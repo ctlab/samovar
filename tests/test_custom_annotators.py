@@ -66,6 +66,13 @@ def test_factory_routes_custom_tools(tool):
     assert not cmd.strip().startswith(tool + " -i")
 
 
+def test_custom_single_end_omits_mate_flag():
+    inst = _custom("centrifuge")
+    cmd = inst.get_snakemake_shell_cmd("a_R1.fastq", "", inst.get_expected_outputs("s1", "/tmp/out"))
+    assert "-I " not in cmd
+    assert "-i a_R1.fastq" in cmd
+
+
 def test_wrapper_scripts_forward_to_custom_sh():
     for name in CUSTOM_WRAPPER_SCRIPTS:
         if name == "custom.sh":

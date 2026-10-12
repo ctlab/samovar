@@ -29,13 +29,22 @@ kaiju_samovar () {
     concat=$(basename "${R1[i]}" | sed 's/_.*//g')
     echo -e "\n" "$concat" "\n"
 
-    kaiju \
-      -t "$DB/nodes.dmp" \
-      -f "$fmi" \
-      -i "${R1[i]}" \
-      -j "${R2[i]}" \
-      -z "$threads" \
-      -o "$out_dir/$concat.raw"
+    if [[ -s "${R2[i]:-}" ]]; then
+      kaiju \
+        -t "$DB/nodes.dmp" \
+        -f "$fmi" \
+        -i "${R1[i]}" \
+        -j "${R2[i]}" \
+        -z "$threads" \
+        -o "$out_dir/$concat.raw"
+    else
+      kaiju \
+        -t "$DB/nodes.dmp" \
+        -f "$fmi" \
+        -i "${R1[i]}" \
+        -z "$threads" \
+        -o "$out_dir/$concat.raw"
+    fi
 
     kaiju-addTaxonNames \
       -t "$DB/nodes.dmp" \

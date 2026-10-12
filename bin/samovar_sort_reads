@@ -35,6 +35,11 @@ def sort_paired_files(r1_path: Path, r2_path: Path):
     write_fastq_records(r2_path, r2)
 
 
+def sort_single_file(r1_path: Path):
+    records = sorted(read_fastq_records(r1_path), key=lambda x: x[0])
+    write_fastq_records(r1_path, records)
+
+
 def _r1_files(out_dir: Path):
     seen = set()
     files = []
@@ -67,8 +72,10 @@ def main():
 
     for r1_path in _r1_files(out_dir):
         r2_path = r2_for_r1(r1_path)
-        if r2_path.exists():
+        if r2_path.is_file() and r2_path.stat().st_size > 0:
             sort_paired_files(r1_path, r2_path)
+        elif "regenerated" in r1_path.parts:
+            sort_single_file(r1_path)
 
 
 if __name__ == "__main__":

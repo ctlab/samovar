@@ -18,9 +18,28 @@ def r1_input(wildcards):
     return ancient(path)
 
 def r2_input(wildcards):
+    # Single-end samples have no mate. [] is not an input, so Snakemake does
+    # not require sample_*_R2.fastq. shell_r2 then returns "" and the command
+    # is built without paired flags.
     found = find_fastq_mate(config["r2_dir"], wildcards.sample, "R2")
-    path = str(found) if found else os.path.join(config["r2_dir"], f"{wildcards.sample}_R2.fastq")
-    return ancient(path)
+    if found is None:
+        return []
+    return ancient(str(found))
+
+
+def shell_r2(wildcards, snakemake_input):
+    """Mate path when the sample is paired; empty string when it is single-end.
+
+    An empty string is not a missing file. Annotator commands omit paired flags.
+    """
+    del wildcards
+    raw = getattr(snakemake_input, "r2", "")
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else ""
+    text = str(raw or "")
+    if text and os.path.isfile(text):
+        return text
+    return ""
 
 SAMPLES = get_samples()
 
@@ -60,7 +79,7 @@ rule custom_tool:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
@@ -84,7 +103,7 @@ rule assembly:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
@@ -106,7 +125,7 @@ rule kraken2:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.report, output.out]
+            input.r1, shell_r2(wildcards, input), [output.report, output.out]
         )
     shell:
         """
@@ -127,7 +146,7 @@ rule kaiju:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
@@ -150,7 +169,7 @@ rule metaphlan4:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out, output.raw, output.bowtie]
+            input.r1, shell_r2(wildcards, input), [output.out, output.raw, output.bowtie]
         )
     shell:
         """
@@ -171,7 +190,7 @@ rule kmer2:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
@@ -192,7 +211,7 @@ rule gc:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
@@ -213,7 +232,7 @@ rule kmer_encoder:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
@@ -234,7 +253,7 @@ rule kraken:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
@@ -255,7 +274,7 @@ rule krakenuniq:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+            input.r1, shell_r2(wildcards, input), [output.out]
         )
     shell:
         """
