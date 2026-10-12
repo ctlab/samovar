@@ -352,7 +352,8 @@ def _logistic_efficiency(
         if rates:
             rates["__default__"] = float(np.clip(float(y.mean()), min_efficiency, 1.0))
         return rates
-    labels = taxa.astype(str).values.reshape(-1, 1)
+    # pandas 3 stores strings as ArrowStringArray; its .values has no reshape.
+    labels = np.asarray(taxa.to_numpy(dtype=object)).reshape(-1, 1)
     try:
         from sklearn.linear_model import LogisticRegression
         from sklearn.preprocessing import OneHotEncoder
