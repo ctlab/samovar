@@ -7,6 +7,7 @@
 #   ./install.sh full            core + every optional extra (reuse if already installed)
 #   ./install.sh ask             core, then ask how to import Kraken2 and Kaiju
 #   ./install.sh full ask        core, then ask about every supported program
+#   ./install.sh full ask --no-check   same, without launching each imported program
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
 #   ./install.sh MultiQC         optional MultiQC HTML reports
@@ -692,6 +693,7 @@ if [ "${SAMOVAR_INSTALL_ASK:-0}" != "0" ]; then
     INSTALL_ASK=1
 fi
 REBUILD_CITATIONS="${SAMOVAR_REBUILD_CITATIONS:-1}"
+ASK_NO_CHECK=0
 FILTERED_ARGS=()
 SKIP_NEXT=0
 for arg in "$@"; do
@@ -717,6 +719,10 @@ for arg in "$@"; do
             ;;
         --no-rebuild-citations)
             REBUILD_CITATIONS=0
+            continue
+            ;;
+        --no-check)
+            ASK_NO_CHECK=1
             continue
             ;;
     esac
@@ -1188,6 +1194,9 @@ PY
 
 ASK_STATUS=0
 if [ "$INSTALL_ASK" = "1" ]; then
+    if [ "$ASK_NO_CHECK" = "1" ]; then
+        export SAMOVAR_INSTALL_ASK_NO_CHECK=1
+    fi
     "$PYTHON_PATH" -m samovar.install_ask || ASK_STATUS=$?
 fi
 

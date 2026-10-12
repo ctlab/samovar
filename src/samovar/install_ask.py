@@ -133,6 +133,17 @@ def ask_full_requested(argv: Optional[Sequence[str]] = None) -> bool:
     return flag in {"1", "true", "yes"}
 
 
+def launch_check_enabled(argv: Optional[Sequence[str]] = None, *, full: bool) -> bool:
+    """Full ask runs each imported binary unless ``--no-check`` is set."""
+    if not full:
+        return False
+    args = list(argv if argv is not None else sys.argv[1:])
+    if "--no-check" in args:
+        return False
+    flag = os.environ.get("SAMOVAR_INSTALL_ASK_NO_CHECK", "").strip().lower()
+    return flag not in {"1", "true", "yes"}
+
+
 def parse_env_answer(text: str) -> Optional[EnvAnswer]:
     """``conda ENV EXEC``, ``base EXEC``, or ``n``/``no``. Anything else is invalid."""
     parts = str(text or "").split()
@@ -193,7 +204,8 @@ def pick_which(answer: str, hits: Sequence[str]) -> Optional[str]:
     return ""
 
 
-def is_yes(answer: str, *, default: bool) -> bool:
+def is_yes(answer: str, *, default: bool) -> Optional[bool]:
+    """``True`` / ``False`` for y/n. Empty uses ``default``. Anything else is ``None``."""
     text = str(answer or "").strip().lower()
     if not text:
         return default
@@ -201,35 +213,86 @@ def is_yes(answer: str, *, default: bool) -> bool:
         return True
     if text in {"n", "no"}:
         return False
-    return default
+    return None
 
 
-def which_prompt(spec: AskTool, hits: Sequence[str]) -> str:
+def ask_yes_no(
+    ask: Callable[[str], str],
+    prompt: str,
+    *,
+    default: bool,
+    detail: str = "",
+) -> bool:
+    """Repeat until the answer is y or n. An empty line uses ``default``.
+
+    ``detail`` is the prompt used after the first answer is neither y nor n.
+    """
+    current = prompt
+    while True:
+        answer = ask_yes_no_once(ask(current), default=default)
+        if answer is not None:
+            return answer
+        current = detail or prompt
+
+
+def ask_yes_no_once(answer: str, *, default: bool) -> Optional[bool]:
+    return is_yes(answer, default=default)
+
+
+def which_prompt(spec: AskTool, hits: Sequence[str], *, detailed: bool = False) -> str:
     lines = [f"{spec.name}: found on PATH:"]
     for index, path in enumerate(hits, start=1):
         lines.append(f"  {index}) {path}")
-    if len(hits) == 1:
-        lines.append(f"Import {spec.name} from 1? [Y/n] ")
-    else:
-        lines.append("Import which number? [1/n] ")
+    if not detailed:
+        if len(hits) == 1:
+            lines.append("Import 1? [Y/n] ")
+        else:
+            lines.append("Number, or n: ")
+        return "\n".join(lines)
+    lines.append("The previous answer did not import a copy that runs.")
+    lines.append("  1 or y    import the first path")
+    lines.append("  2         import that number, when it is listed")
+    lines.append("  n         do not import any of these copies")
+    lines.append("> ")
     return "\n".join(lines)
 
 
-def env_prompt(spec: AskTool, default: str = "") -> str:
-    exe = spec.which[0] if spec.which else spec.name
+def _exe_name(spec: AskTool) -> str:
+    return spec.which[0] if spec.which else spec.name
+
+
+def env_prompt_short(spec: AskTool, default: str = "") -> str:
+    exe = _exe_name(spec)
     if default:
-        return (
-            f"Import {spec.name} from an environment? [{default}]\n"
-            f"  conda ENV {exe}\n"
-            f"  base {exe}\n"
-            f"  n\n"
-            f"> "
-        )
+        return f"Import {spec.name}? [{default}] "
+    return f"Import {spec.name}? conda ENV {exe} | base {exe} | no\n> "
+
+
+def env_prompt(spec: AskTool, default: str = "") -> str:
+    """Long form, shown after an import attempt did not finish."""
+    exe = _exe_name(spec)
+    env = spec.name
+    shown = f"\nEmpty keeps [{default}]." if default else ""
     return (
-        f"Import {spec.name} from an environment?\n"
-        f"  conda ENV {exe}\n"
+        f"Import of {spec.name} is not done yet.{shown}\n"
+        "Reply with one line:\n"
+        f"  conda {env} {exe}\n"
+        f"      conda environment `{env}`, executable `{exe}`\n"
         f"  base {exe}\n"
-        f"  n\n"
+        f"      the active environment, executable `{exe}`\n"
+        f"  no\n"
+        f"      do not import; the next question is whether to install it\n"
+        f"> "
+    )
+
+
+def install_prompt(spec: AskTool, *, detailed: bool = False) -> str:
+    if not detailed:
+        return f"Install {spec.name} using samovar? [y/N] "
+    return (
+        f"Install {spec.name} using samovar? Answer y or n.\n"
+        f"  y     install it into the samovar environment and record it\n"
+        f"  n     skip {spec.name}\n"
         f"> "
     )
 
@@ -241,6 +304,43 @@ def config_keep_prompt(spec: AskTool, current: ConfiguredImport) -> str:
         f"  {current.path}\n"
         f"Keep this? [Y/n] "
     )
+
+
+def program_launches(path: str, *, conda_env: str = "", timeout: float = 12) -> Tuple[bool, str]:
+    """True when the binary prints something or exits 0.
+
+    Tries ``--help``, ``-h``, ``--version``, then no arguments. A hang is a failure.
+    ``conda_env`` runs the binary inside that environment so its libraries resolve.
+    """
+    attempts = (["--help"], ["-h"], ["--version"], [])
+    notes: List[str] = []
+    conda = conda_executable() if conda_env else ""
+    for args in attempts:
+        if conda_env and conda:
+            cmd = [conda, "run", "-n", conda_env, path, *args]
+        else:
+            cmd = [path, *args]
+        label = " ".join(args) if args else "(no args)"
+        try:
+            proc = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            notes.append(f"{label} timed out")
+            continue
+        except OSError as exc:
+            return False, str(exc)
+        text = "\n".join(part for part in (proc.stdout, proc.stderr) if part).strip()
+        if text or proc.returncode == 0:
+            line = text.splitlines()[0].strip() if text else f"exit {proc.returncode}"
+            return True, line[:180]
+        notes.append(f"{label} exited {proc.returncode} with no output")
+    return False, "; ".join(notes) or "no output"
 
 
 def record_tool(
@@ -456,6 +556,9 @@ def offer_companions(
     sibling_fn: Callable[[str, str], str] = sibling_executable,
     prefer_config: bool = False,
     configured_fn: Callable[[str, Sequence[str]], Optional[ConfiguredImport]] = configured_import,
+    check: bool = False,
+    launch_fn: Callable[..., Tuple[bool, str]] = program_launches,
+    conda_env: str = "",
 ) -> None:
     """Yes/no for helper binaries that sit next to the one just imported."""
     for name in spec.companions:
@@ -470,9 +573,15 @@ def offer_companions(
         prompt = (
             f"Import {name} from the same place as {spec.name}{note} ({path})? [Y/n] "
         )
-        if not is_yes(ask(prompt), default=True):
+        if not ask_yes_no(ask, prompt, default=True):
             print(f"  {name}: skipped")
             continue
+        if check:
+            ok, detail = launch_fn(path, conda_env=conda_env)
+            if not ok:
+                print(f"  {name} did not run ({detail}). Not recorded.")
+                continue
+            print(f"  {name} runs: {detail}")
         companion = AskTool(name, (name,), spec.type, "")
         record(companion, path, env=env, prefix=prefix, exec_name=name)
 
@@ -490,10 +599,26 @@ def ask_tool(
     sibling_fn: Callable[[str, str], str] = sibling_executable,
     prefer_config: bool = False,
     configured_fn: Callable[[str, Sequence[str]], Optional[ConfiguredImport]] = configured_import,
+    check: bool = False,
+    launch_fn: Callable[..., Tuple[bool, str]] = program_launches,
 ) -> str:
     """Prompt for one tool. Returns ``imported-which``, ``imported-env``, ``installed``, or ``skipped``."""
 
-    def commit(path: str, *, env: str, prefix: str, exec_name: str, detect_conda: bool = True) -> None:
+    def commit(
+        path: str,
+        *,
+        env: str,
+        prefix: str,
+        exec_name: str,
+        detect_conda: bool = True,
+        conda_env: str = "",
+    ) -> bool:
+        if check:
+            ok, detail = launch_fn(path, conda_env=conda_env)
+            if not ok:
+                print(f"  {spec.name} did not run ({detail}).")
+                return False
+            print(f"  {spec.name} runs: {detail}")
         if detect_conda and not env:
             detected_env, detected_prefix = conda_layout(path)
             if detected_env:
@@ -509,47 +634,63 @@ def ask_tool(
             sibling_fn=sibling_fn,
             prefer_config=prefer_config,
             configured_fn=configured_fn,
+            check=check,
+            launch_fn=launch_fn,
+            conda_env=conda_env,
         )
+        return True
 
     current = configured_fn(spec.name, spec.which) if prefer_config else None
     default_env = ""
     if current is not None and current.answer.startswith(("conda ", "base ")):
         default_env = current.answer
+    detailed = False
     if current is not None and current.path and Path(current.path).is_file():
         while True:
             reply = ask(config_keep_prompt(spec, current)).strip().lower()
             if reply in {"", "y", "yes"}:
-                commit(
+                conda_env = ""
+                if current.answer.startswith("conda "):
+                    parts = current.answer.split()
+                    conda_env = parts[1] if len(parts) > 1 else ""
+                if commit(
                     current.path,
                     env=current.env,
                     prefix=current.prefix,
                     exec_name=current.exec_name,
                     detect_conda=False,
-                )
-                return "imported-config"
+                    conda_env=conda_env,
+                ):
+                    return "imported-config"
+                detailed = True
+                break
             if reply in {"n", "no"}:
                 break
             print("Answer Y or n.")
 
     hits = list(which_fn(spec.which))
+    which_detailed = detailed
     if hits:
         while True:
-            picked = pick_which(ask(which_prompt(spec, hits)), hits)
+            picked = pick_which(ask(which_prompt(spec, hits, detailed=which_detailed)), hits)
             if picked is None:
                 break
             if picked == "":
-                print("Answer Y, a number from the list, or n.")
+                which_detailed = True
                 continue
-            commit(picked, env="", prefix="", exec_name=Path(picked).name)
-            return "imported-which"
+            if commit(picked, env="", prefix="", exec_name=Path(picked).name):
+                return "imported-which"
+            which_detailed = True
+            detailed = True
 
     while True:
-        reply = ask(env_prompt(spec, default_env))
+        prompt = env_prompt(spec, default_env) if detailed else env_prompt_short(spec, default_env)
+        reply = ask(prompt)
         if not str(reply or "").strip() and default_env:
             reply = default_env
         parsed = parse_env_answer(reply)
         if parsed is None:
-            print("Answer `conda ENV EXEC`, `base EXEC`, or n/no.")
+            detailed = True
             continue
         if parsed == "no":
             break
@@ -557,33 +698,49 @@ def ask_tool(
         try:
             if kind == "base":
                 path, prefix = resolve_base_fn(exe)
-                commit(path, env="", prefix=prefix, exec_name=exe)
+                recorded = commit(path, env="", prefix=prefix, exec_name=exe)
             else:
                 path, prefix = resolve_conda_fn(env_name, exe)
-                commit(path, env="conda", prefix=prefix, exec_name=exe)
+                recorded = commit(
+                    path, env="conda", prefix=prefix, exec_name=exe, conda_env=env_name
+                )
         except (OSError, FileNotFoundError, ValueError) as exc:
             print(f"  {exc}")
+            detailed = True
             continue
-        return "imported-env"
+        if recorded:
+            return "imported-env"
+        detailed = True
 
     if not spec.install:
         print(f"  {spec.name}: skipped (optional; not installed automatically)")
         return "skipped"
-    if is_yes(ask(f"Install {spec.name} into the samovar environment? [y/N] "), default=False):
+    install_detailed = False
+    while True:
+        if not ask_yes_no(
+            ask,
+            install_prompt(spec, detailed=install_detailed),
+            default=False,
+            detail=install_prompt(spec, detailed=True),
+        ):
+            print(f"  {spec.name}: skipped")
+            return "skipped"
         try:
             install(spec)
         except (OSError, subprocess.CalledProcessError, ValueError) as exc:
             print(f"  {spec.name}: install failed: {exc}")
-            return "skipped"
+            print(f"  {spec.name} is not imported yet. Answer the install question again, or n to skip.")
+            continue
         path, prefix = locate(spec)
-        if path:
-            env = "conda" if prefix else ""
-            commit(path, env=env, prefix=prefix, exec_name=Path(path).name)
+        if not path:
+            print(f"  {spec.name}: installer finished, but the executable was not found.")
+            print(f"  {spec.name} is not imported yet. Answer the install question again, or n to skip.")
+            continue
+        env = "conda" if prefix else ""
+        if commit(path, env=env, prefix=prefix, exec_name=Path(path).name):
             return "installed"
-        print(f"  {spec.name}: installer finished; executable not found to record.")
-        return "installed"
-    print(f"  {spec.name}: skipped")
-    return "skipped"
+        install_detailed = True
+        print(f"  {spec.name} is not imported yet. Answer the install question again, or n to skip.")
 
 
 def prompts_enabled() -> bool:
@@ -672,7 +829,7 @@ def ask_smoketest(
     run: Callable[[], Tuple[int, str]] = run_toy_example,
 ) -> str:
     """Ask ``run smoketest?``. Yes runs the toy example and prints its report."""
-    if not is_yes(ask("run smoketest? [y/N] "), default=False):
+    if not ask_yes_no(ask, "run smoketest? [y/N] ", default=False):
         print("Smoketest skipped.")
         return "skipped"
     code, _report = run()
@@ -680,7 +837,9 @@ def ask_smoketest(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    full = ask_full_requested(argv)
+    args = list(sys.argv[1:] if argv is None else argv)
+    full = ask_full_requested(args)
+    check = launch_check_enabled(args, full=full)
     if not prompts_enabled():
         print("install.sh ask: not a terminal; skipping tool prompts.")
         return 0
@@ -692,7 +851,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for spec in tools:
         print("")
         try:
-            ask_tool(spec, ask=input, prefer_config=full)
+            ask_tool(spec, ask=input, prefer_config=full, check=check)
         except KeyboardInterrupt:
             print("")
             return 130

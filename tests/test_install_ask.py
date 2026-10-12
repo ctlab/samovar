@@ -8,6 +8,8 @@ from samovar.install_ask import (
     ask_full_requested,
     ask_smoketest,
     ask_tool,
+    launch_check_enabled,
+    program_launches,
     configured_import,
     format_smoketest_report,
     parse_env_answer,
@@ -133,6 +135,98 @@ def test_base_exec_updates_config():
     assert result == "imported-env"
     assert recorded[0]["prefix"] == "/envs/samovar"
     assert recorded[0]["exec_name"] == "kaiju"
+
+
+def test_junk_stays_until_a_real_import():
+    prompts = []
+    answers = iter(["???", "conda kaiju kaiju"])
+
+    def ask(prompt):
+        prompts.append(prompt)
+        return next(answers)
+
+    result = ask_tool(
+        KAIJU,
+        ask=ask,
+        which_fn=lambda names: [],
+        sibling_fn=lambda path, name: "",
+        resolve_conda_fn=lambda env, exe: ("/opt/envs/kaiju/bin/kaiju", "/opt/envs/kaiju"),
+        record=lambda *args, **kwargs: None,
+    )
+    assert result == "imported-env"
+    assert "conda environment" not in prompts[0]
+    assert "conda ENV kaiju" in prompts[0]
+    assert "conda environment" in prompts[1]
+    assert len(prompts) == 2
+    assert not any("using samovar" in prompt for prompt in prompts)
+
+
+def test_full_ask_reruns_when_launch_is_silent():
+    prompts = []
+    answers = iter(["conda kaiju kaiju", "conda kaiju kaiju"])
+    calls = {"n": 0}
+
+    def launch(path, conda_env=""):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False, "no output"
+        return True, "Kaiju 1.10"
+
+    def ask(prompt):
+        prompts.append(prompt)
+        return next(answers)
+
+    result = ask_tool(
+        KAIJU,
+        ask=ask,
+        which_fn=lambda names: [],
+        sibling_fn=lambda path, name: "",
+        resolve_conda_fn=lambda env, exe: ("/opt/envs/kaiju/bin/kaiju", "/opt/envs/kaiju"),
+        record=lambda *args, **kwargs: None,
+        check=True,
+        launch_fn=launch,
+    )
+    assert result == "imported-env"
+    assert calls["n"] == 2
+    assert "Import of kaiju is not done yet" in prompts[1]
+
+
+def test_launch_check_follows_full_ask_flag():
+    assert launch_check_enabled(["--full"], full=True)
+    assert not launch_check_enabled(["--full", "--no-check"], full=True)
+    assert not launch_check_enabled(["--full"], full=False)
+
+
+def test_program_launches_accepts_help_text(tmp_path):
+    exe = tmp_path / "kaiju"
+    exe.write_text("#!/bin/sh\nif [ \"$1\" = \"-h\" ]; then echo usage; exit 0; fi\nexit 1\n")
+    exe.chmod(0o755)
+    ok, detail = program_launches(str(exe), timeout=3)
+    assert ok
+    assert "usage" in detail
+
+
+def test_install_question_rejects_junk_until_no():
+    prompts = []
+    answers = iter(["no", "later", "n"])
+
+    def ask(prompt):
+        prompts.append(prompt)
+        return next(answers)
+
+    called = []
+    result = ask_tool(
+        KAIJU,
+        ask=ask,
+        which_fn=lambda names: [],
+        sibling_fn=lambda path, name: "",
+        install=lambda spec: called.append(spec.name),
+        record=lambda *args, **kwargs: None,
+    )
+    assert called == []
+    assert result == "skipped"
+    install_prompts = [prompt for prompt in prompts if "using samovar" in prompt]
+    assert len(install_prompts) == 2
 
 
 def test_invalid_then_conda():

@@ -29,13 +29,7 @@ chmod +x install.sh
 ./install.sh full ask
 ```
 
-`install.sh` installs the checkout you just cloned. Replace `main` with another branch name to install that branch instead. `./install.sh ask` prompts only for Kraken2 and Kaiju. Kraken and KrakenUniq are asked by `./install.sh full ask`.
-
-An existing checkout updates in place with `samovar update` (branch `main`) or `samovar update --branch NAME`. That fetches the branch, creates the conda env only if it is missing, activates it, and runs `./install.sh full ask`.
-
-`install.sh` may ask you some questions, like e-mail for the NCBI API.
-
-`samovar -h`, `samovar --help`, and `samovar help` print the SAMOVAR version and the command list.
+`install.sh` may ask you some questions, like e-mail for the NCBI API. If you use `ask` mode, it will also try to import all supported tools with your guides. The first prompt is short (`conda ENV EXEC`, `base EXEC`, or `no`). A failed import asks again with a full example and does not move on. `./install.sh full ask` then launches the program (`--help`, `-h`, `--version`, or with no arguments) and keeps it when there is output; `--no-check` skips that launch.
 
 Some tools are optional but are required for some actions. Install them all with:
 
