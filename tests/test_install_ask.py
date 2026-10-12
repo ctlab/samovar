@@ -4,9 +4,11 @@ from pathlib import Path
 from samovar.install_ask import (
     ASK_TOOLS,
     AskTool,
+    ConfiguredImport,
     ask_full_requested,
     ask_smoketest,
     ask_tool,
+    configured_import,
     format_smoketest_report,
     parse_env_answer,
     pick_which,
@@ -321,3 +323,96 @@ def test_smoketest_yes_reports_pass():
     assert "/tmp/toy" in report
     status = ask_smoketest(ask=lambda prompt: "yes", run=lambda: (0, report))
     assert status == "passed"
+
+
+def test_configured_import_remembers_conda_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    prefix = tmp_path / "envs" / "anvio"
+    (prefix / "conda-meta").mkdir(parents=True)
+    exe = prefix / "bin" / "anvi-gen-contigs-database"
+    exe.parent.mkdir()
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    spec = next(tool for tool in ASK_TOOLS if tool.name == "anvio")
+    record_tool(spec, str(exe), env="conda", prefix=str(prefix), exec_name=exe.name)
+    current = configured_import("anvio", spec.which)
+    assert current is not None
+    assert current.answer == "conda anvio anvi-gen-contigs-database"
+    assert current.env == "conda"
+    assert current.exec_name == "anvi-gen-contigs-database"
+    monkeypatch.setenv("CONDA_PREFIX", str(prefix))
+    active = configured_import("anvio", spec.which)
+    assert active is not None
+    assert active.answer == "base anvi-gen-contigs-database"
+    assert active.env == ""
+
+
+def test_full_ask_keeps_configured_import(tmp_path):
+    exe = tmp_path / "envs" / "anvio" / "bin" / "anvi-gen-contigs-database"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    current = ConfiguredImport(
+        path=str(exe),
+        env="conda",
+        prefix=str(tmp_path / "envs" / "anvio"),
+        exec_name=exe.name,
+        answer="conda anvio anvi-gen-contigs-database",
+    )
+    recorded = []
+    spec = next(tool for tool in ASK_TOOLS if tool.name == "anvio")
+
+    def which_fn(names):
+        raise AssertionError("which should not run when the config import is kept")
+
+    status = ask_tool(
+        spec,
+        ask=lambda prompt: "",
+        which_fn=which_fn,
+        prefer_config=True,
+        configured_fn=lambda name, which: current,
+        sibling_fn=lambda path, name: "",
+        record=lambda tool, path, **kwargs: recorded.append((kwargs["env"], kwargs["exec_name"], path)),
+    )
+    assert status == "imported-config"
+    assert recorded == [("conda", exe.name, str(exe))]
+
+
+def test_full_ask_decline_keeps_env_as_default(tmp_path):
+    exe = tmp_path / "envs" / "kaiju" / "bin" / "kaiju"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    current = ConfiguredImport(
+        path=str(exe),
+        env="conda",
+        prefix=str(exe.parent.parent),
+        exec_name="kaiju",
+        answer="conda kaiju kaiju",
+    )
+    prompts = []
+    recorded = []
+
+    def ask(prompt):
+        prompts.append(prompt)
+        if "already in config" in prompt:
+            return "n"
+        if "found on PATH" in prompt:
+            return "n"
+        return ""
+
+    status = ask_tool(
+        KAIJU,
+        ask=ask,
+        which_fn=lambda names: ["/usr/bin/kaiju"],
+        prefer_config=True,
+        configured_fn=lambda name, which: current,
+        sibling_fn=lambda path, name: "",
+        resolve_conda_fn=lambda env, binary: (str(exe), str(exe.parent.parent)),
+        record=lambda tool, path, **kwargs: recorded.append((kwargs["env"], kwargs["exec_name"])),
+    )
+    assert status == "imported-env"
+    assert any("[conda kaiju kaiju]" in prompt for prompt in prompts)
+    assert recorded == [("conda", "kaiju")]

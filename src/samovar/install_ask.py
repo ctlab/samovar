@@ -27,6 +27,17 @@ EnvAnswer = Union[str, Tuple[str, str, str]]
 
 
 @dataclass(frozen=True)
+class ConfiguredImport:
+    """A tool already stored in the main config, including its environment."""
+
+    path: str
+    env: str
+    prefix: str
+    exec_name: str
+    answer: str
+
+
+@dataclass(frozen=True)
 class AskTool:
     name: str
     which: Tuple[str, ...]
@@ -205,14 +216,31 @@ def which_prompt(spec: AskTool, hits: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
-def env_prompt(spec: AskTool) -> str:
+def env_prompt(spec: AskTool, default: str = "") -> str:
     exe = spec.which[0] if spec.which else spec.name
+    if default:
+        return (
+            f"Import {spec.name} from an environment? [{default}]\n"
+            f"  conda ENV {exe}\n"
+            f"  base {exe}\n"
+            f"  n\n"
+            f"> "
+        )
     return (
         f"Import {spec.name} from an environment?\n"
         f"  conda ENV {exe}\n"
         f"  base {exe}\n"
         f"  n\n"
         f"> "
+    )
+
+
+def config_keep_prompt(spec: AskTool, current: ConfiguredImport) -> str:
+    label = current.answer or current.path
+    return (
+        f"{spec.name}: already in config as `{label}`\n"
+        f"  {current.path}\n"
+        f"Keep this? [Y/n] "
     )
 
 
@@ -332,6 +360,71 @@ def locate_installed(spec: AskTool) -> Tuple[str, str]:
     return "", ""
 
 
+def conda_env_name(prefix: str) -> str:
+    path = Path(prefix)
+    if path.name == "bin":
+        path = path.parent
+    if path.parent.name in {"envs", "env"}:
+        return path.name
+    return path.name
+
+
+def describe_configured(path: str, prefix: str, env_field: str, exe: str) -> Tuple[str, str, str]:
+    """Return ``(answer, env, prefix)`` for a config record.
+
+    ``answer`` is ``conda ENV EXEC``, ``base EXEC``, or empty when the binary
+    is not inside a conda prefix. The active conda env is ``base``.
+    """
+    if not prefix and path:
+        parent = Path(path).parent
+        if parent.name == "bin":
+            prefix = str(parent.parent)
+    active = os.environ.get("CONDA_PREFIX", "").strip()
+    if prefix and active and os.path.normpath(prefix) == os.path.normpath(active):
+        return f"base {exe}", "", prefix
+    condaish = str(env_field or "").lower() == "conda" or (
+        bool(prefix) and (Path(prefix) / "conda-meta").is_dir()
+    )
+    if prefix and condaish:
+        return f"conda {conda_env_name(prefix)} {exe}", "conda", prefix
+    return "", "", prefix
+
+
+def configured_import(name: str, which_names: Sequence[str] = ()) -> Optional[ConfiguredImport]:
+    """Read ``tools.<name>`` from the main config, including its conda env."""
+    from samovar.main_config import iter_tools, parse_tool_entry, tool_env_prefix, tool_path
+    from samovar.paths import load_config
+
+    tools = iter_tools(load_config())
+    spec = None
+    key = ""
+    for candidate in (name, *(which_names or ())):
+        if candidate in tools:
+            spec = tools[candidate]
+            key = candidate
+            break
+    if spec is None:
+        return None
+    entry = parse_tool_entry(spec, key or name)
+    env_field = entry[0]
+    raw_path = entry[2]
+    resolved = str(tool_path(spec, key or name) or raw_path or "").strip()
+    if not resolved:
+        return None
+    exe = Path(resolved).name
+    if not exe or exe in {".", ""}:
+        exe = (which_names or (name,))[0]
+    prefix = tool_env_prefix(spec, key or name)
+    answer, env, prefix = describe_configured(resolved, prefix, env_field, exe)
+    return ConfiguredImport(
+        path=resolved,
+        env=env,
+        prefix=prefix,
+        exec_name=exe,
+        answer=answer,
+    )
+
+
 def conda_layout(path: str) -> Tuple[str, str]:
     """``(<env>, <prefix>)`` when ``path`` is ``<conda-prefix>/bin/<exe>``."""
     parent = Path(path).parent
@@ -362,14 +455,21 @@ def offer_companions(
     ask: Callable[[str], str],
     record,
     sibling_fn: Callable[[str, str], str] = sibling_executable,
+    prefer_config: bool = False,
+    configured_fn: Callable[[str, Sequence[str]], Optional[ConfiguredImport]] = configured_import,
 ) -> None:
     """Yes/no for helper binaries that sit next to the one just imported."""
     for name in spec.companions:
         path = sibling_fn(primary_path, name)
         if not path:
             continue
+        note = ""
+        if prefer_config:
+            current = configured_fn(name, (name,))
+            if current is not None and os.path.normpath(current.path) == os.path.normpath(path):
+                note = ", already in config"
         prompt = (
-            f"Import {name} from the same place as {spec.name} ({path})? [Y/n] "
+            f"Import {name} from the same place as {spec.name}{note} ({path})? [Y/n] "
         )
         if not is_yes(ask(prompt), default=True):
             print(f"  {name}: skipped")
@@ -389,11 +489,13 @@ def ask_tool(
     install=install_action,
     locate=locate_installed,
     sibling_fn: Callable[[str, str], str] = sibling_executable,
+    prefer_config: bool = False,
+    configured_fn: Callable[[str, Sequence[str]], Optional[ConfiguredImport]] = configured_import,
 ) -> str:
     """Prompt for one tool. Returns ``imported-which``, ``imported-env``, ``installed``, or ``skipped``."""
 
-    def commit(path: str, *, env: str, prefix: str, exec_name: str) -> None:
-        if not env:
+    def commit(path: str, *, env: str, prefix: str, exec_name: str, detect_conda: bool = True) -> None:
+        if detect_conda and not env:
             detected_env, detected_prefix = conda_layout(path)
             if detected_env:
                 env, prefix = detected_env, detected_prefix
@@ -406,7 +508,29 @@ def ask_tool(
             ask=ask,
             record=record,
             sibling_fn=sibling_fn,
+            prefer_config=prefer_config,
+            configured_fn=configured_fn,
         )
+
+    current = configured_fn(spec.name, spec.which) if prefer_config else None
+    default_env = ""
+    if current is not None and current.answer.startswith(("conda ", "base ")):
+        default_env = current.answer
+    if current is not None and current.path and Path(current.path).is_file():
+        while True:
+            reply = ask(config_keep_prompt(spec, current)).strip().lower()
+            if reply in {"", "y", "yes"}:
+                commit(
+                    current.path,
+                    env=current.env,
+                    prefix=current.prefix,
+                    exec_name=current.exec_name,
+                    detect_conda=False,
+                )
+                return "imported-config"
+            if reply in {"n", "no"}:
+                break
+            print("Answer Y or n.")
 
     hits = list(which_fn(spec.which))
     if hits:
@@ -421,7 +545,10 @@ def ask_tool(
             return "imported-which"
 
     while True:
-        parsed = parse_env_answer(ask(env_prompt(spec)))
+        reply = ask(env_prompt(spec, default_env))
+        if not str(reply or "").strip() and default_env:
+            reply = default_env
+        parsed = parse_env_answer(reply)
         if parsed is None:
             print("Answer `conda ENV EXEC`, `base EXEC`, or n/no.")
             continue
@@ -566,7 +693,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for spec in tools:
         print("")
         try:
-            ask_tool(spec, ask=input)
+            ask_tool(spec, ask=input, prefer_config=full)
         except KeyboardInterrupt:
             print("")
             return 130
