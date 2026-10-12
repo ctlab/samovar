@@ -49,6 +49,20 @@ samovar_toy_database_dir() {
   echo "${SAMOVAR}/examples_outdir/toy/.database"
 }
 
+# Path of a catalog database when the install config already names it and the
+# index files are on disk. Empty means the caller should build it.
+# Usage: samovar_catalog_database_path TOOL NAME
+samovar_catalog_database_path() {
+  local tool="$1"
+  local name="$2"
+  python - "$tool" "$name" <<'PY'
+import sys
+from samovar.db_spec import ready_catalog_database
+
+print(ready_catalog_database(sys.argv[1], sys.argv[2]), end="")
+PY
+}
+
 # CI public examples: catalog name phage_test, imported by examples/phage/pipeline.sh.
 # Set SAMOVAR_CI_LIGHT_INDEXES=1 (full-integration examples-public job).
 samovar_light_public_indexes() {

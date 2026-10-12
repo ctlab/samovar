@@ -10,6 +10,7 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 
 | Example | What it shows |
 |---------|----------------|
+| [smoketest](smoketest/) | Shortest generate → prepare → exec (`./install.sh ask` offers this) |
 | [toy](toy/) | Basic generate → prepare → exec |
 | [scoring](scoring/) | Choosing and comparing annotators |
 | [reprofiling](reprofiling/) | A custom ML reprofiler |

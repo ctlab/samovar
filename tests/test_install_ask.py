@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from samovar.install_ask import (
     ASK_TOOLS,
@@ -7,10 +10,12 @@ from samovar.install_ask import (
     ConfiguredImport,
     ask_full_requested,
     ask_smoketest,
+    ask_smoketest_threads,
     ask_tool,
     launch_check_enabled,
     program_launches,
     configured_import,
+    default_smoketest_threads,
     format_smoketest_report,
     parse_env_answer,
     pick_which,
@@ -451,6 +456,38 @@ def test_smoketest_prompt_skips_unless_yes():
     assert called == []
 
 
+def _scripted_ask(*replies: str):
+    pending = iter(replies)
+
+    def ask(_prompt: str) -> str:
+        return next(pending)
+
+    return ask
+
+
+@pytest.mark.mandatory
+def test_smoketest_threads_default_is_three_quarters():
+    assert default_smoketest_threads(1) == 1
+    assert default_smoketest_threads(4) == 3
+    assert default_smoketest_threads(8) == 6
+    assert ask_smoketest_threads(_scripted_ask("nope", "")) == default_smoketest_threads()
+
+
+@pytest.mark.mandatory
+def test_smoketest_yes_passes_thread_count(monkeypatch):
+    monkeypatch.delenv("SAMOVAR_CORES", raising=False)
+    seen = {}
+
+    def run():
+        seen["cores"] = os.environ.get("SAMOVAR_CORES")
+        return 0, "ok"
+
+    status = ask_smoketest(ask=_scripted_ask("y", "8"), run=run)
+    assert status == "passed"
+    assert seen["cores"] == "8"
+    assert os.environ.get("SAMOVAR_CORES") is None
+
+
 def test_smoketest_yes_reports_toy_failure():
     report = format_smoketest_report(
         1,
@@ -468,16 +505,16 @@ def test_smoketest_yes_reports_toy_failure():
         print(report)
         return 1, report
 
-    status = ask_smoketest(ask=lambda prompt: "y", run=run)
+    status = ask_smoketest(ask=_scripted_ask("y", ""), run=run)
     assert status == "failed"
     assert seen == [report]
 
 
 def test_smoketest_yes_reports_pass():
     report = format_smoketest_report(0, "done\n", Path("/tmp/log"), Path("/tmp/toy"))
-    assert "Toy example passed." in report
+    assert "Smoketest passed." in report
     assert "/tmp/toy" in report
-    status = ask_smoketest(ask=lambda prompt: "yes", run=lambda: (0, report))
+    status = ask_smoketest(ask=_scripted_ask("yes", "2"), run=lambda: (0, report))
     assert status == "passed"
 
 

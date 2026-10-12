@@ -786,11 +786,11 @@ def format_smoketest_report(
     log_path: Path,
     out_dir: Path,
 ) -> str:
-    """Short success line, or the error lines from a failed toy example."""
+    """Short success line, or the error lines from a failed smoketest."""
     lines = [line for line in str(output or "").splitlines() if line.strip()]
     if code == 0:
         return (
-            "Toy example passed.\n"
+            "Smoketest passed.\n"
             f"  output: {out_dir}\n"
             f"  log: {log_path}"
         )
@@ -805,22 +805,22 @@ def format_smoketest_report(
     shown = errors[-20:] or lines[-40:]
     body = "\n".join(f"  {line}" for line in shown) or "  (no output)"
     return (
-        f"Toy example failed (exit {code}).\n"
+        f"Smoketest failed (exit {code}).\n"
         f"  output: {out_dir}\n"
         f"  log: {log_path}\n"
         f"{body}"
     )
 
 
-def run_toy_example(root: Optional[Path] = None) -> Tuple[int, str]:
-    """Run ``examples/toy/pipeline.sh`` and return ``(exit_code, report)``."""
+def run_smoketest(root: Optional[Path] = None) -> Tuple[int, str]:
+    """Run ``examples/smoketest/pipeline.sh`` and return ``(exit_code, report)``."""
     root = Path(root) if root is not None else repo_root()
-    script = root / "examples" / "toy" / "pipeline.sh"
-    out_dir = root / "examples_outdir" / "toy"
+    script = root / "examples" / "smoketest" / "pipeline.sh"
+    out_dir = root / "examples_outdir" / "smoketest"
     log_path = out_dir / "ask-smoketest.log"
     if not script.is_file():
         report = format_smoketest_report(
-            1, f"error: toy example script not found: {script}", log_path, out_dir
+            1, f"error: smoketest script not found: {script}", log_path, out_dir
         )
         print(report)
         return 1, report
@@ -851,16 +851,52 @@ def run_toy_example(root: Optional[Path] = None) -> Tuple[int, str]:
     return code, report
 
 
+def default_smoketest_threads(cpu_count: Optional[int] = None) -> int:
+    """Three quarters of the CPUs, at least one. Suggested smoketest default."""
+    n = cpu_count if cpu_count is not None else (os.cpu_count() or 1)
+    return max(1, (int(n) * 3) // 4)
+
+
+def ask_smoketest_threads(ask: Callable[[str], str]) -> int:
+    """Ask for a thread count. An empty line keeps 3/4 of the CPUs."""
+    default = default_smoketest_threads()
+    prompt = f"examples/smoketest threads [{default}]: "
+    detail = (
+        f"Enter a positive integer. An empty line keeps {default} "
+        f"(3/4 of the CPUs).\n{prompt}"
+    )
+    current = prompt
+    while True:
+        text = str(ask(current) or "").strip()
+        if not text:
+            print(f"Using {default} threads.")
+            return default
+        if text.isdigit() and int(text) >= 1:
+            chosen = int(text)
+            print(f"Using {chosen} threads.")
+            return chosen
+        current = detail
+
+
 def ask_smoketest(
     *,
     ask: Callable[[str], str],
-    run: Callable[[], Tuple[int, str]] = run_toy_example,
+    run: Callable[[], Tuple[int, str]] = run_smoketest,
 ) -> str:
-    """Ask ``run smoketest?``. Yes runs the toy example and prints its report."""
-    if not ask_yes_no(ask, "run smoketest? [y/N] ", default=False):
+    """Ask to run ``examples/smoketest``. Yes asks for threads, then runs it."""
+    if not ask_yes_no(ask, "run examples/smoketest? [y/N] ", default=False):
         print("Smoketest skipped.")
         return "skipped"
-    code, _report = run()
+    threads = ask_smoketest_threads(ask)
+    previous = os.environ.get("SAMOVAR_CORES")
+    os.environ["SAMOVAR_CORES"] = str(threads)
+    try:
+        code, _report = run()
+    finally:
+        if previous is None:
+            os.environ.pop("SAMOVAR_CORES", None)
+        else:
+            os.environ["SAMOVAR_CORES"] = previous
     return "passed" if code == 0 else "failed"
 
 

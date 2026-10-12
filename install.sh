@@ -5,7 +5,9 @@
 # Usage:
 #   ./install.sh                 Python pipeline only
 #   ./install.sh full            core + every optional extra (reuse if already installed)
-#   ./install.sh ask             core, then ask how to import Kraken2 and Kaiju
+#   ./install.sh ask             core, then ask how to import Kraken2 and Kaiju.
+#                                At the end, optionally run examples/smoketest
+#                                and ask for a thread count (default 3/4 of the CPUs)
 #   ./install.sh full ask        core, then ask about every supported program
 #   ./install.sh full ask --no-check   same, without launching each imported program
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
@@ -1286,7 +1288,7 @@ rebuild_citations
 print_install_status
 
 if [ "$INSTALL_ASK" = "1" ] && [ "$ASK_STATUS" != "0" ]; then
-    echo "Ask smoketest did not pass. See the toy example report above."
+    echo "Ask smoketest did not pass. See the examples/smoketest report above."
 fi
 echo "Installation completed successfully!"
 echo "Config: $SAMOVAR_CONFIG"
