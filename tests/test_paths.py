@@ -312,6 +312,41 @@ def test_format_install_status_without_nextflow(monkeypatch):
     assert nxt["path"] == ""
 
 
+def test_status_sees_centrifuge_and_metax_from_config(tmp_path, monkeypatch):
+    """Off-PATH imports must count. Status used to call shutil.which only."""
+    import shutil as _shutil
+
+    from samovar.paths import install_status_rows
+
+    centrifuge = tmp_path / "centrifuge"
+    metax = tmp_path / "metax"
+    for exe in (centrifuge, metax):
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {
+            "tools": {
+                "centrifuge": ["conda", "", str(centrifuge), "annotator"],
+                "metax": ["conda", "metax", str(metax), "annotator"],
+            }
+        },
+    )
+    real_which = _shutil.which
+
+    def fake_which(cmd, path=None):
+        if cmd in {"centrifuge", "metax"}:
+            return None
+        return real_which(cmd, path=path)
+
+    monkeypatch.setattr("samovar.paths.shutil.which", fake_which)
+    rows = {row["name"]: row for row in install_status_rows()}
+    assert rows["centrifuge"]["found"] is True
+    assert rows["centrifuge"]["path"] == str(centrifuge.resolve())
+    assert rows["metax"]["found"] is True
+    assert rows["metax"]["path"] == str(metax.resolve())
+
+
 def test_iss_executable_uses_config(tmp_path, monkeypatch):
     exe = tmp_path / "iss"
     exe.write_text("#!/bin/sh\n")

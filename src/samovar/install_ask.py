@@ -47,6 +47,8 @@ class AskTool:
     companions: Tuple[str, ...] = ()
     # ``core`` is ``./install.sh ask``. ``full`` is only ``./install.sh full ask``.
     scope: str = "full"
+    # Argument lists tried before the generic ``--help`` / ``-h`` launch check.
+    probes: Tuple[Tuple[str, ...], ...] = ()
 
 
 # One row per program the pipeline can launch. ``companions`` are not separate
@@ -76,7 +78,10 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     ),
     AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
     AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),
-    AskTool("metax", ("metax",), "annotator", "optional:metax"),
+    AskTool(
+        "metax", ("metax",), "annotator", "optional:metax",
+        probes=(("profile", "-h"), ("-h",)),
+    ),
     AskTool(
         "bowtie2", ("bowtie2",), "aligner", "conda:bowtie2",
         companions=("bowtie2-build",),
@@ -306,13 +311,23 @@ def config_keep_prompt(spec: AskTool, current: ConfiguredImport) -> str:
     )
 
 
-def program_launches(path: str, *, conda_env: str = "", timeout: float = 12) -> Tuple[bool, str]:
+def program_launches(
+    path: str,
+    *,
+    conda_env: str = "",
+    timeout: float = 12,
+    probes: Sequence[Sequence[str]] = (),
+) -> Tuple[bool, str]:
     """True when the binary prints something or exits 0.
 
-    Tries ``--help``, ``-h``, ``--version``, then no arguments. A hang is a failure.
-    ``conda_env`` runs the binary inside that environment so its libraries resolve.
+    Tries tool-specific ``probes``, then ``--help``, ``-h``, ``--version``, then no
+    arguments. A hang is a failure. ``conda_env`` runs the binary inside that
+    environment so its libraries resolve.
     """
-    attempts = (["--help"], ["-h"], ["--version"], [])
+    attempts = [list(item) for item in probes]
+    for generic in (["--help"], ["-h"], ["--version"], []):
+        if generic not in attempts:
+            attempts.append(generic)
     notes: List[str] = []
     conda = conda_executable() if conda_env else ""
     for args in attempts:
@@ -577,7 +592,10 @@ def offer_companions(
             print(f"  {name}: skipped")
             continue
         if check:
-            ok, detail = launch_fn(path, conda_env=conda_env)
+            if launch_fn is program_launches:
+                ok, detail = program_launches(path, conda_env=conda_env)
+            else:
+                ok, detail = launch_fn(path, conda_env=conda_env)
             if not ok:
                 print(f"  {name} did not run ({detail}). Not recorded.")
                 continue
@@ -604,6 +622,11 @@ def ask_tool(
 ) -> str:
     """Prompt for one tool. Returns ``imported-which``, ``imported-env``, ``installed``, or ``skipped``."""
 
+    def _launch(path: str, conda_env: str = "") -> Tuple[bool, str]:
+        if launch_fn is program_launches:
+            return program_launches(path, conda_env=conda_env, probes=spec.probes)
+        return launch_fn(path, conda_env=conda_env)
+
     def commit(
         path: str,
         *,
@@ -614,7 +637,7 @@ def ask_tool(
         conda_env: str = "",
     ) -> bool:
         if check:
-            ok, detail = launch_fn(path, conda_env=conda_env)
+            ok, detail = _launch(path, conda_env)
             if not ok:
                 print(f"  {spec.name} did not run ({detail}).")
                 return False
@@ -845,19 +868,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     tools = tools_for_ask(full=full)
     if full:
-        print("Full ask: every supported program (anvio, centrifuge, gtdbtk, metax, and the rest).")
+        print("Full ask: mandatory programs first, then optional ones.")
+        sections = (
+            ("Mandatory", tuple(tool for tool in tools if tool.scope == "core")),
+            ("Optional", tuple(tool for tool in tools if tool.scope != "core")),
+        )
     else:
         print("Ask: obligatory annotators. ./install.sh full ask also asks about every supported program.")
-    for spec in tools:
-        print("")
-        try:
-            ask_tool(spec, ask=input, prefer_config=full, check=check)
-        except KeyboardInterrupt:
+        sections = (("", tools),)
+    for title, group in sections:
+        if title:
             print("")
-            return 130
-        except EOFError:
+            print(f"{title}:")
+        for spec in group:
             print("")
-            return 0
+            try:
+                ask_tool(spec, ask=input, prefer_config=full, check=check)
+            except KeyboardInterrupt:
+                print("")
+                return 130
+            except EOFError:
+                print("")
+                return 0
     print("")
     try:
         status = ask_smoketest(ask=input)

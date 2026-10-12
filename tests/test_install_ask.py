@@ -197,6 +197,20 @@ def test_launch_check_follows_full_ask_flag():
     assert not launch_check_enabled(["--full"], full=False)
 
 
+def test_metax_probe_is_profile_help(tmp_path):
+    exe = tmp_path / "metax"
+    exe.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"profile\" ] && [ \"$2\" = \"-h\" ]; then echo metax-profile; exit 0; fi\n"
+        "exit 1\n"
+    )
+    exe.chmod(0o755)
+    metax = next(tool for tool in ASK_TOOLS if tool.name == "metax")
+    ok, detail = program_launches(str(exe), timeout=3, probes=metax.probes)
+    assert ok
+    assert "metax-profile" in detail
+
+
 def test_program_launches_accepts_help_text(tmp_path):
     exe = tmp_path / "kaiju"
     exe.write_text("#!/bin/sh\nif [ \"$1\" = \"-h\" ]; then echo usage; exit 0; fi\nexit 1\n")
