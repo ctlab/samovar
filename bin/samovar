@@ -82,7 +82,7 @@ show_usage() {
     echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
     echo "  genome      Download FASTA by accession or taxid (genome download)"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
-    echo "  update      Fetch origin (default branch main) in place, then ./install.sh full ask"
+    echo "  update      Update the installed checkout (its current branch) and reinstall"
     echo "  convert     Convert Annotation (abundance, kraken2, CAMI, or a custom converter)"
     echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
     echo "  merge       Combine two or more run directories (modes: initial, regenerated)"
@@ -124,6 +124,7 @@ show_usage() {
     echo "  samovar merge --mode regenerated --output_dir merged_regen run_a run_b"
     echo "  samovar methods --output_dir RUN"
     echo "  samovar update"
+    echo "  samovar update --auto"
     echo "  samovar update --branch main"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }

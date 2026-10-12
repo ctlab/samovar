@@ -1,20 +1,102 @@
 #!/bin/bash
-# Update the SamovaR checkout in place and reinstall.
+# Update the installed SamovaR checkout in place and reinstall.
 #   samovar update
 #   samovar update --branch main
+#   samovar update --auto
 set -euo pipefail
 
-ROOT="${SAMOVAR_ROOT:-}"
-if [ -z "$ROOT" ]; then
-    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fi
 ORIGIN_URL="https://github.com/ctlab/samovar"
-BRANCH="main"
+BRANCH=""
+AUTO=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "Usage: samovar update [--branch NAME]"
-    echo "Fetch the latest commit of NAME (default: main) into this checkout, then run ./install.sh full ask."
+    echo "Usage: samovar update [--branch NAME] [--auto]"
+    echo "Locate the installed checkout, fetch its current branch (or NAME), then reinstall."
+    echo "Without --auto this runs ./install.sh full ask."
+    echo "With --auto it refreshes the package and the tools already recorded in config, and does not ask."
     echo "The conda env from environment.yml is created only when it is missing, then activated."
+}
+
+config_root() {
+    python3 - "$@" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+candidates = []
+env = os.environ.get("SAMOVAR_CONFIG", "").strip()
+if env:
+    candidates.append(Path(env).expanduser())
+xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or str(Path.home() / ".config")
+candidates.append(Path(xdg) / "samovar" / "config.json")
+for pointer in sys.argv[1:]:
+    path = Path(pointer).expanduser()
+    if not path.is_file():
+        continue
+    try:
+        text = path.read_text(encoding="utf-8").strip().splitlines()
+    except OSError:
+        continue
+    if text:
+        candidates.append(Path(text[0]).expanduser())
+
+def root_of(cfg):
+    if not isinstance(cfg, dict):
+        return ""
+    root = str(cfg.get("root") or "").strip()
+    if root:
+        return root
+    api = cfg.get("API") or cfg.get("api") or {}
+    if isinstance(api, dict):
+        return str(api.get("root") or "").strip()
+    return ""
+
+for path in candidates:
+    try:
+        if not path.is_file():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError):
+        continue
+    root = root_of(data)
+    if root:
+        print(root)
+        raise SystemExit(0)
+raise SystemExit(0)
+PY
+}
+
+is_checkout() {
+    [ -n "${1:-}" ] && [ -f "$1/install.sh" ] && [ -f "$1/environment.yml" ] && [ -d "$1/.git" ]
+}
+
+locate_root() {
+    local found="" candidate=""
+    candidate="$(config_root "$SCRIPT_DIR/../build/config_path" || true)"
+    if is_checkout "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    if is_checkout "${SAMOVAR_ROOT:-}"; then
+        printf '%s\n' "$SAMOVAR_ROOT"
+        return 0
+    fi
+    if command -v samovar >/dev/null 2>&1; then
+        found="$(command -v samovar)"
+        candidate="$(cd "$(dirname "$found")/.." && pwd)"
+        if is_checkout "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+    candidate="$(cd "$SCRIPT_DIR/.." && pwd)"
+    if is_checkout "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    return 1
 }
 
 while [ "$#" -gt 0 ]; do
@@ -25,6 +107,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --branch=*)
             BRANCH="${1#*=}"
+            shift
+            ;;
+        --auto)
+            AUTO=1
             shift
             ;;
         -h|--help|help)
@@ -39,36 +125,68 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ -z "$BRANCH" ]; then
-    echo "Error: --branch needs a name" >&2
-    exit 1
-fi
-if [ ! -f "$ROOT/install.sh" ] || [ ! -f "$ROOT/environment.yml" ]; then
-    echo "Error: $ROOT is not a SamovaR checkout (install.sh or environment.yml is missing)." >&2
-    exit 1
-fi
-if [ ! -d "$ROOT/.git" ]; then
-    echo "Error: $ROOT is not a git checkout, so it cannot be updated in place." >&2
-    echo "Clone with: git clone --branch $BRANCH $ORIGIN_URL" >&2
-    exit 1
-fi
 if ! command -v git >/dev/null 2>&1; then
     echo "Error: git is not on PATH." >&2
     exit 1
+fi
+if ! ROOT="$(locate_root)"; then
+    echo "Error: could not find a SamovaR git checkout (config root, SAMOVAR_ROOT, or this script)." >&2
+    echo "Clone with: git clone $ORIGIN_URL" >&2
+    exit 1
+fi
+ROOT="$(cd "$ROOT" && pwd)"
+export SAMOVAR_ROOT="$ROOT"
+
+if [ -z "$BRANCH" ]; then
+    BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
+        BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+        BRANCH="${BRANCH#origin/}"
+    fi
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ] || [ "$BRANCH" = "@{u}" ]; then
+        BRANCH="main"
+    fi
 fi
 
 if ! git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
     git -C "$ROOT" remote add origin "$ORIGIN_URL"
 fi
 
+echo "SamovaR checkout: $ROOT"
 echo "Updating $ROOT to origin/$BRANCH"
 git -C "$ROOT" fetch origin "$BRANCH"
+
+# cite/citations.json is rewritten by install and by hand. Keep that copy:
+# a dirty worktree makes checkout and pull refuse the merge.
+CITE_REL="cite/citations.json"
+CITE_SAVED=""
+if [ -n "$(git -C "$ROOT" status --porcelain -- "$CITE_REL")" ]; then
+    CITE_SAVED="$(mktemp)"
+    cp "$ROOT/$CITE_REL" "$CITE_SAVED"
+    if ! git -C "$ROOT" checkout HEAD -- "$CITE_REL"; then
+        rm -f "$ROOT/$CITE_REL"
+    fi
+    echo "Set aside local $CITE_REL so pull can proceed."
+fi
+restore_local_citations() {
+    if [ -n "${CITE_SAVED:-}" ] && [ -f "$CITE_SAVED" ]; then
+        mkdir -p "$ROOT/cite"
+        cp "$CITE_SAVED" "$ROOT/$CITE_REL"
+        rm -f "$CITE_SAVED"
+        CITE_SAVED=""
+        echo "Restored local $CITE_REL (not overwritten by pull)."
+    fi
+}
+trap restore_local_citations EXIT
+
 if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
     git -C "$ROOT" checkout "$BRANCH"
 else
     git -C "$ROOT" checkout -b "$BRANCH" "origin/$BRANCH"
 fi
 git -C "$ROOT" pull --ff-only origin "$BRANCH"
+restore_local_citations
+trap - EXIT
 
 ENV_NAME="$(
     grep -E '^name:[[:space:]]*' "$ROOT/environment.yml" | head -n1 | awk '{print $2}'
@@ -97,8 +215,57 @@ else
 fi
 
 chmod +x "$ROOT/install.sh"
-echo "Running ./install.sh full ask"
-(
-    cd "$ROOT"
-    ./install.sh full ask
-)
+if [ "$AUTO" = "1" ]; then
+    if [ -z "${NCBI_EMAIL:-}" ]; then
+        NCBI_EMAIL="$(
+            SAMOVAR_ROOT="$ROOT" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+root = Path(os.environ["SAMOVAR_ROOT"])
+candidates = []
+env = os.environ.get("SAMOVAR_CONFIG", "").strip()
+if env:
+    candidates.append(Path(env).expanduser())
+xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or str(Path.home() / ".config")
+candidates.append(Path(xdg) / "samovar" / "config.json")
+pointer = root / "build" / "config_path"
+if pointer.is_file():
+    line = pointer.read_text(encoding="utf-8").strip().splitlines()
+    if line:
+        candidates.append(Path(line[0]).expanduser())
+for path in candidates:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError):
+        continue
+    if not isinstance(data, dict):
+        continue
+    api = data.get("API") or data.get("api") or {}
+    email = ""
+    if isinstance(api, dict):
+        email = str(api.get("ncbi_email") or "").strip()
+    email = email or str(data.get("ncbi_email") or "").strip()
+    if email:
+        print(email)
+        break
+PY
+        )"
+        if [ -n "$NCBI_EMAIL" ]; then
+            export NCBI_EMAIL
+        else
+            export NCBI_EMAIL="anonymous@example.com"
+        fi
+    fi
+    echo "Auto update: reinstalling the package and keeping tools already recorded in config."
+    (
+        cd "$ROOT"
+        ./install.sh
+    )
+else
+    echo "Running ./install.sh full ask"
+    (
+        cd "$ROOT"
+        ./install.sh full ask
+    )
+fi
