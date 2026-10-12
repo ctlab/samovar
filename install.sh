@@ -1182,8 +1182,9 @@ print(
 )
 PY
 
+ASK_STATUS=0
 if [ "$INSTALL_ASK" = "1" ]; then
-    "$PYTHON_PATH" -m samovar.install_ask
+    "$PYTHON_PATH" -m samovar.install_ask || ASK_STATUS=$?
 fi
 
 echo ""
@@ -1271,6 +1272,9 @@ rebuild_citations
 
 print_install_status
 
+if [ "$INSTALL_ASK" = "1" ] && [ "$ASK_STATUS" != "0" ]; then
+    echo "Ask smoketest did not pass. See the toy example report above."
+fi
 echo "Installation completed successfully!"
 echo "Config: $SAMOVAR_CONFIG"
 if [ -f "$ROOT/build/config_path" ]; then

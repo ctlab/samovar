@@ -447,6 +447,90 @@ def prompts_enabled() -> bool:
         return False
 
 
+def format_smoketest_report(
+    code: int,
+    output: str,
+    log_path: Path,
+    out_dir: Path,
+) -> str:
+    """Short success line, or the error lines from a failed toy example."""
+    lines = [line for line in str(output or "").splitlines() if line.strip()]
+    if code == 0:
+        return (
+            "Toy example passed.\n"
+            f"  output: {out_dir}\n"
+            f"  log: {log_path}"
+        )
+    errors = [
+        line
+        for line in lines
+        if any(
+            token in line.lower()
+            for token in ("error", "traceback", "failed", "exception", "not found")
+        )
+    ]
+    shown = errors[-20:] or lines[-40:]
+    body = "\n".join(f"  {line}" for line in shown) or "  (no output)"
+    return (
+        f"Toy example failed (exit {code}).\n"
+        f"  output: {out_dir}\n"
+        f"  log: {log_path}\n"
+        f"{body}"
+    )
+
+
+def run_toy_example(root: Optional[Path] = None) -> Tuple[int, str]:
+    """Run ``examples/toy/pipeline.sh`` and return ``(exit_code, report)``."""
+    root = Path(root) if root is not None else repo_root()
+    script = root / "examples" / "toy" / "pipeline.sh"
+    out_dir = root / "examples_outdir" / "toy"
+    log_path = out_dir / "ask-smoketest.log"
+    if not script.is_file():
+        report = format_smoketest_report(
+            1, f"error: toy example script not found: {script}", log_path, out_dir
+        )
+        print(report)
+        return 1, report
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Running {script}")
+    env = os.environ.copy()
+    env["SAMOVAR"] = str(root)
+    env.setdefault("SAMOVAR_ROOT", str(root))
+    chunks: List[str] = []
+    with log_path.open("w", encoding="utf-8") as handle:
+        proc = subprocess.Popen(
+            ["bash", str(script)],
+            cwd=str(root),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            handle.write(line)
+            chunks.append(line)
+        code = proc.wait()
+    report = format_smoketest_report(code, "".join(chunks), log_path, out_dir)
+    print("")
+    print(report)
+    return code, report
+
+
+def ask_smoketest(
+    *,
+    ask: Callable[[str], str],
+    run: Callable[[], Tuple[int, str]] = run_toy_example,
+) -> str:
+    """Ask ``run smoketest?``. Yes runs the toy example and prints its report."""
+    if not is_yes(ask("run smoketest? [y/N] "), default=False):
+        print("Smoketest skipped.")
+        return "skipped"
+    code, _report = run()
+    return "passed" if code == 0 else "failed"
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     del argv
     if not prompts_enabled():
@@ -463,7 +547,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except EOFError:
             print("")
             return 0
-    return 0
+    print("")
+    try:
+        status = ask_smoketest(ask=input)
+    except KeyboardInterrupt:
+        print("")
+        return 130
+    except EOFError:
+        print("")
+        return 0
+    return 0 if status in {"skipped", "passed"} else 1
 
 
 if __name__ == "__main__":

@@ -4,7 +4,9 @@ from pathlib import Path
 from samovar.install_ask import (
     ASK_TOOLS,
     AskTool,
+    ask_smoketest,
     ask_tool,
+    format_smoketest_report,
     parse_env_answer,
     pick_which,
     record_tool,
@@ -273,3 +275,40 @@ def test_assembly_tools_resolve_from_conda_prefix(tmp_path, monkeypatch):
         record_tool(spec, str(exe), env="conda", prefix=str(prefix), exec_name=binary)
         assert which_tool(tool_name) == str(exe.resolve())
         assert str(exe.parent) in collect_runtime_path_dirs()
+
+
+def test_smoketest_prompt_skips_unless_yes():
+    called = []
+    status = ask_smoketest(ask=lambda prompt: "n", run=lambda: called.append(1) or (0, "ok"))
+    assert status == "skipped"
+    assert called == []
+
+
+def test_smoketest_yes_reports_toy_failure():
+    report = format_smoketest_report(
+        1,
+        "building index\nError: kraken2-build not found\nTraceback (most recent call last):\n",
+        Path("/tmp/ask-smoketest.log"),
+        Path("/tmp/toy"),
+    )
+    assert "failed (exit 1)" in report
+    assert "kraken2-build not found" in report
+    assert "Traceback" in report
+    seen = []
+
+    def run():
+        seen.append(report)
+        print(report)
+        return 1, report
+
+    status = ask_smoketest(ask=lambda prompt: "y", run=run)
+    assert status == "failed"
+    assert seen == [report]
+
+
+def test_smoketest_yes_reports_pass():
+    report = format_smoketest_report(0, "done\n", Path("/tmp/log"), Path("/tmp/toy"))
+    assert "Toy example passed." in report
+    assert "/tmp/toy" in report
+    status = ask_smoketest(ask=lambda prompt: "yes", run=lambda: (0, report))
+    assert status == "passed"

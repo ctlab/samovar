@@ -41,7 +41,7 @@ Some tools are optional but are required for some actions. Install them all with
 ./install.sh full
 ```
 
-`./install.sh ask` does the same core install, then asks about each important tool. If `which` finds it, confirm that binary. Otherwise answer `conda ENV EXEC` (a conda env and the executable), `base EXEC` (the active samovar environment), or `n`. `n` asks whether to install it into the samovar environment. Any other accepted answer is written into the main config.
+`./install.sh ask` does the same core install, then asks about each important tool. If `which` finds it, confirm that binary. Otherwise answer `conda ENV EXEC` (a conda env and the executable), `base EXEC` (the active samovar environment), or `n`. `n` asks whether to install it into the samovar environment. Any other accepted answer is written into the main config. At the end, `ask` offers `run smoketest?`; yes runs `examples/toy/pipeline.sh` and prints whether that toy example passed or the errors from it.
 
 Already-installed extras are reused and written into the install config. More details: [installation wiki](https://github.com/ctlab/samovar/wiki/How-to-install).
 
