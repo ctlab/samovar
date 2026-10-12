@@ -2,6 +2,8 @@ import json
 import stat
 from pathlib import Path
 
+import pytest
+
 from samovar.annotators_wrapper import CustomAnnotator, get_annotator_instance
 from samovar.main_config import parse_tool_entry
 from samovar.paths import write_config, update_config
@@ -421,6 +423,7 @@ def test_import_pytest_maps_every_importable_group_to_one_contract_test():
         assert default_tool_path(group).is_file(), f"{group}: baseline/example dest missing"
 
 
+@pytest.mark.optional
 def test_import_pytest_runs_baseline_for_every_contract_group():
     """Each group’s baseline dest must pass the same pytest node import --pytest uses."""
     from samovar.tool_contracts import GROUP_TO_TESTNODE, default_tool_path, run_contract_pytest

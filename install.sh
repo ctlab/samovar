@@ -5,7 +5,7 @@
 # Usage:
 #   ./install.sh                 Python pipeline only
 #   ./install.sh full            core + every optional extra (reuse if already installed)
-#   ./install.sh ask             core, then ask how to import obligatory annotators
+#   ./install.sh ask             core, then ask how to import Kraken2 and Kaiju
 #   ./install.sh full ask        core, then ask about every supported program
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
@@ -743,7 +743,7 @@ if [ "$INSTALL_ASK" = "1" ] && [ "$INSTALL_FULL" = "1" ]; then
     echo "Full ask: Python pipeline, then a prompt for every supported program."
     export SAMOVAR_INSTALL_ASK_FULL=1
 elif [ "$INSTALL_ASK" = "1" ]; then
-    echo "Ask install: Python pipeline, then a prompt for each obligatory annotator."
+    echo "Ask install: Python pipeline, then a prompt for Kraken2 and Kaiju."
 elif [ "$INSTALL_FULL" = "1" ]; then
     echo "Full install: Python pipeline plus every optional extra (reuse if already present, then record in config)."
     enable_full_install_flags

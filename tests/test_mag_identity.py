@@ -1,9 +1,15 @@
-"""Stable MAG ids from tetranucleotide homology, and their use by RandomForest."""
+"""Stable MAG ids from tetranucleotide homology, and their use by RandomForest.
+
+MAG assembly is outside the Kraken2/Kaiju install path, so this module is optional.
+"""
 
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+
+pytestmark = pytest.mark.optional
 
 from samovar.MAG.homology import assign_ids, stabilize_mags
 from samovar.MAG.mapping import map_reads

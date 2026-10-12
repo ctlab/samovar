@@ -198,8 +198,9 @@ def test_ask_table_is_unique_and_typed():
     for name in ("kraken2", "centrifuge", "metax", "megahit", "bowtie2"):
         assert name in names
     core = {tool.name for tool in tools_for_ask(full=False)}
-    assert core == {"kraken2", "kaiju", "kraken", "krakenuniq"}
+    assert core == {"kraken2", "kaiju"}
     full = {tool.name for tool in tools_for_ask(full=True)}
+    assert "kraken" in full and "krakenuniq" in full
     for name in ("anvio", "centrifuge", "gtdbtk", "metax", "kraken2"):
         assert name in full
     assert ask_full_requested(["--full"])

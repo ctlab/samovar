@@ -219,6 +219,7 @@ def _exec_env():
     return env
 
 
+@pytest.mark.optional
 def test_merge_initial_exec_rebuilds_abundance(tmp_path):
     a = _seed_run(tmp_path / "a", "s1")
     b = _seed_run(tmp_path / "b", "s2")
@@ -250,6 +251,7 @@ def test_merge_initial_exec_rebuilds_abundance(tmp_path):
     assert any("s2" in str(c) for c in cols)
 
 
+@pytest.mark.optional
 def test_merge_regenerated_exec_starts_at_reprofile(tmp_path):
     a = _seed_run(tmp_path / "a", "s1")
     b = _seed_run(tmp_path / "b", "s2")

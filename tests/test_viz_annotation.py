@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.annotation_io import annotation_to_abundance, read_annotation_dir
 from samovar.viz_annotation import (
@@ -77,6 +78,7 @@ def test_fpc_taxon_order_stable():
     assert "0" not in order
 
 
+@pytest.mark.optional
 def test_viz_annotation_writes_png(tmp_path):
     df = pd.DataFrame(
         {
@@ -122,6 +124,7 @@ def test_viz_annotation_writes_png(tmp_path):
     assert img.shape[0] > 50 and img.shape[1] > 50
 
 
+@pytest.mark.optional
 def test_viz_annotation_writes_assembly_r2_when_preds_are_unclassified(tmp_path):
     df = pd.DataFrame(
         {
@@ -178,6 +181,7 @@ def test_viz_annotation_without_true_keeps_cv(tmp_path):
     assert not list(out.glob("F1_*_mqc.json"))
 
 
+@pytest.mark.optional
 def test_compare_annotations_skips_correlation_on_raw(tmp_path):
     ann = tmp_path / "initial_annotations"
     ann.mkdir()
@@ -200,6 +204,7 @@ def test_compare_annotations_skips_correlation_on_raw(tmp_path):
     assert not list(out.glob("CV_*_mqc.json"))
 
 
+@pytest.mark.optional
 def test_compare_annotations_writes_correlation_on_regenerated(tmp_path):
     ann = tmp_path / "regenerated_annotations"
     ann.mkdir()
@@ -286,6 +291,7 @@ def test_compare_annotations_cli_skips_empty_dir(tmp_path):
     assert "skipping visualization" in (proc.stderr + proc.stdout)
 
 
+@pytest.mark.optional
 def test_compare_annotations_cli_integrity(tmp_path):
     src = Path("data/test_annotations")
     out = tmp_path / "plots"

@@ -29,7 +29,7 @@ chmod +x install.sh
 ./install.sh full ask
 ```
 
-`install.sh` installs the checkout you just cloned. Replace `main` with another branch name to install that branch instead.
+`install.sh` installs the checkout you just cloned. Replace `main` with another branch name to install that branch instead. `./install.sh ask` prompts only for Kraken2 and Kaiju. Kraken and KrakenUniq are asked by `./install.sh full ask`.
 
 An existing checkout updates in place with `samovar update` (branch `main`) or `samovar update --branch NAME`. That fetches the branch, creates the conda env only if it is missing, activates it, and runs `./install.sh full ask`.
 
@@ -55,7 +55,7 @@ Built-in ensemble members (wired through `samovar prepare`):
 |------|----------------------|
 | **Kraken2** | k-mer LCA classifier |
 | **Kaiju** | protein-level (translated) classifier |
-| **Kraken / KrakenUniq** | additional k-mer votes |
+| **Kraken / KrakenUniq** | additional k-mer votes (`./install.sh full ask`, not the core install) |
 | **MetaPhlAn** | optional marker-gene profiler (not part of the core install) |
 | **Custom** | extra votes; can be easily additionally implemented for the developers |
 

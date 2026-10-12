@@ -635,11 +635,11 @@ def build_database_krakenunique(
     build_bin = _on_disk("krakenuniq-build")
     if not build_bin:
         raise RuntimeError(
-            "krakenuniq-build not found. Import it next to krakenuniq (./install.sh ask)."
+            "krakenuniq-build not found. Import it next to krakenuniq (./install.sh full ask)."
         )
     jellyfish_path = _on_disk("jellyfish")
     if not jellyfish_path:
-        raise RuntimeError("jellyfish not found. Import it next to krakenuniq (./install.sh ask).")
+        raise RuntimeError("jellyfish not found. Import it next to krakenuniq (./install.sh full ask).")
 
     # Set up environment variables
     env = os.environ.copy()

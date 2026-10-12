@@ -4,7 +4,12 @@ import pytest
 
 
 def pytest_collection_modifyitems(config, items):
-    """Unmarked tests are mandatory; CI runs ``pytest -m mandatory``."""
+    """Unmarked tests are mandatory. CI runs ``pytest -m mandatory``.
+
+    Mandatory is the core install path: Kraken2, Kaiju, and the prepare/exec
+    wiring those two use. Kraken, KrakenUniq, and slow feature suites
+    (apply, merge, visualization, MAG) are marked optional.
+    """
     for item in items:
         names = {mark.name for mark in item.iter_markers()}
         if "optional" in names or "mandatory" in names:

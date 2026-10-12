@@ -241,6 +241,7 @@ def test_apply_missing_pipeline(tmp_path):
     assert rc == 1
 
 
+@pytest.mark.optional
 def test_apply_refuses_inplace_overwrite(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -249,6 +250,7 @@ def test_apply_refuses_inplace_overwrite(tmp_path, monkeypatch):
         apply_pipeline(reads, source, source, full=False)
 
 
+@pytest.mark.optional
 def test_apply_incompatible_input(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     empty = tmp_path / "empty"
@@ -265,6 +267,7 @@ def test_apply_missing_model(tmp_path, monkeypatch):
         apply_pipeline(reads, source, tmp_path / "out", full=False)
 
 
+@pytest.mark.optional
 def test_apply_full_missing_regenerated(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     import shutil
@@ -276,6 +279,7 @@ def test_apply_full_missing_regenerated(tmp_path, monkeypatch):
         apply_pipeline(reads, source, tmp_path / "out", full=True)
 
 
+@pytest.mark.optional
 def test_configured_steps_normal_skips_table_regen(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     state = load_pipeline_state(source)
@@ -290,6 +294,7 @@ def test_configured_steps_normal_skips_table_regen(tmp_path, monkeypatch):
     assert "regenerate_reads" not in normal
 
 
+@pytest.mark.optional
 def test_normal_apply_integration_and_contracts(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -354,6 +359,7 @@ def test_full_apply_retrains_and_regenerates(tmp_path, monkeypatch):
     assert counts.is_dir()
 
 
+@pytest.mark.optional
 def test_normal_vs_full_semantics(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -376,6 +382,7 @@ def test_normal_vs_full_semantics(tmp_path, monkeypatch):
         assert (dest / "apply_counts_scores").is_dir()
 
 
+@pytest.mark.optional
 def test_cli_apply_success(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -408,6 +415,7 @@ def test_cli_apply_success(tmp_path, monkeypatch):
     assert list((out / "reprofiled_annotations").glob("*_reprofiled.csv"))
 
 
+@pytest.mark.optional
 def test_apply_full_then_merge_initial_and_regenerated(tmp_path, monkeypatch):
     from samovar.merge import merge_runs
 

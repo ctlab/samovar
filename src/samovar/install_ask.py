@@ -52,8 +52,9 @@ class AskTool:
 # One row per program the pipeline can launch. ``companions`` are not separate
 # dialogues: after this row is imported they are offered yes/no from the same
 # directory and the same conda/base answer.
-# ``scope="core"`` is the obligatory ``./install.sh ask`` set. Every other row
-# is asked only by ``./install.sh full ask``. ``install=""`` is import-only.
+# ``scope="core"`` is the obligatory ``./install.sh ask`` set: Kraken2 and Kaiju.
+# Kraken, KrakenUniq, and every other row are asked only by ``./install.sh full ask``.
+# ``install=""`` is import-only.
 ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool(
         "kraken2", ("kraken2",), "annotator", "conda:kraken2",
@@ -68,12 +69,10 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool(
         "kraken", ("kraken",), "annotator", "conda:kraken",
         companions=("kraken-build",),
-        scope="core",
     ),
     AskTool(
         "krakenuniq", ("krakenuniq",), "annotator", "conda:krakenuniq",
         companions=("krakenuniq-build", "jellyfish"),
-        scope="core",
     ),
     AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
     AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),
