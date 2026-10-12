@@ -234,6 +234,14 @@ def main():
         ),
     )
     parser.add_argument(
+        '--gpu',
+        action='store_true',
+        help=(
+            'Train ML models on a GPU via cuML (RandomForest and logistic regression). '
+            'AdaBoost stays unsupported: its fit is a CPU stump loop.'
+        ),
+    )
+    parser.add_argument(
         '--feature-importance',
         '--feature_importance',
         dest='feature_importance',

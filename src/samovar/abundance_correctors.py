@@ -331,6 +331,7 @@ def _logistic_efficiency(
     max_iter: int,
     min_efficiency: float,
     n_jobs: int = 1,
+    gpu: bool = False,
 ) -> Dict[str, float]:
     """P(pred == true | true = taxon) via one-hot logistic, else empirical recall."""
     true_s = true.map(_taxid_str)
@@ -361,15 +362,26 @@ def _logistic_efficiency(
         except TypeError:
             enc = OneHotEncoder(handle_unknown="ignore", sparse=True)
         X = enc.fit_transform(labels)
-        model = LogisticRegression(
-            C=float(C),
-            max_iter=int(max_iter),
-            solver="lbfgs",
-        )
-        from samovar.reprofiling import blas_threads
+        from samovar.reprofiling import blas_threads, fit_logistic, use_gpu
 
-        with blas_threads(n_jobs):
-            model.fit(X, y.to_numpy())
+        if use_gpu(gpu):
+            dense = X.toarray() if hasattr(X, "toarray") else np.asarray(X)
+            model = fit_logistic(
+                dense,
+                y.to_numpy(),
+                n_jobs=n_jobs,
+                gpu=True,
+                C=float(C),
+                max_iter=int(max_iter),
+            )
+        else:
+            model = LogisticRegression(
+                C=float(C),
+                max_iter=int(max_iter),
+                solver="lbfgs",
+            )
+            with blas_threads(n_jobs):
+                model.fit(X, y.to_numpy())
         unique = [t for t in enc.categories_[0] if str(t) != "0"]
         if unique:
             probs = model.predict_proba(enc.transform(np.array(unique, dtype=object).reshape(-1, 1)))
@@ -394,6 +406,7 @@ def fit_taxon_efficiency(
     max_iter: int = DEFAULT_MAX_ITER,
     min_efficiency: float = DEFAULT_MIN_EFFICIENCY,
     n_jobs: int = 1,
+    gpu: bool = False,
 ) -> Dict[str, Dict[str, float]]:
     """``{annotator: {taxid: recall}}`` from a reference Annotation with ``true``."""
     frame = annotation_frame(reference)
@@ -422,6 +435,7 @@ def fit_taxon_efficiency(
             max_iter=max_iter,
             min_efficiency=min_efficiency,
             n_jobs=blas,
+            gpu=gpu,
         )
 
     if jobs == 1:
@@ -548,7 +562,7 @@ def export_logistic(annotation: Annotation, dest: PathLike, config: Optional[Dic
     if reference is not None:
         ref = as_annotation(reference)
         ref = maybe_attach_samovar_reference(ref, model_path)
-        from samovar.reprofiling import training_n_jobs
+        from samovar.reprofiling import training_n_jobs, use_gpu
 
         rates = fit_taxon_efficiency(
             ref,
@@ -556,6 +570,7 @@ def export_logistic(annotation: Annotation, dest: PathLike, config: Optional[Dic
             max_iter=int(cfg.get("max_iter", DEFAULT_MAX_ITER)),
             min_efficiency=min_eff,
             n_jobs=training_n_jobs(config=cfg),
+            gpu=use_gpu(config=cfg),
         )
     else:
         rates = {}

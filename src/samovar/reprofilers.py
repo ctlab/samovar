@@ -29,17 +29,19 @@ from samovar.main_config import (
 )
 from samovar.paths import load_config
 from samovar.reprofiling import (
+    GpuNotSupported,
     annotator_taxid_columns,
+    fit_logistic,
     load_read_features,
     merge_read_features,
     passthrough_reprofile_tables,
     plot_roc_curves,
     predict_taxid,
-    fit_logistic,
     preprocess_data,
     save_model,
     train_models,
     training_n_jobs,
+    use_gpu,
 )
 from samovar.table_regenerators import extra_flags_argv
 
@@ -409,6 +411,7 @@ def reprofile_linear(
         df[feature_cols],
         df["true"],
         n_jobs=training_n_jobs(config=cfg),
+        gpu=use_gpu(config=cfg),
         **kwargs,
     )
     tables = profile_tables_with_model(
@@ -467,6 +470,7 @@ def run_builtin_reprofiler(
             random_state=seed,
             methods=name,
             n_jobs=training_n_jobs(config=cfg),
+            gpu=use_gpu(config=cfg),
         )
     except ValueError:
         passthrough_reprofile_tables(
@@ -716,6 +720,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Training threads (samovar prepare --cores)",
     )
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Train on GPU (cuML). AdaBoost has no GPU fit.",
+    )
     return parser
 
 
@@ -739,6 +748,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cfg["features"] = args.features
     if args.cores is not None:
         cfg["cores"] = int(args.cores)
+    if args.gpu:
+        cfg["gpu"] = True
     cfg.setdefault("seed", 42)
     try:
         require_known_reprofiler(name)
@@ -750,7 +761,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             output_dir=args.output_dir,
             config=cfg,
         )
-    except (MissingReprofilerError, subprocess.CalledProcessError, FileNotFoundError) as exc:
+    except (MissingReprofilerError, GpuNotSupported, subprocess.CalledProcessError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 0

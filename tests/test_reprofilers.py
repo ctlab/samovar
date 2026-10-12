@@ -55,6 +55,7 @@ def test_prepare_cores_are_training_threads(tmp_path):
     export = yaml.safe_load(Path(paths["export"]).read_text())
     assert repro["cores"] == 6
     assert repro["reprofiler"] == "random_forest"
+    assert repro["gpu"] is False
     assert export["cores"] == 6
     script = Path(config.generate_pipeline(str(tmp_path))).read_text()
     assert "--cores 6" in script
@@ -68,6 +69,18 @@ def test_prepare_cores_are_training_threads(tmp_path):
         config={"seed": 0, "cores": repro["cores"]},
     )
     assert result.model.n_jobs == 6
+
+
+def test_prepare_gpu_flag_reaches_ml(tmp_path):
+    import yaml
+
+    config = PipelineConfig(input_dir="in", output_dir=str(tmp_path), cores=2, gpu=True)
+    paths = config.generate_configs(str(tmp_path))
+    repro = yaml.safe_load(Path(paths["reprofiling"]).read_text())
+    assert repro["gpu"] is True
+    script = Path(config.generate_pipeline(str(tmp_path))).read_text()
+    assert "--gpu" in script
+    assert "--cores 2" in script
 
 
 def test_train_models_single_method():

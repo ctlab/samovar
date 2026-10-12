@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import importlib
+import inspect
 from contextlib import contextmanager
 from joblib import Parallel, delayed
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -159,6 +161,105 @@ def training_n_jobs(n_jobs=None, config=None) -> int:
     return max(1, jobs)
 
 
+class GpuNotSupported(RuntimeError):
+    """GPU mode was requested, but this model's ``fit`` cannot run on CUDA."""
+
+
+# cuML estimators train on the GPU. sklearn's fit for these models does not.
+_GPU_CLASSES = {
+    "RandomForest": ("cuml.ensemble", "RandomForestClassifier"),
+    "LogisticRegression": ("cuml.linear_model", "LogisticRegression"),
+}
+
+
+def use_gpu(gpu=None, config=None) -> bool:
+    if gpu is not None:
+        return bool(gpu)
+    if isinstance(config, dict):
+        return bool(config.get("gpu") or config.get("device") == "cuda")
+    return False
+
+
+def cuda_device_available() -> bool:
+    try:
+        cupy = importlib.import_module("cupy")
+        return int(cupy.cuda.runtime.getDeviceCount()) > 0
+    except Exception:
+        pass
+    try:
+        torch = importlib.import_module("torch")
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def trains_on_gpu(model) -> bool:
+    """True only when this estimator's implementation runs ``fit`` on CUDA.
+
+    A ``device`` attribute or a ``cuml`` class counts. sklearn ensembles and
+    logistic regression stay on CPU even if a GPU is present.
+    """
+    module = str(getattr(type(model), "__module__", "") or "")
+    if module.startswith("cuml"):
+        return True
+    device = getattr(model, "device", None)
+    return device is not None and "cuda" in str(device).lower()
+
+
+def gpu_training_support(kind: str) -> Optional[str]:
+    """``None`` when ``kind`` can train on a GPU, otherwise the reason it cannot."""
+    if kind == "AdaBoost":
+        return (
+            "AdaBoostClassifier.fit is a CPU loop: each round refits a sklearn "
+            "decision stump on reweighted rows, and there is no CUDA implementation."
+        )
+    spec = _GPU_CLASSES.get(kind)
+    if spec is None:
+        return f"{kind} has no GPU training backend"
+    module, _cls_name = spec
+    try:
+        importlib.import_module(module)
+    except ImportError:
+        return (
+            f"{kind} GPU training needs {module} (cuML). "
+            "The sklearn estimator's fit does not use the GPU."
+        )
+    if not cuda_device_available():
+        return "CUDA device is not available"
+    return None
+
+
+def _load_gpu_class(module: str, name: str):
+    return getattr(importlib.import_module(module), name)
+
+
+def _supported_kwargs(cls, kwargs: dict) -> dict:
+    params = inspect.signature(cls.__init__).parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return dict(kwargs)
+    allowed = {key for key in params if key != "self"}
+    picked = {key: value for key, value in kwargs.items() if key in allowed}
+    if "output_type" in allowed and "output_type" not in picked:
+        picked["output_type"] = "numpy"
+    return picked
+
+
+def build_gpu_estimator(kind: str, **kwargs):
+    """Construct a CUDA estimator and reject anything that would still fit on CPU."""
+    reason = gpu_training_support(kind)
+    if reason:
+        raise GpuNotSupported(reason)
+    module, cls_name = _GPU_CLASSES[kind]
+    cls = _load_gpu_class(module, cls_name)
+    model = cls(**_supported_kwargs(cls, kwargs))
+    if not trains_on_gpu(model):
+        raise GpuNotSupported(
+            f"{kind} was built as {type(model).__module__}.{type(model).__name__}, "
+            "which does not train on GPU."
+        )
+    return model
+
+
 @contextmanager
 def blas_threads(n_jobs: int):
     """Cap BLAS/OpenMP threads for solvers that do not take ``n_jobs`` (lbfgs)."""
@@ -235,17 +336,28 @@ class _ParallelDepth1Tree(BaseEstimator, ClassifierMixin):
         return self.tree_.predict_proba(column)
 
 
-def build_random_forest(n_jobs=1, random_state=42, n_estimators=100) -> RandomForestClassifier:
-    """Forest whose ``fit`` builds trees via ``Parallel(n_jobs=...)``."""
+def build_random_forest(n_jobs=1, random_state=42, n_estimators=100, gpu=False):
+    """Forest whose ``fit`` builds trees via ``Parallel(n_jobs=...)`` or cuML on GPU."""
+    jobs = training_n_jobs(n_jobs)
+    if use_gpu(gpu):
+        return build_gpu_estimator(
+            "RandomForest",
+            n_estimators=n_estimators,
+            random_state=random_state,
+            n_streams=jobs,
+            n_jobs=jobs,
+        )
     return RandomForestClassifier(
         random_state=random_state,
         n_estimators=n_estimators,
-        n_jobs=training_n_jobs(n_jobs),
+        n_jobs=jobs,
     )
 
 
-def build_adaboost(n_jobs=1, random_state=42, n_estimators=100) -> AdaBoostClassifier:
-    """AdaBoost. ``n_jobs>1`` parallelizes each round's stump search."""
+def build_adaboost(n_jobs=1, random_state=42, n_estimators=100, gpu=False) -> AdaBoostClassifier:
+    """AdaBoost. ``n_jobs>1`` parallelizes each round's stump search. No GPU fit."""
+    if use_gpu(gpu):
+        raise GpuNotSupported(gpu_training_support("AdaBoost"))
     jobs = training_n_jobs(n_jobs)
     if jobs <= 1:
         return AdaBoostClassifier(random_state=random_state, n_estimators=n_estimators)
@@ -256,15 +368,20 @@ def build_adaboost(n_jobs=1, random_state=42, n_estimators=100) -> AdaBoostClass
     )
 
 
-def fit_logistic(X, y, *, n_jobs=1, **kwargs) -> Any:
+def fit_logistic(X, y, *, n_jobs=1, gpu=False, **kwargs) -> Any:
     """Fit logistic regression using ``n_jobs`` on the training itself.
 
     Multiclass with more than one thread uses one-vs-rest so each class is a
     separate ``fit`` (sklearn's multinomial lbfgs ignores ``n_jobs``). Binary
     lbfgs is one problem; BLAS/OpenMP threads are capped at ``n_jobs``.
+    ``gpu=True`` fits a cuML model on CUDA instead of sklearn.
     """
     from sklearn.linear_model import LogisticRegression
 
+    if use_gpu(gpu):
+        model = build_gpu_estimator("LogisticRegression", **kwargs)
+        model.fit(X, y)
+        return model
     jobs = training_n_jobs(n_jobs)
     labels = pd.Series(np.asarray(y)).dropna()
     n_classes = int(labels.nunique())
@@ -278,7 +395,7 @@ def fit_logistic(X, y, *, n_jobs=1, **kwargs) -> Any:
     return model
 
 
-def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1):
+def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu=False):
     """
     Train RandomForest and/or AdaBoost models for taxID prediction.
 
@@ -289,6 +406,7 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1):
         methods: ``random_forest`` (default), ``adaboost``, ``ensemble`` (both, pick best),
             or an iterable of those names.
         n_jobs: Threads for training. ``samovar prepare --cores`` supplies this.
+        gpu: Train on CUDA. Each model is checked; sklearn estimators are rejected.
 
     Returns:
         tuple: (best_model, models_dict, metrics_dict, feature_cols)
@@ -328,9 +446,17 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1):
 
     wanted = _normalize_sklearn_methods(methods)
     jobs = training_n_jobs(n_jobs)
+    on_gpu = use_gpu(gpu)
+    if on_gpu:
+        for name in wanted:
+            reason = gpu_training_support(name)
+            if reason:
+                raise GpuNotSupported(reason)
     catalog = {
-        "RandomForest": build_random_forest(n_jobs=jobs, random_state=random_state),
-        "AdaBoost": build_adaboost(n_jobs=jobs, random_state=random_state),
+        "RandomForest": build_random_forest(
+            n_jobs=jobs, random_state=random_state, gpu=on_gpu
+        ),
+        "AdaBoost": build_adaboost(n_jobs=jobs, random_state=random_state, gpu=on_gpu),
     }
     models = {name: catalog[name] for name in wanted}
     

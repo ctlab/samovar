@@ -260,6 +260,65 @@ class TestReprofiling(unittest.TestCase):
         self.assertIn(3, calls)
         self.assertGreaterEqual(calls.count(3), 2)
 
+    def test_gpu_mode_checks_each_model(self):
+        import sys
+        import types
+
+        from sklearn.ensemble import RandomForestClassifier as SkForest
+
+        import samovar.reprofiling as reprofiling
+        from samovar.reprofiling import (
+            GpuNotSupported,
+            build_adaboost,
+            build_random_forest,
+            gpu_training_support,
+            trains_on_gpu,
+        )
+
+        cpu = build_random_forest(n_estimators=2, n_jobs=1)
+        self.assertIsInstance(cpu, SkForest)
+        self.assertFalse(trains_on_gpu(cpu))
+        with self.assertRaises(GpuNotSupported) as ada:
+            build_adaboost(gpu=True, n_estimators=2)
+        self.assertIn("CPU", str(ada.exception))
+
+        class CudaForest:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        CudaForest.__module__ = "cuml.ensemble"
+
+        class CpuLookalike:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        CpuLookalike.__module__ = "sklearn.ensemble"
+
+        saved_load = reprofiling._load_gpu_class
+        saved_cuda = reprofiling.cuda_device_available
+        added = []
+        for mod_name in ("cuml", "cuml.ensemble", "cuml.linear_model"):
+            if mod_name not in sys.modules:
+                sys.modules[mod_name] = types.ModuleType(mod_name)
+                added.append(mod_name)
+        reprofiling._load_gpu_class = lambda module, name: CudaForest
+        reprofiling.cuda_device_available = lambda: True
+        try:
+            self.assertIsNone(gpu_training_support("RandomForest"))
+            self.assertIsNotNone(gpu_training_support("AdaBoost"))
+            model = build_random_forest(gpu=True, n_estimators=4, n_jobs=2)
+            self.assertTrue(trains_on_gpu(model))
+            self.assertEqual(model.kwargs["n_estimators"], 4)
+            reprofiling._load_gpu_class = lambda module, name: CpuLookalike
+            with self.assertRaises(GpuNotSupported) as rejected:
+                build_random_forest(gpu=True, n_estimators=2)
+            self.assertIn("does not train on GPU", str(rejected.exception))
+        finally:
+            reprofiling._load_gpu_class = saved_load
+            reprofiling.cuda_device_available = saved_cuda
+            for mod_name in added:
+                sys.modules.pop(mod_name, None)
+
 
 if __name__ == '__main__':
     unittest.main() 

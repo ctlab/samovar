@@ -337,6 +337,7 @@ class PipelineConfig:
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
     reprofiler: str = "random_forest"
+    gpu: bool = False
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
     feature_importance: str = "builtin"
@@ -402,6 +403,7 @@ class PipelineConfig:
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
         config = cls()
         config.cores = getattr(args, 'cores', 1) or 1
+        config.gpu = bool(getattr(args, "gpu", False))
         threads = getattr(args, "threads", None)
         if threads:
             config.cores = int(threads)
@@ -1480,6 +1482,7 @@ class PipelineConfig:
             'reprofiler_flags': self.reprofiler_flags or "",
             'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
             'cores': int(self.cores),
+            'gpu': bool(self.gpu),
             'feature_importance': self.feature_importance or "builtin",
             'feature_importance_all': bool(self.feature_importance_all),
             'feature_importance_flags': self.feature_importance_flags or "",
@@ -1500,6 +1503,7 @@ class PipelineConfig:
             "export_taxdump": self.export_taxdump or "",
             "export_taxonomy": self.export_taxonomy or "",
             "cores": int(self.cores),
+            "gpu": bool(self.gpu),
         }
         export_path = configs_dir / "config_export.yaml"
         with open(export_path, "w") as f:
@@ -1892,6 +1896,7 @@ fi
     --config {configs['scoring']}""",
         )
 
+        gpu_line = " \\\n    --gpu" if self.gpu else ""
         reprofile = _checkpoint_block(
             "reprofile",
             f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
@@ -1910,7 +1915,7 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --output_dir "$out_dir/reprofiled_annotations" \\
     --reprofiler {self.reprofiler} \\
     --config {configs['reprofiling']} \\
-    --cores {self.cores} \\
+    --cores {self.cores}{gpu_line} \\
     --seed {self.regeneration_seed} \\
     $FEATURE_ARG"""
             + self._annotation_export_bash("reprofiled_annotations", "reprofiled"),
