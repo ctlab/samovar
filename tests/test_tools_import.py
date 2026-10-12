@@ -627,6 +627,42 @@ def test_prepare_used_citations_includes_imported_bibtex(tmp_path, monkeypatch):
     assert "myclf" in text
 
 
+def test_tools_status_ok_for_binary_in_another_conda_env(tmp_path, monkeypatch):
+    """samovar tools --status must treat a recorded conda prefix as present."""
+    import shutil as _shutil
+
+    prefix = tmp_path / "envs" / "centrifuge"
+    binary = prefix / "bin" / "centrifuge"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    cfg = {
+        "tools": {
+            "centrifuge": ["conda", "", str(prefix), "annotator"],
+        }
+    }
+    monkeypatch.setattr("samovar.paths.load_config", lambda: cfg)
+    real_which = _shutil.which
+
+    def fake_which(cmd, path=None):
+        if cmd == "centrifuge":
+            return None
+        return real_which(cmd, path=path)
+
+    monkeypatch.setattr("samovar.paths.shutil.which", fake_which)
+    text = format_status(cfg)
+    resolved = str(binary.resolve())
+    assert f"centrifuge\tannotator\tok\t{resolved}" in text
+    optional = text.split("Optional:", 1)[1]
+    line = next(
+        row
+        for row in optional.splitlines()
+        if row.strip().startswith("[") and "centrifuge" in row
+    )
+    assert line.strip().startswith("[ok")
+    assert resolved in line
+
+
 def test_import_status_lists_tools_and_databases(tmp_path, monkeypatch, capsys):
     binary = tmp_path / "mykaiju"
     binary.write_text("#!/bin/sh\nexit 0\n")

@@ -241,8 +241,9 @@ def format_import_status(cfg: Optional[dict] = None) -> str:
             exe = rec.get("exec") or {}
             path = str(exe.get("path") or "")
             kind = str(rec.get("type") or "")
-            mark = _path_status(path)
-            lines.append(f"{name}\t{kind}\t{mark}\t{path}")
+            shown = _resolved_tool_path(rec, name) or path
+            mark = _file_status(shown)
+            lines.append(f"{name}\t{kind}\t{mark}\t{shown}")
     lines.extend(["", "Databases", "tool\tname\tstatus\tpath\tflags\turl\tlazy-download"])
     rows = []
     for tool, grouped in iter_database_records(cfg).items():
@@ -272,6 +273,34 @@ def format_status(cfg: Optional[dict] = None) -> str:
     from samovar.paths import format_install_status
 
     return format_import_status(cfg) + "\n\n" + format_install_status()
+
+
+def _resolved_tool_path(record: dict, name: str) -> str:
+    """Binary for a tools.* record, including ``<conda prefix>/bin/<name>``."""
+    from samovar.main_config import tool_path
+    from samovar.tool_spec import bare_tool_name
+
+    bare = bare_tool_name(name) or name
+    resolved = str(tool_path(record, bare) or "").strip()
+    if not resolved:
+        return ""
+    candidate = Path(resolved).expanduser()
+    try:
+        if candidate.is_file():
+            return str(candidate.resolve())
+    except OSError:
+        return ""
+    return ""
+
+
+def _file_status(path: str) -> str:
+    text = str(path or "").strip()
+    if not text:
+        return "missing"
+    try:
+        return "ok" if Path(text).expanduser().is_file() else "missing"
+    except OSError:
+        return "missing"
 
 
 def _path_status(path: str) -> str:

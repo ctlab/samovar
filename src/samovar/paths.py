@@ -1004,6 +1004,7 @@ def _first_token(value: Any) -> str:
 
 
 def _existing_tool(name: str) -> Optional[str]:
+    """Executable from the install config, including another conda env, else PATH."""
     resolved = resolve_executable(name, tool_key=name)
     token = _first_token(resolved)
     if not token:
@@ -1015,6 +1016,25 @@ def _existing_tool(name: str) -> Optional[str]:
     except OSError:
         pass
     return shutil.which(name)
+
+
+# Row label in the status report -> config tool names to resolve.
+_STATUS_TOOL_KEYS = {
+    "snakemake": ("snakemake",),
+    "kraken2": ("kraken2",),
+    "kaiju": ("kaiju",),
+    "metaphlan": ("metaphlan", "metaphlan4"),
+    "centrifuge": ("centrifuge",),
+    "metax": ("metax",),
+    "OPAL": ("opal", "opal.py"),
+    "MultiQC": ("multiqc",),
+    "Nextflow": ("nextflow",),
+    "NanoSim": ("nanosim", "simulator.py"),
+    "ART": ("art", "art_illumina"),
+    "wgsim": ("wgsim",),
+    "seqtk": ("seqtk",),
+    "R": ("R", "Rscript"),
+}
 
 
 def install_status_rows() -> List[Dict[str, Any]]:
@@ -1258,6 +1278,19 @@ def install_status_rows() -> List[Dict[str, Any]]:
                     )
             elif not item["path"]:
                 item["path"] = str(cfg.get("sparsedossa2_r") or "")
+    # An import into another conda env is not on PATH. Prefer that binary.
+    for item in rows:
+        names = _STATUS_TOOL_KEYS.get(str(item["name"]))
+        if not names:
+            continue
+        found = ""
+        for name in names:
+            found = _existing_tool(name) or ""
+            if found:
+                break
+        if found:
+            item["path"] = found
+            item["found"] = True
     return rows
 
 
