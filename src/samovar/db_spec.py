@@ -216,10 +216,31 @@ def official_url_for(tool: str, name: str, version: str = "", url: str = "") -> 
     return href
 
 
+def taxdump_lazy_recipe(url: str) -> str:
+    """Fetch NCBI taxdump only when the SamovaR config has no ``nodes.dmp`` yet."""
+    fetch = curl_tarball_recipe(url).splitlines()
+    guard = [
+        'if [ -f "${PREFIX:-.}/nodes.dmp" ] || [ -f "${PREFIX:-.}/taxonomy/nodes.dmp" ]; then',
+        '  echo "NCBI taxdump already present; not downloading." >&2',
+        "  exit 0",
+        "fi",
+        "if python -c 'from samovar.taxdump import usable_taxdump_dir; raise SystemExit(0 if usable_taxdump_dir() else 1)'; then",
+        '  echo "NCBI taxdump is already in the SamovaR config; not downloading." >&2',
+        "  exit 0",
+        "fi",
+    ]
+    # Keep the shebang and `set -euo pipefail`, then refuse a second download.
+    head = fetch[:2]
+    tail = fetch[2:]
+    return "\n".join(head + guard + tail) + "\n"
+
+
 def lazy_download_for(tool: str, name: str, version: str = "", url: str = "") -> str:
     href = official_url_for(tool, name, version, url)
     if not href:
         return ""
+    if str(tool or "").strip() == "taxdump":
+        return taxdump_lazy_recipe(href)
     lower = href.lower()
     if lower.endswith((".qza", ".qza.gz", ".fa.gz", ".fasta.gz", ".fna.gz")):
         return curl_file_recipe(href)

@@ -999,6 +999,7 @@ def empty_canonical(*, version: str = "", root: str = "") -> Dict[str, Any]:
         "genomes": {
             "samovar_database": str(Path(root) / "genomes") if root else "",
             "taxdump": "",
+            "taxdump_version": "",
             "gtdb": "",
             "test": [],
             "raw": {},
@@ -1047,7 +1048,7 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
         if key == "genomes":
             if isinstance(value, dict) and any(
                 k in value
-                for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb")
+                for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "taxdump_version", "gtdb")
             ):
                 block = genomes_block(cfg) or empty_canonical()["genomes"]
                 for sub, val in value.items():
@@ -1231,9 +1232,9 @@ def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
         cfg["API"].update(raw["api"])
     if isinstance(raw.get("genomes"), dict) and any(
         k in raw["genomes"]
-        for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb")
+        for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "taxdump_version", "gtdb")
     ):
-        for key in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb"):
+        for key in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "taxdump_version", "gtdb"):
             if key in raw["genomes"]:
                 cfg["genomes"][key] = raw["genomes"][key]
     if isinstance(raw.get("databases"), dict):
@@ -1610,6 +1611,9 @@ def disk_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         payload["genomes"] = genomes
     payload["tools"] = _tools_for_disk(canonical)
     payload["databases"] = _databases_for_disk(canonical)
+    from samovar.taxdump import attach_taxdump_catalog
+
+    attach_taxdump_catalog(payload)
     from samovar.tool_spec import custom_flags_from_cfg
 
     payload["custom-flags"] = custom_flags_from_cfg(canonical)
@@ -1709,6 +1713,7 @@ def install_option_rows(cfg: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
     genomes = payload.get("genomes") if isinstance(payload.get("genomes"), dict) else {}
     add("genomes.samovar_database", genomes.get("samovar_database"))
     add("genomes.taxdump", genomes.get("taxdump"))
+    add("genomes.taxdump_version", genomes.get("taxdump_version"))
     add("genomes.gtdb", genomes.get("gtdb"))
     for name, path in folder_map(genomes.get("raw")).items():
         add(f"genomes.raw.{name}", path)

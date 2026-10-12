@@ -217,6 +217,20 @@ samovar_ensure_database() {
   local dest="$3"
   local marker="${4:-}"
   local url="${5:-}"
+  if [[ "$tool" == "taxdump" ]]; then
+    local existing
+    existing="$(python - <<'PY'
+from samovar.taxdump import usable_taxdump_dir
+found = usable_taxdump_dir()
+print("" if found is None else found, end="")
+PY
+)"
+    if [[ -n "$existing" && ( -f "$existing/nodes.dmp" || -f "$existing/taxonomy/nodes.dmp" ) ]]; then
+      echo "NCBI taxdump already configured: ${existing}" >&2
+      samovar_import_database "$tool" "$name" "$existing" ""
+      return 0
+    fi
+  fi
   mkdir -p "$dest"
   if [[ -n "$marker" ]] && find -L "$dest" -name "$marker" 2>/dev/null | grep -q .; then
     echo "Database already on disk: ${dest} (${marker})"

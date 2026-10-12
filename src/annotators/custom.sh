@@ -194,8 +194,29 @@ case "$TOOL" in
       fi
     fi
     if [ -z "$DMP" ] || [ ! -f "$DMP/nodes.dmp" ]; then
-      echo "[ERROR] Metax needs a taxonomy dump (--dmp-dir). Set METAX_DMP_DIR or place nodes.dmp next to the database." >&2
+      py="${PYTHON_PATH:-python3}"
+      resolved="$("$py" - <<'PY'
+from samovar.taxdump import metax_dmp_dir
+print(metax_dmp_dir() or "")
+PY
+)"
+      if [ -n "$resolved" ] && [ -f "$resolved/nodes.dmp" ]; then
+        DMP="$resolved"
+      fi
+    fi
+    if [ -z "$DMP" ] || [ ! -f "$DMP/nodes.dmp" ]; then
+      echo "[ERROR] Metax needs a taxonomy dump (--dmp-dir). Set genomes.taxdump / databases.taxdump in the SamovaR config, METAX_DMP_DIR, or place nodes.dmp next to the database." >&2
       exit 2
+    fi
+    # Point the Metax DB at the configured dump when it does not have its own.
+    parent=""
+    if [ -d "$DB" ]; then
+      parent="$DB"
+    elif [[ "$DB" == *.json ]]; then
+      parent="$(dirname "$DB")"
+    fi
+    if [ -n "$parent" ] && [ ! -e "$parent/taxonomy" ] && [ ! -e "$parent/nodes.dmp" ] && [ -w "$parent" ]; then
+      ln -s "$DMP" "$parent/taxonomy" || true
     fi
     echo "[INFO] Metax db=${DB_JSON} dmp=${DMP}"
     PREFIX="$TMP_DIR/metax"

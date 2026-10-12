@@ -404,3 +404,68 @@ def test_fastq_annotator_and_feature_merge(tmp_path):
     merged = merge_read_features(ann, feats)
     assert "gc" in merged.columns
     assert merged.loc[merged["seq"] == "r0", "gc"].notna().all()
+
+
+def test_custom_sh_metax_uses_configured_taxdump(tmp_path):
+    dump = tmp_path / "taxdump"
+    dump.mkdir()
+    (dump / "nodes.dmp").write_text("1\t|\t1\t|\n")
+    (dump / "taxdump.version").write_text("2024-08-14\n")
+    db = tmp_path / "metax_db"
+    db.mkdir()
+    (db / "metax_db.json").write_text("{}\n")
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    metax = mock_bin / "metax"
+    log = tmp_path / "metax.argv"
+    metax.write_text(
+        "#!/bin/bash\n"
+        f'printf "%s\\n" "$@" > "{log}"\n'
+        "prefix=''\n"
+        "prev=''\n"
+        "for arg in \"$@\"; do\n"
+        "  if [ \"$prev\" = \"--outprefix\" ]; then prefix=\"$arg\"; fi\n"
+        "  prev=\"$arg\"\n"
+        "done\n"
+        "printf 'read1\\t562\\n' > \"${prefix}.classify.txt\"\n"
+    )
+    metax.chmod(metax.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        '{"genomes": {"taxdump": "%s", "taxdump_version": "2024-08-14"}, "tools": {}, "databases": {}}\n'
+        % dump
+    )
+    r1 = tmp_path / "a_1.fastq"
+    _tiny_fastq(r1)
+    out = tmp_path / "sample.metax.out"
+    env = os.environ.copy()
+    env["PATH"] = f"{mock_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["SAMOVAR_CONFIG"] = str(cfg)
+    env["PYTHONPATH"] = f"{REPO / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env.pop("METAX_DMP_DIR", None)
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ANNOTATORS / "custom.sh"),
+            "-i",
+            str(r1),
+            "-d",
+            str(db),
+            "-o",
+            str(out),
+            "-p",
+            "metax",
+            "-t",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    argv = log.read_text()
+    assert f"--dmp-dir\n{dump}" in argv or f"--dmp-dir {dump}" in argv
+    assert (db / "taxonomy").is_symlink()
+    assert (db / "taxonomy").resolve() == dump.resolve()
+    assert "read1\t562" in out.read_text()

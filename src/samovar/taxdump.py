@@ -13,8 +13,9 @@ import os
 import pickle
 import tarfile
 import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,192 @@ TAXDUMP_DMP_FILES = (
 
 def _as_path(raw: PathLike) -> Path:
     return Path(raw).expanduser()
+
+
+def taxdump_version_label(root: PathLike) -> str:
+    """Version stamp for one dump: ``taxdump.version``, else ``nodes.dmp`` date.
+
+    NCBI does not ship a version file. The ``nodes.dmp`` mtime is the date the
+    dump was unpacked, which is enough to keep two dumps as separate catalog
+    keys (``ncbi:YYYY-MM-DD``).
+    """
+    base = _as_path(root)
+    for name in ("taxdump.version", "VERSION"):
+        path = base / name
+        try:
+            if path.is_file():
+                text = path.read_text(encoding="utf-8", errors="ignore").strip().split()
+                if text:
+                    return text[0]
+        except OSError:
+            continue
+    nodes = find_dmp("nodes.dmp", base)
+    if nodes is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(nodes.stat().st_mtime).strftime("%Y-%m-%d")
+    except OSError:
+        return ""
+
+
+def _record_path(rec: Dict[str, Any]) -> Optional[Path]:
+    raw = str(rec.get("path") or "").strip()
+    if not raw:
+        return None
+    return _as_path(raw)
+
+
+def configured_taxdumps(
+    cfg: Optional[Dict[str, Any]] = None,
+) -> List[Tuple[str, Path]]:
+    """``(version, directory)`` from env, ``genomes.taxdump``, and the catalog.
+
+    Version may be empty. Directories are not required to exist.
+    """
+    if cfg is None:
+        try:
+            from samovar.paths import load_config
+
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+    found: List[Tuple[str, Path]] = []
+    seen = set()
+
+    def add(version: str, path: Optional[Path]) -> None:
+        if path is None:
+            return
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        found.append((str(version or "").strip(), path))
+
+    env = os.environ.get("SAMOVAR_TAXDUMP", "").strip()
+    if env:
+        add(os.environ.get("SAMOVAR_TAXDUMP_VERSION", "").strip(), _as_path(env))
+    from samovar.main_config import genomes_block
+
+    block = genomes_block(cfg or {}) if cfg else {}
+    if isinstance(block, dict):
+        raw = str(block.get("taxdump") or "").strip()
+        if raw:
+            add(str(block.get("taxdump_version") or "").strip(), _as_path(raw))
+    try:
+        from samovar.db_spec import iter_database_records, split_db_key
+
+        grouped = iter_database_records(cfg or {}).get("taxdump") or {}
+        for key, item in grouped.items():
+            if not isinstance(item, dict):
+                continue
+            bare, key_ver = split_db_key(str(key))
+            if bare in {"gtdb", "gtdb_taxdump"}:
+                continue
+            version = str(item.get("version") or item.get("_version") or key_ver or "").strip()
+            add(version, _record_path(item))
+    except Exception:
+        pass
+    return found
+
+
+def usable_taxdump_dir(
+    cfg: Optional[Dict[str, Any]] = None,
+    version: str = "",
+) -> Optional[Path]:
+    """A configured dump that already contains ``nodes.dmp``. Never downloads.
+
+    ``version`` (or ``SAMOVAR_TAXDUMP_VERSION``) selects one stamp. Without it,
+    ``genomes.taxdump`` wins when that directory is populated, otherwise the
+    newest dated catalog entry.
+    """
+    want = str(version or os.environ.get("SAMOVAR_TAXDUMP_VERSION", "") or "").strip()
+    live: List[Tuple[str, Path]] = []
+    for stamp, path in configured_taxdumps(cfg):
+        if find_dmp("nodes.dmp", path) is None:
+            continue
+        live.append((stamp or taxdump_version_label(path), path))
+    if not live:
+        return None
+    if want:
+        for stamp, path in live:
+            if stamp == want:
+                return path
+        return None
+    env = os.environ.get("SAMOVAR_TAXDUMP", "").strip()
+    if env:
+        env_path = _as_path(env)
+        for _stamp, path in live:
+            if path == env_path:
+                return path
+    return live[0][1]
+
+
+def metax_dmp_dir(cfg: Optional[Dict[str, Any]] = None, version: str = "") -> str:
+    """Directory Metax should pass as ``--dmp-dir``. Empty if none is installed."""
+    found = usable_taxdump_dir(cfg, version=version)
+    if found is None:
+        return ""
+    nodes = find_dmp("nodes.dmp", found)
+    if nodes is None:
+        return ""
+    parent = nodes.parent
+    return str(parent)
+
+
+def attach_taxdump_catalog(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Record each on-disk NCBI dump as ``databases.taxdump.<name:version>``.
+
+    A dump that already has ``nodes.dmp`` does not keep a download recipe.
+    ``genomes.taxdump`` stays the default path; ``genomes.taxdump_version`` is
+    the stamp of that default.
+    """
+    genomes = payload.get("genomes") if isinstance(payload.get("genomes"), dict) else {}
+    databases = payload.get("databases") if isinstance(payload.get("databases"), dict) else {}
+    block = databases.get("taxdump") if isinstance(databases.get("taxdump"), dict) else {}
+    rewritten: Dict[str, Any] = {}
+    for key, rec in block.items():
+        if not isinstance(rec, dict):
+            rewritten[str(key)] = rec
+            continue
+        path = _record_path(rec)
+        if path is None or find_dmp("nodes.dmp", path) is None:
+            rewritten[str(key)] = rec
+            continue
+        bare = str(key).split(":", 1)[0] or "ncbi"
+        ver = str(rec.get("version") or "").strip() or taxdump_version_label(path)
+        item = dict(rec)
+        item["path"] = str(path)
+        item["type"] = item.get("type") or "database"
+        item["lazy-download"] = ""
+        if ver:
+            item["version"] = ver
+        new_key = f"{bare}:{ver}" if ver else str(key)
+        rewritten[new_key] = item
+    raw = str(genomes.get("taxdump") or "").strip()
+    if raw:
+        path = _as_path(raw)
+        if find_dmp("nodes.dmp", path) is not None:
+            ver = str(genomes.get("taxdump_version") or "").strip() or taxdump_version_label(path)
+            if ver:
+                genomes["taxdump_version"] = ver
+            key = f"ncbi:{ver}" if ver else "ncbi"
+            rewritten.setdefault(
+                key,
+                {
+                    "path": str(path),
+                    "flags": "",
+                    "lazy-download": "",
+                    "type": "database",
+                    "version": ver,
+                },
+            )
+    if rewritten:
+        databases = dict(databases)
+        databases["taxdump"] = rewritten
+        payload["databases"] = databases
+    if genomes:
+        payload["genomes"] = genomes
+    return payload
 
 
 def taxdump_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
@@ -278,15 +465,61 @@ def follow_merged(taxid: str, cfg: Optional[Dict[str, Any]] = None) -> str:
 
 
 def taxdump_tarball(cfg: Optional[Dict[str, Any]] = None) -> Optional[Path]:
-    root = taxdump_dir(cfg)
-    for name in ("taxdump.tar.gz", "ncbi-taxonomy.tar.gz"):
-        path = root / name
-        try:
-            if path.is_file():
-                return path
-        except OSError:
+    roots = [taxdump_dir(cfg)]
+    usable = usable_taxdump_dir(cfg)
+    if usable is not None:
+        roots.insert(0, usable)
+    seen = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
             continue
+        seen.add(key)
+        for name in ("taxdump.tar.gz", "ncbi-taxonomy.tar.gz"):
+            path = root / name
+            try:
+                if path.is_file():
+                    return path
+            except OSError:
+                continue
+        nested = root / "taxonomy"
+        for name in ("taxdump.tar.gz", "ncbi-taxonomy.tar.gz"):
+            path = nested / name
+            try:
+                if path.is_file():
+                    return path
+            except OSError:
+                continue
     return None
+
+
+def local_taxdump_tarball(cfg: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+    """Tarball for CAMISIM: the configured archive, or one packed from ``.dmp`` files.
+
+    Packing stays on local disk. This does not fetch NCBI.
+    """
+    archive = taxdump_tarball(cfg)
+    if archive is not None:
+        return archive
+    root = usable_taxdump_dir(cfg)
+    if root is None:
+        return None
+    dest = root / "taxdump.tar.gz"
+    members = []
+    for name in TAXDUMP_DMP_FILES:
+        found = find_dmp(name, root)
+        if found is not None:
+            members.append(found)
+    if not members:
+        return None
+    try:
+        with tarfile.open(dest, "w:gz") as tar:
+            for path in members:
+                tar.add(path, arcname=path.name)
+    except OSError:
+        logger.info("Could not pack a local taxdump tarball in %s", root)
+        return None
+    return dest if dest.is_file() else None
 
 
 def _extract_dmp_from_tarball(archive: Path, dest: Path) -> None:
@@ -306,7 +539,14 @@ def _extract_dmp_from_tarball(archive: Path, dest: Path) -> None:
 
 
 def ensure_taxdump(cfg: Optional[Dict[str, Any]] = None) -> Path:
-    """Return a directory that contains ``nodes.dmp``, downloading once if needed."""
+    """Return a directory that contains ``nodes.dmp``.
+
+    A dump already recorded in the config (any version) is reused. NCBI is
+    fetched only when none of those directories has ``nodes.dmp``.
+    """
+    found = usable_taxdump_dir(cfg)
+    if found is not None:
+        return found
     dest = taxdump_dir(cfg)
     if find_dmp("nodes.dmp", dest) is not None:
         return dest

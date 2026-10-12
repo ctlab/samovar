@@ -404,11 +404,15 @@ def camisim_sizes_by_type(
 
 
 def camisim_taxdump(root: Optional[str]) -> str:
-    """NCBI taxdump tarball: install ``genomes.taxdump``, else CAMISIM bundled dump."""
-    try:
-        from samovar.taxdump import taxdump_tarball
+    """NCBI taxdump tarball: configured dump (any version), else CAMISIM's copy.
 
-        archive = taxdump_tarball()
+    The configured archive is reused as-is. Missing ``.tar.gz`` next to an
+    already extracted dump is packed locally. This does not fetch NCBI.
+    """
+    try:
+        from samovar.taxdump import local_taxdump_tarball
+
+        archive = local_taxdump_tarball()
         if archive is not None:
             return str(archive.resolve())
     except Exception:
