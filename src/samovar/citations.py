@@ -759,7 +759,7 @@ def selected_prepare_tools(config: Any) -> List[str]:
     names.append(getattr(config, "reads_generator", "") or "iss")
     names.append(getattr(config, "metagenome_generator", "") or "")
 
-    repro = str(getattr(config, "reprofiler", "") or "ensemble")
+    repro = str(getattr(config, "reprofiler", "") or "random_forest")
     try:
         from samovar.reprofilers import resolve_reprofiler
 

@@ -1,15 +1,19 @@
 import pandas as pd
 import numpy as np
+from contextlib import contextmanager
+from joblib import Parallel, delayed
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import roc_curve, auc
 from sklearn.multiclass import OneVsRestClassifier
+from sklearn.tree import DecisionTreeClassifier
 import matplotlib.pyplot as plt
 import joblib
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 from collections import Counter
 
 def _tool_name_from_column(col: str) -> Optional[str]:
@@ -142,7 +146,139 @@ def preprocess_data(df, drop_missing_true: bool = True):
     
     return df
 
-def train_models(df, test_size=0.2, random_state=42, methods=None):
+
+def training_n_jobs(n_jobs=None, config=None) -> int:
+    """Thread count from ``samovar prepare --cores`` (never ``-1`` / all CPUs)."""
+    raw = n_jobs
+    if raw is None and isinstance(config, dict):
+        raw = config.get("cores", config.get("threads", config.get("n_jobs", 1)))
+    try:
+        jobs = int(raw if raw is not None else 1)
+    except (TypeError, ValueError):
+        jobs = 1
+    return max(1, jobs)
+
+
+@contextmanager
+def blas_threads(n_jobs: int):
+    """Cap BLAS/OpenMP threads for solvers that do not take ``n_jobs`` (lbfgs)."""
+    limit = training_n_jobs(n_jobs)
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:
+        yield
+        return
+    with threadpool_limits(limits=limit):
+        yield
+
+
+class _ParallelDepth1Tree(BaseEstimator, ClassifierMixin):
+    """Depth-1 tree whose split search runs in ``n_jobs`` threads.
+
+    A depth-1 tree uses one feature. Searching each feature independently and
+    keeping the lowest weighted impurity matches ``DecisionTreeClassifier(max_depth=1)``,
+    which is the AdaBoost base learner. Boosting rounds stay sequential; this
+    parallelizes the work inside each round. sklearn 1.7 AdaBoost no longer
+    accepts ``n_jobs`` because that parameter did not affect ``fit``.
+    """
+
+    def __init__(self, n_jobs: int = 1, random_state=None):
+        self.n_jobs = n_jobs
+        self.random_state = random_state
+
+    def fit(self, X, y, sample_weight=None):
+        matrix = np.asarray(X)
+        n_features = int(matrix.shape[1]) if matrix.ndim == 2 else 0
+        if n_features < 1:
+            raise ValueError("AdaBoost stump needs at least one feature")
+        jobs = training_n_jobs(self.n_jobs)
+        random_state = self.random_state
+
+        def _one(index: int):
+            tree = DecisionTreeClassifier(max_depth=1, random_state=random_state)
+            column = matrix[:, [index]]
+            tree.fit(column, y, sample_weight=sample_weight)
+            layout = tree.tree_
+            left = int(layout.children_left[0])
+            right = int(layout.children_right[0])
+            if left < 0:
+                score = float(layout.impurity[0])
+            else:
+                weights = layout.weighted_n_node_samples
+                score = float(
+                    (weights[left] * layout.impurity[left] + weights[right] * layout.impurity[right])
+                    / max(float(weights[0]), 1e-12)
+                )
+            return score, index, tree
+
+        # Cython split search releases the GIL, so threads overlap the training work.
+        found = Parallel(n_jobs=jobs, prefer="threads")(
+            delayed(_one)(index) for index in range(n_features)
+        )
+        _score, index, tree = min(found, key=lambda row: (row[0], row[1]))
+        importances = np.zeros(n_features, dtype=float)
+        if int(tree.tree_.feature[0]) >= 0:
+            importances[index] = 1.0
+        self.tree_ = tree
+        self.feature_index_ = int(index)
+        self.feature_importances_ = importances
+        self.classes_ = tree.classes_
+        self.n_features_in_ = n_features
+        return self
+
+    def predict(self, X):
+        column = np.asarray(X)[:, [self.feature_index_]]
+        return self.tree_.predict(column)
+
+    def predict_proba(self, X):
+        column = np.asarray(X)[:, [self.feature_index_]]
+        return self.tree_.predict_proba(column)
+
+
+def build_random_forest(n_jobs=1, random_state=42, n_estimators=100) -> RandomForestClassifier:
+    """Forest whose ``fit`` builds trees via ``Parallel(n_jobs=...)``."""
+    return RandomForestClassifier(
+        random_state=random_state,
+        n_estimators=n_estimators,
+        n_jobs=training_n_jobs(n_jobs),
+    )
+
+
+def build_adaboost(n_jobs=1, random_state=42, n_estimators=100) -> AdaBoostClassifier:
+    """AdaBoost. ``n_jobs>1`` parallelizes each round's stump search."""
+    jobs = training_n_jobs(n_jobs)
+    if jobs <= 1:
+        return AdaBoostClassifier(random_state=random_state, n_estimators=n_estimators)
+    return AdaBoostClassifier(
+        estimator=_ParallelDepth1Tree(n_jobs=jobs, random_state=random_state),
+        random_state=random_state,
+        n_estimators=n_estimators,
+    )
+
+
+def fit_logistic(X, y, *, n_jobs=1, **kwargs) -> Any:
+    """Fit logistic regression using ``n_jobs`` on the training itself.
+
+    Multiclass with more than one thread uses one-vs-rest so each class is a
+    separate ``fit`` (sklearn's multinomial lbfgs ignores ``n_jobs``). Binary
+    lbfgs is one problem; BLAS/OpenMP threads are capped at ``n_jobs``.
+    """
+    from sklearn.linear_model import LogisticRegression
+
+    jobs = training_n_jobs(n_jobs)
+    labels = pd.Series(np.asarray(y)).dropna()
+    n_classes = int(labels.nunique())
+    if jobs > 1 and n_classes > 2:
+        model = OneVsRestClassifier(LogisticRegression(**kwargs), n_jobs=jobs)
+        model.fit(X, y)
+        return model
+    model = LogisticRegression(**kwargs)
+    with blas_threads(jobs):
+        model.fit(X, y)
+    return model
+
+
+def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1):
     """
     Train RandomForest and/or AdaBoost models for taxID prediction.
 
@@ -150,8 +286,9 @@ def train_models(df, test_size=0.2, random_state=42, methods=None):
         df (pd.DataFrame): Input dataframe
         test_size (float): Proportion of data to use for testing
         random_state (int): Random seed for reproducibility
-        methods: ``ensemble`` (both, pick best), ``random_forest``, ``adaboost``,
+        methods: ``random_forest`` (default), ``adaboost``, ``ensemble`` (both, pick best),
             or an iterable of those names.
+        n_jobs: Threads for training. ``samovar prepare --cores`` supplies this.
 
     Returns:
         tuple: (best_model, models_dict, metrics_dict, feature_cols)
@@ -190,9 +327,10 @@ def train_models(df, test_size=0.2, random_state=42, methods=None):
     )
 
     wanted = _normalize_sklearn_methods(methods)
+    jobs = training_n_jobs(n_jobs)
     catalog = {
-        "RandomForest": RandomForestClassifier(random_state=random_state, n_estimators=100),
-        "AdaBoost": AdaBoostClassifier(random_state=random_state, n_estimators=100),
+        "RandomForest": build_random_forest(n_jobs=jobs, random_state=random_state),
+        "AdaBoost": build_adaboost(n_jobs=jobs, random_state=random_state),
     }
     models = {name: catalog[name] for name in wanted}
     
@@ -228,7 +366,7 @@ def _normalize_sklearn_methods(methods) -> list:
         "adaboostclassifier": ("AdaBoost",),
     }
     if methods is None or methods is False:
-        names = ["ensemble"]
+        names = ["random_forest"]
     elif isinstance(methods, str):
         names = [methods]
     else:

@@ -39,10 +39,35 @@ def _tiny_tables():
 
 def test_resolve_builtin_reprofilers():
     assert resolve_reprofiler("ensemble") == ("builtin", "ensemble")
+    assert resolve_reprofiler(None) == ("builtin", "random_forest")
     assert resolve_reprofiler("rf") == ("builtin", "random_forest")
     assert resolve_reprofiler("AdaBoost") == ("builtin", "adaboost")
     assert resolve_reprofiler("linear") == ("builtin", "linear")
     assert require_known_reprofiler("random_forest") == "random_forest"
+
+
+def test_prepare_cores_are_training_threads(tmp_path):
+    import yaml
+
+    config = PipelineConfig(input_dir="in", output_dir=str(tmp_path), cores=6)
+    paths = config.generate_configs(str(tmp_path))
+    repro = yaml.safe_load(Path(paths["reprofiling"]).read_text())
+    export = yaml.safe_load(Path(paths["export"]).read_text())
+    assert repro["cores"] == 6
+    assert repro["reprofiler"] == "random_forest"
+    assert export["cores"] == 6
+    script = Path(config.generate_pipeline(str(tmp_path))).read_text()
+    assert "--cores 6" in script
+    regenerated, ground, initial = _tiny_tables()
+    result = run_reprofiler(
+        "rf",
+        regenerated=regenerated,
+        ground_truth=ground,
+        initial=initial,
+        output_dir=tmp_path / "out",
+        config={"seed": 0, "cores": repro["cores"]},
+    )
+    assert result.model.n_jobs == 6
 
 
 def test_train_models_single_method():

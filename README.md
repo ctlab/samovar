@@ -62,7 +62,7 @@ Workflow:
 1. Annotate real or ISS-simulated reads with every configured tool.
 2. Cross-validate taxIDs across tools (CV heatmaps) and against known truth when available (F1 / R²).
 3. Re-simulate a community from the annotation table (annotation2iss).
-4. Re-annotate the synthetic reads and train an ML ensemble (`workflow/ML.py`: RandomForest / AdaBoost) that maps tool votes → corrected taxID.
+4. Re-annotate the synthetic reads and train a RandomForest reprofiler (`workflow/ML.py`; AdaBoost only with `--reprofiler adaboost` or `ensemble`) that maps tool votes → corrected taxID.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%

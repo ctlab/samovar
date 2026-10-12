@@ -187,7 +187,7 @@ def _apply_translated_cli_flags(config: "PipelineConfig", args: argparse.Namespa
     config.scoring_tool_flags = named_s or {}
     config.reprofiler_flags = apply_translated_flags(
         config.reprofiler_flags or "",
-        name=config.reprofiler or "ensemble",
+        name=config.reprofiler or "random_forest",
         record=lookup_tool_record(cfg, str(config.reprofiler or "")),
         canonical=canonical,
     ) or None
@@ -336,7 +336,7 @@ class PipelineConfig:
     scoring_flags: Optional[str] = None
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
-    reprofiler: str = "ensemble"
+    reprofiler: str = "random_forest"
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
     feature_importance: str = "builtin"
@@ -1479,6 +1479,7 @@ class PipelineConfig:
             'reprofiler': self.reprofiler,
             'reprofiler_flags': self.reprofiler_flags or "",
             'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
+            'cores': int(self.cores),
             'feature_importance': self.feature_importance or "builtin",
             'feature_importance_all': bool(self.feature_importance_all),
             'feature_importance_flags': self.feature_importance_flags or "",
@@ -1498,6 +1499,7 @@ class PipelineConfig:
             "export_formats": list(self.export_formats or []),
             "export_taxdump": self.export_taxdump or "",
             "export_taxonomy": self.export_taxonomy or "",
+            "cores": int(self.cores),
         }
         export_path = configs_dir / "config_export.yaml"
         with open(export_path, "w") as f:
@@ -1908,6 +1910,7 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --output_dir "$out_dir/reprofiled_annotations" \\
     --reprofiler {self.reprofiler} \\
     --config {configs['reprofiling']} \\
+    --cores {self.cores} \\
     --seed {self.regeneration_seed} \\
     $FEATURE_ARG"""
             + self._annotation_export_bash("reprofiled_annotations", "reprofiled"),

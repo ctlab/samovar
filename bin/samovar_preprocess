@@ -228,8 +228,9 @@ def main():
         dest='reprofiler',
         default=None,
         help=(
-            'ML reprofiler: ensemble|random_forest|adaboost, or a name imported '
-            'with `samovar tools import --type ml`'
+            'ML reprofiler (default: random_forest). Also ensemble (RandomForest and '
+            'AdaBoost), adaboost, linear, or a name imported with '
+            '`samovar tools import --type ml`'
         ),
     )
     parser.add_argument(

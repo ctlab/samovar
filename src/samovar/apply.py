@@ -466,7 +466,7 @@ def apply_pipeline(
                 name = (
                     repro_cfg.get("reprofiler")
                     or state.reprofiling_config.get("reprofiler")
-                    or "ensemble"
+                    or "random_forest"
                 )
                 run_reprofiler(
                     name,

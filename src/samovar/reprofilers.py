@@ -35,13 +35,17 @@ from samovar.reprofiling import (
     passthrough_reprofile_tables,
     plot_roc_curves,
     predict_taxid,
+    fit_logistic,
     preprocess_data,
     save_model,
     train_models,
+    training_n_jobs,
 )
 from samovar.table_regenerators import extra_flags_argv
 
 REPROFILER_GROUP = "reprofiler"
+# ``samovar prepare`` with no ``--reprofiler`` trains RandomForest only.
+DEFAULT_REPROFILER = "random_forest"
 PathLike = Union[str, Path]
 
 _BUILTIN_ALIASES = {
@@ -85,7 +89,7 @@ class ReprofileResult:
 
 
 def resolve_reprofiler(name: Optional[str]) -> Tuple[str, str]:
-    key = str(name or "ensemble").strip() or "ensemble"
+    key = str(name or DEFAULT_REPROFILER).strip() or DEFAULT_REPROFILER
     low = key.lower().replace("-", "_")
     if low in _BUILTIN_ALIASES:
         return "builtin", _BUILTIN_ALIASES[low]
@@ -383,8 +387,6 @@ def reprofile_linear(
     config: Dict[str, Any],
 ) -> ReprofileResult:
     """Logistic regression builtin (same contract as imported ML tools)."""
-    from sklearn.linear_model import LogisticRegression
-
     cfg = dict(config or {})
     flags = _linear_flag_values(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
     seed = int(cfg.get("seed") or 42)
@@ -403,8 +405,12 @@ def reprofile_linear(
     }
     if flags["use_priors"] and _priors_from_ground_truth(ground_truth or {}):
         kwargs["class_weight"] = "balanced"
-    model = LogisticRegression(**kwargs)
-    model.fit(df[feature_cols], df["true"])
+    model = fit_logistic(
+        df[feature_cols],
+        df["true"],
+        n_jobs=training_n_jobs(config=cfg),
+        **kwargs,
+    )
     tables = profile_tables_with_model(
         initial,
         model,
@@ -457,7 +463,10 @@ def run_builtin_reprofiler(
     seed = int(cfg.get("seed") or 42)
     try:
         best, models, metrics, feature_cols = train_models(
-            validation, random_state=seed, methods=name
+            validation,
+            random_state=seed,
+            methods=name,
+            n_jobs=training_n_jobs(config=cfg),
         )
     except ValueError:
         passthrough_reprofile_tables(
@@ -689,7 +698,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ml",
         dest="reprofiler",
         default=None,
-        help="ensemble|random_forest|adaboost|linear or an imported --type ml name",
+        help="random_forest (default)|ensemble|adaboost|linear or an imported --type ml name",
     )
     parser.add_argument("--config", default="", help="config_reprofiling.yaml from prepare")
     parser.add_argument(
@@ -699,6 +708,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--features", "-f", default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--cores",
+        "--threads",
+        dest="cores",
+        type=int,
+        default=None,
+        help="Training threads (samovar prepare --cores)",
+    )
     return parser
 
 
@@ -713,13 +730,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not regenerated:
         print("Error: --validation_file / --regenerated is required", file=sys.stderr)
         return 1
-    name = args.reprofiler or cfg.get("reprofiler") or "ensemble"
+    name = args.reprofiler or cfg.get("reprofiler") or DEFAULT_REPROFILER
     if args.seed is not None:
         cfg["seed"] = args.seed
     if args.classify_unclassified:
         cfg["classify_unclassified"] = True
     if args.features:
         cfg["features"] = args.features
+    if args.cores is not None:
+        cfg["cores"] = int(args.cores)
     cfg.setdefault("seed", 42)
     try:
         require_known_reprofiler(name)

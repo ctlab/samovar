@@ -330,6 +330,7 @@ def _logistic_efficiency(
     C: float,
     max_iter: int,
     min_efficiency: float,
+    n_jobs: int = 1,
 ) -> Dict[str, float]:
     """P(pred == true | true = taxon) via one-hot logistic, else empirical recall."""
     true_s = true.map(_taxid_str)
@@ -365,7 +366,10 @@ def _logistic_efficiency(
             max_iter=int(max_iter),
             solver="lbfgs",
         )
-        model.fit(X, y.to_numpy())
+        from samovar.reprofiling import blas_threads
+
+        with blas_threads(n_jobs):
+            model.fit(X, y.to_numpy())
         unique = [t for t in enc.categories_[0] if str(t) != "0"]
         if unique:
             probs = model.predict_proba(enc.transform(np.array(unique, dtype=object).reshape(-1, 1)))
@@ -389,24 +393,47 @@ def fit_taxon_efficiency(
     C: float = DEFAULT_C,
     max_iter: int = DEFAULT_MAX_ITER,
     min_efficiency: float = DEFAULT_MIN_EFFICIENCY,
+    n_jobs: int = 1,
 ) -> Dict[str, Dict[str, float]]:
     """``{annotator: {taxid: recall}}`` from a reference Annotation with ``true``."""
     frame = annotation_frame(reference)
     if frame.empty or "true" not in frame.columns:
         return {}
     true = frame["true"]
-    out: Dict[str, Dict[str, float]] = {}
+    columns = []
     for col in taxid_annotation_columns(frame):
         name = annotator_name(col)
         if name.lower() in {"true", "samovar_confidence"}:
             continue
-        rates = _logistic_efficiency(
+        columns.append((name, col))
+    if not columns:
+        return {}
+    from samovar.reprofiling import training_n_jobs
+
+    jobs = min(training_n_jobs(n_jobs), len(columns))
+    # One logistic per annotator. Share the prepare core budget across those fits.
+    blas = max(1, training_n_jobs(n_jobs) // jobs)
+
+    def _one(name: str, col: str):
+        return name, _logistic_efficiency(
             true,
             frame[col],
             C=C,
             max_iter=max_iter,
             min_efficiency=min_efficiency,
+            n_jobs=blas,
         )
+
+    if jobs == 1:
+        pairs = [_one(name, col) for name, col in columns]
+    else:
+        from joblib import Parallel, delayed
+
+        pairs = Parallel(n_jobs=jobs, prefer="processes")(
+            delayed(_one)(name, col) for name, col in columns
+        )
+    out: Dict[str, Dict[str, float]] = {}
+    for name, rates in pairs:
         if rates:
             out[name] = rates
     return out
@@ -521,11 +548,14 @@ def export_logistic(annotation: Annotation, dest: PathLike, config: Optional[Dic
     if reference is not None:
         ref = as_annotation(reference)
         ref = maybe_attach_samovar_reference(ref, model_path)
+        from samovar.reprofiling import training_n_jobs
+
         rates = fit_taxon_efficiency(
             ref,
             C=float(cfg.get("C", DEFAULT_C)),
             max_iter=int(cfg.get("max_iter", DEFAULT_MAX_ITER)),
             min_efficiency=min_eff,
+            n_jobs=training_n_jobs(config=cfg),
         )
     else:
         rates = {}

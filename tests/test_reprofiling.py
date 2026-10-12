@@ -64,13 +64,9 @@ class TestReprofiling(unittest.TestCase):
         processed_df = preprocess_data(self.test_data.copy())
         best_model, models, metrics, feature_cols = train_models(processed_df, test_size=0.25)  # Adjusted test size
         
-        # Check if we got both models
         self.assertIn('RandomForest', models)
-        self.assertIn('AdaBoost', models)
-        
-        # Check if metrics are calculated
+        self.assertNotIn('AdaBoost', models)
         self.assertIn('RandomForest', metrics)
-        self.assertIn('AdaBoost', metrics)
         
         # Check if best model is selected
         self.assertIsNotNone(best_model)
@@ -196,6 +192,73 @@ class TestReprofiling(unittest.TestCase):
             self.assertEqual(n, 1)
             out = pd.read_csv(dst / "sample_reprofiled.csv")
             self.assertEqual(list(out["taxid_SAMOVAR"]), [562, 562])
+
+    def test_fit_uses_prepare_cores(self):
+        """RandomForest and AdaBoost training call Parallel with prepare's core count."""
+        import sklearn.ensemble._forest as forest
+        import sklearn.multiclass as multiclass
+
+        from samovar.reprofiling import Parallel as stump_parallel
+        from samovar.reprofiling import build_adaboost, fit_logistic
+
+        calls = []
+
+        def _spy(real):
+            class Spy:
+                def __init__(self, *args, **kwargs):
+                    calls.append(kwargs.get("n_jobs"))
+                    self._inner = real(*args, **kwargs)
+
+                def __call__(self, iterable):
+                    return self._inner(iterable)
+
+            return Spy
+
+        forest_parallel = forest.Parallel
+        ovr_parallel = multiclass.Parallel
+        forest.Parallel = _spy(forest_parallel)
+        multiclass.Parallel = _spy(ovr_parallel)
+        import samovar.reprofiling as reprofiling
+
+        saved = reprofiling.Parallel
+        reprofiling.Parallel = _spy(stump_parallel)
+        try:
+            processed = preprocess_data(self.test_data.copy())
+            _best, models, _metrics, _cols = train_models(
+                processed, test_size=0.25, methods="ensemble", n_jobs=3
+            )
+            self.assertEqual(models["RandomForest"].n_jobs, 3)
+            self.assertEqual(models["AdaBoost"].estimator.n_jobs, 3)
+            rng = np.random.default_rng(0)
+            frame = pd.DataFrame(
+                {
+                    "taxid_a": rng.integers(1, 4, 40),
+                    "taxid_b": rng.integers(1, 4, 40),
+                    "length": 100,
+                    "true": rng.integers(0, 3, 40),
+                }
+            )
+            logistic = fit_logistic(
+                frame[["taxid_a", "taxid_b", "length"]],
+                frame["true"],
+                n_jobs=3,
+                max_iter=50,
+                solver="lbfgs",
+            )
+            self.assertEqual(logistic.n_jobs, 3)
+            plain = build_adaboost(n_jobs=1, random_state=0, n_estimators=8)
+            parallel = build_adaboost(n_jobs=3, random_state=0, n_estimators=8)
+            X = processed[["taxid_annotator1", "taxid_annotator2", "length"]]
+            y = processed["true"]
+            plain.fit(X, y)
+            parallel.fit(X, y)
+            self.assertTrue(np.array_equal(plain.predict(X), parallel.predict(X)))
+        finally:
+            forest.Parallel = forest_parallel
+            multiclass.Parallel = ovr_parallel
+            reprofiling.Parallel = saved
+        self.assertIn(3, calls)
+        self.assertGreaterEqual(calls.count(3), 2)
 
 
 if __name__ == '__main__':

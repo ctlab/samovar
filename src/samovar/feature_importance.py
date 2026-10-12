@@ -263,6 +263,7 @@ def permutation_importance_scores(
     n_repeats: int = 5,
     random_state: int = 0,
     sample_weight: Optional[np.ndarray] = None,
+    n_jobs: int = 1,
 ) -> Optional[np.ndarray]:
     if X is None or X.empty or y is None or len(y) != len(X):
         return None
@@ -287,6 +288,7 @@ def permutation_importance_scores(
             n_repeats=max(1, int(n_repeats)),
             random_state=int(random_state),
             scoring=_acc,
+            n_jobs=max(1, int(n_jobs or 1)),
         )
         return _as_1d(result.importances_mean, X.shape[1])
     except Exception:
@@ -517,6 +519,8 @@ def importance_table(
     native_ok = native is not None and float(np.abs(native).sum()) > 0
     if (force_perm or not native_ok) and not X.empty and y is not None:
         use_x = X.reindex(columns=names, fill_value=0)
+        from samovar.reprofiling import training_n_jobs
+
         perm = permutation_importance_scores(
             model,
             use_x,
@@ -524,6 +528,7 @@ def importance_table(
             n_repeats=n_repeats,
             random_state=seed,
             sample_weight=weights,
+            n_jobs=training_n_jobs(config=cfg),
         )
     regen_agree, init_agree = profile_agreement_scores(frame, names, regenerated, initial)
     native_map = {}
