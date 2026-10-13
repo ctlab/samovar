@@ -2,7 +2,11 @@
 """Dinucleotide (k=2) feature extractor.
 
 Reads FASTQ via the annotator CLI (``-i``/``-I``/``-o``/``-t``) and writes a
-headered TSV: ``seq`` plus 16 ACGT 2-mer counts (``AA``, ``AC``, …, ``TT``).
+headered TSV: ``seq`` plus ACGT 2-mer counts (``AA``, ``AC``, …, ``TT``).
+Counting runs in ``bin/samovar_kmer`` (OpenMP over reads, ``-t`` threads).
+``--kmer-max N`` keeps the N k-mers with the largest across-read variance
+(at most 16; ties keep the earlier AA..TT column). Those are the columns
+that land in the combined annotation table.
 This is a Feature sub-contract of Annotation: no taxID column.
 """
 
@@ -10,14 +14,10 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import sys
+import os
+import subprocess
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, TextIO, Tuple
-
-K = 2
-BASES = "ACGT"
-KMER_IDS: List[str] = [a + b for a in BASES for b in BASES]
-KMER_INDEX = {kmer: i for i, kmer in enumerate(KMER_IDS)}
+from typing import Iterator, List, Optional, TextIO, Tuple
 
 
 def _open_text(path: str) -> TextIO:
@@ -58,57 +58,45 @@ def iter_fastq_records(path: str) -> Iterator[Tuple[str, str]]:
             yield read_id, seq.strip().upper()
 
 
-def count_kmers(seq: str, k: int = K) -> List[int]:
-    """Count ACGT k-mers; skip windows that contain non-ACGT bases."""
-    counts = [0] * (4**k)
-    if k <= 0 or len(seq) < k:
-        return counts
-    for i in range(len(seq) - k + 1):
-        mer = seq[i : i + k]
-        idx = KMER_INDEX.get(mer)
-        if idx is not None:
-            counts[idx] += 1
-    return counts
-
-
-def extract_features(
-    r1: str,
-    r2: Optional[str] = None,
-) -> Dict[str, List[int]]:
-    """Map read ID → 16 dinucleotide counts (R1 and R2 are summed)."""
-    by_id: Dict[str, List[int]] = {}
-    for path in (r1, r2):
-        if not path:
-            continue
-        for read_id, seq in iter_fastq_records(path):
-            if not read_id:
-                continue
-            add = count_kmers(seq, K)
-            if read_id not in by_id:
-                by_id[read_id] = add
-            else:
-                cur = by_id[read_id]
-                for i, n in enumerate(add):
-                    cur[i] += n
-    return by_id
-
-
-def write_table(by_id: Dict[str, List[int]], dest: str) -> int:
-    path = Path(dest)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as out:
-        out.write("seq\t" + "\t".join(KMER_IDS) + "\n")
-        for read_id in by_id:
-            counts = by_id[read_id]
-            out.write(read_id + "\t" + "\t".join(str(n) for n in counts) + "\n")
-    return len(by_id)
-
-
 def parse_output(file_path: str):
     """Contract helper: headered seq + k-mer columns."""
     from samovar.parse_annotators import read_custom_raw
 
     return read_custom_raw(file_path)
+
+
+def kmer_binary() -> Path:
+    from samovar.paths import repo_root
+
+    return repo_root() / "bin" / "samovar_kmer"
+
+
+def ensure_kmer_binary() -> Path:
+    """Build ``bin/samovar_kmer`` when the source is newer than the binary."""
+    from samovar.paths import cxx_compiler, repo_root
+
+    binary = kmer_binary()
+    root = repo_root()
+    source = root / "src" / "cpp" / "kmer_profile.cpp"
+    makefile = root / "src" / "cpp" / "Makefile"
+    if not source.is_file():
+        raise FileNotFoundError(f"C++ k-mer profiler source not found: {source}")
+    newest = source.stat().st_mtime
+    if makefile.is_file():
+        newest = max(newest, makefile.stat().st_mtime)
+    needs_build = (not binary.is_file()) or newest > binary.stat().st_mtime
+    if needs_build:
+        cxx = cxx_compiler()
+        if not cxx:
+            raise FileNotFoundError(
+                "No C++ compiler found (g++, c++, or clang++). Install a compiler or set CXX."
+            )
+        env = os.environ.copy()
+        env["CXX"] = cxx
+        subprocess.check_call(["make", "-C", str(makefile.parent), "kmer"], env=env)
+    if not os.access(binary, os.X_OK):
+        raise RuntimeError(f"C++ k-mer profiler is not executable: {binary}")
+    return binary
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -119,11 +107,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("-I", "-2", dest="r2", default="", help="R2 FASTQ (optional)")
     parser.add_argument("-d", dest="db", default="", help="Unused (annotator CLI)")
     parser.add_argument("-o", "--output", dest="o", required=True, help="Output TSV")
-    parser.add_argument("-t", dest="threads", default="1", help="Unused (annotator CLI)")
+    parser.add_argument("-t", dest="threads", default="1", help="OpenMP threads for the C++ counter")
+    parser.add_argument(
+        "--kmer-max",
+        dest="kmer_max",
+        type=int,
+        default=None,
+        help="Max distinct k-mers written (highest across-read variance; at most 16)",
+    )
     args = parser.parse_args(argv)
-    table = extract_features(args.r1, args.r2 or None)
-    write_table(table, args.o)
-    return 0
+    if args.kmer_max is not None and args.kmer_max < 0:
+        parser.error("--kmer-max must be >= 0")
+    threads = int(args.threads)
+    if threads < 1:
+        parser.error("-t must be >= 1")
+    binary = ensure_kmer_binary()
+    cmd = [str(binary), "-i", args.r1, "-o", args.o, "-t", str(threads)]
+    if args.r2:
+        cmd.extend(["-I", args.r2])
+    if args.db:
+        cmd.extend(["-d", args.db])
+    if args.kmer_max is not None:
+        cmd.extend(["--kmer-max", str(args.kmer_max)])
+    return subprocess.call(cmd)
 
 
 if __name__ == "__main__":

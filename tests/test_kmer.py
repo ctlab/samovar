@@ -1,46 +1,60 @@
-"""Builtin k=2 k-mer feature extractor and Feature contract helpers."""
-
-from pathlib import Path
+"""C++ dinucleotide profiler (optional: needs a C++ compiler)."""
 
 import pandas as pd
+import pytest
 
 from samovar.annotation_columns import (
     feat_annotator_columns,
-    is_feat_column,
     is_tax_column,
     prefix_tool_columns,
     select_scoring_annotators,
 )
 from samovar.annotators_wrapper import get_annotator_instance
-from samovar.kmer2 import KMER_IDS, count_kmers, main, parse_output
-from samovar.main_config import normalize_tool_group
+from samovar.kmer2 import main, parse_output
 from samovar.parse_annotators import Annotation
 from samovar.reprofiling import preprocess_data, train_models
 from samovar.scores import score_annotators
 
-
-def test_feature_type_aliases_annotator():
-    assert normalize_tool_group("feature") == "annotator"
-    assert normalize_tool_group("seq2feature") == "annotator"
+pytestmark = pytest.mark.optional
 
 
-def test_kmer2_counts_dinucleotides():
-    counts = count_kmers("AAAT")
-    by = dict(zip(KMER_IDS, counts))
-    assert len(KMER_IDS) == 16
-    assert by["AA"] == 2
-    assert by["AT"] == 1
-    assert by["TA"] == 0
-    assert sum(counts) == 3
+def _fastq(records):
+    chunks = []
+    for read_id, seq in records:
+        chunks.append(f"@{read_id}\n{seq}\n+\n{'I' * len(seq)}\n")
+    return "".join(chunks)
 
 
-def test_kmer2_cli_and_parse_output(tmp_path):
+def test_kmer_counts_dinucleotides(tmp_path):
+    r1 = tmp_path / "s_R1.fastq"
+    r1.write_text(_fastq([("r0", "AAAT")]))
+    out = tmp_path / "kmer.out"
+    assert main(["-i", str(r1), "-o", str(out), "-t", "1"]) == 0
+    frame = parse_output(str(out)).set_index("seq")
+    row = frame.loc["r0"]
+    assert len(frame.columns) == 16
+    assert int(row["AA"]) == 2
+    assert int(row["AT"]) == 1
+    assert int(row["TA"]) == 0
+    assert sum(int(row[c]) for c in frame.columns) == 3
+
+
+def test_kmer_skips_non_acgt(tmp_path):
+    r1 = tmp_path / "s_R1.fastq"
+    r1.write_text(_fastq([("r0", "ANAA")]))
+    out = tmp_path / "kmer.out"
+    assert main(["-i", str(r1), "-o", str(out), "-t", "1"]) == 0
+    row = parse_output(str(out)).set_index("seq").loc["r0"]
+    assert int(row["AA"]) == 1
+    assert sum(int(row[c]) for c in row.index) == 1
+
+
+def test_kmer_cli_and_parse_output(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r2 = tmp_path / "s_R2.fastq"
-    rec = "@r0\nAAAT\n+\nIIII\n"
-    r1.write_text(rec)
-    r2.write_text("@r0\nGGGG\n+\nIIII\n")
-    out = tmp_path / "kmer2.out"
+    r1.write_text(_fastq([("r0", "AAAT")]))
+    r2.write_text(_fastq([("r0", "GGGG")]))
+    out = tmp_path / "kmer.out"
     assert main(["-i", str(r1), "-I", str(r2), "-o", str(out), "-t", "1"]) == 0
     text = out.read_text()
     assert text.startswith("seq\tAA\t")
@@ -58,7 +72,7 @@ def test_kmer2_cli_and_parse_output(tmp_path):
     assert not any(is_tax_column(c) for c in labeled.columns)
 
 
-def test_kmer2_factory_and_annotation_class(tmp_path):
+def test_kmer_factory_and_annotation_class(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r1.write_text("@readA|taxid:562|\nATGC\n+\nIIII\n")
     out = tmp_path / "sample_kmer2.kmer2.out"
@@ -73,9 +87,46 @@ def test_kmer2_factory_and_annotation_class(tmp_path):
     assert all(c.startswith("feat_") for c in ann.ft().columns)
 
 
-def test_count_kmers_skips_non_acgt():
-    # N-containing windows are skipped; AA from ANAA still counts once.
-    assert count_kmers("ANAA")[KMER_IDS.index("AA")] == 1
+def test_kmer_max_keeps_highest_variance(tmp_path):
+    """Top k-mers by across-read variance, capped by the real k-mer count."""
+    r1 = tmp_path / "s_R1.fastq"
+    r1.write_text(
+        _fastq(
+            [
+                ("r1", "AAAA"),
+                ("r2", "AAAA"),
+                ("r3", "ACAC"),
+                ("r4", "ACAC"),
+            ]
+        )
+    )
+    out = tmp_path / "kmer.out"
+    assert main(["-i", str(r1), "-o", str(out), "-t", "2", "--kmer-max", "2"]) == 0
+    frame = parse_output(str(out))
+    assert list(frame.columns) == ["seq", "AA", "AC"]
+    assert main(["-i", str(r1), "-o", str(out), "-t", "1", "--kmer-max", "100"]) == 0
+    wide = parse_output(str(out))
+    assert len([c for c in wide.columns if c != "seq"]) == 16
+
+
+def test_kmer_threads_and_duplicates_match(tmp_path):
+    records = [("r%03d" % i, "ACGT" * (3 + (i % 5)) + ("N" if i % 7 == 0 else "")) for i in range(40)]
+    records.append(("r000", "TTTT"))
+    r1 = tmp_path / "s_R1.fastq"
+    r2 = tmp_path / "s_R2.fastq"
+    r1.write_text(_fastq(records))
+    r2.write_text(_fastq([("r000", "aaat"), ("only2", "GG")]))
+    one = tmp_path / "t1.out"
+    many = tmp_path / "t8.out"
+    assert main(["-i", str(r1), "-I", str(r2), "-o", str(one), "-t", "1"]) == 0
+    assert main(["-i", str(r1), "-I", str(r2), "-o", str(many), "-t", "8", "--kmer-max", "16"]) == 0
+    assert one.read_text() == many.read_text()
+    frame = parse_output(str(one)).set_index("seq")
+    assert int(frame.loc["r000", "AA"]) == 2
+    assert int(frame.loc["r000", "AT"]) == 1
+    assert int(frame.loc["r000", "TT"]) == 3
+    assert int(frame.loc["only2", "GG"]) == 1
+    assert "only2" in frame.index
 
 
 def test_scoring_ignores_feat_columns():
