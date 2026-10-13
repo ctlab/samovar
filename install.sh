@@ -874,6 +874,20 @@ if [ -z "$CXX_BIN" ] || ! command -v "$CXX_BIN" >/dev/null 2>&1; then
 fi
 if [ -n "${CXX_BIN:-}" ]; then
     echo "C++ compiler: $CXX_BIN"
+    # samovar_kmer includes zlib.h. Conda's g++ does not search the system
+    # include tree, so the header has to come from this environment.
+    if ! echo '#include <zlib.h>' | "$CXX_BIN" -E -x c++ - -o /dev/null >/dev/null 2>&1; then
+        echo "zlib headers are not visible to $CXX_BIN"
+        if command -v conda >/dev/null 2>&1; then
+            conda install -y -c conda-forge zlib
+        elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends zlib1g-dev
+        else
+            echo "ERROR: install zlib development headers (conda: zlib, Debian: zlib1g-dev)."
+            exit 1
+        fi
+    fi
     make -C src/cpp CXX="$CXX_BIN"
     chmod +x bin/samovar_combine_annotations 2>/dev/null || true
 else
