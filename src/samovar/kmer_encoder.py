@@ -13,14 +13,15 @@ Train a model from reference FASTA (same algorithm as ``metauto train``):
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+import tempfile
 from itertools import product
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 
-from samovar.kmer2 import iter_read_mates
 from samovar.memory import proba_chunk_rows
 
 DEFAULT_K = 4
@@ -52,44 +53,6 @@ def seq_to_vec(seq: str, k: int, index: Optional[Dict[str, int]] = None) -> np.n
     if total > 0:
         vec /= total
     return vec
-
-
-def _counts(seq: str, k: int, index: Dict[str, int]) -> np.ndarray:
-    raw = np.zeros(len(index), dtype=np.float64)
-    if k > 0 and seq and len(seq) >= k:
-        for i in range(len(seq) - k + 1):
-            idx = index.get(seq[i : i + k])
-            if idx is not None:
-                raw[idx] += 1
-    return raw
-
-
-def _pair_freq(left: str, right: str, k: int, index: Dict[str, int]) -> np.ndarray:
-    """Normalized k-mer frequencies of R1 and R2, without a junction k-mer."""
-    raw = _counts(left, k, index)
-    if right:
-        raw = raw + _counts(right, k, index)
-    total = raw.sum()
-    if total > 0:
-        raw /= total
-    return raw
-
-
-def freqs_from_fastq(r1: str, r2: Optional[str] = None, k: int = DEFAULT_K) -> Dict[str, np.ndarray]:
-    """In-memory frequencies. Sample-sized FASTQ should use :func:`write_freq_table`."""
-    index = build_kmer_index(k)
-    out: Dict[str, np.ndarray] = {}
-    for read_id, left, right in iter_read_mates(r1, r2 or None):
-        if not read_id:
-            continue
-        vec = _pair_freq(left, right, k, index)
-        if read_id not in out:
-            out[read_id] = vec
-        else:
-            merged = out[read_id] + vec
-            total = merged.sum()
-            out[read_id] = merged / total if total > 0 else merged
-    return out
 
 
 def resolve_model_path(db: str) -> Optional[Path]:
@@ -230,39 +193,39 @@ def _encode_batch(torch, model, dev, mat: np.ndarray) -> np.ndarray:
         return z.detach().cpu().numpy()
 
 
-def latents_from_fastq(
+def _fmt(values: Iterable[float]) -> str:
+    return "\t".join(f"{float(v):.6g}" for v in values)
+
+
+def write_freq_table(
     r1: str,
-    r2: Optional[str],
-    model_path: str,
-    device: str = "",
-) -> Tuple[List[str], np.ndarray]:
-    """Encode in memory-sized batches. The returned matrix is the caller's."""
-    torch, model, dev, k, index, latent_dim = _load_encoder(model_path, device)
-    ids: List[str] = []
-    blocks: List[np.ndarray] = []
-    batch_ids: List[str] = []
-    batch_vecs: List[np.ndarray] = []
-    chunk = proba_chunk_rows(latent_dim, len(index))
+    dest: str,
+    k: int = DEFAULT_K,
+    r2: Optional[str] = None,
+    threads: int = 1,
+) -> int:
+    """Normalized k-mer frequencies via ``bin/samovar_kmer`` (one row per read)."""
+    from samovar.kmer2 import ensure_kmer_binary
 
-    def _flush() -> None:
-        if not batch_ids:
-            return
-        blocks.append(_encode_batch(torch, model, dev, np.stack(batch_vecs)))
-        ids.extend(batch_ids)
-        batch_ids.clear()
-        batch_vecs.clear()
-
-    for read_id, left, right in iter_read_mates(r1, r2 or None):
-        if not read_id:
-            continue
-        batch_ids.append(read_id)
-        batch_vecs.append(_pair_freq(left, right, k, index))
-        if len(batch_ids) >= chunk:
-            _flush()
-    _flush()
-    if not ids:
-        return [], np.zeros((0, latent_dim))
-    return ids, np.vstack(blocks)
+    path = Path(dest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        str(ensure_kmer_binary()),
+        "-i",
+        r1,
+        "-o",
+        str(path),
+        "-t",
+        str(max(1, int(threads))),
+        "-k",
+        str(int(k)),
+        "--normalize",
+    ]
+    if r2:
+        cmd.extend(["-I", r2])
+    subprocess.check_call(cmd)
+    with path.open(encoding="utf-8") as handle:
+        return max(0, sum(1 for _ in handle) - 1)
 
 
 def write_latent_table_stream(
@@ -271,72 +234,56 @@ def write_latent_table_stream(
     model_path: str,
     dest: str,
     device: str = "",
+    threads: int = 1,
 ) -> int:
-    """Write latent rows in batches. Each batch is released after it is written."""
+    """Encode C++ frequency rows in batches. A batch is dropped after it is written."""
     torch, model, dev, k, index, latent_dim = _load_encoder(model_path, device)
     names = [f"z{i}" for i in range(latent_dim)]
     path = Path(dest)
     path.parent.mkdir(parents=True, exist_ok=True)
-    chunk = proba_chunk_rows(latent_dim, len(index))
+    n_in = len(index) if not isinstance(index, dict) else len(index)
+    chunk = proba_chunk_rows(latent_dim, n_in)
     n = 0
-    batch_ids: List[str] = []
-    batch_vecs: List[np.ndarray] = []
-    with path.open("w", encoding="utf-8") as out:
-        out.write("seq\t" + "\t".join(names) + "\n")
+    with tempfile.TemporaryDirectory(prefix="samovar-kmer-") as tmp:
+        freq_path = Path(tmp) / "freq.tsv"
+        write_freq_table(r1, str(freq_path), k=k, r2=r2, threads=threads)
+        with freq_path.open(encoding="utf-8") as src, path.open("w", encoding="utf-8") as out:
+            header = src.readline().rstrip("\n").split("\t")
+            cols = header[1:]
+            if isinstance(index, dict):
+                places = [int(index[name]) for name in cols]
+            else:
+                places = list(range(len(cols)))
+            out.write("seq\t" + "\t".join(names) + "\n")
+            ids: List[str] = []
+            vecs: List[np.ndarray] = []
 
-        def _flush() -> None:
-            nonlocal n
-            if not batch_ids:
-                return
-            encoded = _encode_batch(torch, model, dev, np.stack(batch_vecs))
-            for read_id, row in zip(batch_ids, encoded):
-                out.write(read_id + "\t" + _fmt(row) + "\n")
-                n += 1
-            batch_ids.clear()
-            batch_vecs.clear()
+            def _flush() -> None:
+                nonlocal n
+                if not ids:
+                    return
+                mat = np.zeros((len(vecs), n_in), dtype=np.float64)
+                for row_i, vec in enumerate(vecs):
+                    for src_i, dst_i in enumerate(places):
+                        if 0 <= dst_i < n_in:
+                            mat[row_i, dst_i] = vec[src_i]
+                encoded = _encode_batch(torch, model, dev, mat)
+                for read_id, row in zip(ids, encoded):
+                    out.write(read_id + "\t" + _fmt(row) + "\n")
+                    n += 1
+                ids.clear()
+                vecs.clear()
 
-        for read_id, left, right in iter_read_mates(r1, r2 or None):
-            if not read_id:
-                continue
-            batch_ids.append(read_id)
-            batch_vecs.append(_pair_freq(left, right, k, index))
-            if len(batch_ids) >= chunk:
-                _flush()
-        _flush()
+            for line in src:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 2:
+                    continue
+                ids.append(parts[0])
+                vecs.append(np.asarray(parts[1:], dtype=np.float64))
+                if len(ids) >= chunk:
+                    _flush()
+            _flush()
     return n
-
-
-def _fmt(values: Iterable[float]) -> str:
-    return "\t".join(f"{float(v):.6g}" for v in values)
-
-
-def write_freq_table(r1: str, dest: str, k: int = DEFAULT_K, r2: Optional[str] = None) -> int:
-    """Write one frequency row per read. Counters for a read are dropped after the row."""
-    names = kmer_ids(k)
-    index = build_kmer_index(k)
-    path = Path(dest)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    n = 0
-    with path.open("w", encoding="utf-8") as out:
-        out.write("seq\t" + "\t".join(names) + "\n")
-        for read_id, left, right in iter_read_mates(r1, r2 or None):
-            if not read_id:
-                continue
-            out.write(read_id + "\t" + _fmt(_pair_freq(left, right, k, index)) + "\n")
-            n += 1
-    return n
-
-
-def write_latent_table(ids: Sequence[str], z: np.ndarray, dest: str) -> int:
-    n = 0 if z.size == 0 else z.shape[1]
-    names = [f"z{i}" for i in range(n)]
-    path = Path(dest)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as out:
-        out.write("seq\t" + "\t".join(names) + "\n")
-        for i, read_id in enumerate(ids):
-            out.write(read_id + "\t" + _fmt(z[i]) + "\n")
-    return len(ids)
 
 
 def parse_output(file_path: str):
@@ -345,11 +292,20 @@ def parse_output(file_path: str):
     return read_custom_raw(file_path)
 
 
-def extract_to_file(r1: str, r2: str, dest: str, db: str = "", k: int = DEFAULT_K) -> int:
+def extract_to_file(
+    r1: str,
+    r2: str,
+    dest: str,
+    db: str = "",
+    k: int = DEFAULT_K,
+    threads: int = 1,
+) -> int:
     model = resolve_model_path(db)
     if model is not None:
-        return write_latent_table_stream(r1, r2 or None, str(model), dest)
-    return write_freq_table(r1, dest, k=k, r2=r2 or None)
+        return write_latent_table_stream(
+            r1, r2 or None, str(model), dest, threads=threads
+        )
+    return write_freq_table(r1, dest, k=k, r2=r2 or None, threads=threads)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -382,7 +338,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("-t", dest="threads", default="1")
     parser.add_argument("-k", dest="k", type=int, default=DEFAULT_K)
     args = parser.parse_args(rest)
-    extract_to_file(args.r1, args.r2, args.o, db=args.db, k=args.k)
+    threads = int(args.threads)
+    if threads < 1:
+        parser.error("-t must be >= 1")
+    extract_to_file(args.r1, args.r2, args.o, db=args.db, k=args.k, threads=threads)
     return 0
 
 

@@ -13,7 +13,7 @@ from samovar.tool_spec import scheduler_threads
 
 def test_scheduler_reserves_only_what_the_program_uses():
     assert scheduler_threads("gc", 200) == 1
-    assert scheduler_threads("kmer_encoder", 200) == 1
+    assert scheduler_threads("kmer_encoder", 200) == 8
     assert scheduler_threads("kmer2", 200) == 8
     assert scheduler_threads("metax", 200) == 4
     assert scheduler_threads("kraken2", 200) == 16

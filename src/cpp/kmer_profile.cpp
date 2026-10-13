@@ -40,6 +40,8 @@ const char* KMER_IDS[KMER_N] = {
 };
 
 struct Table {
+    int k = 2;
+    int nmer = KMER_N;
     std::vector<std::string> ids;
     std::vector<uint32_t> counts;
 };
@@ -71,21 +73,29 @@ int base4(unsigned char c) {
     }
 }
 
-void count_seq(const char* seq, size_t n, uint32_t* counts) {
-    int prev = -1;
+void count_seq(const char* seq, size_t n, uint32_t* counts, int k, int nmer) {
+    // Rolling base-4 window. A non-ACGT base breaks the window, same as the
+    // k=2 counter (no k-mer crosses an ambiguous base).
+    int filled = 0;
+    int window = 0;
+    const int mask = nmer - 1;
     for (size_t i = 0; i < n; ++i) {
         int b = base4(static_cast<unsigned char>(seq[i]));
         if (b < 0) {
-            prev = -1;
+            filled = 0;
+            window = 0;
             continue;
         }
-        if (prev >= 0) {
-            uint32_t& cell = counts[prev * 4 + b];
+        window = ((window << 2) | b) & mask;
+        if (filled < k) {
+            ++filled;
+        }
+        if (filled == k) {
+            uint32_t& cell = counts[window];
             if (cell < COUNT_MAX) {
                 ++cell;
             }
         }
-        prev = b;
     }
 }
 
@@ -118,8 +128,8 @@ std::string read_id(const char* header, size_t n) {
     return id;
 }
 
-void add_counts(uint32_t* dst, const uint32_t* src) {
-    for (int k = 0; k < KMER_N; ++k) {
+void add_counts(uint32_t* dst, const uint32_t* src, int nmer) {
+    for (int k = 0; k < nmer; ++k) {
         uint64_t sum = static_cast<uint64_t>(dst[k]) + src[k];
         dst[k] = sum > COUNT_MAX ? COUNT_MAX : static_cast<uint32_t>(sum);
     }
@@ -292,13 +302,16 @@ void line_span(const std::vector<char>& text, const std::vector<size_t>& starts,
     len = end - begin;
 }
 
-Table collapse(std::vector<std::string> ids, std::vector<uint32_t> counts) {
+Table collapse(std::vector<std::string> ids, std::vector<uint32_t> counts, int k, int nmer) {
     Table out;
+    out.k = k;
+    out.nmer = nmer;
     const size_t n = ids.size();
+    const size_t width = static_cast<size_t>(nmer);
     std::unordered_map<std::string, size_t> index;
     index.reserve(n * 2 + 1);
     out.ids.reserve(n);
-    out.counts.reserve(n * KMER_N);
+    out.counts.reserve(n * width);
     for (size_t i = 0; i < n; ++i) {
         if (ids[i].empty()) {
             continue;
@@ -307,24 +320,26 @@ Table collapse(std::vector<std::string> ids, std::vector<uint32_t> counts) {
         if (it == index.end()) {
             index.emplace(ids[i], out.ids.size());
             out.ids.push_back(std::move(ids[i]));
-            out.counts.insert(out.counts.end(), counts.begin() + static_cast<std::ptrdiff_t>(i * KMER_N),
-                              counts.begin() + static_cast<std::ptrdiff_t>((i + 1) * KMER_N));
+            out.counts.insert(out.counts.end(), counts.begin() + static_cast<std::ptrdiff_t>(i * width),
+                              counts.begin() + static_cast<std::ptrdiff_t>((i + 1) * width));
         } else {
-            add_counts(&out.counts[it->second * KMER_N], &counts[i * KMER_N]);
+            add_counts(&out.counts[it->second * width], &counts[i * width], nmer);
         }
     }
     return out;
 }
 
-Table count_fastq(const std::string& path, int threads) {
+Table count_fastq(const std::string& path, int threads, int k) {
+    const int nmer = 1 << (2 * k);
     std::vector<char> text;
     if (!load_bytes(path, threads, text)) {
         throw std::runtime_error("cannot read FASTQ: " + path);
     }
     std::vector<size_t> starts = line_starts(text, threads);
     const size_t nrec = starts.size() / 4;
+    const size_t width = static_cast<size_t>(nmer);
     std::vector<std::string> ids(nrec);
-    std::vector<uint32_t> counts(nrec * KMER_N, 0);
+    std::vector<uint32_t> counts(nrec * width, 0);
     const int workers = worker_count(threads, nrec);
     const long long nrec_ll = static_cast<long long>(nrec);
 #ifdef _OPENMP
@@ -340,10 +355,10 @@ Table count_fastq(const std::string& path, int threads) {
         line_span(text, starts, rec * 4 + 1, seq, slen);
         ids[rec] = read_id(header, hlen);
         if (!ids[rec].empty()) {
-            count_seq(seq, slen, &counts[rec * KMER_N]);
+            count_seq(seq, slen, &counts[rec * width], k, nmer);
         }
     }
-    return collapse(std::move(ids), std::move(counts));
+    return collapse(std::move(ids), std::move(counts), k, nmer);
 }
 
 void merge_into(Table& dst, const Table& src) {
@@ -357,10 +372,10 @@ void merge_into(Table& dst, const Table& src) {
         if (it == index.end()) {
             index.emplace(src.ids[j], dst.ids.size());
             dst.ids.push_back(src.ids[j]);
-            dst.counts.insert(dst.counts.end(), src.counts.begin() + static_cast<std::ptrdiff_t>(j * KMER_N),
-                              src.counts.begin() + static_cast<std::ptrdiff_t>((j + 1) * KMER_N));
+            dst.counts.insert(dst.counts.end(), src.counts.begin() + static_cast<std::ptrdiff_t>(j * dst.nmer),
+                              src.counts.begin() + static_cast<std::ptrdiff_t>((j + 1) * dst.nmer));
         } else {
-            add_counts(&dst.counts[it->second * KMER_N], &src.counts[j * KMER_N]);
+            add_counts(&dst.counts[it->second * dst.nmer], &src.counts[j * dst.nmer], dst.nmer);
         }
     }
 }
@@ -372,12 +387,13 @@ struct Rank {
 
 std::vector<int> select_kmers(const Table& table, int kmer_max) {
     const size_t n = table.ids.size();
-    std::vector<Rank> ranks(KMER_N);
-    for (int k = 0; k < KMER_N; ++k) {
+    const int nmer = table.nmer;
+    std::vector<Rank> ranks(static_cast<size_t>(nmer));
+    for (int k = 0; k < nmer; ++k) {
         unsigned __int128 sum = 0;
         unsigned __int128 sumsq = 0;
         for (size_t i = 0; i < n; ++i) {
-            unsigned __int128 c = table.counts[i * KMER_N + static_cast<size_t>(k)];
+            unsigned __int128 c = table.counts[i * static_cast<size_t>(nmer) + static_cast<size_t>(k)];
             sum += c;
             sumsq += c * c;
         }
@@ -387,9 +403,9 @@ std::vector<int> select_kmers(const Table& table, int kmer_max) {
         }
         ranks[static_cast<size_t>(k)] = Rank{disp, k};
     }
-    int keep = KMER_N;
+    int keep = nmer;
     if (kmer_max >= 0) {
-        keep = std::min(kmer_max, KMER_N);
+        keep = std::min(kmer_max, nmer);
     }
     if (kmer_max >= 0) {
         std::sort(ranks.begin(), ranks.end(), [](const Rank& a, const Rank& b) {
@@ -409,7 +425,19 @@ std::vector<int> select_kmers(const Table& table, int kmer_max) {
     return cols;
 }
 
-void write_table(const std::string& path, const Table& table, const std::vector<int>& cols) {
+std::string kmer_name(int idx, int k) {
+    if (k == 2) {
+        return KMER_IDS[idx];
+    }
+    std::string name(static_cast<size_t>(k), 'A');
+    for (int i = k - 1; i >= 0; --i) {
+        name[static_cast<size_t>(i)] = "ACGT"[idx & 3];
+        idx >>= 2;
+    }
+    return name;
+}
+
+void write_table(const std::string& path, const Table& table, const std::vector<int>& cols, bool normalize) {
     namespace fs = std::filesystem;
     fs::path dest(path);
     std::error_code ec;
@@ -422,14 +450,29 @@ void write_table(const std::string& path, const Table& table, const std::vector<
     }
     out << "seq";
     for (int col : cols) {
-        out << '\t' << KMER_IDS[col];
+        out << '\t' << kmer_name(col, table.k);
     }
     out << '\n';
+    out.setf(std::ios::fmtflags(0), std::ios::floatfield);
+    out.precision(6);
+    const size_t width = static_cast<size_t>(table.nmer);
     for (size_t i = 0; i < table.ids.size(); ++i) {
         out << table.ids[i];
-        const uint32_t* row = &table.counts[i * KMER_N];
+        const uint32_t* row = &table.counts[i * width];
+        double total = 0;
+        if (normalize) {
+            for (int col : cols) {
+                total += static_cast<double>(row[col]);
+            }
+        }
         for (int col : cols) {
-            out << '\t' << row[col];
+            if (!normalize) {
+                out << '\t' << row[col];
+            } else if (total > 0) {
+                out << '\t' << (static_cast<double>(row[col]) / total);
+            } else {
+                out << "\t0";
+            }
         }
         out << '\n';
     }
@@ -440,9 +483,9 @@ void write_table(const std::string& path, const Table& table, const std::vector<
 
 void usage() {
     std::cerr
-        << "Usage: samovar_kmer -i R1 [-I R2] -o OUT [-t THREADS] [--kmer-max N]\n"
-        << "  Count ACGT dinucleotides per read. --kmer-max keeps that many\n"
-        << "  k-mers with the highest across-read variance (at most 16).\n";
+        << "Usage: samovar_kmer -i R1 [-I R2] -o OUT [-t THREADS] [-k K] [--normalize] [--kmer-max N]\n"
+        << "  Count ACGT k-mers per read (default k=2). --normalize writes frequencies.\n"
+        << "  --kmer-max keeps that many k-mers with the highest across-read variance.\n";
 }
 
 }  // namespace
@@ -452,6 +495,8 @@ int main(int argc, char** argv) {
     std::string r2;
     std::string dest;
     int threads = 1;
+    int k = 2;
+    bool normalize = false;
     int kmer_max = -1;
     bool kmer_max_set = false;
     try {
@@ -475,6 +520,10 @@ int main(int argc, char** argv) {
                 dest = need("-o");
             } else if (arg == "-t" || arg == "--threads") {
                 threads = std::stoi(need("-t"));
+            } else if (arg == "-k") {
+                k = std::stoi(need("-k"));
+            } else if (arg == "--normalize") {
+                normalize = true;
             } else if (arg == "-d") {
                 (void)need("-d");
             } else if (arg == "--kmer-max") {
@@ -493,6 +542,9 @@ int main(int argc, char** argv) {
         if (threads < 1) {
             throw std::runtime_error("-t must be >= 1");
         }
+        if (k < 1 || k > 8) {
+            throw std::runtime_error("-k must be from 1 to 8");
+        }
         if (kmer_max_set && kmer_max < 0) {
             throw std::runtime_error("--kmer-max must be >= 0");
         }
@@ -510,11 +562,11 @@ int main(int argc, char** argv) {
 #endif
 
     try {
-        Table table = count_fastq(r1, threads);
+        Table table = count_fastq(r1, threads, k);
         if (!r2.empty()) {
-            merge_into(table, count_fastq(r2, threads));
+            merge_into(table, count_fastq(r2, threads, k));
         }
-        write_table(dest, table, select_kmers(table, kmer_max));
+        write_table(dest, table, select_kmers(table, kmer_max), normalize);
     } catch (const std::exception& exc) {
         std::cerr << "samovar_kmer: " << exc.what() << "\n";
         return 1;

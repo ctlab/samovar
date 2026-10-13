@@ -105,8 +105,8 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
 SCHEDULER_THREAD_CAP = {
     "gc": 1,
     "length": 1,
-    # Accepts -t and ignores it. Parallelism is across samples.
-    "kmer_encoder": 1,
+    # Same OpenMP counter as kmer2 (samovar_kmer -k). Cap matches that job.
+    "kmer_encoder": 8,
     # OpenMP over reads. Several samples at this width beat one job on every core.
     "kmer2": 8,
     "kaiju": 32,
