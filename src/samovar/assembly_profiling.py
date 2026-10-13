@@ -340,6 +340,40 @@ def _touch_empty_fasta(dest: Path) -> None:
     dest.write_text("", encoding="utf-8")
 
 
+# Threads for one step inside an assembly job. MegaHIT / Flye: the k-mer table,
+# not the core count, is the limit. Prodigal is one thread per genome, so the
+# cap is how many genomes are called at once. GTDB-Tk's pplacer is RAM-bound.
+ASSEMBLY_STAGE_CAP = {
+    "megahit": 16,
+    "flye": 16,
+    "metaflye": 16,
+    "prodigal": 8,
+    "anvio": 8,
+    "metabat2": 8,
+    "metabat": 8,
+    "gtdbtk": 8,
+    "gtdb": 8,
+    "minimap2": 8,
+    "coverm": 4,
+    "checkm2": 4,
+    "dastool": 4,
+}
+
+
+def assembly_stage_threads(stage: str, budget: int) -> int:
+    """Threads for one assembly step, given the job budget."""
+    allowed = max(1, int(budget or 1))
+    key = str(stage or "").strip().lower().replace("-", "_")
+    cap = ASSEMBLY_STAGE_CAP.get(key)
+    if cap is None:
+        return allowed
+    return max(1, min(allowed, cap))
+
+
+def _job_threads(stage: str, threads: int) -> int:
+    return assembly_stage_threads(stage, threads)
+
+
 def run_megahit(
     r1: str,
     r2: str = "",
@@ -349,6 +383,7 @@ def run_megahit(
     exe: str = "",
 ) -> Path:
     """Assemble paired (or single) FASTQ with MegaHIT; write contig FASTA to dest."""
+    threads = _job_threads("megahit", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".megahit")
     if work.exists():
@@ -383,6 +418,7 @@ def run_metaflye(
     assembler-contract ``-o``. ONT R10 uses ``--nano-hq`` unless ``extra``
     already names a read type. A non-empty R2 is a second file of that type.
     """
+    threads = _job_threads("flye", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".metaflye")
     if work.exists():
@@ -450,15 +486,22 @@ def run_prodigal(
     extra: Optional[Sequence[str]] = None,
     exe: str = "",
 ) -> Path:
-    """Call genes with Prodigal; write ``*.faa`` and ``*.gff`` under dest."""
-    del threads  # Prodigal is single-threaded
+    """Call genes with Prodigal; write ``*.faa`` and ``*.gff`` under dest.
+
+    Prodigal itself has no thread flag. ``threads`` is how many genomes are
+    called at once, each in its own process.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = _job_threads("prodigal", threads)
     out = as_path(dest)
     out.mkdir(parents=True, exist_ok=True)
     prodigal = which_tool("prodigal", exe)
     files = _fasta_inputs(as_path(contigs))
     if not files and as_path(contigs).is_file():
         files = [as_path(contigs)]
-    for fasta in files:
+
+    def _one(fasta: Path) -> None:
         stem = fasta.stem
         faa = out / f"{stem}.faa"
         gff = out / f"{stem}.gff"
@@ -477,6 +520,13 @@ def run_prodigal(
         ]
         cmd.extend(str(x) for x in (extra or []))
         _run(cmd)
+
+    if len(files) <= 1 or workers <= 1:
+        for fasta in files:
+            _one(fasta)
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(files))) as pool:
+            list(pool.map(_one, files))
     return out
 
 
@@ -557,6 +607,7 @@ def run_anvio_binner(
     assembly is written as ``mag1.fa``. Extra FASTQ pairs in ``additional_reads``
     are profiled, merged, and clustered.
     """
+    threads = _job_threads("anvio", threads)
     mag_dir = as_path(dest)
     mag_dir.mkdir(parents=True, exist_ok=True)
     work = mag_dir / ".anvio"
@@ -777,6 +828,7 @@ def run_binner(
             additional_reads=additional_reads,
         )
     if key in {"metabat2", "metabat"}:
+        threads = _job_threads("metabat2", threads)
         exe = which_tool("metabat2")
         mag_dir = as_path(dest)
         mag_dir.mkdir(parents=True, exist_ok=True)
@@ -813,6 +865,7 @@ def run_checkm2(
     threads: int = 1,
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
+    threads = _job_threads("checkm2", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".checkm2")
     work.mkdir(parents=True, exist_ok=True)
@@ -897,6 +950,7 @@ def run_dastool_combine(
     threads: int = 1,
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
+    threads = _job_threads("dastool", threads)
     mag_dir = as_path(dest)
     mag_dir.mkdir(parents=True, exist_ok=True)
     dirs = [as_path(d) for d in mag_dirs if as_path(d).exists()]
@@ -1001,6 +1055,7 @@ def run_gtdbtk(
     threads: int = 1,
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
+    threads = _job_threads("gtdbtk", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".gtdbtk")
     env = os.environ.copy()
@@ -1152,6 +1207,7 @@ def run_minimap2(
     preset: str = "sr",
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
+    threads = _job_threads("minimap2", threads)
     out = as_path(dest)
     out.parent.mkdir(parents=True, exist_ok=True)
     ref = as_path(reference)

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from samovar.exec_control import CHECKPOINT_STEPS, resolve_window
+from samovar.tool_spec import scheduler_threads
 from samovar.paths import (
     absolute_path,
     add_output_dir_argument,
@@ -134,14 +135,17 @@ def _apply_translated_cli_flags(config: "PipelineConfig", args: argparse.Namespa
     }
     canonical.update(dict(getattr(args, "custom_cli_flags", None) or {}))
     cfg = load_config()
-    native = {"kraken2", "kaiju", "kraken", "krakenuniq", "metaphlan", "metaphlan4"}
     for ann in config.annotators or []:
         name = ann.type or ann.run_name
         rec = lookup_tool_record(cfg, name) or lookup_tool_record(cfg, ann.run_name)
-        extra_canon = dict(canonical)
-        if str(ann.type or "").lower() in native:
-            extra_canon.pop("--threads", None)
-            extra_canon.pop("--cores", None)
+        # Every shell command already passes its own -t / -z from the rule's
+        # threads. A second copy from flags-translate used to win and pin the
+        # whole machine (custom.sh saw -t twice; the last value was used).
+        extra_canon = {
+            key: value
+            for key, value in canonical.items()
+            if key not in {"--threads", "--cores"}
+        }
         ann.extra = apply_translated_flags(
             ann.extra or "",
             name=name,
@@ -1389,7 +1393,7 @@ class PipelineConfig:
                     'type': ann.type,
                     'cmd': ann.cmd,
                     'db_path': ann.db_path,
-                    'threads': self.cores,
+                    'threads': scheduler_threads(ann.type or ann.run_name, self.cores),
                     **({'db_name': ann.db_name} if ann.db_name else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }
@@ -1544,7 +1548,7 @@ class PipelineConfig:
                     'type': ann.type,
                     'cmd': ann.cmd,
                     'db_path': ann.db_path,
-                    'threads': self.cores,
+                    'threads': scheduler_threads(ann.type or ann.run_name, self.cores),
                     **({'db_name': ann.db_name} if ann.db_name else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }

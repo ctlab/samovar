@@ -1,3 +1,4 @@
+import glob
 import os
 import re
 import shlex
@@ -224,6 +225,80 @@ class Kraken2Annotator(BaseAnnotator):
         return df[["seq", "taxID"]]
 
 
+# One kaiju-multi process once a cohort is larger than a single sample.
+KAIJU_MULTI_MIN_SAMPLES = 2
+
+
+def use_kaiju_multi(n_samples: int) -> bool:
+    return int(n_samples or 0) >= KAIJU_MULTI_MIN_SAMPLES
+
+
+def _comma_paths(paths: Sequence[str]) -> str:
+    return ",".join(shlex.quote(str(path)) for path in paths)
+
+
+def _expand_index(path: str) -> str:
+    """Turn ``dir/*.fmi`` into the one index file the shell used to expand."""
+    text = str(path)
+    if "*" not in text and "?" not in text:
+        return text
+    hits = sorted(glob.glob(text))
+    if len(hits) == 1:
+        return hits[0]
+    return text
+
+
+def kaiju_multi_script(
+    *,
+    binary: str,
+    nodes: str,
+    database: str,
+    r1: Sequence[str],
+    r2: Sequence[str],
+    outputs: Sequence[str],
+    threads: int,
+    extra: str = "",
+    empty: Optional[Sequence[str]] = None,
+) -> str:
+    """Shell for one ``kaiju-multi`` run. Empty FASTQs are touched and left out."""
+    lines = ["set -euo pipefail"]
+    for path in outputs:
+        parent = str(path).rsplit("/", 1)[0] if "/" in str(path) else "."
+        lines.append(f"mkdir -p {shlex.quote(parent)}")
+    for path in empty or []:
+        lines.append(f"touch {shlex.quote(str(path))}")
+    if not r1:
+        return "\n".join(lines)
+    paired = [str(path) for path in r2 if str(path or "").strip()]
+    if paired and len(paired) != len(r1):
+        raise ValueError("kaiju-multi needs every sample paired, or none of them")
+    cmd = [
+        shlex.quote(binary),
+        "-t",
+        shlex.quote(nodes),
+        "-f",
+        shlex.quote(_expand_index(database)),
+        "-i",
+        _comma_paths(r1),
+        "-o",
+        _comma_paths(outputs),
+        "-z",
+        str(max(1, int(threads))),
+    ]
+    if paired:
+        cmd.extend(["-j", _comma_paths(paired)])
+    tail = str(extra or "").strip()
+    if tail:
+        cmd.append(tail)
+    lines.append(" ".join(cmd))
+    return "\n".join(lines)
+
+
+def wrap_shell(script: str) -> str:
+    """One argv so Snakemake's ``2> log`` covers the whole script."""
+    return "bash -euo pipefail -c " + shlex.quote(script)
+
+
 class KaijuAnnotator(BaseAnnotator):
     """Annotator class for Kaiju taxonomic classifier."""
 
@@ -235,18 +310,14 @@ class KaijuAnnotator(BaseAnnotator):
         out_file = os.path.join(output_dir, f"{sample}_{self.run_name}.kaiju.out")
         return [out_file]
 
-    def get_snakemake_shell_cmd(
-        self, input_r1: str, input_r2: str, outputs: List[str]
-    ) -> str:
-        out_file = outputs[0]
+    def _database_and_nodes(self) -> tuple:
         if self.run_config.get("db_name"):
             db_file_path = os.path.join(self.db_path, self.run_config["db_name"])
-        elif self.db_path.endswith(".fmi"):
+        elif str(self.db_path).endswith(".fmi"):
             db_file_path = self.db_path
         else:
             db_file_path = os.path.join(self.db_path, "*.fmi")
-
-        default_nodes = os.path.join(os.path.dirname(db_file_path), "nodes.dmp")
+        default_nodes = os.path.join(os.path.dirname(str(db_file_path).replace("*", "")), "nodes.dmp")
         db_nodes = self.run_config.get("db_nodes") or default_nodes
         try:
             nodes_ok = Path(str(db_nodes)).is_file()
@@ -261,6 +332,62 @@ class KaijuAnnotator(BaseAnnotator):
                     db_nodes = str(found)
             except Exception:
                 pass
+        return str(db_file_path), str(db_nodes)
+
+    def batch_shell(self, samples: Sequence[str], r1_dir: str, r2_dir: str, output_dir: str) -> str:
+        """One ``kaiju-multi`` for every sample of this run."""
+        from samovar.paths import resolve_executable
+        from samovar.seqio import fastq_has_reads, find_fastq_mate
+
+        database, nodes = self._database_and_nodes()
+        binary = str(resolve_executable("kaiju-multi") or "kaiju-multi").split()[0]
+        active_r1: List[str] = []
+        active_r2: List[str] = []
+        active_out: List[str] = []
+        empty: List[str] = []
+        paired = True
+        for sample in samples:
+            r1 = find_fastq_mate(r1_dir, sample, "R1")
+            r2 = find_fastq_mate(r2_dir, sample, "R2")
+            out = os.path.join(output_dir, f"{sample}_{self.run_name}.kaiju.out")
+            if r1 is None or not fastq_has_reads(str(r1)):
+                empty.append(out)
+                continue
+            if r2 is None:
+                paired = False
+            active_r1.append(str(r1))
+            active_r2.append(str(r2) if r2 is not None else "")
+            active_out.append(out)
+        r2_arg: List[str] = []
+        if paired and active_r2 and all(active_r2):
+            r2_arg = active_r2
+        elif any(active_r2):
+            lines = ["set -euo pipefail"]
+            for path in empty:
+                lines.append(f"touch {shlex.quote(str(path))}")
+            for r1, r2, out in zip(active_r1, active_r2, active_out):
+                lines.append(
+                    self.get_snakemake_shell_cmd(r1, r2, [out])
+                )
+            return wrap_shell("\n".join(lines))
+        script = kaiju_multi_script(
+            binary=binary,
+            nodes=nodes,
+            database=database,
+            r1=active_r1,
+            r2=r2_arg,
+            outputs=active_out,
+            threads=int(self.threads),
+            extra=self.extra or "",
+            empty=empty,
+        )
+        return wrap_shell(script)
+
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        out_file = outputs[0]
+        db_file_path, db_nodes = self._database_and_nodes()
 
         common = (
             f"{self.cmd} "

@@ -1,6 +1,6 @@
 import os
 
-from samovar.annotators_wrapper import get_annotator_instance
+from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
 from samovar.seqio import find_fastq_mate, list_fastq_samples
 
 try:
@@ -51,6 +51,14 @@ for run_conf in config.get('run_config', []):
     tool_type = run_conf['type']
     ANNOTATORS[run_name] = get_annotator_instance(tool_type, run_conf, config)
     THREADS[run_name] = run_conf.get('threads', 1)
+
+KAIJU_RUNS = [
+    name for name, ann in ANNOTATORS.items()
+    if type(ann).__name__ == "KaijuAnnotator"
+]
+# One kaiju-multi job loads the FM-index once for the cohort. A wildcard
+# rule that also writes the same files would be ambiguous, so it is omitted.
+BATCH_KAIJU = use_kaiju_multi(len(SAMPLES)) and bool(KAIJU_RUNS)
 
 def get_all_expected_outputs():
     outputs = []
@@ -134,26 +142,51 @@ rule kraken2:
         {params.cmd} 2> {log}
         """
 
-rule kaiju:
-    input:
-        r1 = r1_input,
-        r2 = r2_input
-    output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
-    threads:
-        lambda wildcards: THREADS.get(wildcards.run_name, 1)
-    log:
-        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
-    params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
-        )
-    shell:
-        """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
-        """
+if not BATCH_KAIJU:
+    rule kaiju:
+        input:
+            r1 = r1_input,
+            r2 = r2_input
+        output:
+            out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
+        threads:
+            lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        log:
+            f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
+        params:
+            cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+                input.r1, shell_r2(wildcards, input), [output.out]
+            )
+        shell:
+            """
+            mkdir -p $(dirname {output.out})
+            mkdir -p $(dirname {log})
+            {params.cmd} 2> {log}
+            """
+
+if BATCH_KAIJU:
+    for _kaiju_run in KAIJU_RUNS:
+        rule:
+            name:
+                f"kaiju_multi_{_kaiju_run}"
+            output:
+                expand(
+                    f"{config['output_dir']}/{{sample}}_{_kaiju_run}.kaiju.out",
+                    sample=SAMPLES,
+                )
+            threads:
+                THREADS.get(_kaiju_run, 1)
+            log:
+                f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"
+            params:
+                cmd = lambda wildcards, output, run_name=_kaiju_run: ANNOTATORS[run_name].batch_shell(
+                    SAMPLES, config["r1_dir"], config["r2_dir"], config["output_dir"]
+                )
+            shell:
+                """
+                mkdir -p $(dirname {log})
+                {params.cmd} 2> {log}
+                """
 
 rule metaphlan4:
     input:

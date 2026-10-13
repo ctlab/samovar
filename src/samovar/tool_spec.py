@@ -100,6 +100,40 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "chopper": {"--threads": "--threads", "--cores": "--threads"},
 }
 
+# Cores one Snakemake job may reserve. ``--cores`` stays the machine budget.
+# A rule that reserves the whole budget runs alone, even when samples are independent.
+SCHEDULER_THREAD_CAP = {
+    "gc": 1,
+    "length": 1,
+    # Accepts -t and ignores it. Parallelism is across samples.
+    "kmer_encoder": 1,
+    # OpenMP over reads. Several samples at this width beat one job on every core.
+    "kmer2": 8,
+    "kaiju": 32,
+    "kraken2": 16,
+    "kraken": 16,
+    "krakenuniq": 16,
+    "metaphlan": 8,
+    "metaphlan4": 8,
+    # Alignment uses the threads. The profile after it is one thread and would
+    # otherwise hold every core until it finishes.
+    "metax": 4,
+    "centrifuge": 8,
+    # Widest assembly stage. Later stages use a lower cap inside the assembly job.
+    "assembly": 16,
+    "assembly_profiling": 16,
+}
+DEFAULT_SCHEDULER_CAP = 8
+
+
+def scheduler_threads(tool: str, cores: int, *, n_samples: int = 1) -> int:
+    """Cores this annotator job may take from ``--cores``."""
+    del n_samples
+    budget = max(1, int(cores or 1))
+    key = str(tool or "").strip().lower().replace("-", "_")
+    cap = SCHEDULER_THREAD_CAP.get(key, DEFAULT_SCHEDULER_CAP)
+    return max(1, min(budget, cap))
+
 _VERSION_TOKEN = re.compile(r"(\d+\.\d+(?:\.\d+)?)")
 
 
