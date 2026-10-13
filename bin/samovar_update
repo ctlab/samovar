@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     echo "Usage: samovar update [--branch NAME] [--auto]"
     echo "Locate the installed checkout, fetch its current branch (or NAME), then reinstall."
+    echo "Without --branch the current branch is used, or main when HEAD is detached."
     echo "Without --auto this runs ./install.sh full ask."
     echo "With --auto it refreshes the package and the tools already recorded in config, and does not ask."
     echo "The conda env from environment.yml is created only when it is missing, then activated."
@@ -172,6 +173,13 @@ if [ -n "$(git -C "$ROOT" status --porcelain -- "$CITE_REL")" ]; then
     fi
     echo "Set aside local $CITE_REL so pull can proceed."
 fi
+# install.sh rebuilds these tracked binaries. A dirty copy blocks checkout.
+for rel in bin/samovar_kmer bin/samovar_combine_annotations bin/samovar_spearman; do
+    if git -C "$ROOT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 \
+        && [ -n "$(git -C "$ROOT" status --porcelain -- "$rel")" ]; then
+        git -C "$ROOT" checkout HEAD -- "$rel"
+    fi
+done
 restore_local_citations() {
     if [ -n "${CITE_SAVED:-}" ] && [ -f "$CITE_SAVED" ]; then
         mkdir -p "$ROOT/cite"

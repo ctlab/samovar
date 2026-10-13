@@ -5,6 +5,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.cami_profile import (
     CAMI_FORMAT_VERSION,
@@ -164,6 +165,7 @@ def test_dump_cami_concatenates_samples(tmp_path, monkeypatch):
     assert {s[0]["sampleid"] for s in sections} == {"1", "2"}
 
 
+@pytest.mark.optional
 def test_write_cami_profile_fallback_without_taxdump(tmp_path, monkeypatch):
     monkeypatch.setattr("samovar.cami_profile.try_taxonomy", lambda taxdump=None: None)
     path = write_cami_profile(

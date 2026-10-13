@@ -168,7 +168,56 @@ def test_update_skips_conda_when_env_is_active(tmp_path):
     assert not (tmp_path / "conda.log").exists()
 
 
-def test_update_help_defaults_to_main():
+def test_update_uses_samovar_root_not_the_configured_checkout(tmp_path):
+    origin = _origin(tmp_path)
+    (origin / "bin").mkdir()
+    _write(origin / "bin/samovar_kmer", "built-old\n", executable=True)
+    _git(origin, "add", "bin/samovar_kmer")
+    _git(origin, "commit", "-m", "track kmer binary")
+    _write(
+        origin / "install.sh",
+        "#!/bin/bash\nprintf '%s\\n' \"$*\" > \"$SAMOVAR_ROOT/ran.txt\"\n",
+        executable=True,
+    )
+    _git(origin, "add", "install.sh")
+    _git(origin, "commit", "-m", "new install")
+
+    decoy = tmp_path / "decoy"
+    subprocess.check_call(["git", "clone", str(origin), str(decoy)])
+    _write(decoy / "bin/samovar_kmer", "dirty-decoy\n", executable=True)
+    decoy_head = subprocess.check_output(
+        ["git", "-C", str(decoy), "rev-parse", "HEAD"], text=True
+    ).strip()
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"root": "%s"}\n' % decoy)
+
+    clone = tmp_path / "clone"
+    subprocess.check_call(["git", "clone", str(origin), str(clone)])
+    subprocess.check_call(["git", "-C", str(clone), "reset", "--hard", "HEAD~1"])
+    _write(clone / "bin/samovar_kmer", "dirty-clone\n", executable=True)
+    bindir = _conda(tmp_path, has_env=False)
+
+    result = _run(
+        tmp_path,
+        clone,
+        bindir,
+        env={"SAMOVAR_CONFIG": str(cfg)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "decoy" not in result.stdout
+    assert (clone / "ran.txt").read_text().strip() == "full ask"
+    assert "dirty-decoy" in (decoy / "bin/samovar_kmer").read_text()
+    decoy_after = subprocess.check_output(
+        ["git", "-C", str(decoy), "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert decoy_after == decoy_head
+    clone_head = subprocess.check_output(
+        ["git", "-C", str(clone), "rev-parse", "HEAD"], text=True
+    ).strip()
+    origin_head = subprocess.check_output(
+        ["git", "-C", str(origin), "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert clone_head == origin_head
     result = subprocess.run(
         ["bash", str(UPDATE), "--help"],
         text=True,
