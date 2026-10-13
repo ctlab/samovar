@@ -34,6 +34,9 @@ def main():
         default=1,
         help='Number of cores for snakemake / annotator threads',
     )
+    from samovar.memory import add_mem_argument
+
+    add_mem_argument(parser)
     parser.add_argument(
         '--autoimport',
         type=int,

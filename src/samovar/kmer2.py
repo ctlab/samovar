@@ -58,6 +58,32 @@ def iter_fastq_records(path: str) -> Iterator[Tuple[str, str]]:
             yield read_id, seq.strip().upper()
 
 
+def iter_read_mates(r1: str, r2: Optional[str] = None):
+    """Yield ``(read_id, r1_seq, r2_seq)`` one read at a time.
+
+    Paired files are consumed in order. A mate with the same id is returned
+    with its partner and then dropped. Nothing from the sample is retained.
+    """
+    if not r2:
+        for read_id, seq in iter_fastq_records(r1):
+            yield read_id, seq, ""
+        return
+    mate = iter_fastq_records(r2)
+    pending = None
+    for read_id, seq in iter_fastq_records(r1):
+        if pending is None:
+            pending = next(mate, None)
+        if pending and pending[0] == read_id:
+            yield read_id, seq, pending[1]
+            pending = None
+        else:
+            yield read_id, seq, ""
+    if pending:
+        yield pending[0], "", pending[1]
+    for read_id, seq in mate:
+        yield read_id, "", seq
+
+
 def parse_output(file_path: str):
     """Contract helper: headered seq + k-mer columns."""
     from samovar.parse_annotators import read_custom_raw

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,7 @@ from samovar.main_config import (
     tool_flags,
     tool_path,
 )
+from samovar.memory import read_csv_memmap
 from samovar.paths import load_config
 from samovar.reprofiling import (
     GpuNotSupported,
@@ -222,8 +224,94 @@ def load_csv_tables(
     for path in sorted(root.glob("*.csv")):
         if any(path.name.startswith(prefix) for prefix in skip):
             continue
-        tables[path.stem] = pd.read_csv(path)
+        tables[path.stem] = read_csv_memmap(path)
     return tables
+
+
+def iter_annotation_csvs(
+    directory: Optional[PathLike],
+    *,
+    skip_prefixes: Sequence[str] = ("combined_annotation_table",),
+):
+    """CSV paths under ``directory``, one name at a time. Nothing is parsed."""
+    if not directory:
+        return
+    root = Path(directory)
+    if not root.is_dir():
+        return
+    skip = tuple(skip_prefixes)
+    for path in sorted(root.glob("*.csv")):
+        if any(path.name.startswith(prefix) for prefix in skip):
+            continue
+        yield path
+
+
+def _profile_frame(raw: pd.DataFrame, model, *, features_df, classify_unclassified: bool) -> pd.DataFrame:
+    df = merge_read_features(raw, features_df)
+    fill_cols = [c for c in df.columns if c != "true"]
+    if fill_cols:
+        df[fill_cols] = df[fill_cols].fillna(0)
+    result = predict_taxid(df, model_path=model)
+    if not classify_unclassified:
+        taxid_cols = annotator_taxid_columns(df)
+        if taxid_cols:
+            numeric = df[taxid_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+            mask = (numeric == 0).all(axis=1)
+            result.loc[mask, "taxid_SAMOVAR"] = 0
+            result.loc[mask, "taxid_SAMOVAR_confidence"] = 0
+    return result
+
+
+def stream_profile_csv(
+    path: Path,
+    model,
+    dest: Path,
+    *,
+    features_df=None,
+    classify_unclassified: bool = False,
+) -> int:
+    """Profile one annotation CSV in row chunks and append the reprofiled rows."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    first = True
+    written = 0
+    for chunk in pd.read_csv(path, chunksize=20_000):
+        result = _profile_frame(
+            chunk,
+            model,
+            features_df=features_df,
+            classify_unclassified=classify_unclassified,
+        )
+        result.to_csv(dest, index=False, mode="w" if first else "a", header=first)
+        first = False
+        written += len(result)
+    if first:
+        pd.DataFrame().to_csv(dest, index=False)
+    return written
+
+
+def stream_profile_dir(
+    initial_dir: PathLike,
+    model,
+    output_dir: PathLike,
+    *,
+    features_df=None,
+    classify_unclassified: bool = False,
+) -> int:
+    """Apply ``model`` to each initial CSV and release it before the next file."""
+    dest = Path(output_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for path in iter_annotation_csvs(initial_dir):
+        stem = _reprofiled_stem(path.stem)
+        stream_profile_csv(
+            path,
+            model,
+            dest / f"{stem}.csv",
+            features_df=features_df,
+            classify_unclassified=classify_unclassified,
+        )
+        n += 1
+    return n
 
 
 def load_regenerated_table(path: Optional[PathLike]) -> pd.DataFrame:
@@ -231,7 +319,7 @@ def load_regenerated_table(path: Optional[PathLike]) -> pd.DataFrame:
         return pd.DataFrame()
     target = Path(path)
     if target.is_file():
-        return pd.read_csv(target)
+        return read_csv_memmap(target)
     if target.is_dir():
         combined = target / "combined_annotation_table.csv"
         if combined.is_file():
@@ -251,20 +339,38 @@ def profile_tables_with_model(
 ) -> Dict[str, pd.DataFrame]:
     out: Dict[str, pd.DataFrame] = {}
     for stem, raw in initial.items():
-        df = merge_read_features(raw.copy(), features_df)
-        fill_cols = [c for c in df.columns if c != "true"]
-        if fill_cols:
-            df[fill_cols] = df[fill_cols].fillna(0)
-        result = predict_taxid(df, model_path=model)
-        if not classify_unclassified:
-            taxid_cols = annotator_taxid_columns(df)
-            if taxid_cols:
-                numeric = df[taxid_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
-                mask = (numeric == 0).all(axis=1)
-                result.loc[mask, "taxid_SAMOVAR"] = 0
-                result.loc[mask, "taxid_SAMOVAR_confidence"] = 0
-        out[_reprofiled_stem(stem)] = result
+        out[_reprofiled_stem(stem)] = _profile_frame(
+            raw,
+            model,
+            features_df=features_df,
+            classify_unclassified=classify_unclassified,
+        )
     return out
+
+
+def _emit_profiles(initial, model, config: Dict[str, Any]):
+    """Profile a provided dict, or one CSV at a time from ``initial_dir``.
+
+    The directory path writes files and returns ``wrote=True`` so the caller
+    does not load those tables back.
+    """
+    features_df = (config or {}).get("features_df")
+    classify = bool((config or {}).get("classify_unclassified"))
+    if initial is not None:
+        return profile_tables_with_model(
+            initial, model, features_df=features_df, classify_unclassified=classify
+        ), False
+    src = (config or {}).get("initial_dir")
+    if not src:
+        return {}, False
+    stream_profile_dir(
+        src,
+        model,
+        (config or {}).get("output_dir") or ".",
+        features_df=features_df,
+        classify_unclassified=classify,
+    )
+    return {}, True
 
 
 def _reprofiled_stem(stem: str) -> str:
@@ -299,23 +405,17 @@ def apply_saved_reprofiler(
     src_model = Path(model_path)
     if not src_model.is_file():
         raise FileNotFoundError(f"trained reprofiler model not found: {src_model}")
-    initial = load_csv_tables(initial_dir)
-    if not initial:
-        raise FileNotFoundError(f"no initial annotation CSVs under {initial_dir}")
-    tables = profile_tables_with_model(
-        initial,
-        str(src_model),
-        features_df=cfg.get("features_df"),
-        classify_unclassified=bool(cfg.get("classify_unclassified")),
-    )
     dest = Path(output_dir)
     dest.mkdir(parents=True, exist_ok=True)
+    if not any(iter_annotation_csvs(initial_dir)):
+        raise FileNotFoundError(f"no initial annotation CSVs under {initial_dir}")
+    cfg["output_dir"] = str(dest)
+    cfg["initial_dir"] = str(initial_dir)
+    _tables, wrote = _emit_profiles(None, str(src_model), cfg)
     copied = dest / "trained_model.joblib"
     if src_model.resolve() != copied.resolve():
         shutil.copy2(src_model, copied)
-    for stem, table in tables.items():
-        table.to_csv(dest / f"{_reprofiled_stem(stem)}.csv", index=False)
-    return ReprofileResult(tables=tables, model=str(copied))
+    return ReprofileResult(tables={}, model=str(copied), extras={"wrote_tables": wrote})
 
 
 def _coerce_result(value: Any, initial: Dict[str, pd.DataFrame]) -> ReprofileResult:
@@ -414,18 +514,14 @@ def reprofile_linear(
         gpu=use_gpu(config=cfg),
         **kwargs,
     )
-    tables = profile_tables_with_model(
-        initial,
-        model,
-        features_df=features_df,
-        classify_unclassified=bool(cfg.get("classify_unclassified")),
-    )
+    tables, wrote = _emit_profiles(initial, model, cfg)
     save_model(model, str(output_dir / "trained_model.joblib"))
     return ReprofileResult(
         tables=tables,
         model=model,
         models={"LogisticRegression": model},
         feature_cols=feature_cols,
+        extras={"wrote_tables": wrote},
     )
 
 
@@ -479,12 +575,7 @@ def run_builtin_reprofiler(
             features_df=features_df,
         )
         return ReprofileResult(tables=load_csv_tables(output_dir, skip_prefixes=()))
-    tables = profile_tables_with_model(
-        initial,
-        best,
-        features_df=features_df,
-        classify_unclassified=bool(cfg.get("classify_unclassified")),
-    )
+    tables, wrote = _emit_profiles(initial, best, cfg)
     processed = preprocess_data(validation.copy())
     try:
         X = processed.reindex(columns=feature_cols, fill_value=0)
@@ -497,6 +588,7 @@ def run_builtin_reprofiler(
         models=models,
         metrics=metrics,
         feature_cols=feature_cols,
+        extras={"wrote_tables": wrote},
     )
 
 
@@ -529,7 +621,10 @@ def run_reprofiler(
     truth = ground_truth if ground_truth is not None else load_csv_tables(
         ground_truth_dir, skip_prefixes=()
     )
-    init = initial if initial is not None else load_csv_tables(initial_dir)
+    if kind == "builtin":
+        init = initial
+    else:
+        init = initial if initial is not None else load_csv_tables(initial_dir)
     cfg["features_df"] = cfg.get("features_df")
     if cfg.get("features") and cfg["features_df"] is None:
         cfg["features_df"] = load_read_features(cfg.get("features"))
@@ -538,7 +633,8 @@ def run_reprofiler(
         result = run_builtin_reprofiler(canon, regen, truth, init, cfg)
     else:
         result = _run_custom(canon, regen, truth, init, cfg)
-    if not result.tables:
+    wrote = bool((result.extras or {}).get("wrote_tables"))
+    if not result.tables and not wrote:
         src = initial_dir or cfg.get("initial_dir")
         if src:
             passthrough_reprofile_tables(
@@ -548,7 +644,10 @@ def run_reprofiler(
             )
         result.tables = load_csv_tables(output_dir, skip_prefixes=())
         return result
-    write_reprofile_result(result, output_dir)
+    if result.tables:
+        write_reprofile_result(result, output_dir)
+    elif result.model is not None:
+        save_model(result.model, str(Path(output_dir) / "trained_model.joblib"))
     try:
         from samovar.feature_importance import maybe_score_reprofiler, resolve_abundance_inputs
 
@@ -725,6 +824,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Train on GPU (cuML). AdaBoost has no GPU fit.",
     )
+    from samovar.memory import add_mem_argument
+
+    add_mem_argument(parser)
     return parser
 
 
@@ -750,6 +852,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cfg["cores"] = int(args.cores)
     if args.gpu:
         cfg["gpu"] = True
+    from samovar.memory import memory_limit_mb
+
+    limit = memory_limit_mb(args.mem_mb if args.mem_mb is not None else cfg.get("mem_mb"))
+    cfg["mem_mb"] = limit
+    os.environ["SAMOVAR_MEM_MB"] = str(limit)
     cfg.setdefault("seed", 42)
     try:
         require_known_reprofiler(name)

@@ -25,7 +25,9 @@ from samovar.abundance import materialize_observed_abundance, regenerated_abunda
 from samovar.abundance_correctors import export_run_dir, is_skipped_export
 from samovar.combine_tables import combine_with_cpp
 from samovar.exec_control import CHECKPOINT_STEPS, mark_done, resolve_window
+from samovar.memory import memory_limit_mb
 from samovar.paths import add_output_dir_argument, repo_root, runtime_path_prefix
+from samovar.tool_spec import scheduler_threads
 from samovar.qc import trim_stage
 from samovar.regenerate import stage_regenerate_tables
 from samovar.reprofilers import apply_saved_reprofiler, run_reprofiler
@@ -219,15 +221,20 @@ def _apply_env(dest: Path) -> Dict[str, str]:
     return env
 
 
-def _retarget_init_config(cfg: Dict[str, Any], dest: Path, cores: int) -> Dict[str, Any]:
+def _retarget_init_config(
+    cfg: Dict[str, Any], dest: Path, cores: int, mem_mb: int
+) -> Dict[str, Any]:
     out = copy.deepcopy(cfg)
     trimmed = dest / "initial_trimmed"
     out["r1_dir"] = str(trimmed)
     out["r2_dir"] = str(trimmed)
     out["output_dir"] = str(dest / "initial_reports")
+    out["cores"] = int(cores)
+    out["mem_mb"] = int(mem_mb)
     for run in out.get("run_config") or []:
         if isinstance(run, dict):
-            run["threads"] = cores
+            tool = str(run.get("type") or run.get("run_name") or "")
+            run["threads"] = scheduler_threads(tool, cores)
     return out
 
 
@@ -241,7 +248,9 @@ def _retarget_annotation2iss(cfg: Dict[str, Any], dest: Path, cores: int) -> Dic
     return out
 
 
-def _run_annotators(config: Dict[str, Any], dest: Path, cores: int, env: Dict[str, str]) -> None:
+def _run_annotators(
+    config: Dict[str, Any], dest: Path, cores: int, env: Dict[str, str], mem_mb: int
+) -> None:
     cfg_path = dest / ".log" / "configs" / "config_init.yaml"
     _dump_yaml(cfg_path, config)
     snakefile = repo_root() / "workflow" / "annotators" / "Snakefile"
@@ -257,6 +266,9 @@ def _run_annotators(config: Dict[str, Any], dest: Path, cores: int, env: Dict[st
             str(dest),
             "--cores",
             str(cores),
+            "--resources",
+            f"mem_mb={mem_mb}",
+            f"tmpdir={mem_mb}",
         ]
         subprocess.check_call(cmd, env=env)
         return
@@ -336,6 +348,7 @@ def apply_pipeline(
     *,
     full: bool = False,
     cores: int = 1,
+    mem_mb: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run apply. Returns provenance dict written to ``.log/apply.yaml``."""
     src_reads = Path(input_dir).expanduser().resolve()
@@ -367,6 +380,9 @@ def apply_pipeline(
     env = _apply_env(dest)
     steps = configured_steps(state, full=full)
     cores = max(1, int(cores or 1))
+    limit = memory_limit_mb(mem_mb)
+    os.environ["SAMOVAR_MEM_MB"] = str(limit)
+    os.environ["SAMOVAR_CORES"] = str(cores)
 
     scoring_cfg = dict(state.scoring_config)
     scoring_cfg["output_dir"] = str(dest)
@@ -383,9 +399,11 @@ def apply_pipeline(
     repro_cfg["output_dir"] = str(dest / "reprofiled_annotations")
     repro_cfg["initial_dir"] = str(dest / "initial_annotations")
     repro_cfg["seed"] = state.seed
+    repro_cfg["cores"] = cores
+    repro_cfg["mem_mb"] = limit
     _dump_yaml(dest / ".log" / "configs" / "config_reprofiling.yaml", repro_cfg)
 
-    init_cfg = _retarget_init_config(state.init_config, dest, cores)
+    init_cfg = _retarget_init_config(state.init_config, dest, cores, limit)
     reference = (
         Path(state.regenerated_annotations)
         if state.regenerated_annotations is not None
@@ -401,7 +419,7 @@ def apply_pipeline(
         elif step == "qc_initial":
             trim_stage(dest, "initial", qc_cfg)
         elif step == "annotate_initial":
-            _run_annotators(init_cfg, dest, cores, env)
+            _run_annotators(init_cfg, dest, cores, env, limit)
         elif step == "combine_initial":
             combine_with_cpp(
                 str(dest / "initial_reports"),
@@ -558,8 +576,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--cores", "-t",
         type=int,
         default=1,
-        help="Threads for annotators (default: 1)",
+        help="Machine thread budget. Each annotator reserves its own cap; prediction does not.",
     )
+    from samovar.memory import add_mem_argument
+
+    add_mem_argument(parser)
     return parser
 
 
@@ -572,6 +593,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.output_dir,
             full=bool(args.full),
             cores=args.cores,
+            mem_mb=args.mem_mb,
         )
     except (
         ApplyError,

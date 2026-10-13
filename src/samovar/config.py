@@ -321,6 +321,7 @@ class PipelineConfig:
     coverage: int = 30
     email: str = None
     cores: int = 1
+    mem_mb: Optional[int] = None
     max_genomes: float = UNLIMITED_MAX_GENOMES
     regeneration_mode: str = "direct"
     regeneration_modes: Optional[List[str]] = None
@@ -431,6 +432,11 @@ class PipelineConfig:
         config = cls()
         config.cores = getattr(args, 'cores', 1) or 1
         config.gpu = bool(getattr(args, "gpu", False))
+        requested_mem = getattr(args, "mem_mb", None)
+        if requested_mem is not None and requested_mem is not False:
+            from samovar.memory import parse_mem
+
+            config.mem_mb = parse_mem(requested_mem)
         threads = getattr(args, "threads", None)
         if threads:
             config.cores = int(threads)
@@ -1387,6 +1393,8 @@ class PipelineConfig:
             'r1_dir': init_trimmed,
             'r2_dir': init_trimmed,
             'output_dir': str(base_path / 'initial_reports'),
+            'cores': int(self.cores),
+            'mem_mb': int(self.mem_mb or 0),
             'run_config': [
                 {
                     'run_name': ann.run_name,
@@ -1509,6 +1517,7 @@ class PipelineConfig:
             'reprofiler_flags': self.reprofiler_flags or "",
             'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
             'cores': int(self.cores),
+            'mem_mb': int(self.mem_mb or 0),
             'gpu': bool(self.gpu),
             'feature_importance': self.feature_importance or "builtin",
             'feature_importance_all': bool(self.feature_importance_all),
@@ -1542,6 +1551,8 @@ class PipelineConfig:
             'r1_dir': regen_trimmed,
             'r2_dir': regen_trimmed,
             'output_dir': str(base_path / 'regenerated_reports'),
+            'cores': int(self.cores),
+            'mem_mb': int(self.mem_mb or 0),
             'run_config': [
                 {
                     'run_name': ann.run_name,
@@ -1710,6 +1721,17 @@ if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
   PYTHON_PATH="$(command -v python3 || command -v python || true)"
 fi
 PYTHON_PATH="${{PYTHON_PATH:-python3}}"
+export SAMOVAR_CORES="{int(self.cores)}"
+# --mem from prepare (SLURM --mem, MiB). SAMOVAR_MEM_MB still overrides it.
+PREPARED_MEM="{int(self.mem_mb or 0)}"
+if [ -n "${{SAMOVAR_MEM_MB:-}}" ]; then
+  MEM_MB="$SAMOVAR_MEM_MB"
+elif [ "$PREPARED_MEM" != "0" ]; then
+  MEM_MB="$PREPARED_MEM"
+else
+  MEM_MB="$($PYTHON_PATH -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')"
+fi
+export SAMOVAR_MEM_MB="$MEM_MB"
 
 out_dir="{base_dir}"
 {shell_outdir_override_snippet()}
@@ -1784,7 +1806,8 @@ fi""",
             f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['init_annotator']} \\
     --directory "$out_dir" \\
-    --cores {self.cores}""",
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB""",
         )
 
         combine_initial = _checkpoint_block(
@@ -1875,7 +1898,8 @@ mkdir -p "$out_dir/genomes"
             f"""snakemake -s {wf / 'abundance2iss' / 'Snakefile'} \\
     --configfile {configs['abundance2iss']} \\
     --directory "$out_dir" \\
-    --cores {self.cores}
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB
 "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )
 
@@ -1904,7 +1928,8 @@ fi
             f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
     --configfile {configs['reannotate']} \\
     --directory "$out_dir" \\
-    --cores {self.cores}""",
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB""",
         )
 
         combine_regenerated = _checkpoint_block(
@@ -1928,9 +1953,7 @@ fi
             "reprofile",
             f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
-    $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial_trimmed', '$out_dir/combined_temporary_R1.fastq')"
-    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} "$out_dir/combined_temporary_R1.fastq" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}
-    rm -f "$out_dir/combined_temporary_R1.fastq"
+    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} "$out_dir/initial_trimmed" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}
     FEATURE_ARG="--features $out_dir/features.tsv"
 else
     FEATURE_ARG=""
@@ -1942,7 +1965,7 @@ $PYTHON_PATH {wf / 'ML.py'} \\
     --output_dir "$out_dir/reprofiled_annotations" \\
     --reprofiler {self.reprofiler} \\
     --config {configs['reprofiling']} \\
-    --cores {self.cores}{gpu_line} \\
+    --cores {self.cores} --mem-mb "$MEM_MB"{gpu_line} \\
     --seed {self.regeneration_seed} \\
     $FEATURE_ARG"""
             + self._annotation_export_bash("reprofiled_annotations", "reprofiled"),

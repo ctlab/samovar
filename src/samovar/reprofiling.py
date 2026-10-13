@@ -18,6 +18,8 @@ import re
 from typing import Any, Optional
 from collections import Counter
 
+from samovar.memory import parallel_jobs, predict_threads, proba_chunk_rows, read_csv_memmap
+
 def _tool_name_from_column(col: str) -> Optional[str]:
     """Extract annotator name from taxid/taxID column labels, never from feat_."""
     name = str(col)
@@ -49,8 +51,14 @@ def load_read_features(path: Optional[str]) -> Optional[pd.DataFrame]:
     """Load a TSV/CSV of per-read features, or None if missing."""
     if not path or not os.path.exists(path):
         return None
-    sep = "\t" if path.endswith((".tsv", ".txt")) else ","
-    return pd.read_csv(path, sep=sep)
+    sep = "\t" if str(path).endswith((".tsv", ".txt")) else ","
+    if sep != ",":
+        return pd.read_csv(path, sep=sep)
+    from samovar.memory import memmap_min_bytes, read_csv_memmap
+
+    if os.path.getsize(path) < memmap_min_bytes():
+        return pd.read_csv(path, sep=sep)
+    return read_csv_memmap(path)
 
 
 def annotator_taxid_columns(df: pd.DataFrame) -> list:
@@ -382,7 +390,8 @@ def fit_logistic(X, y, *, n_jobs=1, gpu=False, **kwargs) -> Any:
         model = build_gpu_estimator("LogisticRegression", **kwargs)
         model.fit(X, y)
         return model
-    jobs = training_n_jobs(n_jobs)
+    nbytes = int(getattr(X, "shape", (0, 0))[0] or 0) * int(getattr(X, "shape", (0, 1))[1] or 0) * 8
+    jobs = parallel_jobs(training_n_jobs(n_jobs), nbytes=nbytes)
     labels = pd.Series(np.asarray(y)).dropna()
     n_classes = int(labels.nunique())
     if jobs > 1 and n_classes > 2:
@@ -445,7 +454,10 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
     )
 
     wanted = _normalize_sklearn_methods(methods)
-    jobs = training_n_jobs(n_jobs)
+    matrix_bytes = int(getattr(X_train, "shape", (0, 0))[0] or 0) * int(
+        getattr(X_train, "shape", (0, 1))[1] or 0
+    ) * 8
+    jobs = parallel_jobs(training_n_jobs(n_jobs), nbytes=matrix_bytes)
     on_gpu = use_gpu(gpu)
     if on_gpu:
         for name in wanted:
@@ -551,6 +563,49 @@ def plot_roc_curves(models, X_test, y_test, output_dir='tests_outs'):
     plt.savefig(os.path.join(output_dir, 'roc_comparison.png'))
     plt.close()
 
+def _predict_in_chunks(model, X: pd.DataFrame):
+    """Predict one block at a time so the reads × classes matrix is not retained."""
+    n = len(X)
+    predictions = np.empty(n, dtype=object)
+    confidences = np.zeros(n, dtype=float)
+    if n == 0:
+        return predictions, confidences
+    classes = getattr(model, "classes_", None)
+    n_classes = len(classes) if classes is not None else 2
+    chunk = proba_chunk_rows(n_classes, int(X.shape[1]))
+    annotator_cols = annotator_taxid_columns(X)
+    requested = getattr(model, "n_jobs", 1) or 1
+    with predict_threads(model, requested):
+        for start in range(0, n, chunk):
+            stop = min(n, start + chunk)
+            block = X.iloc[start:stop]
+            pred = np.asarray(model.predict(block))
+            proba = np.asarray(model.predict_proba(block))
+            conf = proba.max(axis=1) if proba.size else np.zeros(stop - start)
+            del proba
+            values = block[annotator_cols] if annotator_cols else None
+            for i, label in enumerate(pred):
+                votes = []
+                if values is not None:
+                    for col in annotator_cols:
+                        try:
+                            value = int(values.iloc[i][col])
+                        except (TypeError, ValueError):
+                            continue
+                        if value > 0:
+                            votes.append(value)
+                confidence = float(conf[i])
+                if votes:
+                    top_value, top_count = Counter(votes).most_common(1)[0]
+                    if top_count == len(votes):
+                        predictions[start + i] = top_value
+                        confidences[start + i] = 1.0 if len(votes) > 1 else confidence
+                        continue
+                predictions[start + i] = int(label)
+                confidences[start + i] = confidence
+    return predictions, confidences
+
+
 def predict_taxid(df, model_path=None, feature_cols=None):
     """
     Predict taxID and confidence for input dataframe.
@@ -587,36 +642,7 @@ def predict_taxid(df, model_path=None, feature_cols=None):
     if "length" not in df_processed.columns:
         df_processed["length"] = 0
     X = df_processed.reindex(columns=feature_cols, fill_value=0)
-    predictions = model.predict(X)
-    probabilities = model.predict_proba(X)
-
-    annotator_cols = annotator_taxid_columns(X)
-    final_predictions = []
-    final_confidences = []
-
-    for i, pred in enumerate(predictions):
-        votes = []
-        for col in annotator_cols:
-            try:
-                value = int(X.iloc[i][col])
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                votes.append(value)
-
-        confidence = float(np.max(probabilities[i]))
-        if votes:
-            top_value, top_count = Counter(votes).most_common(1)[0]
-            # Unanimous annotators keep their vote; otherwise use the model.
-            if top_count == len(votes):
-                final_predictions.append(top_value)
-                final_confidences.append(1.0 if len(votes) > 1 else confidence)
-            else:
-                final_predictions.append(int(pred))
-                final_confidences.append(confidence)
-        else:
-            final_predictions.append(int(pred))
-            final_confidences.append(confidence)
+    final_predictions, final_confidences = _predict_in_chunks(model, X)
     
     # Create a mapping from processed index to original index
     processed_to_original = dict(zip(range(len(df_processed)), df_processed.index))

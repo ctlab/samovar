@@ -369,10 +369,13 @@ out_dir="{base_dir}"
 mkdir -p "$out_dir"
 
 # Generate reads with InSilicoSeq
+MEM_MB="${{SAMOVAR_MEM_MB:-$($PYTHON_PATH -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')}}"
+export SAMOVAR_MEM_MB="$MEM_MB"
 snakemake -s {snakefile} \\
     --configfile {config_path} \\
     --directory "$out_dir" \\
-    --cores {self.cores}
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB
 """
         
         with open(pipeline_path, 'w') as f:

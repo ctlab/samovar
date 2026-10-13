@@ -157,11 +157,39 @@ def _add_cluster_features(df, k_mat, ipca, mbk, n_pca):
 # ----------------------------
 # Main (Two-Pass Batched version)
 # ----------------------------
+def _fastq_inputs(raws):
+    """Files, or every R1 under a directory. Nothing is concatenated."""
+    from pathlib import Path
+
+    from samovar.seqio import list_r1_files
+
+    files = []
+    for raw in raws:
+        path = Path(raw)
+        if path.is_dir():
+            found = list_r1_files(path)
+            if not found:
+                raise SystemExit(f"no R1 FASTQ under {path}")
+            files.extend(str(item) for item in found)
+        else:
+            files.append(str(path))
+    return files
+
+
+def _iter_records(files):
+    for path in files:
+        yield from read_fastq(path)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Extract features from FASTQ files safely using Two-Pass chunking."
     )
-    parser.add_argument("fastq", help="Input FASTQ file")
+    parser.add_argument(
+        "fastq",
+        nargs="+",
+        help="FASTQ file or a directory of R1 files (read one file at a time)",
+    )
     parser.add_argument(
         "-o", "--output", default="features.tsv", help="Output TSV file"
     )
@@ -182,6 +210,11 @@ def main():
         help="Random seed for MiniBatchKMeans / IncrementalPCA",
     )
     args = parser.parse_args()
+    files = _fastq_inputs(args.fastq)
+    from samovar.memory import proba_chunk_rows
+
+    # 256 k-mer frequencies plus the scalar feature columns of one read.
+    args.chunk_size = min(int(args.chunk_size), proba_chunk_rows(16, 256))
 
     # Fit after the first chunk so n_components cannot exceed n_samples.
     ipca = None
@@ -196,12 +229,13 @@ def main():
     # PASS 1: Train Models (IncrementalPCA & MiniBatchKMeans)
     # ---------------------------------------------------------
     print(
-        f"[INFO] PASS 1: Training models on {args.fastq} in chunks of {args.chunk_size} reads..."
+        f"[INFO] PASS 1: Training models on {len(files)} FASTQ file(s) "
+        f"in chunks of {args.chunk_size} reads..."
     )
     kmer_matrix = []
     processed_count = 0
 
-    for _, seq, _ in read_fastq(args.fastq):
+    for _, seq, _ in _iter_records(files):
         seq = seq.upper()
         kmer_matrix.append(kmer_counts(seq, args.k))
         processed_count += 1
@@ -229,7 +263,7 @@ def main():
     processed_count = 0
     is_first_chunk = True
 
-    for rid, seq, qual in read_fastq(args.fastq):
+    for rid, seq, qual in _iter_records(files):
         seq = seq.upper()
 
         feats = {

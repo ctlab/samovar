@@ -20,7 +20,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from samovar.kmer2 import iter_fastq_records
+from samovar.kmer2 import iter_read_mates
+from samovar.memory import proba_chunk_rows
 
 DEFAULT_K = 4
 DEFAULT_LATENT = 64
@@ -53,35 +54,41 @@ def seq_to_vec(seq: str, k: int, index: Optional[Dict[str, int]] = None) -> np.n
     return vec
 
 
-def _sum_counts(r1: str, r2: Optional[str], k: int) -> Dict[str, np.ndarray]:
-    index = build_kmer_index(k)
-    by_id: Dict[str, np.ndarray] = {}
-    for path in (r1, r2):
-        if not path:
-            continue
-        for read_id, seq in iter_fastq_records(path):
-            if not read_id:
-                continue
-            raw = np.zeros(len(index), dtype=np.float64)
-            seq = seq.upper()
-            if k > 0 and len(seq) >= k:
-                for i in range(len(seq) - k + 1):
-                    idx = index.get(seq[i : i + k])
-                    if idx is not None:
-                        raw[idx] += 1
-            if read_id not in by_id:
-                by_id[read_id] = raw
-            else:
-                by_id[read_id] += raw
-    return by_id
+def _counts(seq: str, k: int, index: Dict[str, int]) -> np.ndarray:
+    raw = np.zeros(len(index), dtype=np.float64)
+    if k > 0 and seq and len(seq) >= k:
+        for i in range(len(seq) - k + 1):
+            idx = index.get(seq[i : i + k])
+            if idx is not None:
+                raw[idx] += 1
+    return raw
+
+
+def _pair_freq(left: str, right: str, k: int, index: Dict[str, int]) -> np.ndarray:
+    """Normalized k-mer frequencies of R1 and R2, without a junction k-mer."""
+    raw = _counts(left, k, index)
+    if right:
+        raw = raw + _counts(right, k, index)
+    total = raw.sum()
+    if total > 0:
+        raw /= total
+    return raw
 
 
 def freqs_from_fastq(r1: str, r2: Optional[str] = None, k: int = DEFAULT_K) -> Dict[str, np.ndarray]:
-    by_id = _sum_counts(r1, r2, k)
+    """In-memory frequencies. Sample-sized FASTQ should use :func:`write_freq_table`."""
+    index = build_kmer_index(k)
     out: Dict[str, np.ndarray] = {}
-    for read_id, raw in by_id.items():
-        total = raw.sum()
-        out[read_id] = raw / total if total > 0 else raw
+    for read_id, left, right in iter_read_mates(r1, r2 or None):
+        if not read_id:
+            continue
+        vec = _pair_freq(left, right, k, index)
+        if read_id not in out:
+            out[read_id] = vec
+        else:
+            merged = out[read_id] + vec
+            total = merged.sum()
+            out[read_id] = merged / total if total > 0 else merged
     return out
 
 
@@ -202,47 +209,122 @@ def train_encoder(
     return out
 
 
+def _load_encoder(model_path: str, device: str = ""):
+    torch, _nn, _optim = _torch_mods()
+    ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
+    k = int(ckpt["k"])
+    index = ckpt["kmer_index"]
+    le = ckpt["label_encoder"]
+    latent_dim = int(ckpt.get("latent_dim") or 64)
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model = make_autoencoder(len(index), latent_dim, len(le.classes_)).to(dev)
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+    return torch, model, dev, k, index, latent_dim
+
+
+def _encode_batch(torch, model, dev, mat: np.ndarray) -> np.ndarray:
+    with torch.no_grad():
+        xt = torch.tensor(mat, dtype=torch.float32).to(dev)
+        _rec, _logits, z = model(xt)
+        return z.detach().cpu().numpy()
+
+
 def latents_from_fastq(
     r1: str,
     r2: Optional[str],
     model_path: str,
     device: str = "",
 ) -> Tuple[List[str], np.ndarray]:
-    torch, nn, _optim = _torch_mods()
-    ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
-    k = int(ckpt["k"])
-    index = ckpt["kmer_index"]
-    le = ckpt["label_encoder"]
-    latent_dim = int(ckpt.get("latent_dim") or 64)
-    freqs = freqs_from_fastq(r1, r2, k=k)
-    ids = list(freqs)
+    """Encode in memory-sized batches. The returned matrix is the caller's."""
+    torch, model, dev, k, index, latent_dim = _load_encoder(model_path, device)
+    ids: List[str] = []
+    blocks: List[np.ndarray] = []
+    batch_ids: List[str] = []
+    batch_vecs: List[np.ndarray] = []
+    chunk = proba_chunk_rows(latent_dim, len(index))
+
+    def _flush() -> None:
+        if not batch_ids:
+            return
+        blocks.append(_encode_batch(torch, model, dev, np.stack(batch_vecs)))
+        ids.extend(batch_ids)
+        batch_ids.clear()
+        batch_vecs.clear()
+
+    for read_id, left, right in iter_read_mates(r1, r2 or None):
+        if not read_id:
+            continue
+        batch_ids.append(read_id)
+        batch_vecs.append(_pair_freq(left, right, k, index))
+        if len(batch_ids) >= chunk:
+            _flush()
+    _flush()
     if not ids:
         return [], np.zeros((0, latent_dim))
-    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model = make_autoencoder(len(index), latent_dim, len(le.classes_)).to(dev)
-    model.load_state_dict(ckpt["model"])
-    model.eval()
-    mat = np.stack([freqs[i] for i in ids])
-    with torch.no_grad():
-        xt = torch.tensor(mat, dtype=torch.float32).to(dev)
-        _rec, _logits, z = model(xt)
-        arr = z.detach().cpu().numpy()
-    return ids, arr
+    return ids, np.vstack(blocks)
+
+
+def write_latent_table_stream(
+    r1: str,
+    r2: Optional[str],
+    model_path: str,
+    dest: str,
+    device: str = "",
+) -> int:
+    """Write latent rows in batches. Each batch is released after it is written."""
+    torch, model, dev, k, index, latent_dim = _load_encoder(model_path, device)
+    names = [f"z{i}" for i in range(latent_dim)]
+    path = Path(dest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    chunk = proba_chunk_rows(latent_dim, len(index))
+    n = 0
+    batch_ids: List[str] = []
+    batch_vecs: List[np.ndarray] = []
+    with path.open("w", encoding="utf-8") as out:
+        out.write("seq\t" + "\t".join(names) + "\n")
+
+        def _flush() -> None:
+            nonlocal n
+            if not batch_ids:
+                return
+            encoded = _encode_batch(torch, model, dev, np.stack(batch_vecs))
+            for read_id, row in zip(batch_ids, encoded):
+                out.write(read_id + "\t" + _fmt(row) + "\n")
+                n += 1
+            batch_ids.clear()
+            batch_vecs.clear()
+
+        for read_id, left, right in iter_read_mates(r1, r2 or None):
+            if not read_id:
+                continue
+            batch_ids.append(read_id)
+            batch_vecs.append(_pair_freq(left, right, k, index))
+            if len(batch_ids) >= chunk:
+                _flush()
+        _flush()
+    return n
 
 
 def _fmt(values: Iterable[float]) -> str:
     return "\t".join(f"{float(v):.6g}" for v in values)
 
 
-def write_freq_table(by_id: Dict[str, np.ndarray], dest: str, k: int) -> int:
+def write_freq_table(r1: str, dest: str, k: int = DEFAULT_K, r2: Optional[str] = None) -> int:
+    """Write one frequency row per read. Counters for a read are dropped after the row."""
     names = kmer_ids(k)
+    index = build_kmer_index(k)
     path = Path(dest)
     path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
     with path.open("w", encoding="utf-8") as out:
         out.write("seq\t" + "\t".join(names) + "\n")
-        for read_id, vec in by_id.items():
-            out.write(read_id + "\t" + _fmt(vec) + "\n")
-    return len(by_id)
+        for read_id, left, right in iter_read_mates(r1, r2 or None):
+            if not read_id:
+                continue
+            out.write(read_id + "\t" + _fmt(_pair_freq(left, right, k, index)) + "\n")
+            n += 1
+    return n
 
 
 def write_latent_table(ids: Sequence[str], z: np.ndarray, dest: str) -> int:
@@ -266,10 +348,8 @@ def parse_output(file_path: str):
 def extract_to_file(r1: str, r2: str, dest: str, db: str = "", k: int = DEFAULT_K) -> int:
     model = resolve_model_path(db)
     if model is not None:
-        ids, z = latents_from_fastq(r1, r2 or None, str(model))
-        return write_latent_table(ids, z, dest)
-    table = freqs_from_fastq(r1, r2 or None, k=k)
-    return write_freq_table(table, dest, k)
+        return write_latent_table_stream(r1, r2 or None, str(model), dest)
+    return write_freq_table(r1, dest, k=k, r2=r2 or None)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

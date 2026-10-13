@@ -1,6 +1,7 @@
 import os
 
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
+from samovar.memory import job_mem_mb
 from samovar.seqio import find_fastq_mate, list_fastq_samples
 
 try:
@@ -52,6 +53,13 @@ for run_conf in config.get('run_config', []):
     ANNOTATORS[run_name] = get_annotator_instance(tool_type, run_conf, config)
     THREADS[run_name] = run_conf.get('threads', 1)
 
+MACHINE_CORES = max(1, int(config.get("cores") or os.environ.get("SAMOVAR_CORES") or 1))
+MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None
+
+
+def rule_mem(wildcards):
+    return job_mem_mb(THREADS.get(wildcards.run_name, 1), MACHINE_CORES, MEM_LIMIT)
+
 KAIJU_RUNS = [
     name for name, ann in ANNOTATORS.items()
     if type(ann).__name__ == "KaijuAnnotator"
@@ -83,6 +91,9 @@ rule custom_tool:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.custom_{{tool_name}}.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
     params:
@@ -107,6 +118,9 @@ rule assembly:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.assembly.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
     params:
@@ -129,6 +143,9 @@ rule kraken2:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
     params:
@@ -151,6 +168,9 @@ if not BATCH_KAIJU:
             out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
         threads:
             lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        resources:
+            mem_mb=rule_mem,
+            tmpdir=rule_mem,
         log:
             f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
         params:
@@ -176,6 +196,9 @@ if BATCH_KAIJU:
                 )
             threads:
                 THREADS.get(_kaiju_run, 1)
+            resources:
+                mem_mb=job_mem_mb(THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT),
+                tmpdir=job_mem_mb(THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT),
             log:
                 f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"
             params:
@@ -198,6 +221,9 @@ rule metaphlan4:
         bowtie = f"{config['output_dir']}/{{sample}}_{{run_name}}.bowtie2.bz2"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
     params:
@@ -219,6 +245,9 @@ rule kmer2:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kmer2.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
     params:
@@ -240,6 +269,9 @@ rule gc:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.gc.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
     params:
@@ -261,6 +293,9 @@ rule kmer_encoder:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kmer_encoder.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
     params:
@@ -282,6 +317,9 @@ rule kraken:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
     params:
@@ -303,6 +341,9 @@ rule krakenuniq:
         out = f"{config['output_dir']}/{{sample}}_{{run_name}}.krakenuniq.out"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
     params:
