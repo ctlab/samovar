@@ -74,13 +74,17 @@ is_checkout() {
 
 locate_root() {
     local found="" candidate=""
+    # An explicit SAMOVAR_ROOT is the tree to update. The config root is the
+    # installed checkout, and on CI that file points at the job workspace.
+    # Preferring it made `samovar update` check out origin/main in the tree
+    # under test and delete the branch it was running from.
+    if is_checkout "${SAMOVAR_ROOT:-}"; then
+        printf '%s\n' "$SAMOVAR_ROOT"
+        return 0
+    fi
     candidate="$(config_root "$SCRIPT_DIR/../build/config_path" || true)"
     if is_checkout "$candidate"; then
         printf '%s\n' "$candidate"
-        return 0
-    fi
-    if is_checkout "${SAMOVAR_ROOT:-}"; then
-        printf '%s\n' "$SAMOVAR_ROOT"
         return 0
     fi
     if command -v samovar >/dev/null 2>&1; then
