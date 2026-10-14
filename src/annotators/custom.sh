@@ -135,6 +135,9 @@ case "$TOOL" in
     INDEX="$DB"
     if [ -d "$DB" ]; then
       cf1=$(ls "$DB"/*.1.cf 2>/dev/null | head -n 1 || true)
+      if [ -z "$cf1" ]; then
+        cf1=$(ls "$DB"/*/*.1.cf 2>/dev/null | head -n 1 || true)
+      fi
       if [ -n "$cf1" ]; then
         INDEX="${cf1%.1.cf}"
       fi
@@ -143,15 +146,15 @@ case "$TOOL" in
     fi
     echo "[INFO] Centrifuge index prefix: ${INDEX}"
     CENTRIFUGE="$(cfg_tool centrifuge)"
-    # --report-file: centrifuge otherwise writes centrifuge_report.tsv into CWD
-    # (often the repo root when snakemake cds there). Keep all litter in TMP_DIR.
+    # --mm: the nt index is larger than a job should load into RAM.
+    # --report-file: centrifuge otherwise writes centrifuge_report.tsv into CWD.
     # Unpaired CAMI files have no R2: -U, not -1/-2.
     if [ -s "$R2" ]; then
-      "$CENTRIFUGE" -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" \
+      "$CENTRIFUGE" -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" --mm \
         -S "$TMP_DIR/centrifuge.out" \
         --report-file "$TMP_DIR/centrifuge_report.tsv"
     else
-      "$CENTRIFUGE" -x "$INDEX" -U "$R1" -p "$THREADS" \
+      "$CENTRIFUGE" -x "$INDEX" -U "$R1" -p "$THREADS" --mm \
         -S "$TMP_DIR/centrifuge.out" \
         --report-file "$TMP_DIR/centrifuge_report.tsv"
     fi

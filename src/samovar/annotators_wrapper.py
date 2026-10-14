@@ -189,14 +189,17 @@ class Kraken2Annotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         report_file, out_file = outputs
+        extra = str(self.extra or "")
+        mapping = "" if "--memory-mapping" in extra else "--memory-mapping "
         common = (
             f"{self.cmd} "
             f"--use-names "
+            f"{mapping}"
             f"--db {self.db_path} "
             f"--threads {self.threads} "
             f"--report {report_file} "
             f"--output {out_file} "
-            f"{self.extra}"
+            f"{extra}"
         )
         return single_or_paired_reads_cmd(
             input_r1,
@@ -317,12 +320,23 @@ class KaijuAnnotator(BaseAnnotator):
             db_file_path = self.db_path
         else:
             db_file_path = os.path.join(self.db_path, "*.fmi")
-        default_nodes = os.path.join(os.path.dirname(str(db_file_path).replace("*", "")), "nodes.dmp")
-        db_nodes = self.run_config.get("db_nodes") or default_nodes
+        # Kaiju keeps nodes.dmp beside the index dir (…/kaijudb/nodes.dmp,
+        # index in …/kaijudb/refseq/), not inside the refseq folder.
+        explicit = str(self.run_config.get("db_nodes") or "").strip()
+        folder = Path(str(db_file_path).replace("*", "")).parent
+        db_nodes = explicit or str(folder / "nodes.dmp")
         try:
             nodes_ok = Path(str(db_nodes)).is_file()
         except OSError:
             nodes_ok = False
+        if not nodes_ok:
+            parent_nodes = folder.parent / "nodes.dmp"
+            try:
+                if parent_nodes.is_file():
+                    db_nodes = str(parent_nodes)
+                    nodes_ok = True
+            except OSError:
+                nodes_ok = False
         if not nodes_ok:
             try:
                 from samovar.taxdump import nodes_dmp
