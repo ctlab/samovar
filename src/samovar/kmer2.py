@@ -99,7 +99,7 @@ def kmer_binary() -> Path:
 
 def ensure_kmer_binary() -> Path:
     """Build ``bin/samovar_kmer`` when the source is newer than the binary."""
-    from samovar.paths import cxx_compiler, repo_root
+    from samovar.paths import cpp_binary_loadable, cxx_compiler, repo_root
 
     binary = kmer_binary()
     root = repo_root()
@@ -107,6 +107,8 @@ def ensure_kmer_binary() -> Path:
     makefile = root / "src" / "cpp" / "Makefile"
     if not source.is_file():
         raise FileNotFoundError(f"C++ k-mer profiler source not found: {source}")
+    if binary.is_file() and not cpp_binary_loadable(binary):
+        binary.unlink()
     newest = source.stat().st_mtime
     if makefile.is_file():
         newest = max(newest, makefile.stat().st_mtime)

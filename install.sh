@@ -888,6 +888,18 @@ if [ -n "${CXX_BIN:-}" ]; then
             exit 1
         fi
     fi
+    # A binary copied from a newer machine (glibc 2.32+) is newer than the
+    # source, so make would keep it. Drop it and compile on this host.
+    for built in bin/samovar_combine_annotations bin/samovar_kmer bin/samovar_spearman; do
+        if [ ! -e "$built" ]; then
+            continue
+        fi
+        probe="$("$built" --help 2>&1 || true)"
+        if printf '%s\n' "$probe" | grep -Eq 'GLIBC_.*not found|error while loading shared libraries|Exec format error'; then
+            echo "Removing $built (linked against a different glibc); recompiling here."
+            rm -f "$built"
+        fi
+    done
     make -C src/cpp CXX="$CXX_BIN"
     chmod +x bin/samovar_combine_annotations 2>/dev/null || true
 else

@@ -294,12 +294,14 @@ def _spearman_binary() -> Path:
 
 def ensure_spearman_binary() -> Path:
     """Build ``bin/samovar_spearman`` when the source is newer. OpenMP when the compiler allows it."""
-    from samovar.paths import cxx_compiler, repo_root
+    from samovar.paths import cpp_binary_loadable, cxx_compiler, repo_root
 
     binary = _spearman_binary()
     source = repo_root() / "src" / "cpp" / "spearman.cpp"
     if not source.is_file():
         raise FileNotFoundError(f"Spearman source not found: {source}")
+    if binary.is_file() and not cpp_binary_loadable(binary):
+        binary.unlink()
     needs = (not binary.is_file()) or source.stat().st_mtime > binary.stat().st_mtime
     if not needs:
         return binary

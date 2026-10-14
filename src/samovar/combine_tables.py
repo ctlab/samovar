@@ -41,11 +41,15 @@ def _cxx() -> str:
 
 def ensure_combine_binary() -> Path:
     """Build the C++ combiner if the binary is missing or older than the source."""
+    from samovar.paths import cpp_binary_loadable
+
     binary = combine_binary()
     source = repo_root() / "src" / "cpp" / "combine_annotations.cpp"
     makefile = repo_root() / "src" / "cpp" / "Makefile"
     if not source.exists():
         raise FileNotFoundError(f"C++ combiner source not found: {source}")
+    if binary.exists() and not cpp_binary_loadable(binary):
+        binary.unlink()
     needs_build = (not binary.exists()) or (
         source.stat().st_mtime > binary.stat().st_mtime
     )

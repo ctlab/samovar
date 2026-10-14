@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -834,6 +835,27 @@ def cxx_compiler() -> Optional[str]:
         if found:
             return found
     return None
+
+
+def cpp_binary_loadable(path: Path) -> bool:
+    """False when a copied binary was linked against a newer glibc than this host."""
+    binary = Path(path)
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        return False
+    try:
+        proc = subprocess.run(
+            [str(binary), "--help"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    text = f"{proc.stdout}\n{proc.stderr}"
+    if "GLIBC_" in text and "not found" in text:
+        return False
+    if "error while loading shared libraries" in text or "Exec format error" in text:
+        return False
+    return True
 
 
 def smoke_test() -> List[str]:

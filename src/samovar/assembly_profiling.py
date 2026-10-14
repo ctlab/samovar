@@ -1151,50 +1151,52 @@ def contig_to_mag_map(mag_dir: Path) -> Dict[str, str]:
     for fasta in _iter_mag_fastas(mag_dir):
         mag = fasta.stem
         try:
-            text = fasta.read_text(encoding="utf-8", errors="replace")
+            handle = fasta.open("r", encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for line in text.splitlines():
-            if line.startswith(">"):
-                contig = line[1:].split()[0]
-                out[contig] = mag
-                out[f"{mag}~{contig}"] = mag
+        with handle:
+            for line in handle:
+                if line.startswith(">"):
+                    contig = line[1:].split()[0]
+                    out[contig] = mag
+                    out[f"{mag}~{contig}"] = mag
     return out
 
 
 def _concat_mag_fasta(mag_dir: Path, dest: Path) -> Path:
+    """Stream MAG FASTAs into one reference. Do not hold the assemblies in RAM."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    parts = []
-    for fasta in _iter_mag_fastas(mag_dir):
-        if not _fasta_has_records(fasta):
-            continue
-        mag = fasta.stem
-        try:
-            text = fasta.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        header = ""
-        seq: list[str] = []
+    with dest.open("w", encoding="utf-8") as out:
+        for fasta in _iter_mag_fastas(mag_dir):
+            if not _fasta_has_records(fasta):
+                continue
+            mag = fasta.stem
+            header = ""
+            seq: list[str] = []
 
-        def flush() -> None:
-            if header and any(piece.strip() for piece in seq):
-                parts.append(header)
-                parts.extend(seq)
-                parts.append("")
+            def flush() -> None:
+                if header and any(piece.strip() for piece in seq):
+                    out.write(header + "\n")
+                    out.write("\n".join(seq) + "\n")
 
-        for line in text.splitlines():
-            if line.startswith(">"):
+            try:
+                handle = fasta.open("r", encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            with handle:
+                for line in handle:
+                    line = line.rstrip("\n")
+                    if line.startswith(">"):
+                        flush()
+                        contig = line[1:].split()[0]
+                        if contig.startswith(f"{mag}~"):
+                            header = f">{contig}"
+                        else:
+                            header = f">{mag}~{contig}"
+                        seq = []
+                    else:
+                        seq.append(line)
                 flush()
-                contig = line[1:].split()[0]
-                if contig.startswith(f"{mag}~"):
-                    header = f">{contig}"
-                else:
-                    header = f">{mag}~{contig}"
-                seq = []
-            else:
-                seq.append(line)
-        flush()
-    dest.write_text("\n".join(parts) + ("\n" if parts else ""), encoding="utf-8")
     return dest
 
 
@@ -1219,15 +1221,27 @@ def run_minimap2(
     if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size > 0:
         cmd.append(str(r2))
     cmd.extend(str(x) for x in (extra or []))
-    gen = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-    sort = subprocess.Popen(
-        [samtools, "sort", "-@", str(int(threads)), "-o", str(out)],
-        stdin=gen.stdout,
-    )
-    if gen.stdout:
-        gen.stdout.close()
-    if sort.wait() != 0 or gen.wait() != 0:
-        raise subprocess.CalledProcessError(sort.returncode or gen.returncode, cmd)
+    err_path = out.with_suffix(".minimap2.log")
+    with err_path.open("w", encoding="utf-8") as err:
+        gen = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err)
+        sort = subprocess.Popen(
+            [samtools, "sort", "-@", str(int(threads)), "-o", str(out)],
+            stdin=gen.stdout,
+        )
+        if gen.stdout:
+            gen.stdout.close()
+        sort_code = sort.wait()
+        gen_code = gen.wait()
+    if sort_code != 0 or gen_code != 0:
+        tail = ""
+        try:
+            lines = err_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = "\n".join(lines[-20:])
+        except OSError:
+            tail = ""
+        raise subprocess.CalledProcessError(
+            sort_code or gen_code, cmd, output=tail
+        )
     try:
         _run([samtools, "index", str(out)])
     except Exception:
@@ -1587,38 +1601,47 @@ def run_assembly_annotator(
     if slots.get("mag_quantifier"):
         mag_quantifier = str(slots["mag_quantifier"])
     contigs = work / "contigs.fa"
-    run_assembler(r1, r2, str(contigs), threads=threads, name=assembler)
-    genes = work / "genes"
-    try:
-        run_gene_caller(str(contigs), str(genes), threads=threads, name=gene_caller)
-    except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-        genes.mkdir(parents=True, exist_ok=True)
-    bin_dirs = []
-    for name in names:
-        folder = work / "bins" / name
-        try:
-            run_binner(str(contigs), str(folder), r1=r1, r2=r2, threads=threads, name=name)
-        except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-            _write_identity_mag(contigs, folder)
-        bin_dirs.append(str(folder))
-        qc_path = work / "bins_qc" / f"{name}.tsv"
-        try:
-            run_binner_qc(str(folder), str(qc_path), db="", threads=threads, name=binner_qc)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            dummy_qc = as_path(qc_path)
-            dummy_qc.parent.mkdir(parents=True, exist_ok=True)
-            dummy_qc.write_text("mag_id\tcompleteness\tcontamination\tscore\n", encoding="utf-8")
+    from samovar.MAG.homology import catalog_fasta_dir as _catalog_fasta_dir
+
+    mode_early = str(
+        slots.get("mag_mode") or mag_mode or os.environ.get("SAMOVAR_MAG_MODE") or "homology"
+    ).lower().replace("_", "-")
+    catalog_early = Path(os.environ.get("SAMOVAR_MAG_CATALOG") or (work / "mag_catalog.tsv"))
+    stored_early = _catalog_fasta_dir(catalog_early)
+    skip_new_bins = mode_early == "map-initial" and any(stored_early.glob("*.fa"))
     selected = work / "bins_selected"
-    try:
-        run_binner_combine(
-            bin_dirs,
-            str(selected),
-            contigs=str(contigs),
-            threads=threads,
-            name=binner_combine,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        run_binner_combine(bin_dirs, str(selected), name="identity")
+    if not skip_new_bins:
+        run_assembler(r1, r2, str(contigs), threads=threads, name=assembler)
+        genes = work / "genes"
+        try:
+            run_gene_caller(str(contigs), str(genes), threads=threads, name=gene_caller)
+        except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+            genes.mkdir(parents=True, exist_ok=True)
+        bin_dirs = []
+        for name in names:
+            folder = work / "bins" / name
+            try:
+                run_binner(str(contigs), str(folder), r1=r1, r2=r2, threads=threads, name=name)
+            except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+                _write_identity_mag(contigs, folder)
+            bin_dirs.append(str(folder))
+            qc_path = work / "bins_qc" / f"{name}.tsv"
+            try:
+                run_binner_qc(str(folder), str(qc_path), db="", threads=threads, name=binner_qc)
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                dummy_qc = as_path(qc_path)
+                dummy_qc.parent.mkdir(parents=True, exist_ok=True)
+                dummy_qc.write_text("mag_id\tcompleteness\tcontamination\tscore\n", encoding="utf-8")
+        try:
+            run_binner_combine(
+                bin_dirs,
+                str(selected),
+                contigs=str(contigs),
+                threads=threads,
+                name=binner_combine,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            run_binner_combine(bin_dirs, str(selected), name="identity")
     mag_genes = work / "mag_genes"
     try:
         run_gene_caller(str(selected), str(mag_genes), threads=threads, name=gene_caller)
