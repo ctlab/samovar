@@ -1807,7 +1807,7 @@ fi""",
     --configfile {configs['init_annotator']} \\
     --directory "$out_dir" \\
     --cores {self.cores} \\
-    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB""",
+    --resources mem_mb=$MEM_MB""",
         )
 
         combine_initial = _checkpoint_block(
@@ -1899,7 +1899,7 @@ mkdir -p "$out_dir/genomes"
     --configfile {configs['abundance2iss']} \\
     --directory "$out_dir" \\
     --cores {self.cores} \\
-    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB
+    --resources mem_mb=$MEM_MB
 "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )
 
@@ -1929,7 +1929,7 @@ fi
     --configfile {configs['reannotate']} \\
     --directory "$out_dir" \\
     --cores {self.cores} \\
-    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB""",
+    --resources mem_mb=$MEM_MB""",
         )
 
         combine_regenerated = _checkpoint_block(

@@ -158,7 +158,6 @@ rule process_abundance:
         CORES
     resources:
         mem_mb=job_mem_mb(CORES, CORES, int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None),
-        tmpdir=job_mem_mb(CORES, CORES, int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None),
     params:
         genome_dir = GENOME_DIR,
         output_dir = OUTPUT_DIR,

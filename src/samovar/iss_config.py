@@ -375,7 +375,7 @@ snakemake -s {snakefile} \\
     --configfile {config_path} \\
     --directory "$out_dir" \\
     --cores {self.cores} \\
-    --resources mem_mb=$MEM_MB tmpdir=$MEM_MB
+    --resources mem_mb=$MEM_MB
 """
         
         with open(pipeline_path, 'w') as f:

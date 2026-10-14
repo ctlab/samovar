@@ -93,7 +93,6 @@ rule custom_tool:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
     params:
@@ -120,7 +119,6 @@ rule assembly:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
     params:
@@ -145,7 +143,6 @@ rule kraken2:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
     params:
@@ -170,7 +167,6 @@ if not BATCH_KAIJU:
             lambda wildcards: THREADS.get(wildcards.run_name, 1)
         resources:
             mem_mb=rule_mem,
-            tmpdir=rule_mem,
         log:
             f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
         params:
@@ -198,7 +194,6 @@ if BATCH_KAIJU:
                 THREADS.get(_kaiju_run, 1)
             resources:
                 mem_mb=job_mem_mb(THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT),
-                tmpdir=job_mem_mb(THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT),
             log:
                 f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"
             params:
@@ -223,7 +218,6 @@ rule metaphlan4:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
     params:
@@ -247,7 +241,6 @@ rule kmer2:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
     params:
@@ -271,7 +264,6 @@ rule gc:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
     params:
@@ -295,7 +287,6 @@ rule kmer_encoder:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
     params:
@@ -319,7 +310,6 @@ rule kraken:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
     params:
@@ -343,7 +333,6 @@ rule krakenuniq:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
-        tmpdir=rule_mem,
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
     params:

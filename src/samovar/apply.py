@@ -268,7 +268,6 @@ def _run_annotators(
             str(cores),
             "--resources",
             f"mem_mb={mem_mb}",
-            f"tmpdir={mem_mb}",
         ]
         subprocess.check_call(cmd, env=env)
         return
