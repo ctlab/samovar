@@ -233,12 +233,22 @@ restore_local_citations() {
 }
 trap restore_local_citations EXIT
 
-if run_git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-    run_git checkout "$BRANCH"
-else
-    run_git checkout -b "$BRANCH" "origin/$BRANCH"
+# fetch already stored origin/$BRANCH in FETCH_HEAD. pull would fetch it again.
+current="$(run_git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ "$current" != "$BRANCH" ]; then
+    if run_git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        run_git checkout "$BRANCH"
+    else
+        run_git checkout -b "$BRANCH" FETCH_HEAD
+    fi
 fi
-run_git pull --ff-only origin "$BRANCH"
+head_sha="$(run_git rev-parse HEAD)"
+fetched="$(run_git rev-parse FETCH_HEAD)"
+if [ "$head_sha" = "$fetched" ]; then
+    echo "Already up to date with origin/$BRANCH."
+else
+    run_git merge --ff-only FETCH_HEAD
+fi
 restore_local_citations
 trap - EXIT
 
