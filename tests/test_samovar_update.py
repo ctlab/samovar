@@ -228,6 +228,101 @@ def test_update_uses_samovar_root_not_the_configured_checkout(tmp_path):
     assert "main" in result.stdout
 
 
+def test_update_auto_refreshes_without_asking(tmp_path):
+    origin = _origin(tmp_path)
+    clone = tmp_path / "clone"
+    subprocess.check_call(["git", "clone", str(origin), str(clone)])
+    _write(
+        origin / "install.sh",
+        "#!/bin/bash\nprintf '%s\\n' \"$*\" > \"$SAMOVAR_ROOT/ran.txt\"\n"
+        "printf '%s\\n' \"shell=${SAMOVAR_UPDATE_SHELL:-}\" > \"$SAMOVAR_ROOT/shell.txt\"\n",
+        executable=True,
+    )
+    _git(origin, "add", "install.sh")
+    _git(origin, "commit", "-m", "new install")
+    bindir = _conda(tmp_path, has_env=True)
+
+    result = _run(tmp_path, clone, bindir, "--auto", env={"CONDA_DEFAULT_ENV": "samovar"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Auto update:" in result.stdout
+    assert "full ask" not in result.stdout
+    assert (clone / "ran.txt").read_text().strip() == ""
+    assert (clone / "shell.txt").read_text().strip() == "shell=0"
+
+
+def test_update_keeps_dirty_citations_when_switching_branch(tmp_path):
+    origin = _origin(tmp_path)
+    cite = origin / "cite"
+    cite.mkdir()
+    _write(cite / "citations.json", '{"kept": false}\n')
+    _git(origin, "add", "cite/citations.json")
+    _git(origin, "commit", "-m", "cite")
+    _git(origin, "checkout", "-b", "feature")
+    clone = tmp_path / "clone"
+    subprocess.check_call(["git", "clone", "--branch", "feature", str(origin), str(clone)])
+    _write(clone / "cite/citations.json", '{"kept": true}\n')
+    _git(origin, "checkout", "main")
+    _write(
+        origin / "install.sh",
+        "#!/bin/bash\nprintf '%s\\n' \"$*\" > \"$SAMOVAR_ROOT/ran.txt\"\n",
+        executable=True,
+    )
+    _git(origin, "add", "install.sh")
+    _git(origin, "commit", "-m", "new install")
+    bindir = _conda(tmp_path, has_env=True)
+
+    result = _run(
+        tmp_path,
+        clone,
+        bindir,
+        "--branch",
+        "main",
+        env={"CONDA_DEFAULT_ENV": "samovar"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Set aside local cite/citations.json" in result.stdout
+    assert (clone / "cite/citations.json").read_text() == '{"kept": true}\n'
+    branch = subprocess.check_output(
+        ["git", "-C", str(clone), "rev-parse", "--abbrev-ref", "HEAD"], text=True
+    ).strip()
+    assert branch == "main"
+    assert (clone / "ran.txt").read_text().strip() == "full ask"
+
+
+def test_update_git_ignores_conda_libssl(tmp_path):
+    origin = _origin(tmp_path)
+    clone = tmp_path / "clone"
+    subprocess.check_call(["git", "clone", str(origin), str(clone)])
+    bindir = _conda(tmp_path, has_env=True)
+    _write(
+        bindir / "git",
+        """#!/bin/bash
+case ":${LD_LIBRARY_PATH:-}:" in
+  *conda*|*mamba*)
+    echo "OpenSSL version mismatch. Built against 30000020, you have 30600040" >&2
+    echo "fatal: Could not read from remote repository." >&2
+    exit 128
+    ;;
+esac
+real="$(PATH="/usr/bin:/bin" command -v git)"
+exec "$real" "$@"
+""",
+        executable=True,
+    )
+    result = _run(
+        tmp_path,
+        clone,
+        bindir,
+        env={
+            "CONDA_DEFAULT_ENV": "samovar",
+            "LD_LIBRARY_PATH": "/tmp/miniconda3/lib",
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OpenSSL version mismatch" not in result.stderr
+    assert "Could not read from remote repository" not in result.stderr
+
+
 def test_update_rejects_unknown_option(tmp_path):
     result = _run(tmp_path, tmp_path, tmp_path, "--nope")
     assert result.returncode != 0

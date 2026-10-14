@@ -14,8 +14,8 @@ usage() {
     echo "Usage: samovar update [--branch NAME] [--auto]"
     echo "Locate the installed checkout, fetch its current branch (or NAME), then reinstall."
     echo "Without --branch the current branch is used, or main when HEAD is detached."
-    echo "Without --auto this runs ./install.sh full ask."
-    echo "With --auto it refreshes the package and the tools already recorded in config, and does not ask."
+    echo "Without --auto this runs ./install.sh full ask (a prompt for every optional program)."
+    echo "With --auto it refreshes the Python package, keeps tools already in config, and does not ask."
     echo "The conda env from environment.yml is created only when it is missing, then activated."
 }
 
@@ -142,10 +142,40 @@ fi
 ROOT="$(cd "$ROOT" && pwd)"
 export SAMOVAR_ROOT="$ROOT"
 
+# /usr/bin/git is linked to the distro OpenSSL. An active conda env puts a
+# newer libssl on LD_LIBRARY_PATH, and git then dies with
+# "OpenSSL version mismatch" before fetch ("Could not read from remote repository").
+run_git() {
+    local old_ifs="$IFS"
+    local cleaned="" part
+    IFS=':'
+    for part in ${LD_LIBRARY_PATH:-}; do
+        case "$part" in
+            *conda*|*anaconda*|*miniforge*|*mamba*|*micromamba*)
+                ;;
+            "")
+                ;;
+            *)
+                if [ -n "$cleaned" ]; then
+                    cleaned="${cleaned}:${part}"
+                else
+                    cleaned="$part"
+                fi
+                ;;
+        esac
+    done
+    IFS="$old_ifs"
+    if [ -n "$cleaned" ]; then
+        LD_LIBRARY_PATH="$cleaned" git -C "$ROOT" "$@"
+    else
+        env -u LD_LIBRARY_PATH git -C "$ROOT" "$@"
+    fi
+}
+
 if [ -z "$BRANCH" ]; then
-    BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    BRANCH="$(run_git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
     if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
-        BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+        BRANCH="$(run_git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
         BRANCH="${BRANCH#origin/}"
     fi
     if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ] || [ "$BRANCH" = "@{u}" ]; then
@@ -153,31 +183,43 @@ if [ -z "$BRANCH" ]; then
     fi
 fi
 
-if ! git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
-    git -C "$ROOT" remote add origin "$ORIGIN_URL"
+if ! run_git remote get-url origin >/dev/null 2>&1; then
+    run_git remote add origin "$ORIGIN_URL"
 fi
 
 echo "SamovaR checkout: $ROOT"
 echo "Updating $ROOT to origin/$BRANCH"
-git -C "$ROOT" fetch origin "$BRANCH"
+run_git fetch origin "$BRANCH"
 
-# cite/citations.json is rewritten by install and by hand. Keep that copy:
-# a dirty worktree makes checkout and pull refuse the merge.
+# cite/citations.json is rewritten by install and by hand. `git status` hides
+# skip-worktree bits, but checkout still refuses ("local changes would be
+# overwritten"). Compare the worktree blob to HEAD and park the user's copy.
 CITE_REL="cite/citations.json"
 CITE_SAVED=""
-if [ -n "$(git -C "$ROOT" status --porcelain -- "$CITE_REL")" ]; then
-    CITE_SAVED="$(mktemp)"
-    cp "$ROOT/$CITE_REL" "$CITE_SAVED"
-    if ! git -C "$ROOT" checkout HEAD -- "$CITE_REL"; then
-        rm -f "$ROOT/$CITE_REL"
+if [ -f "$ROOT/$CITE_REL" ]; then
+    run_git update-index --no-skip-worktree --no-assume-unchanged -- "$CITE_REL" >/dev/null 2>&1 || true
+    cite_dirty=0
+    if ! run_git ls-files --error-unmatch -- "$CITE_REL" >/dev/null 2>&1; then
+        cite_dirty=1
+    elif ! run_git diff --quiet HEAD -- "$CITE_REL"; then
+        cite_dirty=1
     fi
-    echo "Set aside local $CITE_REL so pull can proceed."
+    if [ "$cite_dirty" = "1" ]; then
+        CITE_SAVED="$(mktemp)"
+        cp "$ROOT/$CITE_REL" "$CITE_SAVED"
+        if ! run_git checkout -f HEAD -- "$CITE_REL" >/dev/null 2>&1; then
+            rm -f "$ROOT/$CITE_REL"
+        fi
+        echo "Set aside local $CITE_REL so pull can proceed."
+    fi
 fi
 # install.sh rebuilds these tracked binaries. A dirty copy blocks checkout.
 for rel in bin/samovar_kmer bin/samovar_combine_annotations bin/samovar_spearman; do
-    if git -C "$ROOT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 \
-        && [ -n "$(git -C "$ROOT" status --porcelain -- "$rel")" ]; then
-        git -C "$ROOT" checkout HEAD -- "$rel"
+    if run_git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+        run_git update-index --no-skip-worktree --no-assume-unchanged -- "$rel" >/dev/null 2>&1 || true
+        if ! run_git diff --quiet HEAD -- "$rel"; then
+            run_git checkout -f HEAD -- "$rel"
+        fi
     fi
 done
 restore_local_citations() {
@@ -191,12 +233,12 @@ restore_local_citations() {
 }
 trap restore_local_citations EXIT
 
-if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-    git -C "$ROOT" checkout "$BRANCH"
+if run_git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    run_git checkout "$BRANCH"
 else
-    git -C "$ROOT" checkout -b "$BRANCH" "origin/$BRANCH"
+    run_git checkout -b "$BRANCH" "origin/$BRANCH"
 fi
-git -C "$ROOT" pull --ff-only origin "$BRANCH"
+run_git pull --ff-only origin "$BRANCH"
 restore_local_citations
 trap - EXIT
 
@@ -269,10 +311,11 @@ PY
             export NCBI_EMAIL="anonymous@example.com"
         fi
     fi
-    echo "Auto update: reinstalling the package and keeping tools already recorded in config."
+    echo "Auto update: refreshing the Python package and keeping tools already in config (no prompts)."
     (
         cd "$ROOT"
-        ./install.sh
+        # Version mismatches otherwise call input() and look like a hung update.
+        SAMOVAR_UPDATE_SHELL=0 ./install.sh
     )
 else
     echo "Running ./install.sh full ask"
