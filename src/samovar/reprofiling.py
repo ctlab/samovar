@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import joblib
 import os
 import re
+import sys
 from typing import Any, Optional
 from collections import Counter
 
@@ -189,6 +190,7 @@ def use_gpu(gpu=None, config=None) -> bool:
 
 
 def cuda_device_available() -> bool:
+    ensure_cuda_toolkit_path()
     try:
         cupy = importlib.import_module("cupy")
         return int(cupy.cuda.runtime.getDeviceCount()) > 0
@@ -252,8 +254,34 @@ def _supported_kwargs(cls, kwargs: dict) -> dict:
     return picked
 
 
+def ensure_cuda_toolkit_path() -> None:
+    """Point CuPy at the conda CUDA toolkit before it is imported.
+
+    CuPy's conda lookup uses ``CONDA_PREFIX/targets/<arch>``, and it caches
+    that path on first import. ``samovar exec`` often runs the env interpreter
+    without ``conda activate``, so ``CONDA_PREFIX`` is empty and NVRTC cannot
+    find ``cuda.h``.
+    """
+    prefix = getattr(sys, "prefix", "") or ""
+    if prefix and not os.environ.get("CONDA_PREFIX"):
+        os.environ["CONDA_PREFIX"] = prefix
+    current = os.environ.get("CUDA_PATH") or ""
+    if current and os.path.isfile(os.path.join(current, "include", "cuda.h")):
+        return
+    roots = [
+        os.path.join(prefix, "targets", "x86_64-linux"),
+        os.path.join(prefix, "targets", "x86_64-linux-gnu"),
+        prefix,
+    ]
+    for root in roots:
+        if os.path.isfile(os.path.join(root, "include", "cuda.h")):
+            os.environ["CUDA_PATH"] = root
+            return
+
+
 def build_gpu_estimator(kind: str, **kwargs):
     """Construct a CUDA estimator and reject anything that would still fit on CPU."""
+    ensure_cuda_toolkit_path()
     reason = gpu_training_support(kind)
     if reason:
         raise GpuNotSupported(reason)
@@ -454,6 +482,8 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
     )
 
     wanted = _normalize_sklearn_methods(methods)
+    if use_gpu(gpu):
+        ensure_cuda_toolkit_path()
     matrix_bytes = int(getattr(X_train, "shape", (0, 0))[0] or 0) * int(
         getattr(X_train, "shape", (0, 1))[1] or 0
     ) * 8
@@ -464,13 +494,17 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
             reason = gpu_training_support(name)
             if reason:
                 raise GpuNotSupported(reason)
-    catalog = {
-        "RandomForest": build_random_forest(
+    builders = {
+        "RandomForest": lambda: build_random_forest(
             n_jobs=jobs, random_state=random_state, gpu=on_gpu
         ),
-        "AdaBoost": build_adaboost(n_jobs=jobs, random_state=random_state, gpu=on_gpu),
+        "AdaBoost": lambda: build_adaboost(
+            n_jobs=jobs, random_state=random_state, gpu=on_gpu
+        ),
     }
-    models = {name: catalog[name] for name in wanted}
+    # Build only the requested estimators. AdaBoost has no CUDA fit, so
+    # constructing it whenever gpu=True rejects a RandomForest-only run.
+    models = {name: builders[name]() for name in wanted}
     
     # Train and evaluate models
     metrics = {}

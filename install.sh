@@ -28,6 +28,7 @@
 #   ./install.sh CheckM2         optional CheckM2 (sidecar)
 #   ./install.sh GTDB-Tk         optional GTDB-Tk (sidecar; set GTDBTK_DATA_PATH)
 #   ./install.sh SparseDOSSA2    SparseDOSSA2 (also included in ./install.sh full)
+#   ./install.sh cuml            optional cuML (RandomForest --gpu, this env)
 #   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
 #   ./install.sh --rebuild-citations 1 refresh cite/*.bib after install (default)
 #   ./install.sh --rebuild-citations 0 skip doi.org / R citation() / CLI harvest
@@ -45,6 +46,7 @@
 #   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
+#   SAMOVAR_INSTALL_CUML=1     also install cuML (same as ./install.sh cuml)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
@@ -583,6 +585,37 @@ except Exception as exc:
 PY
 }
 
+# RandomForest --gpu imports cuml.ensemble in this env, not a sidecar.
+install_cuml() {
+    local py prefix conda wrapper
+    py="${PYTHON_PATH:-python3}"
+    prefix="${CONDA_PREFIX:-}"
+    if [ -z "$prefix" ]; then
+        prefix="$("$py" -c 'import sys; print(sys.prefix)')"
+    fi
+    if "$py" -c 'import cuml.ensemble' >/dev/null 2>&1; then
+        echo "cuML already importable by $py"
+    else
+        conda="$(command -v conda || true)"
+        if [ -z "$conda" ]; then
+            echo "conda was not found; cannot install cuML into $prefix" >&2
+            return 1
+        fi
+        echo "Installing cuML into $prefix"
+        "$conda" install -y -p "$prefix" \
+            -c rapidsai -c conda-forge -c nvidia \
+            'cuml>=26.02' 'cuda-version>=12.0,<13'
+        "$py" -c 'import cuml.ensemble'
+    fi
+    mkdir -p "$prefix/bin"
+    wrapper="$prefix/bin/cuml"
+    cat > "$wrapper" <<EOF
+#!/bin/sh
+exec $(printf '%q' "$py") -c 'import cuml.ensemble'
+EOF
+    chmod +x "$wrapper"
+}
+
 normalize_optional_arg() {
     local raw="${1:-}"
     local lower
@@ -607,6 +640,7 @@ normalize_optional_arg() {
         gtdbtk|gtdb-tk|gtdb_tk) echo "gtdbtk" ;;
         sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
         metax) echo "metax" ;;
+        cuml) echo "cuml" ;;
         full|all|everything) echo "full" ;;
         ask) echo "ask" ;;
         *) echo "" ;;
@@ -652,6 +686,7 @@ run_optional_named() {
         checkm2) "$PYTHON_PATH" -m samovar.sidecar checkm2 ;;
         gtdbtk) "$PYTHON_PATH" -m samovar.sidecar gtdbtk ;;
         sparsedossa2) install_sparsedossa2 ;;
+        cuml) install_cuml ;;
         metax) "$PYTHON_PATH" -m samovar.sidecar metax ;;
         *) return 1 ;;
     esac
@@ -975,6 +1010,12 @@ if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then
     "$PYTHON_PATH" -m samovar.sidecar metax || echo "Warning: optional Metax sidecar install did not complete."
 else
     echo "Skipping Metax (not required). Use ./install.sh Metax for the custom.sh annotator."
+fi
+
+if [ "${SAMOVAR_INSTALL_CUML:-0}" != "0" ]; then
+    install_cuml || echo "Warning: optional cuML install did not complete."
+else
+    echo "Skipping cuML (not required). Use ./install.sh cuml for RandomForest on GPU."
 fi
 fi
 

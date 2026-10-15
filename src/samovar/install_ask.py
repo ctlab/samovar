@@ -120,6 +120,7 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     ),
     AskTool("checkm2", ("checkm2",), "binner_qc", "optional:checkm2"),
     AskTool("gtdbtk", ("gtdbtk",), "mag_taxonomy", "optional:gtdbtk"),
+    AskTool("cuml", ("cuml",), "reprofiler", "optional:cuml"),
 )
 
 

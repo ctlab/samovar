@@ -1070,6 +1070,22 @@ _STATUS_TOOL_KEYS = {
 }
 
 
+def _cuml_marker() -> Optional[str]:
+    """Path of the ``cuml`` wrapper, or the importable ``cuml.ensemble`` module."""
+    recorded = _existing_tool("cuml")
+    if recorded:
+        return recorded
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("cuml.ensemble")
+    except Exception:
+        return None
+    if spec is None or not spec.origin:
+        return None
+    return spec.origin
+
+
 def install_status_rows() -> List[Dict[str, Any]]:
     """Required and optional tools: path, role, how to install, config key."""
     cfg = load_config()
@@ -1266,6 +1282,14 @@ def install_status_rows() -> List[Dict[str, Any]]:
             path=str(cfg.get("sparsedossa2_r") or "") or None,
             config_key="sparsedossa2 / tools.sparsedossa2-fit",
             install="./install.sh SparseDOSSA2",
+        ),
+        row(
+            "cuml",
+            required=False,
+            role="RandomForest on GPU (--gpu)",
+            path=_cuml_marker(),
+            config_key="tools.cuml",
+            install="./install.sh cuml",
         ),
     ]
     try:
