@@ -324,9 +324,17 @@ def load_regenerated_table(path: Optional[PathLike]) -> pd.DataFrame:
         combined = target / "combined_annotation_table.csv"
         if combined.is_file():
             return pd.read_csv(combined)
-        parts = list(load_csv_tables(target).values())
-        if parts:
-            return pd.concat(parts, ignore_index=True)
+        parts = sorted(target.glob("*.annotation.csv"))
+        frames = []
+        for path in parts:
+            try:
+                frames.append(pd.read_csv(path))
+            except Exception:
+                continue
+        if not frames:
+            frames = list(load_csv_tables(target).values())
+        if frames:
+            return pd.concat(frames, ignore_index=True)
     return pd.DataFrame()
 
 
