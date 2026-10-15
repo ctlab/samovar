@@ -471,6 +471,25 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
     # Prepare features and target
     X = df_processed[feature_cols]
     y = df_processed['true']
+    min_class = int(os.environ.get("SAMOVAR_MIN_CLASS_COUNT", "0") or 0)
+    if min_class > 1:
+        counts = y.value_counts()
+        keep_labels = counts[counts >= min_class].index
+        if len(keep_labels) >= 2:
+            mask = y.isin(keep_labels)
+            dropped = int((~mask).sum())
+            print(
+                f"[rfc] skip rare profiles: drop {dropped} rows in classes with n<{min_class}; "
+                f"keep {len(keep_labels)} classes",
+                flush=True,
+            )
+            X = X.loc[mask]
+            y = y.loc[mask]
+        else:
+            print(
+                f"[rfc] skip rare profiles: not applied, fewer than 2 classes have n>={min_class}",
+                flush=True,
+            )
     
     # Split data. Stratify only when every class has ≥2 members (sklearn).
     split_kwargs = {"test_size": test_size, "random_state": random_state}
@@ -629,6 +648,15 @@ def _predict_in_chunks(model, X: pd.DataFrame):
                         if value > 0:
                             votes.append(value)
                 confidence = float(conf[i])
+                if os.environ.get("SAMOVAR_RFC_CORRECTION") == "1":
+                    min_conf = float(os.environ.get("SAMOVAR_MIN_CONFIDENCE", "0.5"))
+                    if not votes or confidence < min_conf:
+                        predictions[start + i] = 0
+                        confidences[start + i] = confidence
+                    else:
+                        predictions[start + i] = int(label)
+                        confidences[start + i] = confidence
+                    continue
                 if votes:
                     top_value, top_count = Counter(votes).most_common(1)[0]
                     if top_count == len(votes):
