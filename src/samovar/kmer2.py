@@ -136,14 +136,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("-d", dest="db", default="", help="Unused (annotator CLI)")
     parser.add_argument("-o", "--output", dest="o", required=True, help="Output TSV")
     parser.add_argument("-t", dest="threads", default="1", help="OpenMP threads for the C++ counter")
+    parser.add_argument("-k", dest="k", type=int, default=2, help="k-mer length (1..8, default 2)")
     parser.add_argument(
         "--kmer-max",
         dest="kmer_max",
         type=int,
         default=None,
-        help="Max distinct k-mers written (highest across-read variance; at most 16)",
+        help="Max distinct k-mers written (highest across-read variance)",
     )
     args = parser.parse_args(argv)
+    if args.k < 1 or args.k > 8:
+        parser.error("-k must be from 1 to 8")
     if args.kmer_max is not None and args.kmer_max < 0:
         parser.error("--kmer-max must be >= 0")
     threads = int(args.threads)
@@ -155,6 +158,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         cmd.extend(["-I", args.r2])
     if args.db:
         cmd.extend(["-d", args.db])
+    if args.k != 2:
+        cmd.extend(["-k", str(args.k)])
     if args.kmer_max is not None:
         cmd.extend(["--kmer-max", str(args.kmer_max)])
     return subprocess.call(cmd)
