@@ -191,6 +191,13 @@ def annotation_to_abundance_tables(frame: pd.DataFrame) -> Dict[str, pd.DataFram
         n_cols = n_sample_columns(out)
         if n_cols:
             out = out[out[n_cols].sum(axis=1) > 0]
+        if out.empty:
+            # All labels were missing. Keep the annotator so the column
+            # contract matches a table where this tool did classify.
+            sample = "1"
+            if "sample" in work.columns and len(work.index):
+                sample = str(work["sample"].iloc[0])
+            out = pd.DataFrame({"taxid": ["0"], f"N_{sample}": [0]})
         result[annotator_name(col)] = out.reset_index(drop=True)
     return result
 

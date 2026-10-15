@@ -183,8 +183,10 @@ def diagnose_annotator(
 
 def warning_message(name: str, diagnosis: str) -> str:
     base = (
-        f"Annotator {name!r} produced empty or unclassified-only output; "
-        "it will be skipped for table regeneration."
+        f"Annotator {name!r} produced empty or unclassified-only output. "
+        "Its column stays in the combined annotation (taxid 0) so initial and "
+        "regenerated tables keep the same ML features. It is skipped only when "
+        "building abundance tables for read regeneration."
     )
     if diagnosis == "did_not_run":
         detail = (

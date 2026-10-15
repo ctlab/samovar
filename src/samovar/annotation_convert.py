@@ -224,12 +224,31 @@ def _kreport_options(fmt: str, kwargs: Dict[str, Any]) -> tuple:
     return mpa, taxdump or None, normalize_taxonomy(taxonomy)
 
 
+def _write_empty_abundance(dest: PathLike) -> Path:
+    """Keep the export step alive when every annotator is unclassified."""
+    import warnings
+
+    warnings.warn(
+        "No classified abundance to write. Later steps still run; "
+        "unclassified annotators stay in the combined annotation as taxid 0.",
+        UserWarning,
+        stacklevel=3,
+    )
+    dest_path = Path(dest)
+    if dest_path.suffix.lower() in {".csv", ".tsv", ".txt"}:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_text("taxid\n", encoding="utf-8")
+        return dest_path
+    dest_path.mkdir(parents=True, exist_ok=True)
+    return dest_path
+
+
 def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> Path:
     name = normalize_format(fmt)
     if name == "abundance":
         tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
         if not tables:
-            raise ValueError("no abundance tables to write (empty annotation)")
+            return _write_empty_abundance(dest)
         return write_abundance(dest, tables)
     if name == "annotation":
         frame = annotation_long_table(annotation)
@@ -243,7 +262,7 @@ def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> 
 
         tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
         if not tables:
-            raise ValueError("no abundance tables to write (empty annotation)")
+            return _write_empty_abundance(dest)
         mpa, taxdump, taxonomy = _kreport_options(name, kwargs)
         return dump_kreport(
             tables, dest, taxdump=taxdump, mpa=mpa, taxonomy=taxonomy
@@ -253,7 +272,7 @@ def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> 
 
         tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
         if not tables:
-            raise ValueError("no abundance tables to write (empty annotation)")
+            return _write_empty_abundance(dest)
         _mpa, taxdump, taxonomy = _kreport_options(name, kwargs)
         return dump_cami(tables, dest, taxdump=taxdump, taxonomy=taxonomy)
     raise UnknownFormatError(fmt)

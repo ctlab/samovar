@@ -592,6 +592,52 @@ def run_builtin_reprofiler(
     )
 
 
+def _align_ml_tables(regenerated, initial, initial_dir):
+    """Union tax/feature columns before train and apply."""
+    import warnings
+
+    from samovar.annotation_io import align_contract_columns, contract_column_names
+
+    frames = [regenerated if isinstance(regenerated, pd.DataFrame) else pd.DataFrame()]
+    keys = []
+    if isinstance(initial, dict):
+        for key, table in initial.items():
+            if isinstance(table, pd.DataFrame):
+                frames.append(table)
+                keys.append(key)
+    elif initial_dir:
+        root = Path(initial_dir)
+        if root.is_dir():
+            seen = []
+            known = set(contract_column_names(frames[0].columns))
+            for path in iter_annotation_csvs(root):
+                try:
+                    header = pd.read_csv(path, nrows=0)
+                except Exception:
+                    continue
+                for name in contract_column_names(header.columns):
+                    if name not in known:
+                        known.add(name)
+                        seen.append(name)
+            if seen:
+                work = frames[0].copy()
+                for name in seen:
+                    work[name] = 0 if name.lower().startswith("taxid_") else ""
+                warnings.warn(
+                    "Initial annotations have columns missing from the regenerated "
+                    "table (" + ", ".join(seen) + "). They are filled with 0 so both "
+                    "sides share one ML feature set.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                frames[0] = work
+    aligned = align_contract_columns(*frames)
+    regen = aligned[0]
+    if not keys:
+        return regen, initial
+    return regen, {key: aligned[i + 1] for i, key in enumerate(keys)}
+
+
 def run_reprofiler(
     name: Optional[str],
     *,
@@ -625,6 +671,7 @@ def run_reprofiler(
         init = initial
     else:
         init = initial if initial is not None else load_csv_tables(initial_dir)
+    regen, init = _align_ml_tables(regen, init, initial_dir)
     cfg["features_df"] = cfg.get("features_df")
     if cfg.get("features") and cfg["features_df"] is None:
         cfg["features_df"] = load_read_features(cfg.get("features"))

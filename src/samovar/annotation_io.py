@@ -53,6 +53,57 @@ def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def contract_column_names(columns) -> list:
+    """taxID / feat columns that the reprofiler treats as one feature set."""
+    names = []
+    for col in columns:
+        name = str(col)
+        low = name.lower()
+        if low.startswith("taxid_") or name.startswith("feat_"):
+            names.append(name)
+    return names
+
+
+def align_contract_columns(*frames: pd.DataFrame) -> list:
+    """Give every frame the same tax and feature columns.
+
+    A tool that classified only on one side (or returned taxid 0) still occupies
+    its column on the other side, filled with 0 for tax IDs and blank for features.
+    """
+    import warnings
+
+    ordered = []
+    seen = set()
+    for frame in frames:
+        if not isinstance(frame, pd.DataFrame):
+            continue
+        for name in contract_column_names(frame.columns):
+            if name not in seen:
+                seen.add(name)
+                ordered.append(name)
+    aligned = []
+    for frame in frames:
+        if not isinstance(frame, pd.DataFrame):
+            aligned.append(frame)
+            continue
+        missing = [name for name in ordered if name not in frame.columns]
+        if not missing:
+            aligned.append(frame)
+            continue
+        work = frame.copy()
+        for name in missing:
+            work[name] = 0 if name.lower().startswith("taxid_") else ""
+        warnings.warn(
+            "Combined annotation columns differ ("
+            + ", ".join(missing)
+            + "). Missing columns are filled so the ML feature set matches.",
+            UserWarning,
+            stacklevel=2,
+        )
+        aligned.append(work)
+    return aligned
+
+
 def read_annotation_dir(
     data_dir: Union[str, Path],
     sample_name_position: int = 0,
