@@ -163,9 +163,9 @@ def test_generate_configs():
         iss_config = yaml.safe_load(f)
         assert iss_config['gzip_genomes'] is True
         assert iss_config['gzip_reads'] is False
-        assert iss_config['N_reads'] == 1000
-        assert iss_config['max_genomes'] == float("inf")
-        assert iss_config['max_genome_mb'] == float("inf")
+        assert iss_config['N_reads'] == 1000000
+        assert iss_config['max_genomes'] == 100
+        assert iss_config['max_genome_mb'] == 100
         assert iss_config['genome_skip_list'] == []
 
 
@@ -191,7 +191,7 @@ def test_pipeline_config_n_reads_cli_overrides_default():
     assert iss_config["max_genomes"] == 20
 
 
-def test_pipeline_config_max_genomes_default_inf(tmp_path, monkeypatch):
+def test_pipeline_config_max_genomes_default(tmp_path, monkeypatch):
     monkeypatch.delenv("SAMOVAR_MAX_GENOMES", raising=False)
     args = argparse.Namespace(
         input_config=None,
@@ -201,11 +201,11 @@ def test_pipeline_config_max_genomes_default_inf(tmp_path, monkeypatch):
         kaiju=None,
     )
     config = PipelineConfig.from_args(args)
-    assert config.max_genomes == float("inf")
+    assert config.max_genomes == 100
     configs = config.generate_configs(str(tmp_path))
     with open(configs["annotation2iss"], "r") as f:
         iss_config = yaml.safe_load(f)
-    assert iss_config["max_genomes"] == float("inf")
+    assert iss_config["max_genomes"] == 100
 
 
 def test_pipeline_config_genome_skip_and_max_mb_cli(tmp_path):

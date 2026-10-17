@@ -163,6 +163,7 @@ def _normalize_taxid(taxid: str | int) -> str:
 
 
 UNLIMITED_GENOME_MB = float("inf")
+DEFAULT_MAX_GENOME_MB = 100.0
 
 
 def parse_max_genome_mb(
@@ -170,14 +171,19 @@ def parse_max_genome_mb(
     *,
     default_from_env: bool = True,
 ) -> float:
-    """Size cap for a *new* NCBI download. ``0`` / ``inf`` / empty → unlimited."""
+    """Size cap for a *new* NCBI download. ``0`` / ``inf`` → unlimited.
+
+    An omitted value uses ``SAMOVAR_MAX_GENOME_MB`` or 100.
+    """
     if value is None and default_from_env:
         value = os.environ.get("SAMOVAR_MAX_GENOME_MB", "")
     if value is None or value is False:
-        return UNLIMITED_GENOME_MB
+        return DEFAULT_MAX_GENOME_MB if default_from_env else UNLIMITED_GENOME_MB
     if isinstance(value, str):
         text = value.strip().lower()
-        if text in {"", "inf", "infinity", "+inf", "none", "unlimited", "unlimited.0"}:
+        if text == "":
+            return DEFAULT_MAX_GENOME_MB if default_from_env else UNLIMITED_GENOME_MB
+        if text in {"inf", "infinity", "+inf", "none", "unlimited", "unlimited.0"}:
             return UNLIMITED_GENOME_MB
         try:
             value = float(text)
@@ -1328,8 +1334,8 @@ def download_cli(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--max-genome-mb",
         type=argparse_max_genome_mb,
-        default=UNLIMITED_GENOME_MB,
-        help="Skip new NCBI assemblies larger than this many MB (default: unlimited)",
+        default=DEFAULT_MAX_GENOME_MB,
+        help="Skip new NCBI assemblies larger than this many MB (default: 100; 0 unlimited)",
     )
     parser.add_argument(
         "--genome-skip-list",
@@ -1386,8 +1392,8 @@ def main(argv: Optional[Sequence[str]] = None):
     parser.add_argument(
         '--max-genome-mb',
         type=argparse_max_genome_mb,
-        default=UNLIMITED_GENOME_MB,
-        help='Skip new NCBI assemblies larger than this many MB (default: inf; 0 also unlimited)',
+        default=DEFAULT_MAX_GENOME_MB,
+        help='Skip new NCBI assemblies larger than this many MB (default: 100; 0 unlimited)',
     )
     parser.add_argument(
         '--genome-skip-list',

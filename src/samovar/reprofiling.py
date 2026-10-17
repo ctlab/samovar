@@ -706,18 +706,18 @@ def predict_taxid(df, model_path=None, feature_cols=None):
     X = df_processed.reindex(columns=feature_cols, fill_value=0)
     final_predictions, final_confidences = _predict_in_chunks(model, X)
     
-    # Create a mapping from processed index to original index
+    # Chunked read_csv keeps the file index (20000, 20001, ...), so labels are
+    # not positions in this dataframe.
     processed_to_original = dict(zip(range(len(df_processed)), df_processed.index))
-    
-    # Initialize arrays for the full length of original dataframe
+    label_to_pos = {label: pos for pos, label in enumerate(df.index)}
+
     full_predictions = np.zeros(len(df), dtype=object)
     full_confidences = np.zeros(len(df))
-    
-    # Fill in predictions and confidences for processed rows
+
     for i, (pred, conf) in enumerate(zip(final_predictions, final_confidences)):
-        orig_idx = processed_to_original[i]
-        full_predictions[orig_idx] = pred
-        full_confidences[orig_idx] = conf
+        pos = label_to_pos[processed_to_original[i]]
+        full_predictions[pos] = pred
+        full_confidences[pos] = conf
     
     # Add predictions to dataframe
     df['taxid_SAMOVAR'] = full_predictions

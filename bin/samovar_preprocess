@@ -61,14 +61,14 @@ def main():
         dest='max_genomes',
         type=argparse_max_genomes,
         default=None,
-        help='Max taxa for table regenerate and genomes for metagenome generate (default: inf). Alias: --top',
+        help='Max taxa for table regenerate and genomes for metagenome generate (default: 100). Alias: --top',
     )
     parser.add_argument(
         '--max-genome-mb',
         dest='max_genome_mb',
         type=argparse_max_genome_mb,
         default=None,
-        help='Skip new NCBI downloads larger than this many MB (default: inf; 0 unlimited). Already-cached genomes are kept.',
+        help='Skip new NCBI downloads larger than this many MB (default: 100; 0 unlimited). Already-cached genomes are kept.',
     )
     parser.add_argument(
         '--genome-skip-list',
@@ -84,7 +84,7 @@ def main():
     )
     parser.add_argument(
         '--N_reads', '--n_reads', dest='N_reads', type=int, default=None,
-        help='Read depth of each regenerated sample (default: 1000, or N_reads in --input_config)')
+        help='Read depth of each regenerated sample (default: 1000000, or N_reads in --input_config)')
     parser.add_argument(
         '--N',
         dest='regeneration_n',
@@ -100,7 +100,9 @@ def main():
         action='append',
         default=None,
         help=(
-            'Abundance table regenerator: direct|bootstrap|vae|glm|camisim-table|'
+            'Abundance table regenerator (default: concat_weighted, one table, '
+            'shared taxa summed across annotators). '
+            'direct|bootstrap|vae|glm|camisim-table|'
             'concat|concat_weighted|sparsedossa2-fit|sparsedossa2-stool|samovar, '
             'or a name imported with `samovar tools import --type table`. '
             'Repeat to try several methods; the best is chosen with --table-score'

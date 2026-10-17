@@ -4,13 +4,13 @@ Minimal contract: ``taxid`` × ``N_<sample>`` in, same shape out. Long
 annotation tables (``taxID_*``) and phyloseq-style OTU tables are converted
 first. Sequence regenerate (ISS) consumes that same abundance shape.
 
-``config["max_genomes"]`` (CLI ``--max-genomes``, default ``inf``) caps how
+``config["max_genomes"]`` (CLI ``--max-genomes``, default 100) caps how
 many taxa are kept (top by abundance) before table regenerate and how many
 non-host genomes a metagenome generator uses.
 
 Modes:
 
-- ``direct`` (default; aliases: preserve, exact, raw): observed taxID counts,
+- ``direct`` (aliases: preserve, exact, raw): observed taxID counts,
   same sample names, no generative remodelling.
 - ``bootstrap``: column bootstrap of observed sample profiles.
 - ``vae``: latent-factor generative model (FactorAnalysis on log abundances).
@@ -19,7 +19,8 @@ Modes:
   design on the observed taxIDs (same engine as ``samovar generate --simulator camisim --camisim-mode table``).
 - ``concat``: merge prior annotator tables into one (union taxa, equal
   reads per taxon), then one regeneration.
-- ``concat_weighted``: same merge, summing counts for shared taxa.
+- ``concat_weighted`` (default): same merge into one table, summing counts
+  for shared taxa (same proportions as the mean across annotators).
 - ``samovar``: optional R regenerator (not part of the Python install). Looked
   up via ``SAMOVAR_R_REGENERATE`` / config ``annotation_regenerate_r``.
 - any other name: custom ``table_reads_generator`` registered with
@@ -39,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 UNLIMITED_MAX_GENOMES = float("inf")
+DEFAULT_MAX_GENOMES = 100.0
 
 
 def parse_max_genomes(
@@ -46,14 +48,19 @@ def parse_max_genomes(
     *,
     default_from_env: bool = True,
 ) -> float:
-    """Count cap for taxa / non-host genomes. ``0`` / ``inf`` / empty → unlimited."""
+    """Count cap for taxa / non-host genomes. ``0`` / ``inf`` → unlimited.
+
+    An omitted value uses ``SAMOVAR_MAX_GENOMES`` or 100.
+    """
     if value is None and default_from_env:
         value = os.environ.get("SAMOVAR_MAX_GENOMES", "")
     if value is None or value is False:
-        return UNLIMITED_MAX_GENOMES
+        return DEFAULT_MAX_GENOMES if default_from_env else UNLIMITED_MAX_GENOMES
     if isinstance(value, str):
         text = value.strip().lower()
-        if text in {"", "inf", "infinity", "+inf", "none", "unlimited"}:
+        if text == "":
+            return DEFAULT_MAX_GENOMES if default_from_env else UNLIMITED_MAX_GENOMES
+        if text in {"inf", "infinity", "+inf", "none", "unlimited"}:
             return UNLIMITED_MAX_GENOMES
         try:
             value = float(text)
@@ -855,13 +862,13 @@ def write_samovar_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         "plot_log": False,
         "min_cluster_size": 2,
         "max_cluster_size": 100,
-        "N_reads": 1000,
-        "regeneration_mode": "direct",
+        "N_reads": 1_000_000,
+        "regeneration_mode": "concat_weighted",
         "seed": 42,
         "vae_latent_dim": 4,
         "rescale_abundance": False,
         "bootstrap_error_scale": 0.15,
-        "max_genomes": UNLIMITED_MAX_GENOMES,
+        "max_genomes": DEFAULT_MAX_GENOMES,
     }
     merged = {**defaults, **config}
     # keep R spelling alias

@@ -8,7 +8,7 @@ import sys
 
 from samovar.genome_fetcher import argparse_max_genome_mb
 from samovar.paths import add_output_dir_argument
-from samovar.regenerate import UNLIMITED_MAX_GENOMES, argparse_max_genomes, parse_max_genomes
+from samovar.regenerate import argparse_max_genomes, parse_max_genomes
 
 
 def parse_genome_tokens(values: Optional[Sequence[Any]]) -> List[str]:
@@ -234,9 +234,9 @@ class ISSTestConfig:
     reads_generator: str = "iss"
     metagenome_generator: str = ""
     abundance_table: str = ""
-    max_genome_mb: float = float("inf")
+    max_genome_mb: float = 100.0
     genome_skip_list: str = ""
-    max_genomes: float = UNLIMITED_MAX_GENOMES
+    max_genomes: float = 100.0
     locked_genomes: Optional[List[str]] = None
 
     @classmethod
@@ -503,7 +503,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         dest='max_genomes',
         type=argparse_max_genomes,
         default=None,
-        help='Keep this many genomes from genome_dir (default: inf). The chosen files are written to Hydra.',
+        help='Keep this many genomes from genome_dir (default: 100). The chosen files are written to Hydra.',
     )
     parser.add_argument(
         '--genomes',
@@ -516,7 +516,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         dest='max_genome_mb',
         type=argparse_max_genome_mb,
         default=None,
-        help='Skip new NCBI downloads larger than this many MB (default: inf). Cached genomes are kept.',
+        help='Skip new NCBI downloads larger than this many MB (default: 100). Cached genomes are kept.',
     )
     parser.add_argument(
         '--genome-skip-list',

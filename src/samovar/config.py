@@ -56,11 +56,12 @@ from samovar.reprofilers import (
 )
 from samovar.genome_resolve import normalize_reannotation_level
 from samovar.genome_fetcher import (
+    DEFAULT_MAX_GENOME_MB,
     UNLIMITED_GENOME_MB,
     parse_genome_skip_list,
     parse_max_genome_mb,
 )
-from samovar.regenerate import UNLIMITED_MAX_GENOMES, parse_max_genomes
+from samovar.regenerate import DEFAULT_MAX_GENOMES, UNLIMITED_MAX_GENOMES, parse_max_genomes
 from samovar.ground_truth import (
     GROUND_TRUTH_TABLE,
     normalize_regenerated_mode,
@@ -322,8 +323,8 @@ class PipelineConfig:
     email: str = None
     cores: int = 1
     mem_mb: Optional[int] = None
-    max_genomes: float = UNLIMITED_MAX_GENOMES
-    regeneration_mode: str = "direct"
+    max_genomes: float = DEFAULT_MAX_GENOMES
+    regeneration_mode: str = "concat_weighted"
     regeneration_modes: Optional[List[str]] = None
     table_score: str = "shannon_ks"
     sample_score: str = ""
@@ -341,7 +342,7 @@ class PipelineConfig:
     sample_filter_sd_by_method: Optional[Dict[str, float]] = None
     sample_filter_stage: str = "final"
     regeneration_n: Optional[int] = None
-    regeneration_n_reads: int = 1000
+    regeneration_n_reads: int = 1_000_000
     regeneration_seed: int = 42
     reannotation_level: str = "taxid"
     rescale_abundance: bool = False
@@ -356,7 +357,7 @@ class PipelineConfig:
     reuse_genomes: bool = True
     use_test_genomes: bool = False
     genome_dirs: Optional[List[str]] = None
-    max_genome_mb: float = UNLIMITED_GENOME_MB
+    max_genome_mb: float = DEFAULT_MAX_GENOME_MB
     genome_skip_list: Optional[List[str]] = None
     run_multiqc: Optional[bool] = None
     initial_ground_truth_table: Optional[str] = None

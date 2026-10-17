@@ -1558,7 +1558,8 @@ def samovar_annotation_regenerate(
 
     Modes (``regeneration_mode`` / ``table_reads_generator`` in config):
 
-    - ``direct`` (default; alias ``preserve``): observed counts, same samples.
+    - ``direct`` (alias ``preserve``): observed counts, same samples.
+    - ``concat_weighted`` (default): one table, shared taxa summed across annotators.
     - ``bootstrap`` / ``vae`` / ``glm``: Python generative models.
     - ``samovar``: optional R regenerator (not part of the Python install).
     - any other name: imported ``table_reads_generator`` (``samovar tools import --type table``).
@@ -1570,8 +1571,8 @@ def samovar_annotation_regenerate(
         config_samovar_dict = {
             "threshold_amount": 1e-5,
             "plot_log": False,
-            "N_reads": 1000,
-            "regeneration_mode": "direct",
+            "N_reads": 1_000_000,
+            "regeneration_mode": "concat_weighted",
         }
     else:
         with open(config_samovar, "r") as f:
@@ -1584,7 +1585,7 @@ def samovar_annotation_regenerate(
 
     kind, mode = resolve_regeneration_mode(
         config_samovar_dict.get("table_reads_generator")
-        or config_samovar_dict.get("regeneration_mode", "direct")
+        or config_samovar_dict.get("regeneration_mode", "concat_weighted")
     )
     if not (kind == "builtin" and mode == "samovar"):
         _samovar_annotation_regenerate_python(
