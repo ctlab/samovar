@@ -1,7 +1,8 @@
 import os
 
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
-from samovar.memory import job_mem_mb
+from samovar.memory import annotator_mem_mb
+from samovar.tool_spec import annotator_priority
 from samovar.seqio import find_fastq_mate, list_fastq_samples
 
 try:
@@ -47,18 +48,36 @@ SAMPLES = get_samples()
 # Initialize annotator instances and thread counts once during DAG generation
 ANNOTATORS = {}
 THREADS = {}
+TOOL_TYPES = {}
 for run_conf in config.get('run_config', []):
     run_name = run_conf['run_name']
     tool_type = run_conf['type']
     ANNOTATORS[run_name] = get_annotator_instance(tool_type, run_conf, config)
     THREADS[run_name] = run_conf.get('threads', 1)
+    TOOL_TYPES[run_name] = str(tool_type or run_name)
 
 MACHINE_CORES = max(1, int(config.get("cores") or os.environ.get("SAMOVAR_CORES") or 1))
 MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None
 
 
 def rule_mem(wildcards):
-    return job_mem_mb(THREADS.get(wildcards.run_name, 1), MACHINE_CORES, MEM_LIMIT)
+    tool = TOOL_TYPES.get(wildcards.run_name, "")
+    return annotator_mem_mb(
+        tool, THREADS.get(wildcards.run_name, 1), MACHINE_CORES, MEM_LIMIT
+    )
+
+
+# custom_tool is one rule for every custom annotator. If MetaX is among them,
+# the rule takes MetaX's priority so that database job is not stuck behind
+# per-read tools. Snakemake priority has to be a number, not a function.
+CUSTOM_PRIORITY = max(
+    (
+        annotator_priority(tool)
+        for name, tool in TOOL_TYPES.items()
+        if type(ANNOTATORS[name]).__name__ == "CustomAnnotator"
+    ),
+    default=annotator_priority("gc"),
+)
 
 KAIJU_RUNS = [
     name for name, ann in ANNOTATORS.items()
@@ -93,6 +112,7 @@ rule custom_tool:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: CUSTOM_PRIORITY
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
     params:
@@ -119,6 +139,7 @@ rule assembly:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("assembly")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
     params:
@@ -143,6 +164,7 @@ rule kraken2:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("kraken2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
     params:
@@ -167,6 +189,7 @@ if not BATCH_KAIJU:
             lambda wildcards: THREADS.get(wildcards.run_name, 1)
         resources:
             mem_mb=rule_mem,
+        priority: annotator_priority("kaiju")
         log:
             f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
         params:
@@ -193,7 +216,10 @@ if BATCH_KAIJU:
             threads:
                 THREADS.get(_kaiju_run, 1)
             resources:
-                mem_mb=job_mem_mb(THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT),
+                mem_mb=annotator_mem_mb(
+                    "kaiju", THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT
+                ),
+            priority: annotator_priority("kaiju")
             log:
                 f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"
             params:
@@ -218,6 +244,7 @@ rule metaphlan4:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("metaphlan4")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
     params:
@@ -241,6 +268,7 @@ rule kmer2:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("kmer2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
     params:
@@ -264,6 +292,7 @@ rule gc:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("gc")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
     params:
@@ -287,6 +316,7 @@ rule kmer_encoder:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("kmer_encoder")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
     params:
@@ -310,6 +340,7 @@ rule kraken:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("kraken")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
     params:
@@ -333,6 +364,7 @@ rule krakenuniq:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
         mem_mb=rule_mem,
+    priority: annotator_priority("krakenuniq")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
     params:

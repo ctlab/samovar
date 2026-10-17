@@ -139,6 +139,20 @@ def job_mem_mb(threads: int, cores: int, limit_mb: Optional[int] = None) -> int:
     return max(1, min(limit, (limit * slots) // width))
 
 
+def annotator_mem_mb(tool: str, threads: int, cores: int, limit_mb: Optional[int] = None) -> int:
+    """Memory one annotator job may take.
+
+    Kraken2, KrakenUniq, and MetaX hold the database in RAM, so the job asks
+    for the whole ceiling and runs alone. Other tools keep a thread share and
+    can run side by side.
+    """
+    from samovar.tool_spec import heavy_db_tool
+
+    if heavy_db_tool(tool):
+        return memory_limit_mb(limit_mb)
+    return job_mem_mb(threads, cores, limit_mb)
+
+
 def parallel_jobs(
     requested: int,
     *,

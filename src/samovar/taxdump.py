@@ -156,6 +156,31 @@ def usable_taxdump_dir(
     return live[0][1]
 
 
+def require_metax_taxdump(runs: Any) -> None:
+    """Fail at prepare time when MetaX is selected and ``nodes.dmp`` is missing."""
+    needs = False
+    for run in runs or []:
+        if isinstance(run, dict):
+            tool = str(run.get("type") or run.get("run_name") or "")
+        else:
+            tool = str(getattr(run, "type", "") or getattr(run, "run_name", "") or "")
+        if tool.strip().lower().replace("-", "_") == "metax":
+            needs = True
+            break
+    if not needs:
+        return
+    env = os.environ.get("METAX_DMP_DIR", "").strip()
+    if env and (Path(env).expanduser() / "nodes.dmp").is_file():
+        return
+    if metax_dmp_dir():
+        return
+    raise ValueError(
+        "MetaX needs nodes.dmp before the run starts. "
+        "Set genomes.taxdump or databases.taxdump in the SamovaR config, "
+        "or SAMOVAR_TAXDUMP / METAX_DMP_DIR."
+    )
+
+
 def metax_dmp_dir(cfg: Optional[Dict[str, Any]] = None, version: str = "") -> str:
     """Directory Metax should pass as ``--dmp-dir``. Empty if none is installed."""
     found = usable_taxdump_dir(cfg, version=version)

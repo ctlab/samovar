@@ -1381,6 +1381,9 @@ class PipelineConfig:
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
         """Generate all necessary config files and return their paths"""
+        from samovar.taxdump import require_metax_taxdump
+
+        require_metax_taxdump(self.annotators)
         base_path = Path(absolute_path(base_dir))
         configs_dir = base_path / '.log' / 'configs'
         configs_dir.mkdir(parents=True, exist_ok=True)

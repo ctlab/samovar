@@ -8,7 +8,22 @@ from pathlib import Path
 from samovar.annotators_wrapper import kaiju_multi_script, use_kaiju_multi
 from samovar.assembly_profiling import assembly_stage_threads, run_megahit, run_prodigal
 from samovar.config import AnnotatorConfig, PipelineConfig, _apply_translated_cli_flags
-from samovar.tool_spec import scheduler_threads
+from samovar.memory import annotator_mem_mb, job_mem_mb
+from samovar.tool_spec import annotator_priority, scheduler_threads
+
+
+def test_heavy_databases_take_the_whole_memory_ceiling():
+    limit = 32_000
+    cores = 32
+    assert annotator_mem_mb("kraken2", 16, cores, limit) == limit
+    assert annotator_mem_mb("krakenuniq", 16, cores, limit) == limit
+    assert annotator_mem_mb("metax", 4, cores, limit) == limit
+    kaiju = annotator_mem_mb("kaiju", 8, cores, limit)
+    assert kaiju == job_mem_mb(8, cores, limit)
+    assert kaiju < limit
+    assert annotator_priority("kaiju") > annotator_priority("kraken2")
+    assert annotator_priority("kraken2") > annotator_priority("metax")
+    assert annotator_priority("metax") > annotator_priority("gc")
 
 
 def test_scheduler_reserves_only_what_the_program_uses():

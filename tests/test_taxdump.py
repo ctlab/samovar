@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from samovar.taxdump import (
     TAXDUMP_DMP_FILES,
     attach_taxdump_catalog,
@@ -8,6 +10,7 @@ from samovar.taxdump import (
     link_taxdump_into,
     load_scientific_names,
     metax_dmp_dir,
+    require_metax_taxdump,
     parse_names_dmp,
     taxdump_dir,
     usable_taxdump_dir,
@@ -200,3 +203,17 @@ def test_parse_and_cache_scientific_names(tmp_path, monkeypatch):
     assert parsed[562] == "Escherichia coli"
     assert 1 in load_scientific_names(names)
     assert load_scientific_names(names)[562] == "Escherichia coli"
+
+
+def test_prepare_rejects_metax_without_nodes_dmp(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_TAXDUMP", raising=False)
+    monkeypatch.delenv("METAX_DMP_DIR", raising=False)
+    monkeypatch.setattr("samovar.taxdump.metax_dmp_dir", lambda *args, **kwargs: "")
+    require_metax_taxdump([{"type": "kaiju"}])
+    with pytest.raises(ValueError, match="nodes.dmp"):
+        require_metax_taxdump([{"type": "metax", "run_name": "metax"}])
+    dump = tmp_path / "dmp"
+    dump.mkdir()
+    (dump / "nodes.dmp").write_text("1\t|\t1\t|\n")
+    monkeypatch.setenv("METAX_DMP_DIR", str(dump))
+    require_metax_taxdump([{"type": "metax"}])

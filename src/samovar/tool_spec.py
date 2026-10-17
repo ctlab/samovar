@@ -125,6 +125,34 @@ SCHEDULER_THREAD_CAP = {
 }
 DEFAULT_SCHEDULER_CAP = 8
 
+# RSS is the database. One of these jobs takes the whole memory ceiling, so
+# Kraken2 and MetaX cannot run beside each other.
+HEAVY_DB_TOOLS = frozenset({"kraken2", "kraken", "krakenuniq", "metax"})
+
+# Higher runs first. Kaiju (including kaiju-multi) finishes the cohort before a
+# database-sized job occupies the machine. Heavy families then go one at a time.
+# Light tools share whatever memory is left and run together.
+ANNOTATOR_PRIORITY = {
+    "kaiju": 100,
+    "kraken2": 80,
+    "kraken": 70,
+    "krakenuniq": 60,
+    "metax": 50,
+}
+DEFAULT_ANNOTATOR_PRIORITY = 10
+
+
+def _tool_key(tool: str) -> str:
+    return str(tool or "").strip().lower().replace("-", "_")
+
+
+def heavy_db_tool(tool: str) -> bool:
+    return _tool_key(tool) in HEAVY_DB_TOOLS
+
+
+def annotator_priority(tool: str) -> int:
+    return ANNOTATOR_PRIORITY.get(_tool_key(tool), DEFAULT_ANNOTATOR_PRIORITY)
+
 
 def scheduler_threads(tool: str, cores: int, *, n_samples: int = 1) -> int:
     """Cores this annotator job may take from ``--cores``."""

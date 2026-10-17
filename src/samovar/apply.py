@@ -231,6 +231,9 @@ def _retarget_init_config(
     out["output_dir"] = str(dest / "initial_reports")
     out["cores"] = int(cores)
     out["mem_mb"] = int(mem_mb)
+    from samovar.taxdump import require_metax_taxdump
+
+    require_metax_taxdump(out.get("run_config"))
     for run in out.get("run_config") or []:
         if isinstance(run, dict):
             tool = str(run.get("type") or run.get("run_name") or "")
