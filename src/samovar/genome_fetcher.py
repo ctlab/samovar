@@ -389,7 +389,7 @@ def skip_new_ncbi_download(
     """True when a *new* NCBI fetch should be skipped (skip-list or size cap).
 
     Already-on-disk genomes are the caller's job: this helper is only for the
-    download branch. Default ``max_genome_mb`` is unlimited.
+    download branch. An omitted ``max_genome_mb`` is 100 (or ``SAMOVAR_MAX_GENOME_MB``).
     """
     skip = (
         parse_genome_skip_list(skip_list, default_from_env=False)

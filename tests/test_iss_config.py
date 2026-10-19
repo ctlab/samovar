@@ -92,7 +92,7 @@ def test_generate_config():
         assert config_content['seed'] == 123
         assert config_content['model'] == "novaseq"
         assert config_content['genomes'] == []
-        assert config_content['max_genomes'] == float("inf")
+        assert config_content['max_genomes'] == 100.0
 
 def test_generate_pipeline():
     test_output_dir = 'tests_outs/test_generate_pipeline'

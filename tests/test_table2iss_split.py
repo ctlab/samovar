@@ -106,6 +106,7 @@ def test_process_annotation_tables_generates_once_then_splits(tmp_path):
             ],
             genome_dir=str(genome_dir),
             output_dir=str(reads),
+            regeneration_config={"regeneration_mode": "direct"},
         )
 
     iss_calls = [c for c in calls if _is_iss_cmd(c)]

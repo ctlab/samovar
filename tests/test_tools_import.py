@@ -592,8 +592,6 @@ def test_import_without_bibtex_leaves_existing_cli(tmp_path, monkeypatch):
 
 
 def test_prepare_used_citations_includes_imported_bibtex(tmp_path, monkeypatch):
-    import pytest
-
     from samovar.citations import write_used_citations
     from samovar.config import AnnotatorConfig, PipelineConfig
 
@@ -620,8 +618,7 @@ def test_prepare_used_citations_includes_imported_bibtex(tmp_path, monkeypatch):
     pipe.run_multiqc = False
     pipe.export_corrector = "off"
     pipe.scoring_tools = []
-    with pytest.warns(UserWarning):
-        path = write_used_citations(pipe, out)
+    path = write_used_citations(pipe, out)
     text = path.read_text()
     assert "Toy annotator A" in text
     assert "myclf" in text

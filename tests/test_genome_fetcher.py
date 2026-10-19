@@ -199,7 +199,7 @@ def test_fetch_genome_max_mb_blocks_new_download(tmp_path, monkeypatch):
     download.assert_not_called()
 
 
-def test_fetch_genome_default_max_mb_is_unlimited(tmp_path, monkeypatch):
+def test_fetch_genome_default_max_mb_checks_size(tmp_path, monkeypatch):
     from unittest.mock import patch
 
     monkeypatch.delenv("SAMOVAR_MAX_GENOME_MB", raising=False)
@@ -218,7 +218,7 @@ def test_fetch_genome_default_max_mb_is_unlimited(tmp_path, monkeypatch):
         "samovar.genome_fetcher._assembly_ftp_path",
         return_value="https://example.invalid/GCF_fake",
     ):
-        with patch("samovar.genome_fetcher._remote_fasta_size_mb") as head:
+        with patch("samovar.genome_fetcher._remote_fasta_size_mb", return_value=1.0) as head:
             with patch("samovar.genome_fetcher._download_url", side_effect=fake_download) as download:
                 with patch(
                     "samovar.genome_fetcher._assembly_doc_for_taxid",
@@ -229,8 +229,8 @@ def test_fetch_genome_default_max_mb_is_unlimited(tmp_path, monkeypatch):
                         side_effect=lambda **kw: Path(kw["output_file"]).write_text(">x\nACGT\n"),
                     ):
                         fetch_genome("1280", str(tmp_path / "run"), "test@example.com")
+    head.assert_called()
     download.assert_called()
-    head.assert_not_called()
 
 
 def test_fetch_genome_downloads_into_raw(tmp_path, monkeypatch):
