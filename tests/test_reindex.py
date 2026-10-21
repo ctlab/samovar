@@ -192,6 +192,114 @@ def test_materialize_reindex_modes(tmp_path, monkeypatch):
     assert resolve_indexed_path(acc).name == f"{acc}.fa.gz"
 
 
+@pytest.mark.parametrize("mode", [0, 1, 2])
+def test_materialize_repairs_unresolved_cached_taxonomy(tmp_path, monkeypatch, mode):
+    from samovar import genome_fetcher as fetcher
+    from samovar.genome_index import genome_data_map
+    from samovar.fasta_processor import read_fasta
+    from samovar.camisim import collect_generate_genomes
+    from samovar.table2iss import _genome_id_from_path
+
+    cfg, store = _isolate(tmp_path, monkeypatch)
+    accession = "GCA_035764635.1"
+    cached = store / "processed" / f"{accession}.fa.gz"
+    cached.parent.mkdir(parents=True)
+    with gzip.open(cached, "wt") as handle:
+        handle.write(f">{accession}|taxid:{accession}|1|1\nACGT\n")
+    index_processed_file(cached, accession=accession)
+    old_run = tmp_path / "old-run.fa.gz"
+    os.link(cached, old_run)
+    before = cfg.read_bytes()
+    monkeypatch.setattr(fetcher, "assembly_taxonomy", lambda *args, **kwargs: ("", ""))
+    with pytest.raises(ValueError, match="Cannot resolve a numeric taxid"):
+        fetcher.materialize_accessions([accession], output_dir=str(tmp_path / "out"),
+                                      email="test@example.com", reindex_mode=mode)
+    assert cfg.read_bytes() == before
+    monkeypatch.setattr(fetcher, "assembly_taxonomy", lambda *args, **kwargs: ("2681611", "2681611"))
+    monkeypatch.setattr(fetcher, "_download_url", lambda *args: pytest.fail("Cached assembly must not be downloaded again"))
+    paths = fetcher.materialize_accessions([accession], output_dir=str(tmp_path / "out"),
+                                         email="test@example.com", reindex_mode=mode)
+    assert len(paths) == 1
+    assert set(genome_data_map()) == {"2681611"}
+    assert all("taxid:2681611" in header for header, seq in read_fasta(paths[0]))
+    assert "taxid:GCA_" in read_fasta(str(old_run))[0][0]
+    assert _genome_id_from_path(paths[0]) == "2681611"
+    assert collect_generate_genomes(str(Path(paths[0]).parent))[0]["NCBI_ID"] == "2681611"
+
+
+@pytest.mark.parametrize("mode", [0, 1, 2])
+def test_download_requires_taxonomy_before_caching(tmp_path, monkeypatch, mode):
+    from samovar import genome_fetcher as fetcher
+    from samovar.genome_index import genome_data_map
+    from samovar.fasta_processor import read_fasta
+    from samovar.camisim import collect_generate_genomes
+    from samovar.table2iss import _genome_id_from_path
+
+    cfg, store = _isolate(tmp_path, monkeypatch)
+    accession = "GCA_035764635.1"
+    downloads = []
+
+    def download(url, dest):
+        downloads.append(url)
+        _write_fa(dest)
+
+    monkeypatch.setattr(fetcher, "_assembly_ftp_for_accession", lambda *args, **kw: "https://example.invalid/assembly")
+    monkeypatch.setattr(fetcher, "skip_new_ncbi_download", lambda *args, **kw: False)
+    monkeypatch.setattr(fetcher, "_download_url", download)
+    monkeypatch.setattr(fetcher, "assembly_taxonomy", lambda *args, **kwargs: ("", ""))
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="Cannot resolve a numeric taxid"):
+        fetcher.materialize_accessions([accession], output_dir=str(out),
+                                      email="test@example.com", reindex_mode=mode)
+    assert not genome_data_map()
+    assert not downloads
+    monkeypatch.setattr(fetcher, "assembly_taxonomy", lambda *args, **kwargs: ("2681611", "2681611"))
+    paths = fetcher.materialize_accessions([accession], output_dir=str(out),
+                                         email="test@example.com", reindex_mode=mode)
+    assert len(paths) == len(downloads) == 1
+    assert "taxid:2681611" in read_fasta(paths[0])[0][0]
+    assert set(genome_data_map()) == ({"2681611"} if mode else set())
+    assert _genome_id_from_path(paths[0]) == "2681611"
+    assert collect_generate_genomes(str(Path(paths[0]).parent))[0]["NCBI_ID"] == "2681611"
+
+
+@pytest.mark.parametrize("catalog_taxid", ["2681611", ""])
+def test_cached_numeric_catalog_repairs_headers_without_ncbi(tmp_path, monkeypatch, catalog_taxid):
+    from samovar import genome_fetcher as fetcher
+    from samovar.fasta_processor import read_fasta
+    from samovar.genome_index import genome_data_map
+
+    cfg, store = _isolate(tmp_path, monkeypatch)
+    accession = "GCA_035764635.1"
+    cached = _write_fa(store / "processed" / f"{accession}.fa.gz")
+    if not catalog_taxid:
+        with gzip.open(cached, "wt") as handle:
+            handle.write(">contig|taxid:2681611\nACGT\n")
+    index_processed_file(cached, accession=accession, taxid=catalog_taxid)
+    monkeypatch.setattr(fetcher, "assembly_taxonomy", lambda *args, **kwargs: pytest.fail("Valid taxonomy should be reused"))
+    fetched = fetcher.fetch_assembly_processed(accession, str(tmp_path / "unused"), "test@example.com")
+    assert "taxid:2681611" in read_fasta(fetched)[0][0]
+    assert set(genome_data_map()) == {"2681611"}
+
+
+def test_materialize_moves_local_cache_into_store_without_requery(tmp_path, monkeypatch):
+    from samovar import genome_fetcher as fetcher
+
+    cfg, store = _isolate(tmp_path, monkeypatch)
+    accession = "GCA_035764635.1"
+    out = tmp_path / "out"
+    local = out / ".genomes" / "processed" / f"{accession}.fa.gz"
+    local.parent.mkdir(parents=True)
+    with gzip.open(local, "wt") as handle:
+        handle.write(">contig|taxid:2681611\nACGT\n")
+    monkeypatch.setattr(fetcher, "assembly_taxonomy", lambda *args, **kwargs: pytest.fail("Cached numeric header should be reused"))
+    paths = fetcher.materialize_accessions([accession], output_dir=str(out),
+                                         email="test@example.com", reindex_mode=1)
+    assert len(paths) == 1
+    assert resolve_indexed_path(accession) == store / "processed" / f"{accession}.fa.gz"
+    assert Path(paths[0]).is_file()
+
+
 def test_expand_named_database(tmp_path, monkeypatch):
     from samovar.config import _expand_indexed_database
     from samovar.genome_index import register_database

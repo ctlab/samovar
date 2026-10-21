@@ -442,6 +442,33 @@ def test_assembly_taxonomy_reads_ftp_report(monkeypatch):
     assert calls["n"] == 2
 
 
+def test_assembly_taxonomy_retries_and_logs_transient_error(monkeypatch, caplog):
+    from unittest.mock import Mock
+    from samovar import genome_fetcher as fetcher
+
+    monkeypatch.setattr(fetcher, "_genomes_ftp_dir", lambda acc: None)
+    monkeypatch.setattr(fetcher.time, "sleep", lambda delay: None)
+    record = Mock(side_effect=[OSError("temporary NCBI outage"),
+                              {"Taxid": "2681611", "SpeciesTaxid": "2681611"}])
+    monkeypatch.setattr(fetcher, "_assembly_record", record)
+    assert fetcher.assembly_taxonomy("GCA_035764635.1", "test@example.com", silent=True) == ("2681611", "2681611")
+    assert record.call_count == 2
+    assert "temporary NCBI outage" in caplog.text
+
+
+@pytest.mark.parametrize("bad_taxid", ["", "GCA_035764635.1", "0"])
+def test_assembly_taxonomy_rejects_non_numeric_results(monkeypatch, bad_taxid):
+    from unittest.mock import Mock
+    from samovar import genome_fetcher as fetcher
+
+    monkeypatch.setattr(fetcher, "_genomes_ftp_dir", lambda acc: None)
+    monkeypatch.setattr(fetcher.time, "sleep", lambda delay: None)
+    record = Mock(return_value={"Taxid": bad_taxid})
+    monkeypatch.setattr(fetcher, "_assembly_record", record)
+    assert fetcher.assembly_taxonomy("GCA_035764635.1", "test@example.com") == ("", "")
+    assert record.call_count == 3
+
+
 @pytest.mark.optional
 def test_generate_random_taxids_invalid_group(test_output_dir):
     """Test generating taxids for invalid group"""

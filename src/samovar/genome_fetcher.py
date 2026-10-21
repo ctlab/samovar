@@ -8,6 +8,7 @@ import re
 import shutil
 import socket
 import sys
+import tempfile
 from typing import Any, Collection, FrozenSet, List, Optional, Sequence, Tuple
 import urllib.request
 from Bio import Entrez
@@ -32,6 +33,7 @@ from samovar.seqio import (
     gzip_file,
     is_gzip_path,
     processed_genome_path,
+    open_text,
 )
 from samovar.genome_index import (
     accession_from_fasta,
@@ -46,6 +48,8 @@ from samovar.genome_index import (
     run_processed_dir,
     run_raw_dir,
     index_processed_file,
+    numeric_taxid_for,
+    numeric_taxid_from_fasta,
     proteome_storage_dir,
     stage_into_dir,
 )
@@ -567,6 +571,35 @@ def _assembly_ftp_for_accession(accession: str, email: str, silent: bool = False
     return doc.get("FtpPath_RefSeq") or doc.get("FtpPath_GenBank") or None
 
 
+def _repair_assembly_taxid(path: Path, taxid: str) -> None:
+    """Repair cached headers atomically, leaving existing run hardlinks intact."""
+    if os.environ.get("SAMOVAR_INJECT_TAXID", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+
+    def tagged(line):
+        if not line.startswith(">"):
+            return line
+        if re.search(r"taxid:[^|\s]*", line, re.IGNORECASE):
+            return re.sub(r"taxid:[^|\s]*", f"taxid:{taxid}", line, flags=re.IGNORECASE)
+        parts = line.rstrip("\r\n").split(maxsplit=1)
+        return parts[0] + f"|taxid:{taxid}" + (" " + parts[1] if len(parts) > 1 else "") + "\n"
+
+    with open_text(path) as source:
+        if not any(line != tagged(line) for line in source):
+            return
+    suffix = ".fa.gz" if is_gzip_path(path) else ".fa"
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=suffix, delete=False) as handle:
+        temp = Path(handle.name)
+    try:
+        with open_text(path) as source, open_text(temp, "wt") as target:
+            for line in source:
+                target.write(tagged(line))
+        temp.chmod(path.stat().st_mode & 0o777)
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def fetch_assembly_processed(
     accession: str,
     dest_dir: str,
@@ -582,20 +615,25 @@ def fetch_assembly_processed(
     """Download NCBI assembly ``accession`` and write ``{accession}.fa.gz``."""
     accession = normalize_accession(accession) or accession
     indexed = resolve_indexed_path(accession)
-    if indexed is not None:
-        if not silent:
-            logger.info("Using indexed genome %s: %s", accession, indexed)
-        return str(indexed)
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
-    existing = dest / processed_filename(accession)
-    taxid, species = assembly_taxonomy(accession, email, silent=True)
+    existing = indexed if indexed is not None else dest / processed_filename(accession)
+    taxid = numeric_taxid_for(accession)
+    species = ""
+    catalog_unresolved = not taxid.isdigit() or int(taxid) <= 0
+    if catalog_unresolved and existing.is_file():
+        taxid = numeric_taxid_from_fasta(existing)
+    if not taxid.isdigit() or int(taxid) <= 0:
+        taxid, species = assembly_taxonomy(accession, email, silent=silent)
+    if not taxid.isdigit() or int(taxid) <= 0:
+        raise ValueError(f"Cannot resolve a numeric taxid for assembly {accession}; retry when NCBI is available")
     if existing.is_file():
-        if index:
-            index_processed_file(
+        _repair_assembly_taxid(existing, taxid)
+        if (index and indexed is None) or (indexed is not None and catalog_unresolved):
+            existing = index_processed_file(
                 existing,
                 accession=accession,
-                move_to=dest,
+                move_to=existing.parent,
                 taxid=taxid,
                 species_taxid=species,
             )
@@ -636,6 +674,7 @@ def fetch_assembly_processed(
             output_file=str(processed),
             mutation_rate=0.0,
             include_percent=100.0,
+            taxid=taxid,
         )
     except Exception as exc:
         logger.error("Failed to process %s: %s", accession, exc)
@@ -658,22 +697,26 @@ def fetch_assembly_processed(
 
 def assembly_taxonomy(accession: str, email: str = "", silent: bool = True) -> Tuple[str, str]:
     """Return ``(taxid, species_taxid)`` for an assembly accession."""
-    ftp_dir = _genomes_ftp_dir(accession)
-    if ftp_dir:
-        taxid = _taxid_from_ftp_report(ftp_dir)
-        if taxid:
-            return taxid, taxid
-    try:
-        doc = _assembly_record(
-            accession, email or default_entrez_email(), silent=silent
-        )
-    except Exception:
-        return "", ""
-    if not doc:
-        return "", ""
-    taxid = str(doc.get("Taxid") or "").strip()
-    species = str(doc.get("SpeciesTaxid") or taxid).strip()
-    return taxid, species
+    for attempt in range(3):
+        try:
+            ftp_dir = _genomes_ftp_dir(accession)
+            if ftp_dir:
+                taxid = _taxid_from_ftp_report(ftp_dir)
+                if taxid.isdigit() and int(taxid) > 0:
+                    return taxid, taxid
+            doc = _assembly_record(
+                accession, email or default_entrez_email(), silent=silent
+            )
+            taxid = str((doc or {}).get("Taxid") or "").strip()
+            species = str((doc or {}).get("SpeciesTaxid") or taxid).strip()
+            if taxid.isdigit() and int(taxid) > 0:
+                return taxid, species if species.isdigit() and int(species) > 0 else taxid
+            logger.warning("NCBI taxonomy lookup returned no numeric taxid for %s (attempt %s/3)", accession, attempt + 1)
+        except Exception as exc:
+            logger.warning("NCBI taxonomy lookup failed for %s (attempt %s/3): %s", accession, attempt + 1, exc)
+        if attempt < 2:
+            time.sleep(2 ** attempt)
+    return "", ""
 
 
 def assembly_taxid(accession: str, email: str = "", silent: bool = True) -> str:
@@ -718,28 +761,21 @@ def materialize_accessions(
         if not acc:
             continue
         indexed = resolve_indexed_path(acc)
-        if indexed is not None:
-            if not silent:
-                logger.info("Skip download, indexed: %s", indexed)
-            paths.append(str(stage_into_dir(indexed, run_dest)))
-            continue
         local = run_dest / processed_filename(acc)
         already = dest / processed_filename(acc)
         source = None
-        if already.is_file():
+        if indexed is not None:
+            source = indexed
+        elif already.is_file():
             source = already
         elif local.is_file():
             source = local
         if source is not None:
             if not silent:
                 logger.info("Reuse existing processed genome %s: %s", acc, source)
-            if do_index:
-                source = index_processed_file(source, accession=acc, move_to=dest)
-            paths.append(str(stage_into_dir(source, run_dest)))
-            continue
         fetched = fetch_assembly_processed(
             acc,
-            str(dest),
+            str(source.parent if source is not None else dest),
             email,
             silent=silent,
             keep_raw=keep_raw,
@@ -749,6 +785,8 @@ def materialize_accessions(
             genome_skip_list=genome_skip_list,
         )
         if fetched:
+            if do_index and source is not None and indexed is None and source.parent != dest:
+                fetched = index_processed_file(fetched, accession=acc, move_to=dest)
             paths.append(str(stage_into_dir(fetched, run_dest)))
         else:
             logger.warning("Could not materialize %s", acc)

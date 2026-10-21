@@ -100,7 +100,7 @@ MODE_TO_TYPE = {
 }
 
 READ_TYPE_RE = re.compile(r"read_type:([A-Za-z0-9_+\-]+)", re.IGNORECASE)
-TAXID_RE = re.compile(r"taxid:([0-9]+)", re.IGNORECASE)
+TAXID_RE = re.compile(r"taxid:([0-9]+)(?=[|\s]|$)", re.IGNORECASE)
 
 
 def normalize_camisim_mode(raw: Optional[str]) -> str:
@@ -135,8 +135,13 @@ def tag_read_id(header_or_id: str, read_type: str, taxid: str = "") -> str:
     parts = body.split(None, 1)
     rid = parts[0]
     rest = (" " + parts[1]) if len(parts) > 1 else ""
-    if taxid and not TAXID_RE.search(rid):
-        rid = f"{rid}|taxid:{taxid}"
+    if taxid:
+        if not str(taxid).isdigit() or int(taxid) <= 0:
+            raise ValueError(f"Expected a positive numeric taxid, got {taxid!r}")
+        if re.search(r"taxid:[^|\s]*", rid, re.IGNORECASE):
+            rid = re.sub(r"taxid:[^|\s]*", f"taxid:{taxid}", rid, flags=re.IGNORECASE)
+        else:
+            rid = f"{rid}|taxid:{taxid}"
     token = str(read_type or "").strip().lower()
     if token and not READ_TYPE_RE.search(rid):
         rid = f"{rid}|read_type:{token}"
@@ -279,7 +284,12 @@ def collect_generate_genomes(
         if key in seen:
             return
         seen.add(key)
-        taxid = taxid_from_fasta_name(path) or ("9606" if host else path.stem.split(".")[0])
+        from samovar.genome_index import numeric_taxid_from_fasta
+
+        resolved = numeric_taxid_from_fasta(path)
+        if not resolved.isdigit() or int(resolved) <= 0:
+            raise ValueError(f"Cannot resolve a numeric ground-truth taxid for genome {path}")
+        taxid = resolved
         gid = str(taxid)
         suffix = 2
         existing = {r["genome_ID"] for r in rows}
@@ -290,7 +300,7 @@ def collect_generate_genomes(
             {
                 "genome_ID": gid,
                 "path": str(path),
-                "NCBI_ID": str(taxid) if str(taxid).isdigit() else "1",
+                "NCBI_ID": str(taxid),
                 "OTU": gid,
                 "novelty_category": "known_strain",
                 "host": "1" if host else "0",
@@ -725,7 +735,7 @@ def sanitize_fasta_for_camisim(src: Path, dest: Path, genome_id: str) -> Path:
     SAM converter (expected 6 fields, got 7).
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    token = re.sub(r"[^A-Za-z0-9]", "", str(genome_id)) or "g"
+    token = _camisim_sequence_prefix(genome_id)
     n = 0
 
     def chunks() -> Iterable[str]:
@@ -749,7 +759,12 @@ def stage_genomes_for_camisim(
     staged_dir = dest_dir / "genomes"
     staged_dir.mkdir(parents=True, exist_ok=True)
     staged: List[Dict[str, str]] = []
+    prefixes = set()
     for row in rows:
+        prefix = _camisim_sequence_prefix(row["genome_ID"])
+        if prefix in prefixes:
+            raise ValueError(f"Ambiguous CAMISIM genome ID after normalization: {row['genome_ID']}")
+        prefixes.add(prefix)
         copy = dict(row)
         src = Path(row["path"])
         dest = staged_dir / f"{row['genome_ID']}.fna"
@@ -1545,6 +1560,11 @@ def _mate_kind(path: Path, rows: Optional[Sequence[Dict[str, str]]] = None) -> s
     return "R1"
 
 
+def _camisim_sequence_prefix(genome_id: str) -> str:
+    """Contig-id prefix shared by FASTA staging and NanoSim read recovery."""
+    return re.sub(r"[^A-Za-z0-9]", "", str(genome_id)) or "g"
+
+
 def _taxid_for_filename(path: Path, rows: Sequence[Dict[str, str]]) -> str:
     if _is_pooled_fastq(path):
         return ""  # Mixed taxa: recover the genome id from each read header.
@@ -1554,7 +1574,7 @@ def _taxid_for_filename(path: Path, rows: Sequence[Dict[str, str]]) -> str:
         if gid in name:
             return str(taxid)
     tax = taxid_from_fasta_name(path)
-    return tax or ""
+    return tax if tax and tax.isdigit() else ""
 
 
 def _taxid_for_read_id(header_or_id: str, rows: Sequence[Dict[str, str]]) -> str:
@@ -1562,9 +1582,13 @@ def _taxid_for_read_id(header_or_id: str, rows: Sequence[Dict[str, str]]) -> str
     raw = str(header_or_id or "")
     body = raw[1:] if raw.startswith("@") else raw
     rid = body.split(None, 1)[0] if body else ""
-    for row in sorted(rows, key=lambda r: len(str(r["genome_ID"])), reverse=True):
+    for row in sorted(rows, key=lambda r: len(_camisim_sequence_prefix(r["genome_ID"])), reverse=True):
         gid = str(row["genome_ID"])
-        if rid == gid or rid.startswith(gid):
+        normalized = _camisim_sequence_prefix(gid)
+        staged = normalized + "c"
+        if (rid == gid or rid.startswith(gid + "_") or rid == normalized
+                or rid.startswith(normalized + "_")
+                or re.match(re.escape(staged) + r"\d+(?=[^A-Za-z0-9]|$)", rid)):
             return str(row["NCBI_ID"])
     return ""
 
@@ -1585,6 +1609,11 @@ def tag_fastq_file(
     def chunks() -> Iterable[str]:
         for header, seq, plus, qual in iter_fastq_records(src):
             rec_tax = taxid or (_taxid_for_read_id(header, rows) if rows else "")
+            if rows and not rec_tax:
+                match = TAXID_RE.search(header)
+                rec_tax = match.group(1) if match else ""
+                if not rec_tax:
+                    raise ValueError(f"Cannot resolve ground-truth taxid for read {header.strip()!r} in {src}")
             yield tag_read_id(header, read_type, rec_tax) + "\n"
             yield seq
             yield plus

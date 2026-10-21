@@ -487,6 +487,22 @@ def numeric_taxid_for(ident: str, cfg: Optional[Dict[str, Any]] = None) -> str:
     return ident
 
 
+def numeric_taxid_from_fasta(path: PathLike) -> str:
+    """Resolve a genome through the catalog or its first FASTA header (no NCBI)."""
+    from samovar.seqio import fasta_handle
+
+    resolved = numeric_taxid_stem(numeric_taxid_for(accession_from_fasta(path)))
+    if resolved.isdigit() and int(resolved) > 0:
+        return resolved
+    with fasta_handle(path) as handle:
+        for line in handle:
+            if line.startswith(">"):
+                match = re.search(r"taxid:([0-9]+)(?=[|\s]|$)", line, re.IGNORECASE)
+                taxid = match.group(1) if match else ""
+                return taxid if taxid and int(taxid) > 0 else ""
+    return ""
+
+
 def index_processed_file(
     path: PathLike,
     *,

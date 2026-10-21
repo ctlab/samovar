@@ -66,8 +66,11 @@ def preprocess_fasta(
     mutation_rate: float,
     include_percent: float,
     inject_taxid: Optional[bool] = None,
+    taxid: Optional[str] = None,
 ):
     """Process FASTA file, apply mutations and split sequences."""
+    if taxid is not None and (not str(taxid).isdigit() or int(taxid) <= 0):
+        raise ValueError(f"Expected a positive numeric taxid, got {taxid!r}")
     sequences = read_fasta(input_file)
     input_filename = taxid_from_fasta_name(input_file) or Path(
         str(input_file).removesuffix(".gz")
@@ -98,15 +101,16 @@ def preprocess_fasta(
                 
                 # Write to output file
                 if inject_taxid:
-                    taxid_token = input_filename
-                    try:
-                        from samovar.genome_index import numeric_taxid_for
+                    taxid_token = taxid or input_filename
+                    if taxid is None:
+                        try:
+                            from samovar.genome_index import numeric_taxid_for
 
-                        resolved = str(numeric_taxid_for(input_filename) or "").split(".")[0]
-                        if resolved.isdigit():
-                            taxid_token = resolved
-                    except Exception:
-                        pass
+                            resolved = str(numeric_taxid_for(input_filename) or "").split(".")[0]
+                            if resolved.isdigit():
+                                taxid_token = resolved
+                        except Exception:
+                            pass
                     new_header = (
                         f">{input_filename}|taxid:{taxid_token}|{i+1}|{j//include_length + 1}"
                     )

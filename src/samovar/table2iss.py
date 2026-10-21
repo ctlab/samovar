@@ -288,9 +288,9 @@ def _safe_fasta_id(value: str) -> str:
 def _genome_id_from_path(path: str) -> str:
     stem = sequence_stem(path)
     try:
-        from samovar.genome_index import numeric_taxid_for
+        from samovar.genome_index import numeric_taxid_from_fasta
 
-        num = str(numeric_taxid_for(stem) or "").split(".")[0]
+        num = numeric_taxid_from_fasta(path)
         if num.isdigit():
             return num
     except Exception:

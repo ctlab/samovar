@@ -72,6 +72,25 @@ def test_generate_reads_metagenome_single_iss_call(tmp_path):
     assert "taxid:9606" in text
 
 
+def test_iss_preserves_unindexed_accession_truth(tmp_path, monkeypatch):
+    from samovar.parse_annotators import extract_true_taxid
+    from samovar.seqio import iter_fastq_records
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    genome = _write_fasta(
+        tmp_path / ".genomes" / "processed" / "GCA_035764635.1.fa",
+        "contig|taxid:2681611",
+    )
+    r1, r2 = generate_reads_metagenome(
+        genome_files=[genome], output_dir=str(tmp_path / "reads"), amount=[8],
+        cpus=1, seed=42,
+    )
+    for path in (r1, r2):
+        records = list(iter_fastq_records(path))
+        assert len(records) == 8
+        assert {extract_true_taxid(rec[0]) for rec in records} == {"2681611"}
+
+
 def test_process_annotation_tables_generates_once_then_splits(tmp_path):
     genome_dir = tmp_path / "genomes"
     _write_fasta(genome_dir / "562.fa", "ecoli")
