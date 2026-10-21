@@ -231,3 +231,98 @@ def test_flags_apply_reads():
     assert extra_ids_for_generator("art") == ["illumina"]
     assert extra_ids_for_generator("wgsim") == ["wgsim"]
     assert extra_ids_for_generator("nanosim") == ["ont"]
+
+
+@pytest.mark.parametrize("generator", ["nanosim", "ont", "art", "wgsim", "hybrid", "meta:nanosim"])
+@pytest.mark.parametrize("gzip_reads", [False, True])
+def test_regeneration_uses_selected_simulator(tmp_path, monkeypatch, generator, gzip_reads):
+    import pandas as pd
+
+    from samovar import camisim, table2iss
+    from samovar.reads_generators import simulate_from_sample_tables
+    from samovar.seqio import fastq_pair_paths, iter_fastq_records
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr(camisim, "discover_camisim", lambda: None)
+    monkeypatch.setattr(camisim, "camisim_taxdump", lambda root: "")
+    monkeypatch.setattr(camisim, "available_camisim_types", lambda root: ["art", "nanosim3", "wgsim"])
+
+    def unexpected_iss(**kwargs):
+        pytest.fail("Non-ISS regeneration must not launch ISS")
+
+    monkeypatch.setattr(table2iss, "generate_reads_metagenome", unexpected_iss)
+    monkeypatch.setattr(camisim, "design_communities", unexpected_iss)
+    calls = []
+
+    def simulate(cfg, work, cam_type, dest):
+        communities = camisim.read_distribution_files(work / "distributions")
+        calls.append((cam_type, communities, cfg["extra_flags"]))
+        dest.mkdir(parents=True)
+        length = 4000 if cam_type == "nanosim3" else 150
+        text = "".join(
+            f"@{taxid}_read\n{'A' * length}\n+\n{'I' * length}\n"
+            for taxid, amount in communities[0].items() if amount > 0
+        )
+        (dest / "sample_0_01.fastq").write_text(text)
+        if cam_type != "nanosim3":
+            (dest / "sample_0_02.fastq").write_text(text)
+        return True
+
+    monkeypatch.setattr(camisim, "_run_camisim_reads", simulate)
+    genomes = {}
+    for taxid in ("562", "1280"):
+        # The resolved taxid must survive paths whose basename is an accession.
+        genome = tmp_path / f"GCF_{taxid}.fna"
+        genome.write_text(">contig\n" + "ACGT" * 1000 + "\n")
+        genomes[taxid] = str(genome)
+    tables = {
+        "sample_a": pd.DataFrame({"taxid": ["562", "1280"], "N_kaiju": [9, 1]}),
+        "sample_b": pd.DataFrame({"taxid": ["562", "1280"], "N_kaiju": [1, 9]}),
+    }
+    out = tmp_path / "regenerated"
+    config = {"reads_generator_flags": "--custom-option value"}
+    if generator.startswith("meta:"):
+        config = {"metagenome_generator": generator.split(":")[1],
+                  "metagenome_generator_flags": "--custom-option value"}
+    simulate_from_sample_tables(
+        tables, genomes, str(out), annotator_cols={"kaiju": "N_kaiju"},
+        reads_generator="iss" if generator.startswith("meta:") else generator,
+        total_amount=20, gzip_reads=gzip_reads, config=config,
+    )
+    expected_types = {
+        "nanosim": ["nanosim3"], "ont": ["nanosim3"], "art": ["art"],
+        "wgsim": ["wgsim"], "hybrid": ["art", "nanosim3"], "meta:nanosim": ["nanosim3"],
+    }[generator]
+    assert [call[0] for call in calls] == expected_types * 2
+    assert calls[0][1] == [{"562": 0.9, "1280": 0.1}]
+    assert calls[-1][1] == [{"562": 0.1, "1280": 0.9}]
+    assert all(call[2] == "--custom-option value" for call in calls)
+    for sample in tables:
+        r1, r2 = fastq_pair_paths(out / f"{sample}_kaiju", gzip_reads=gzip_reads)
+        records = list(iter_fastq_records(r1))
+        lengths = {len(rec[1].strip()) for rec in records}
+        assert lengths == ({150, 4000} if generator == "hybrid" else
+                           {4000} if generator in ("nanosim", "ont", "meta:nanosim") else {150})
+        assert {extract_true_taxid(rec[0]) for rec in records} == {"562", "1280"}
+        assert Path(r2).exists() == (generator in ("art", "wgsim"))
+
+
+def test_regeneration_simulator_failure_does_not_fall_back_to_iss(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from samovar import camisim
+    from samovar.reads_generators import simulate_from_sample_tables
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr(camisim, "default_generate_config", lambda **kwargs: {})
+
+    def fail(config):
+        raise RuntimeError("NanoSim failed")
+
+    monkeypatch.setattr(camisim, "run_from_config", fail)
+    with pytest.raises(RuntimeError, match="NanoSim failed"):
+        simulate_from_sample_tables(
+            {"sample": pd.DataFrame({"taxid": ["562"], "N_kaiju": [10]})},
+            {"562": "genome.fna"}, str(tmp_path / "regenerated"),
+            annotator_cols={"kaiju": "N_kaiju"}, reads_generator="nanosim",
+        )

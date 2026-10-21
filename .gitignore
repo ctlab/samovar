@@ -97,3 +97,4 @@ contex.ignore
 !.cursor/rules/
 .cursor/rules/*
 !.cursor/rules/agents.mdc
+.cursor/rules/agents.mdc

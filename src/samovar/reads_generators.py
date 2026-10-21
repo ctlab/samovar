@@ -32,7 +32,7 @@ from samovar.main_config import (
     tool_path,
 )
 from samovar.paths import load_config
-from samovar.seqio import concat_fastq_files, fastq_pair_paths, is_fastq_name
+from samovar.seqio import concat_fastq_files, fastq_pair_paths, is_fastq_name, open_text
 from samovar.table_regenerators import extra_flags_argv
 
 READS_GENERATOR_GROUPS = ("reads_generator", "metagenome_generator")
@@ -531,6 +531,52 @@ def alias_fastq_with_extra_ids(
     return written
 
 
+def _simulate_camisim_sample(
+    name, counts, available_genomes, output_dir, sample, annotator, *,
+    model, cpus, seed, gzip_reads, flags, ids, config,
+):
+    """Sequence the regenerated community with the selected CAMISIM backend."""
+    import yaml
+
+    from samovar.camisim import default_generate_config, run_from_config
+
+    work = Path(output_dir).resolve() / ".camisim" / annotator / sample
+    work.mkdir(parents=True, exist_ok=True)
+    cfg = default_generate_config(
+        genome_dir=str(work), output_dir=str(work), host_genome="",
+        n_samples=1, total_reads=sum(counts.values()), host_fraction="0",
+        seed=seed, model=model, cores=cpus,
+        mode=camisim_mode_for_reads_generator(name, config.get("camisim_mode")),
+    )
+    cfg["genome_rows"] = [
+        {"genome_ID": taxid, "NCBI_ID": taxid, "OTU": taxid,
+         "path": str(Path(available_genomes[taxid]).resolve()),
+         "novelty_category": "known_strain", "host": "0"}
+        for taxid in counts
+    ]
+    total = sum(counts.values())
+    cfg["communities"] = [{taxid: amount / total for taxid, amount in counts.items()}]
+    cfg["extra_flags"] = shlex.join(flags)
+    config_path = work / "camisim.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    run_from_config(str(config_path))
+    r1 = work / "initial" / "1_full_R1.fastq"
+    if not r1.is_file() or not r1.stat().st_size:
+        raise RuntimeError(f"{name} produced no regenerated reads for {sample}/{annotator}")
+    p1, p2 = fastq_pair_paths(
+        str(Path(output_dir) / f"{sample}_{annotator}"), gzip_reads=gzip_reads
+    )
+    for mate, dest in zip(("R1", "R2"), (Path(p1), Path(p2))):
+        src = work / "initial" / f"1_full_{mate}.fastq"
+        if src.is_file():
+            with open_text(src) as source, open_text(dest, "wt") as target:
+                shutil.copyfileobj(source, target)
+        else:
+            dest.unlink(missing_ok=True)
+    if ids:
+        alias_fastq_with_extra_ids(p1, p2, ids, gzip_reads=gzip_reads)
+
+
 def simulate_from_sample_tables(
     sample_tables: Dict[str, pd.DataFrame],
     available_genomes: Dict[str, str],
@@ -550,7 +596,7 @@ def simulate_from_sample_tables(
     config: Optional[Dict[str, Any]] = None,
     genome_dir: str = "",
 ) -> None:
-    """ISS (or custom) mix from per-sample abundance tables (prepare/regenerate)."""
+    """Simulate per-sample abundance tables with the selected reads generator."""
     from samovar.table2iss import (
         _annotator_from_n_col,
         _emit_empty_for_annotators,
@@ -560,7 +606,9 @@ def simulate_from_sample_tables(
         split_metagenome_to_samples,
     )
 
-    cfg = attach_reads_flags(reads_generator, dict(config or {}))
+    cfg = dict(config or {})
+    if not cfg.get("metagenome_generator"):
+        cfg = attach_reads_flags(reads_generator, cfg)
     sample_names = list(sample_tables)
     annotators = list(annotator_cols.keys()) or ["any"]
     meta_name = cfg.get("metagenome_generator")
@@ -643,10 +691,9 @@ def simulate_from_sample_tables(
 
     os_makedirs(output_dir, exist_ok=True)
     pool_dir = os_path.join(output_dir, ".iss_full")
-    os_makedirs(pool_dir, exist_ok=True)
+    if canon == "iss":
+        os_makedirs(pool_dir, exist_ok=True)
     read_type = _READ_TYPE_FOR.get(canon, "") if kind == "builtin" else ""
-    # ISS keeps taxid: in combined-genome headers; ART/wgsim/NanoSim prepare
-    # uses the same mixer and then stamps read_type: + extra filename ids.
     with iss_cli_extra_flags(flags):
         for annotator_name in annotators:
             sample_source_counts: Dict[str, Dict[str, int]] = {}
@@ -689,9 +736,25 @@ def simulate_from_sample_tables(
                 output_dir, sample_names, annotator_name, gzip_reads=gzip_reads
             ):
                 logger.info(
-                    "Skipping ISS for %s: regenerated FASTQs already present",
+                    "Skipping %s for %s: regenerated FASTQs already present",
+                    canon,
                     annotator_name,
                 )
+                continue
+
+            if canon != "iss":
+                for sample_index, (sample_name, counts) in enumerate(sample_source_counts.items()):
+                    if not counts:
+                        _emit_empty_for_annotators(
+                            output_dir, [sample_name], [annotator_name], gzip_reads=gzip_reads
+                        )
+                        continue
+                    _simulate_camisim_sample(
+                        canon, counts, available_genomes, output_dir, sample_name,
+                        annotator_name, model=model, cpus=cpus,
+                        seed=seed + annotators.index(annotator_name) + sample_index,
+                        gzip_reads=gzip_reads, flags=flags, ids=ids, config=cfg,
+                    )
                 continue
 
             r1_full, r2_full = generate_reads_metagenome(
@@ -728,7 +791,8 @@ def simulate_from_sample_tables(
                         gzip_reads=gzip_reads,
                         read_type=read_type if read_type != "hybrid" else "",
                     )
-    rmtree(pool_dir, ignore_errors=True)
+    if canon == "iss":
+        rmtree(pool_dir, ignore_errors=True)
 
 
 def _write_annotator_abundance_csv(

@@ -307,7 +307,9 @@ def collect_generate_genomes(
 
 
 def select_camisim_genome_rows(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Use locked ``cfg['genomes']`` when present; else cap by ``max_genomes``."""
+    """Use regeneration rows, locked genomes, or discovery capped by max_genomes."""
+    if cfg.get("genome_rows") is not None:
+        return list(cfg["genome_rows"])
     rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
     locked = [str(x) for x in (cfg.get("genomes") or []) if str(x).strip()]
     if locked:
@@ -1233,17 +1235,19 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
     mode = normalize_camisim_mode(cfg.get("mode"))
     dist_dir = work / "distributions"
     design_rows = [r for r in rows if r.get("host") != "1"] or list(rows)
-    samples = design_communities(
-        [r["genome_ID"] for r in design_rows],
-        int(cfg.get("n_samples") or 1),
-        seed=int(cfg.get("seed") or 42),
-        mode=str((cfg.get("distribution") or {}).get("mode") or "differential"),
-        log_mu=float((cfg.get("distribution") or {}).get("log_mu", 1)),
-        log_sigma=float((cfg.get("distribution") or {}).get("log_sigma", 2)),
-        gauss_mu=float((cfg.get("distribution") or {}).get("gauss_mu", 1)),
-        gauss_sigma=float((cfg.get("distribution") or {}).get("gauss_sigma", 1)),
-    )
-    if mode != "table":
+    samples = cfg.get("communities")
+    if samples is None:
+        samples = design_communities(
+            [r["genome_ID"] for r in design_rows],
+            int(cfg.get("n_samples") or 1),
+            seed=int(cfg.get("seed") or 42),
+            mode=str((cfg.get("distribution") or {}).get("mode") or "differential"),
+            log_mu=float((cfg.get("distribution") or {}).get("log_mu", 1)),
+            log_sigma=float((cfg.get("distribution") or {}).get("log_sigma", 2)),
+            gauss_mu=float((cfg.get("distribution") or {}).get("gauss_mu", 1)),
+            gauss_sigma=float((cfg.get("distribution") or {}).get("gauss_sigma", 1)),
+        )
+    if mode != "table" and cfg.get("communities") is None:
         samples = add_host_abundance(
             samples,
             rows,
@@ -1542,6 +1546,8 @@ def _mate_kind(path: Path, rows: Optional[Sequence[Dict[str, str]]] = None) -> s
 
 
 def _taxid_for_filename(path: Path, rows: Sequence[Dict[str, str]]) -> str:
+    if _is_pooled_fastq(path):
+        return ""  # Mixed taxa: recover the genome id from each read header.
     by_id = {r["genome_ID"]: r["NCBI_ID"] for r in rows}
     name = path.name
     for gid, taxid in sorted(by_id.items(), key=lambda kv: len(kv[0]), reverse=True):
