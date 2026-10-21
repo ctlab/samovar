@@ -42,6 +42,8 @@ project/
 # Local GitHub wiki drafts (uploaded manually to github.com/ctlab/samovar/wiki)
 /wiki/
 *.log
+# Tracked annotator-output fixtures must remain visible to Git-aware searches.
+!tests/data/*.log
 genomes/
 taxdump.tar.gz
 
@@ -82,5 +84,16 @@ examples/generate_mock_community.sh
 examples/generate_mock_community.md
 examples/_harvest_example.py
 
-# ignore rules & cursorgitignore
+# Local Cursor state; keep only the portable bridge and shared ignore alias.
 .cursor*
+.cursorgitignore
+.codexgitignore
+AGENTS.md
+agents.mdc
+contex.ignore
+.agents/*
+!.cursor/
+.cursor/*
+!.cursor/rules/
+.cursor/rules/*
+!.cursor/rules/agents.mdc
