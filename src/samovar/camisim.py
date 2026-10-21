@@ -54,6 +54,7 @@ from samovar.seqio import (
     is_fastq_name,
     iter_fastq_records,
     list_fasta_files,
+    require_generated_samples,
     open_text,
     taxid_from_fasta_name,
     write_text_lines,
@@ -1289,6 +1290,7 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
         # Native design only. CAMISIM Nextflow ignores just_community_design when
         # distribution_files is set, and would otherwise start a full ART run.
         outputs = _iss_from_distributions(cfg, rows, samples, out_dir)
+        require_generated_samples(out_dir, [str(i + 1) for i in range(int(cfg.get("n_samples") or 1))])
         return {
             "mode": mode,
             "abundance": str(abundance_csv),
@@ -1322,6 +1324,7 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
     else:
         read_type = next(iter(harvested))
         outputs = _promote_to_full(harvested[read_type], out_dir, int(cfg.get("n_samples") or 1), read_type)
+    require_generated_samples(out_dir, [str(i + 1) for i in range(int(cfg.get("n_samples") or 1))])
     return {
         "mode": mode,
         "abundance": str(abundance_csv),

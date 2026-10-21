@@ -317,11 +317,15 @@ def r2_for_r1(r1: PathLike) -> Path:
 
 def find_fastq_mate(directory: PathLike, sample: str, mate: str = "R1") -> Optional[Path]:
     directory = as_path(directory)
-    for suffix in mate_suffixes(mate):
-        candidate = directory / f"{sample}{suffix}"
-        if candidate.exists():
-            return candidate
-    return None
+    candidates = [directory / f"{sample}{suffix}" for suffix in mate_suffixes(mate)]
+    found = [path for path in candidates if path.is_file()]
+    if len(found) > 1:
+        raise ValueError(
+            f"Multiple {mate} FASTQ files for sample {sample!r}: "
+            + ", ".join(str(path) for path in found)
+            + ". Use unique sample names."
+        )
+    return found[0] if found else None
 
 
 # CAMISIM harvest writes ``{n}_{tech}_R1.fastq`` then copies to ``{n}_full_``.
@@ -371,6 +375,9 @@ def list_fastq_samples(directory: PathLike) -> List[str]:
                     seen.add(sample)
                     samples.append(sample)
                 break
+    for sample in samples:
+        for mate in ("R1", "R2"):
+            find_fastq_mate(directory, sample, mate)
     return _drop_duplicate_camisim_tech_samples(samples)
 
 
@@ -444,6 +451,22 @@ def fastq_has_reads(
     except OSError:
         return False
     return False
+
+
+def require_generated_samples(directory: PathLike, samples: Sequence[str], annotator: str = "full") -> None:
+    """Reject a successful simulation that left any requested sample empty."""
+    if not samples:
+        raise ValueError("No samples requested for read generation")
+    empty = []
+    for sample in samples:
+        path = find_fastq_mate(directory, f"{sample}_{annotator}", "R1")
+        if path is None or not fastq_has_reads(path):
+            empty.append(str(sample))
+    if empty:
+        raise RuntimeError(
+            f"Read generation produced empty sample(s) {', '.join(empty)} under {directory}. "
+            "Increase --total_reads or check the simulator output."
+        )
 
 
 def has_r1_reads(
@@ -563,27 +586,46 @@ def drop_r2_if_source_single_end(output_dir: PathLike) -> List[Path]:
     return removed
 
 
-def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike) -> int:
-    """Symlink (or copy) FASTQ pairs from ``src_dir`` into ``dst_dir``."""
+def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike, *, validate_only: bool = False) -> int:
+    """Validate sample identities, then symlink/copy pairs unless validate_only."""
     src = as_path(src_dir).resolve()
     dst = as_path(dst_dir).resolve()
-    dst.mkdir(parents=True, exist_ok=True)
+    sources = list_r1_files(src)
+    list_fastq_samples(dst)
     if src == dst:
         return 0
+    import filecmp
+
+    filecmp.clear_cache()  # Copies must be rechecked even if file timestamps did not change.
+    transfers = []
+    for r1 in sources:
+        sample = sample_name_from_r1(r1)
+        for mate in ("R1", "R2"):
+            src_file = find_fastq_mate(src, sample, mate)
+            existing = find_fastq_mate(dst, sample, mate)
+            if src_file is not None and existing is not None:
+                same = existing.name == src_file.name and (
+                    existing.samefile(src_file) or (
+                        not existing.is_symlink() and filecmp.cmp(existing, src_file, shallow=False)
+                    )
+                )
+                if not same:
+                    raise ValueError(f"Sample name collision for {sample!r} ({mate}): {src_file} and {existing}")
+            if src_file is not None:
+                transfers.append(src_file)
+    if validate_only:
+        return 0
+    dst.mkdir(parents=True, exist_ok=True)
     n = 0
-    for r1 in list_r1_files(src):
-        r2 = r2_for_r1(r1)
-        for src_file in (r1, r2):
-            if not src_file.exists():
-                continue
-            target = dst / src_file.name
-            if target.exists() or target.is_symlink():
-                continue
-            try:
-                target.symlink_to(src_file.resolve())
-            except OSError:
-                shutil.copy2(src_file, target)
-            n += 1
+    for src_file in transfers:
+        target = dst / src_file.name
+        if target.exists() or target.is_symlink():
+            continue
+        try:
+            target.symlink_to(src_file.resolve())
+        except OSError:
+            shutil.copy2(src_file, target)
+        n += 1
     return n
 
 

@@ -784,6 +784,10 @@ class PipelineConfig:
         if config.input_dir:
             config.input_dir = absolute_path(config.input_dir)
         config.output_dir = absolute_path(config.output_dir or DEFAULT_OUTPUT_DIR)
+        if config.input_dir:
+            from samovar.seqio import link_or_copy_reads
+
+            link_or_copy_reads(config.input_dir, Path(config.output_dir) / "initial", validate_only=True)
 
         # Handle command line annotators
         # Get all attributes that start with 'cmd_'

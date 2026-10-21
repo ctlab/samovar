@@ -342,6 +342,28 @@ def test_table_mode_iss_from_distributions(tmp_path, monkeypatch):
     assert calls
 
 
+def test_camisim_success_with_missing_sample_is_an_error(tmp_path, monkeypatch):
+    import pytest
+    from samovar import camisim as cam
+
+    monkeypatch.setattr(cam, "available_camisim_types", lambda root: ["nanosim3"])
+    cfg = default_generate_config(
+        genome_dir=str(META), host_genome="", output_dir=str(tmp_path),
+        n_samples=2, total_reads=20, mode="ont",
+    )
+    config = tmp_path / "camisim.yaml"
+    config.write_text(yaml.safe_dump(cfg))
+
+    def missing_sample(cfg, work, cam_type, dest):
+        dest.mkdir(parents=True)
+        (dest / "sample_0.fq").write_text("@562c1_0\nACGT\n+\nIIII\n")
+        return True
+
+    monkeypatch.setattr(cam, "_run_camisim_reads", missing_sample)
+    with pytest.raises(RuntimeError, match=r"empty sample\(s\) 2"):
+        run_from_config(str(config))
+
+
 def test_camisim_config_overlay_keeps_nested_template(tmp_path):
     template = tmp_path / "user.yaml"
     template.write_text(

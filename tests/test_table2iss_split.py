@@ -181,6 +181,59 @@ def test_generate_iss_test_samples_two_iss_calls(tmp_path):
     assert not (out / ".iss_full").exists()
 
 
+@pytest.mark.parametrize("total_reads", [1, 20])
+def test_generate_without_host_keeps_each_sample_nonempty(tmp_path, total_reads):
+    genome_dir = tmp_path / "meta"
+    _write_fasta(genome_dir / "562.fna", "ecoli", seq="ACGT" * 1000)
+    out = tmp_path / "initial"
+    generate_iss_test_samples(
+        genome_dir=str(genome_dir), host_genome="", output_dir=str(out),
+        n_samples=2, total_reads=total_reads, host_fraction="RANDOM", seed=42, cpus=1,
+    )
+    for sample in ("1", "2"):
+        for mate in ("R1", "R2"):
+            assert _count_fastq_records(out / f"{sample}_full_{mate}.fastq") == total_reads
+
+
+def test_generate_fails_if_only_one_sample_has_reads(tmp_path, monkeypatch):
+    genome_dir = tmp_path / "meta"
+    _write_fasta(genome_dir / "562.fna", "ecoli")
+    out = tmp_path / "initial"
+
+    def incomplete_pool(**kwargs):
+        dest = Path(kwargs["output_dir"])
+        for mate in ("R1", "R2"):
+            (dest / f"meta_full_{mate}.fastq").write_text("@taxid:562_0\nACGT\n+\nIIII\n")
+
+    monkeypatch.setattr("samovar.table2iss.generate_reads_metagenome", incomplete_pool)
+    with pytest.raises(RuntimeError, match=r"empty sample\(s\) 1"):
+        generate_iss_test_samples(
+            genome_dir=str(genome_dir), host_genome="", output_dir=str(out),
+            n_samples=2, total_reads=20, seed=42,
+        )
+    assert _count_fastq_records(out / "2_full_R1.fastq") == 1
+
+
+def test_generate_rejects_missing_host(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Host genome does not exist"):
+        generate_iss_test_samples(
+            genome_dir=str(tmp_path), host_genome=str(tmp_path / "missing.fna"),
+            output_dir=str(tmp_path / "initial"), n_samples=2, total_reads=20,
+        )
+
+
+def test_table_generate_rejects_empty_sample(tmp_path, monkeypatch):
+    from samovar.table2iss import generate_iss_from_abundance_table
+
+    genome = _write_fasta(tmp_path / "562.fna", "ecoli")
+    monkeypatch.setattr("samovar.table2iss._resolve_genomes_for_taxids", lambda *a, **kw: {"562": genome})
+    with pytest.raises(RuntimeError, match=r"empty sample\(s\) empty"):
+        generate_iss_from_abundance_table(
+            pd.DataFrame({"taxid": ["562"], "N_empty": [0], "N_ok": [4]}),
+            genome_dir=str(tmp_path), output_dir=str(tmp_path / "initial"), cpus=1,
+        )
+
+
 def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
     genomes = [_write_fasta(tmp_path / "genomes" / "562.fa", "orig562")]
 

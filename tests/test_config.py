@@ -117,6 +117,35 @@ def test_pipeline_config_from_args_cli():
     assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
 
+def test_prepare_rejects_colliding_sample_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (reads / "sample_1.fq").write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Multiple R1 FASTQ files"):
+        PipelineConfig.from_args(argparse.Namespace(
+            input_config=None, input_dir=str(reads), output_dir=str(tmp_path / "out"),
+        ))
+    assert not (tmp_path / "out").exists()
+
+
+def test_prepare_rejects_collision_with_existing_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    first, second, out = (tmp_path / name for name in ("first", "second", "out"))
+    first.mkdir()
+    second.mkdir()
+    (first / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (second / "sample_R1.fastq").write_text("@b\nT\n+\nI\n")
+    (out / "initial").mkdir(parents=True)
+    (out / "initial" / "sample_R1.fastq").symlink_to(first / "sample_R1.fastq")
+    with pytest.raises(ValueError, match="Sample name collision"):
+        PipelineConfig.from_args(argparse.Namespace(
+            input_config=None, input_dir=str(second), output_dir=str(out),
+        ))
+    assert not (out / ".log").exists()
+
+
 def test_generate_configs():
     test_output_dir = 'tests_outs/test_generate_configs'
     clean_dir(test_output_dir)

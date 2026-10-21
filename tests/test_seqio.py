@@ -1,4 +1,5 @@
 import gzip
+import pytest
 
 from samovar.seqio import (
     concat_fastq_files,
@@ -94,7 +95,7 @@ def test_has_r1_reads_rejects_empty_and_one_byte_stubs(tmp_path):
     empty.write_text("")
     stub = tmp_path / "stub_R1.fastq"
     stub.write_bytes(b"x")
-    gz = tmp_path / "empty_R1.fastq.gz"
+    gz = tmp_path / "compressed_empty_R1.fastq.gz"
     with gzip.open(gz, "wb") as handle:
         handle.write(b"")
     assert not fastq_has_reads(empty)
@@ -137,6 +138,61 @@ def test_fastq_ignores_camisim_tech_duplicates(tmp_path):
     (tmp_path / "1_wgsim_R2.fastq").write_text("@b\nT\n+\nI\n")
     (tmp_path / "2_full_R1.fastq").write_text("@c\nA\n+\nI\n")
     assert list_fastq_samples(tmp_path) == ["1_full", "2_full"]
+
+
+@pytest.mark.parametrize("other", ["sample_R1.fq", "sample_R1.fastq.gz", "sample_1.fastq"])
+def test_fastq_discovery_rejects_colliding_names(tmp_path, other):
+    first = tmp_path / "sample_R1.fastq"
+    second = tmp_path / other
+    first.write_text("@a\nA\n+\nI\n")
+    second.write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Multiple R1 FASTQ files for sample 'sample'") as error:
+        list_fastq_samples(tmp_path)
+    assert str(first) in str(error.value) and str(second) in str(error.value)
+
+
+def test_fastq_discovery_rejects_colliding_r2(tmp_path):
+    (tmp_path / "s_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (tmp_path / "s_R2.fastq").write_text("@a\nA\n+\nI\n")
+    (tmp_path / "s_2.fq").write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Multiple R2 FASTQ files for sample 's'"):
+        list_fastq_samples(tmp_path)
+
+
+def test_link_reads_rejects_other_source_before_staging(tmp_path):
+    from samovar.seqio import link_or_copy_reads
+
+    first, second, out = (tmp_path / name for name in ("first", "second", "initial"))
+    first.mkdir()
+    second.mkdir()
+    (first / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (second / "sample_R1.fastq").write_text("@b\nT\n+\nI\n")
+    (second / "another_R1.fastq").write_text("@c\nT\n+\nI\n")
+    assert link_or_copy_reads(first, out) == 1
+    assert link_or_copy_reads(first, out) == 0
+    with pytest.raises(ValueError, match="Sample name collision"):
+        link_or_copy_reads(second, out)
+    assert not (out / "another_R1.fastq").exists()
+    assert (out / "sample_R1.fastq").resolve() == (first / "sample_R1.fastq").resolve()
+
+
+def test_link_reads_resumes_copied_files(tmp_path, monkeypatch):
+    from pathlib import Path
+    from samovar.seqio import link_or_copy_reads
+
+    source, out = tmp_path / "source", tmp_path / "out"
+    source.mkdir()
+    (source / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+
+    def no_symlinks(*args, **kwargs):
+        raise OSError("Symlinks unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", no_symlinks)
+    assert link_or_copy_reads(source, out) == 1
+    assert link_or_copy_reads(source, out) == 0
+    (source / "sample_R1.fastq").write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Sample name collision"):
+        link_or_copy_reads(source, out)
 
 
 def test_fastq_pair_paths():

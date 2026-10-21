@@ -28,6 +28,7 @@ from samovar.seqio import (
     is_gzip_path,
     iter_fastq_records,
     list_fasta_files,
+    require_generated_samples,
     open_text,
     sequence_stem,
     uncompressed_fasta_for_tool,
@@ -1210,6 +1211,10 @@ def generate_iss_test_samples(
     from samovar.regenerate import coerce_seed
     from samovar.seqio import taxid_from_fasta_name
 
+    if int(n_samples) <= 0 or int(total_reads) <= 0:
+        raise ValueError("n_samples and total_reads must be positive")
+    if host_genome and not os.path.isfile(host_genome):
+        raise FileNotFoundError(f"Host genome does not exist: {host_genome}")
     os.makedirs(output_dir, exist_ok=True)
     seed = coerce_seed(seed)
     has_table = isinstance(abundance_table, pd.DataFrame) or (
@@ -1233,7 +1238,9 @@ def generate_iss_test_samples(
     rng = random.Random(seed)
     samples = [str(i) for i in range(1, int(n_samples) + 1)]
 
-    if str(host_fraction).upper() == "RANDOM":
+    if not host_genome:
+        host_counts = {sample: 0 for sample in samples}
+    elif str(host_fraction).upper() == "RANDOM":
         host_counts = {sample: rng.randint(0, int(total_reads)) for sample in samples}
     else:
         host_n = int(float(host_fraction) * int(total_reads))
@@ -1323,11 +1330,7 @@ def generate_iss_test_samples(
             concat_fastq_files([host_path, meta_path], dest)
             outputs.append(dest)
 
-    if int(total_reads) > 0 and not any(_fastq_has_records(path) for path in outputs):
-        raise RuntimeError(
-            f"ISS generate wrote no FASTQ records under {output_dir} "
-            f"(n_samples={n_samples}, total_reads={total_reads})"
-        )
+    require_generated_samples(output_dir, samples)
 
     shutil.rmtree(pool_dir, ignore_errors=True)
     return outputs
@@ -1373,14 +1376,7 @@ def generate_iss_from_abundance_table(
             name = name[2:]
         sample_names.append(name or str(col))
     if not n_cols:
-        _write_empty_fastq_pair(
-            os.path.join(output_dir, f"1_{annotator_name}_R1.fastq"),
-            os.path.join(output_dir, f"1_{annotator_name}_R2.fastq"),
-        )
-        return [
-            os.path.join(output_dir, f"1_{annotator_name}_R1.fastq"),
-            os.path.join(output_dir, f"1_{annotator_name}_R2.fastq"),
-        ]
+        raise ValueError("Abundance table has no sample columns for read generation")
 
     sample_tables: Dict[str, pd.DataFrame] = {}
     for sample, col in zip(sample_names, n_cols):
@@ -1489,6 +1485,7 @@ def generate_iss_from_abundance_table(
                 os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq"),
             ]
         )
+    require_generated_samples(output_dir, list(sample_tables), annotator_name)
     return outputs
 
 
