@@ -100,7 +100,7 @@ MODE_TO_TYPE = {
 }
 
 READ_TYPE_RE = re.compile(r"read_type:([A-Za-z0-9_+\-]+)", re.IGNORECASE)
-TAXID_RE = re.compile(r"taxid:([0-9]+)(?=[|\s]|$)", re.IGNORECASE)
+TAXID_RE = re.compile(r"taxid:([0-9]+)(?=[|/\s]|$)", re.IGNORECASE)
 
 
 def normalize_camisim_mode(raw: Optional[str]) -> str:
@@ -126,7 +126,7 @@ def extract_read_type(seq_id: Optional[str]) -> str:
 
 
 def tag_read_id(header_or_id: str, read_type: str, taxid: str = "") -> str:
-    """Append ``taxid:`` / ``read_type:`` tokens to a FASTQ id if missing."""
+    """Tag a FASTQ id before its mate suffix, which classifiers may truncate."""
     raw = str(header_or_id or "").rstrip("\r\n")
     prefix = "@" if raw.startswith("@") else ""
     body = raw[1:] if prefix else raw
@@ -135,6 +135,12 @@ def tag_read_id(header_or_id: str, read_type: str, taxid: str = "") -> str:
     parts = body.split(None, 1)
     rid = parts[0]
     rest = (" " + parts[1]) if len(parts) > 1 else ""
+    # Kaiju drops everything from the first slash, including tags after /1 or /2.
+    # Also repair IDs tagged in that old order when harvesting existing reads.
+    mate = re.search(r"/[12](?=\||$)", rid)
+    mate_suffix = mate.group(0) if mate else ""
+    if mate:
+        rid = rid[:mate.start()] + rid[mate.end():]
     if taxid:
         if not str(taxid).isdigit() or int(taxid) <= 0:
             raise ValueError(f"Expected a positive numeric taxid, got {taxid!r}")
@@ -145,7 +151,7 @@ def tag_read_id(header_or_id: str, read_type: str, taxid: str = "") -> str:
     token = str(read_type or "").strip().lower()
     if token and not READ_TYPE_RE.search(rid):
         rid = f"{rid}|read_type:{token}"
-    return f"{prefix}{rid}{rest}"
+    return f"{prefix}{rid}{mate_suffix}{rest}"
 
 
 def discover_camisim() -> Optional[str]:

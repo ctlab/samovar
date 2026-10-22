@@ -54,6 +54,12 @@ def test_extract_and_tag_read_type():
     assert extract_read_type(tagged) == "illumina"
     assert parse_extract_read_type("x|read_type:ont|taxid:9606") == "ont"
     assert extract_read_type("plain") == ""
+    paired = tag_read_id("@contig-1/1 comment", "illumina", "562")
+    assert paired == "@contig-1|taxid:562|read_type:illumina/1 comment"
+    assert tag_read_id(paired, "illumina", "562") == paired
+    assert tag_read_id("@contig-1/2|taxid:562|read_type:illumina", "illumina", "562") == (
+        "@contig-1|taxid:562|read_type:illumina/2"
+    )
 
 
 def test_write_editable_camisim_config(tmp_path):
