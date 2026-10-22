@@ -62,6 +62,8 @@ Test data may come from repository `data/` / `tests/` fixtures or stable public 
 
 New functionality gets mandatory tests if it is core, optional tests if it is ecosystem/extended, or both when both roles apply.
 
+Fixes to existing behavior do not require adding new tests. Validate fixes with relevant existing tests or a focused behavior check; adapt existing tests if their expectations encode the bug. Do not add tests merely because code changed, and do not weaken existing checks to make a fix pass.
+
 ## 4. Repository structure
 
 Follow the existing repository structure and keep responsibilities separated:
