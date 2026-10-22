@@ -584,6 +584,9 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             mcanon, {"extra_flags": merge_flag_strings(*flag_parts)}
         )
         args.extra_flags = merged.get("extra_flags") or ""
+        _materialize_generate_accessions(args)
+        if not getattr(args, "genome_dir", None):
+            raise SystemExit("generate: --genome_dir or --accessions is required")
         mapped_mode = camisim_mode_for_reads_generator(mcanon, getattr(args, "camisim_mode", None))
         if mkind == "builtin" and mapped_mode is not None:
             from samovar.camisim import setup_camisim_generate
@@ -602,9 +605,6 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
                 data["metagenome_generator"] = mcanon
                 Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
             return _finish_generate(args, result)
-        _materialize_generate_accessions(args)
-        if not getattr(args, "genome_dir", None):
-            raise SystemExit("generate: --genome_dir or --accessions is required")
         config = ISSTestConfig.from_args(args)
         config_path = config.generate_config(config.output_dir)
         pipeline_path = write_custom_generate_script(
@@ -643,6 +643,10 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     merged = attach_reads_flags(canon, {"extra_flags": merge_flag_strings(*flag_parts)})
     args.extra_flags = merged.get("extra_flags") or ""
 
+    _materialize_generate_accessions(args)
+    if not getattr(args, "genome_dir", None):
+        raise SystemExit("generate: --genome_dir or --accessions is required")
+
     mapped_mode = camisim_mode_for_reads_generator(canon, camisim_mode)
     if mapped_mode is not None:
         from samovar.camisim import setup_camisim_generate
@@ -667,10 +671,6 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
                 data["abundance_table"] = absolute_path(args.abundance_table)
             Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
         return _finish_generate(args, result)
-
-    _materialize_generate_accessions(args)
-    if not getattr(args, "genome_dir", None):
-        raise SystemExit("generate: --genome_dir or --accessions is required")
 
     config = ISSTestConfig.from_args(args)
     config_path = config.generate_config(config.output_dir)
