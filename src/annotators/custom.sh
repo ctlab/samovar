@@ -2,6 +2,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+runtime_exports="$("$SCRIPT_DIR/../../bin/samovar" _runtime-env)"
+eval "$runtime_exports"
 
 trap 'rm -rf "${TMP_DIR:-}" 2>/dev/null || true' EXIT
 # Default threads
@@ -70,10 +72,10 @@ import os
 import sys
 from pathlib import Path
 
-from samovar.paths import resolve_executable
+from samovar.paths import resolve_executable, command_argv
 
 name = sys.argv[1]
-found = str(resolve_executable(name, tool_key=name) or "").split()
+found = command_argv(resolve_executable(name, tool_key=name) or "")
 head = found[0] if found else ""
 path = Path(head)
 if not (path.is_file() and os.access(path, os.X_OK)):
@@ -96,7 +98,7 @@ case "$TOOL" in
   # ----------------------------------------
   "dummy"|"dummy9606"|"constant9606"|"constant"|"random")
     echo "[INFO] Starting constant-taxID dummy classifier (9606)..."
-    python "$SCRIPT_DIR/constant9606.py" -i "$R1" -I "$R2" -o "$OUT" --taxid 9606
+    "$PYTHON_PATH" "$SCRIPT_DIR/constant9606.py" -i "$R1" -I "$R2" -o "$OUT" --taxid 9606
     ;;
 
   # ----------------------------------------
@@ -120,7 +122,7 @@ case "$TOOL" in
     fi
 
     # Run the python script
-    python "$SCRIPT_DIR/metauto.py" work "$FQ_DIR" "$DB"
+    "$PYTHON_PATH" "$SCRIPT_DIR/metauto.py" work "$FQ_DIR" "$DB"
 
     # Concat output TSVs, remove headers, and take only seq and taxID (columns 1 and 2)
     cat "$FQ_DIR"/*.tsv | grep -v "^seq" | awk -F'\t' '{print $1 "\t" $2}' > "$OUT"
@@ -277,13 +279,11 @@ PYCODE
 
     # Step D: Transfer taxonomy from contigs to reads via Python snippet
     echo "[INFO] Transferring taxonomy from contigs to mapped reads..."
-    python3 -c "
+    "${PYTHON_PATH:-python3}" -c "
 import sys
 import pandas as pd
 
-sam_file = '$TMP_DIR/map.sam'
-kraken_file = '$TMP_DIR/contigs.kraken2'
-out_file = '$OUT'
+sam_file, kraken_file, out_file = sys.argv[1:]
 
 try:
     # Read contig taxonomy (Kraken2 format: status, seq_id, taxid)
@@ -312,7 +312,7 @@ try:
 except Exception as e:
     print(f'Error merging hybrid taxonomy: {e}', file=sys.stderr)
     sys.exit(1)
-"
+" "$TMP_DIR/map.sam" "$TMP_DIR/contigs.kraken2" "$OUT"
     ;;
 
   # ----------------------------------------

@@ -45,7 +45,6 @@ from samovar.paths import (
     load_config,
     python_path,
     repo_root,
-    runtime_path_prefix,
     tool_env_prefix,
     user_cache_dir,
 )
@@ -1135,7 +1134,6 @@ view=False
 
 
 def write_generate_pipeline(output_dir: str, cfg: Dict[str, Any]) -> str:
-    from samovar.paths import python_path as py_path
     from samovar.paths import shell_outdir_override_snippet, shell_source_install_env_snippet
 
     base = Path(absolute_path(output_dir))
@@ -1143,21 +1141,16 @@ def write_generate_pipeline(output_dir: str, cfg: Dict[str, Any]) -> str:
     generate.mkdir(parents=True, exist_ok=True)
     yaml_path = config_yaml_path(str(base))
     root = repo_root()
-    py = py_path()
-    tool_path = runtime_path_prefix()
+    from samovar.paths import shell_runtime_snippet
+
     env_snippet = shell_source_install_env_snippet()
+    runtime_snippet = shell_runtime_snippet()
     pipeline = generate / "generate.sh"
     pipeline.write_text(
         f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
-{env_snippet}export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
-export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
-PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
-if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
-  PYTHON_PATH="$(command -v python3 || command -v python || true)"
-fi
-PYTHON_PATH="${{PYTHON_PATH:-python3}}"
+{env_snippet}{runtime_snippet}export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
 
 out_dir="{base}"
 {shell_outdir_override_snippet()}

@@ -1039,7 +1039,6 @@ from pathlib import Path
 from samovar.main_config import build_install_config, format_install_report
 from samovar.paths import (
     PACKAGE_VERSION,
-    collect_runtime_path_dirs,
     discover_multiqc,
     discover_opal,
     discover_tools,
@@ -1237,7 +1236,7 @@ pointer = write_install_config_pointer(cfg_path, root=Path(root))
 user_cfg = Path(os.environ["USER_CFG_DIR"])
 user_cfg.mkdir(parents=True, exist_ok=True)
 email = os.environ.get("NCBI_EMAIL", "")
-dirs = collect_runtime_path_dirs()
+dirs = [str(Path(root) / "bin"), str(Path(python_path).parent)]
 path_export = ":".join(dirs + ["$PATH"])
 conda_lib = ""
 prefix = os.environ.get("CONDA_PREFIX") or ""

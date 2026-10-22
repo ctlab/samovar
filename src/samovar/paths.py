@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -418,15 +419,12 @@ def load_config() -> Dict[str, Any]:
 def python_path() -> str:
     cfg = load_config()
     configured = compiler_python(cfg).strip()
-    if configured:
-        try:
-            present = Path(configured).is_file()
-        except OSError:
-            present = False
-        if present:
-            return configured
-    found = shutil.which(configured or "python3") or shutil.which("python")
-    return found or sys.executable
+    if not configured:
+        return sys.executable
+    path = Path(configured).expanduser()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise FileNotFoundError(f"Configured SAMOVAR Python is unavailable: {configured}")
+    return str(path)
 
 
 def _split_path_value(value: Any) -> List[str]:
@@ -547,7 +545,7 @@ def iss_executable() -> str:
         or "iss"
     )
     resolved = resolve_executable(configured, tool_key="iss")
-    token = (resolved or "iss").split()[0]
+    token = command_argv(resolved or "iss")[0]
     if token and Path(token).is_file() and os.access(token, os.X_OK):
         return str(Path(token).resolve())
     found = shutil.which(token) or shutil.which("iss")
@@ -566,6 +564,16 @@ def ncbi_email() -> str:
     return "anonymous@example.com"
 
 
+def command_argv(command: str) -> List[str]:
+    """Split a command while preserving a raw executable path containing spaces."""
+    text = str(command or "").strip()
+    if not text:
+        return []
+    if Path(text).expanduser().is_file():
+        return [str(Path(text).expanduser())]
+    return shlex.split(text)
+
+
 def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = None) -> str:
     """Return an absolute executable path when possible; otherwise the original token."""
     if not name_or_path:
@@ -573,15 +581,16 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
     raw = str(name_or_path).strip()
     if not raw:
         return raw
-    token = raw.split()[0]
-    rest = raw[len(token) :].lstrip()
+    parts = command_argv(raw)
+    token = parts[0]
+    rest = parts[1:]
     token_path = Path(token).expanduser()
     if (
         (token_path.is_absolute() or "/" in token)
         and token_path.is_file()
         and os.access(token_path, os.X_OK)
     ):
-        return f"{str(token_path.resolve())} {rest}".strip()
+        return shlex.join([str(token_path.resolve()), *rest]) if rest else str(token_path.resolve())
 
     cfg = load_config()
     tools_map = iter_tools(cfg)
@@ -607,12 +616,12 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
         path = Path(cand).expanduser()
         if path.is_file() and os.access(path, os.X_OK):
             resolved = str(path.resolve())
-            return f"{resolved} {rest}".strip()
+            return shlex.join([resolved, *rest]) if rest else resolved
         if path.is_absolute():
             continue
         which = shutil.which(cand)
         if which:
-            return f"{which} {rest}".strip()
+            return shlex.join([which, *rest]) if rest else which
     return raw
 
 
@@ -648,9 +657,10 @@ def shell_source_install_env_snippet(*, root_expr: str = '"$SAMOVAR_ROOT"') -> s
     """Bash: source the selected config's env, honoring an explicit override."""
     return f"""# Load the explicit config's env, else the recorded install env.
 XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
+_SAMOVAR_CALLER_PATH="$PATH"
 _SAMOVAR_CFG="${{SAMOVAR_CONFIG:-}}"
 if [ -z "$_SAMOVAR_CFG" ] && [ -f {root_expr}/build/config_path ]; then
-  _SAMOVAR_CFG="$(tr -d '[:space:]' < {root_expr}/build/config_path)"
+  _SAMOVAR_CFG="$(cat {root_expr}/build/config_path)"
 fi
 if [ -n "$_SAMOVAR_CFG" ]; then
   export SAMOVAR_CONFIG="$_SAMOVAR_CFG"
@@ -664,7 +674,8 @@ elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
   # shellcheck disable=SC1090
   . "$XDG_CONFIG_HOME/samovar/env"
 fi
-unset _SAMOVAR_CFG
+export PATH="$_SAMOVAR_CALLER_PATH"
+unset _SAMOVAR_CFG _SAMOVAR_CALLER_PATH
 """
 
 
@@ -727,7 +738,7 @@ def discover_opal() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_OPAL_PATH") or os.environ.get("SAMOVAR_OPAL_BIN"))
     add(str(cfg.get("opal_path") or ""))
@@ -771,7 +782,7 @@ def discover_multiqc() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_MULTIQC_PATH") or os.environ.get("SAMOVAR_MULTIQC_BIN"))
     add(str(cfg.get("multiqc_path") or ""))
@@ -961,7 +972,7 @@ def discover_nanosim() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_NANOSIM") or os.environ.get("SAMOVAR_NANOSIM_BIN"))
     add(str(cfg.get("nanosim_path") or ""))
@@ -986,7 +997,7 @@ def discover_art() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_ART") or os.environ.get("SAMOVAR_ART_ILLUMINA"))
     add(str(cfg.get("art_path") or ""))
@@ -1007,7 +1018,7 @@ def discover_wgsim() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_WGSIM"))
     add(str(cfg.get("wgsim_path") or ""))
@@ -1036,8 +1047,8 @@ def conda_prefix_for_executable(exe: Optional[str]) -> Optional[str]:
 
 
 def _first_token(value: Any) -> str:
-    """First whitespace-separated token; empty if ``value`` is blank."""
-    parts = str(value or "").split()
+    """Executable token, preserving a path with spaces; empty for blank values."""
+    parts = command_argv(str(value or ""))
     return parts[0] if parts else ""
 
 
@@ -1397,3 +1408,20 @@ def format_install_status() -> str:
         lines.append("")
         lines.append("All required programs are present.")
     return "\n".join(lines)
+
+
+def shell_runtime_exports() -> str:
+    """Shell assignments for configured pipeline executables, without tool PATHs."""
+    return "\n".join(
+        "export " + key + "=" + shlex.quote(value)
+        for key, value in (
+            ("PYTHON_PATH", python_path()),
+            ("SNAKEMAKE", command_argv(resolve_executable("snakemake", tool_key="snakemake"))[0]),
+        )
+    )
+
+
+def shell_runtime_snippet() -> str:
+    """Ask the canonical launcher for runtime selection in generated scripts."""
+    launcher = shlex.quote(str(repo_root() / "bin" / "samovar"))
+    return f'runtime_exports="$({launcher} _runtime-env)"\neval "$runtime_exports"\n'

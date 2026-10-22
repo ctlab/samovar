@@ -171,7 +171,7 @@ elif name == "kraken2":
         exe.chmod(0o755)
         tools["spades" if name == "spades.py" else name] = {"exec": {"path": str(exe)}}
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"tools": tools}))
+    config.write_text(json.dumps({"compilers": {"python": sys.executable}, "tools": tools}))
     monkeypatch.setenv("SAMOVAR_CONFIG", str(config))
     monkeypatch.setenv("PYTHON_PATH", sys.executable)
     out = tmp_path / "hybrid.out"

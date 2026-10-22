@@ -6,6 +6,8 @@ import logging
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Union
+from samovar.paths import command_argv
+
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -45,7 +47,7 @@ def run_command(cmd: List[str], check: bool = True) -> subprocess.CompletedProce
     if argv:
         from samovar.paths import resolve_executable
 
-        resolved = str(resolve_executable(argv[0]) or "").split()
+        resolved = command_argv(resolve_executable(argv[0]) or "")
         if resolved and resolved[0]:
             argv[0] = resolved[0]
     logger.info(f"Running command: {' '.join(argv)}")
@@ -658,7 +660,7 @@ def build_database_krakenunique(
     from samovar.paths import resolve_executable
 
     def _on_disk(name: str) -> str:
-        head = str(resolve_executable(name) or "").split()
+        head = command_argv(resolve_executable(name) or "")
         path = Path(head[0]) if head else Path()
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)

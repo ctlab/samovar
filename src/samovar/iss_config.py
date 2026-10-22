@@ -1,4 +1,5 @@
 import os
+import shlex
 import yaml
 import argparse
 from typing import Any, Dict, List, Optional, Sequence
@@ -332,7 +333,7 @@ class ISSTestConfig:
 
     def generate_pipeline(self, base_dir: str) -> str:
         """Generate the ISS test pipeline script and return its path"""
-        from samovar.paths import absolute_path, python_path, repo_root, runtime_path_prefix
+        from samovar.paths import absolute_path, repo_root
         from samovar.paths import shell_outdir_override_snippet
 
         base_dir = absolute_path(base_dir)
@@ -347,32 +348,27 @@ class ISSTestConfig:
         
         # Generate pipeline script
         root = repo_root()
-        py = python_path()
-        tool_path = runtime_path_prefix()
         snakefile = root / "workflow" / "iss_test" / "Snakefile"
         from samovar.paths import shell_source_install_env_snippet
 
+        from samovar.paths import shell_runtime_snippet
+
         env_snippet = shell_source_install_env_snippet()
+        runtime_snippet = shell_runtime_snippet()
         pipeline_content = f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
-{env_snippet}export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
-export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
-PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
-if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
-  PYTHON_PATH="$(command -v python3 || command -v python || true)"
-fi
-PYTHON_PATH="${{PYTHON_PATH:-python3}}"
+{env_snippet}{runtime_snippet}export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
 
 out_dir="{base_dir}"
 {shell_outdir_override_snippet()}
 mkdir -p "$out_dir"
 
 # Generate reads with InSilicoSeq
-MEM_MB="${{SAMOVAR_MEM_MB:-$($PYTHON_PATH -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')}}"
+MEM_MB="${{SAMOVAR_MEM_MB:-$("$PYTHON_PATH" -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')}}"
 export SAMOVAR_MEM_MB="$MEM_MB"
-snakemake -s {snakefile} \\
-    --configfile {config_path} \\
+"$SNAKEMAKE" -s {shlex.quote(str(snakefile))} \\
+    --configfile {shlex.quote(config_path)} \\
     --directory "$out_dir" \\
     --cores {self.cores} \\
     --resources mem_mb=$MEM_MB

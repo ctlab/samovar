@@ -1797,3 +1797,31 @@ def format_install_report(
         "(none — this install only reused previous values)",
     )
     return "\n".join(lines)
+
+
+def bootstrap_runtime_exports(config_path: str, fallback_root: str) -> str:
+    """Read runtime selection without importing the SAMOVAR package/dependencies.
+
+    Used by the shell launcher with an OS Python solely to read the install
+    config; every application command uses the configured interpreter.
+    """
+    import json
+    import shlex
+
+    cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    python = Path(compiler_python(cfg)).expanduser()
+    if not compiler_python(cfg) or not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError("No executable Python in the SAMOVAR install config; run install.sh")
+    root = str(cfg.get("root") or fallback_root)
+    return "\n".join([
+        "export SAMOVAR_ROOT=" + shlex.quote(root),
+        "export PYTHON_PATH=" + shlex.quote(str(python)),
+    ])
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) != 3:
+        raise SystemExit("Usage: main_config.py CONFIG FALLBACK_ROOT")
+    print(bootstrap_runtime_exports(sys.argv[1], sys.argv[2]))

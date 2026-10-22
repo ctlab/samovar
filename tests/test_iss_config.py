@@ -111,13 +111,13 @@ def test_generate_pipeline():
     with open(pipeline_path, 'r') as f:
         pipeline_content = f.read()
         assert "set -e" in pipeline_content
-        assert "PYTHON_PATH=" in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
-        assert "snakemake -s " in pipeline_content
+        assert '"$SNAKEMAKE" -s ' in pipeline_content
         assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
         assert "samovar/env" in pipeline_content
-        assert "SAMOVAR_PATH" in pipeline_content
+        assert "_runtime-env" in pipeline_content
 
 def test_setup_iss_test():
     test_output_dir = 'tests_outs/test_setup_iss_test'
@@ -161,9 +161,9 @@ def test_setup_iss_test():
     with open(pipeline_path, 'r') as f:
         pipeline_content = f.read()
         assert "set -e" in pipeline_content
-        assert "PYTHON_PATH=" in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
-        assert "snakemake -s " in pipeline_content
+        assert '"$SNAKEMAKE" -s ' in pipeline_content
         assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
 

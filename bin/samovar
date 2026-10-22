@@ -23,7 +23,7 @@ _find_cfg() {
         return
     fi
     if [ -f "$SCRIPT_DIR/../build/config_path" ]; then
-        _ptr="$(tr -d '[:space:]' < "$SCRIPT_DIR/../build/config_path")"
+        _ptr="$(cat "$SCRIPT_DIR/../build/config_path")"
         if [ -n "$_ptr" ] && [ -f "$_ptr" ]; then
             echo "$_ptr"
             return
@@ -52,10 +52,10 @@ _samovar_version() {
                 | sed -E 's/^version[[:space:]]*=[[:space:]]*["'\'']([^"'\'']+)["'\''].*/\1/'
         )"
     fi
-    if [ -z "$ver" ] && command -v python3 >/dev/null 2>&1; then
+    if [ -z "$ver" ] && [ -x "${PYTHON_PATH:-}" ]; then
         ver="$(
             PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" \
-                python3 -c 'from samovar.version import get_version; print(get_version())' 2>/dev/null || true
+                "$PYTHON_PATH" -c 'from samovar.version import get_version; print(get_version())' 2>/dev/null || true
         )"
     fi
     printf '%s\n' "${ver:-unknown}"
@@ -129,6 +129,11 @@ show_usage() {
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
 
+if [ "${1:-help}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    SAMOVAR_ROOT="$SCRIPT_DIR/.." show_usage
+    exit 0
+fi
+
 CFG=""
 if CFG="$(_find_cfg)"; then
     :
@@ -150,43 +155,37 @@ else
     exit 1
 fi
 
-ROOT="${SAMOVAR_ROOT:-}"
-if [ -z "$ROOT" ] && command -v python3 >/dev/null 2>&1; then
-    ROOT="$(
-        SAMOVAR_CFG="$CFG" python3 -c 'import json,os; print(json.load(open(os.environ["SAMOVAR_CFG"])).get("root","") or "")' 2>/dev/null || true
-    )"
+# A PATH Python may belong to a classifier env. The OS interpreter only reads
+# the JSON schema; it never imports SAMOVAR or runs application commands.
+BOOTSTRAP=""
+for candidate in /usr/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$candidate" ]; then BOOTSTRAP="$candidate"; break; fi
+done
+_CALLER_PATH="$PATH"
+if [ -f "$(dirname "$CFG")/env" ]; then
+    . "$(dirname "$CFG")/env"
 fi
-if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
-    ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Older install env files prepend every classifier env; keep the caller's PATH.
+export PATH="$_CALLER_PATH"
+unset _CALLER_PATH
+if [ -z "$BOOTSTRAP" ] && [ -x "${PYTHON_PATH:-}" ]; then
+    BOOTSTRAP="$PYTHON_PATH"
 fi
-export SAMOVAR_ROOT="$ROOT"
-export PATH="$SCRIPT_DIR:$ROOT/bin:$PATH"
+if [ -z "$BOOTSTRAP" ]; then
+    echo "Cannot read the SAMOVAR config: no bootstrap interpreter. Run install.sh." >&2
+    exit 1
+fi
+export SAMOVAR_CONFIG="$CFG"
+runtime_exports="$("$BOOTSTRAP" "$SCRIPT_DIR/../src/samovar/main_config.py" "$CFG" "$SCRIPT_DIR/..")"
+eval "$runtime_exports"
+ROOT="$SAMOVAR_ROOT"
+PYTHON="$PYTHON_PATH"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
-if [ -f "$(dirname "$CFG")/env" ]; then
-    # shellcheck disable=SC1090
-    . "$(dirname "$CFG")/env"
-elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
-    # shellcheck disable=SC1090
-    . "$XDG_CONFIG_HOME/samovar/env"
-fi
-# env files often export SAMOVAR_CONFIG to the XDG install; the path
-# _find_cfg already chose (including an explicit override) must win.
-export SAMOVAR_CONFIG="$CFG"
-
-PYTHON="${PYTHON_PATH:-}"
-if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
-    PYTHON="$(
-        SAMOVAR_CFG="$CFG" python3 -c 'import json,os; print(json.load(open(os.environ["SAMOVAR_CFG"])).get("python_path","") or "")' 2>/dev/null || true
-    )"
-fi
-if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
-    PYTHON="$(command -v python3 || command -v python || true)"
-fi
-PYTHON="${PYTHON:-python3}"
-export PYTHON_PATH="$PYTHON"
-
 case "${1:-}" in
+    "_runtime-env")
+        "$PYTHON" -c 'from samovar.paths import shell_runtime_exports; print(shell_runtime_exports())'
+        ;;
     "generate")
         shift
         "$PYTHON" "$SCRIPT_DIR/samovar_generate" "$@"

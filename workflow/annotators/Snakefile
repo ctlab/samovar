@@ -121,9 +121,9 @@ rule custom_tool:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 # ==========================================
@@ -148,9 +148,9 @@ rule assembly:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 rule kraken2:
@@ -173,9 +173,9 @@ rule kraken2:
         )
     shell:
         """
-        mkdir -p $(dirname {output.report})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.report:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 if not BATCH_KAIJU:
@@ -198,9 +198,9 @@ if not BATCH_KAIJU:
             )
         shell:
             """
-            mkdir -p $(dirname {output.out})
-            mkdir -p $(dirname {log})
-            {params.cmd} 2> {log}
+            mkdir -p "$(dirname {output.out:q})"
+            mkdir -p "$(dirname {log:q})"
+            {params.cmd} 2> {log:q}
             """
 
 if BATCH_KAIJU:
@@ -228,8 +228,8 @@ if BATCH_KAIJU:
                 )
             shell:
                 """
-                mkdir -p $(dirname {log})
-                {params.cmd} 2> {log}
+                mkdir -p "$(dirname {log:q})"
+                {params.cmd} 2> {log:q}
                 """
 
 rule metaphlan4:
@@ -253,9 +253,9 @@ rule metaphlan4:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 rule kmer2:
@@ -277,9 +277,9 @@ rule kmer2:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 rule gc:
@@ -301,9 +301,9 @@ rule gc:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 rule kmer_encoder:
@@ -325,9 +325,9 @@ rule kmer_encoder:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 rule kraken:
@@ -349,9 +349,9 @@ rule kraken:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """
 
 rule krakenuniq:
@@ -373,7 +373,7 @@ rule krakenuniq:
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
         """

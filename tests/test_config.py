@@ -293,24 +293,23 @@ def test_generate_pipeline():
         
         # Check basic structure
         assert "set -e" in pipeline_content
-        assert "PYTHON_PATH=" in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/compare_annotations.R" not in pipeline_content
         assert "export R_PATH=" not in pipeline_content
-        assert "R_PATH=" not in pipeline_content.replace("SAMOVAR_PATH", "")
         
         # Check config file paths
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
-        assert 'PYTHON_PATH="${PYTHON_PATH:-' in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert '[ -f "$CKPT/$1.done" ]' in pipeline_content
         assert "visualization failed; continuing" not in pipeline_content
         assert "XDG_CONFIG_HOME" in pipeline_content
         assert "samovar/env" in pipeline_content
-        assert "SAMOVAR_PATH" in pipeline_content
-        assert "tool_envs" in pipeline_content or "Baked tool bins" in pipeline_content
+        assert "_runtime-env" in pipeline_content
+        assert 'export PATH="$_SAMOVAR_CALLER_PATH"' in pipeline_content
         
         # Check snakemake commands
-        assert "snakemake -s " in pipeline_content
+        assert '"$SNAKEMAKE" -s ' in pipeline_content
         assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/annotators/Snakefile" in pipeline_content
         assert "workflow/abundance2iss/Snakefile" in pipeline_content
@@ -424,7 +423,7 @@ def test_setup_pipeline():
         assert '--directory "$out_dir"' in pipeline_content
 
 
-def test_generate_pipeline_bakes_tool_env_bins(tmp_path, monkeypatch):
+def test_generate_pipeline_resolves_tools_without_baking_env_bins(tmp_path, monkeypatch):
     env = tmp_path / "kaiju_env"
     (env / "bin").mkdir(parents=True)
     kaiju = env / "bin" / "kaiju"
@@ -455,10 +454,10 @@ def test_generate_pipeline_bakes_tool_env_bins(tmp_path, monkeypatch):
         ],
     )
     script = Path(config.generate_pipeline(str(out))).read_text()
-    assert str(env / "bin") in script
-    assert str(extra) in script
+    assert str(env / "bin") not in script
+    assert str(extra) not in script
     assert "samovar/env" in script
-    assert "SAMOVAR_PATH" in script
+    assert "_runtime-env" in script
 
 
 def test_prepare_to_flags_embed_convert(tmp_path):

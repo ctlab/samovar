@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Sequence
 import pandas as pd
 
 from samovar.baselines import CONSTANT_TAXID_NAMES
+from samovar.paths import command_argv, python_path
 
 DUMMY_TAXID = "9606"
 DUMMY_TOOL_NAMES = CONSTANT_TAXID_NAMES
@@ -40,7 +41,7 @@ def skip_empty_reads_cmd(input_r1: str, outputs: Sequence[str], run_cmd: str) ->
     """
     r1 = shlex.quote(str(input_r1))
     outs = " ".join(shlex.quote(str(path)) for path in outputs)
-    py = shlex.quote(sys.executable)
+    py = shlex.quote(python_path())
     src_root = str(Path(__file__).resolve().parent.parent)
     code = (
         "from samovar.seqio import fastq_has_reads; import sys; "
@@ -81,7 +82,7 @@ def single_or_paired_reads_cmd(
     r1 = shlex.quote(str(input_r1))
     r2 = shlex.quote(str(input_r2))
     outs = " ".join(shlex.quote(str(path)) for path in outputs)
-    py = shlex.quote(sys.executable)
+    py = shlex.quote(python_path())
     src_root = str(Path(__file__).resolve().parent.parent)
     code = (
         "from samovar.seqio import fastq_has_reads; import sys; "
@@ -144,8 +145,12 @@ class BaseAnnotator:
         from samovar.paths import resolve_executable
 
         raw_cmd = run_config.get("cmd") or self.default_cmd
-        first = str(raw_cmd).split()[0] if raw_cmd else ""
-        self.cmd = resolve_executable(raw_cmd, tool_key=Path(first).name if first else None)
+        parts = command_argv(raw_cmd)
+        # Prepared runs may retain the interpreter from an older installation.
+        if len(parts) >= 3 and parts[1] == "-m" and parts[2].startswith("samovar."):
+            raw_cmd = shlex.join([python_path(), *parts[1:]])
+        first = command_argv(raw_cmd)[0] if raw_cmd else ""
+        self.cmd = shlex.join(command_argv(resolve_executable(raw_cmd, tool_key=Path(first).name if first else None)))
 
     @property
     def default_cmd(self) -> str:
@@ -195,18 +200,18 @@ class Kraken2Annotator(BaseAnnotator):
             f"{self.cmd} "
             f"--use-names "
             f"{mapping}"
-            f"--db {self.db_path} "
+            f"--db {shlex.quote(str(self.db_path))} "
             f"--threads {self.threads} "
-            f"--report {report_file} "
-            f"--output {out_file} "
+            f"--report {shlex.quote(str(report_file))} "
+            f"--output {shlex.quote(str(out_file))} "
             f"{extra}"
         )
         return single_or_paired_reads_cmd(
             input_r1,
             input_r2,
             outputs,
-            single_cmd=f"{common} {input_r1}",
-            paired_cmd=f"{common} --paired {input_r1} {input_r2}",
+            single_cmd=f"{common} {shlex.quote(str(input_r1))}",
+            paired_cmd=f"{common} --paired {shlex.quote(str(input_r1))} {shlex.quote(str(input_r2))}",
         )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
@@ -346,7 +351,7 @@ class KaijuAnnotator(BaseAnnotator):
                     db_nodes = str(found)
             except Exception:
                 pass
-        return str(db_file_path), str(db_nodes)
+        return _expand_index(str(db_file_path)), str(db_nodes)
 
     def batch_shell(self, samples: Sequence[str], r1_dir: str, r2_dir: str, output_dir: str) -> str:
         """One ``kaiju-multi`` for every sample of this run."""
@@ -354,7 +359,7 @@ class KaijuAnnotator(BaseAnnotator):
         from samovar.seqio import fastq_has_reads, find_fastq_mate
 
         database, nodes = self._database_and_nodes()
-        binary = str(resolve_executable("kaiju-multi") or "kaiju-multi").split()[0]
+        binary = command_argv(resolve_executable("kaiju-multi") or "kaiju-multi")[0]
         active_r1: List[str] = []
         active_r2: List[str] = []
         active_out: List[str] = []
@@ -405,11 +410,11 @@ class KaijuAnnotator(BaseAnnotator):
 
         common = (
             f"{self.cmd} "
-            f"-t {db_nodes} "
-            f"-f {db_file_path} "
-            f"-i {input_r1} "
+            f"-t {shlex.quote(str(db_nodes))} "
+            f"-f {shlex.quote(str(db_file_path))} "
+            f"-i {shlex.quote(str(input_r1))} "
             f"-z {self.threads} "
-            f"-o {out_file} "
+            f"-o {shlex.quote(str(out_file))} "
             f"{self.extra}"
         )
         return single_or_paired_reads_cmd(
@@ -417,7 +422,7 @@ class KaijuAnnotator(BaseAnnotator):
             input_r2,
             outputs,
             single_cmd=common,
-            paired_cmd=f"{common} -j {input_r2}",
+            paired_cmd=f"{common} -j {shlex.quote(str(input_r2))}",
         )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
@@ -450,15 +455,15 @@ class MetaPhlanAnnotator(BaseAnnotator):
             f"--input_type fastq "
             f"--nproc {self.threads} "
             + (
-                f"-1 {input_r1} -2 {input_r2} "
+                f"-1 {shlex.quote(str(input_r1))} -2 {shlex.quote(str(input_r2))} "
                 if _has_r2(input_r2)
-                else f"{input_r1} "
+                else f"{shlex.quote(str(input_r1))} "
             )
-            + f"--bowtie2out {bowtie_file} "
-            f"-o {raw_file} "
+            + f"--bowtie2out {shlex.quote(str(bowtie_file))} "
+            f"-o {shlex.quote(str(raw_file))} "
             f"{self.extra} "
             f"&& "
-            f"bzcat {bowtie_file} | awk -F'\\t' '{{print $1 \"\\t\" $3}}' > {out_file}"
+            f"bzcat {shlex.quote(str(bowtie_file))} | awk -F'\\t' '{{print $1 \"\\t\" $3}}' > {shlex.quote(str(out_file))}"
         )
         return skip_empty_reads_cmd(input_r1, outputs, cmd)
 
@@ -518,16 +523,16 @@ class Kraken1Annotator(BaseAnnotator):
     ) -> str:
         out_file = outputs[0]
         reads = (
-            f"--paired {input_r1} {input_r2}"
+            f"--paired {shlex.quote(str(input_r1))} {shlex.quote(str(input_r2))}"
             if _has_r2(input_r2)
-            else str(input_r1)
+            else shlex.quote(str(input_r1))
         )
         cmd = (
             f"{self.cmd} "
-            f"--db {self.db_path} "
+            f"--db {shlex.quote(str(self.db_path))} "
             f"--threads {self.threads} "
             f"{reads} "
-            f"--output {out_file} "
+            f"--output {shlex.quote(str(out_file))} "
             f"{self.extra}"
         )
         return skip_empty_reads_cmd(input_r1, outputs, cmd)
@@ -557,16 +562,16 @@ class KrakenUniqAnnotator(BaseAnnotator):
     ) -> str:
         out_file = outputs[0]
         reads = (
-            f"--paired {input_r1} {input_r2}"
+            f"--paired {shlex.quote(str(input_r1))} {shlex.quote(str(input_r2))}"
             if _has_r2(input_r2)
-            else str(input_r1)
+            else shlex.quote(str(input_r1))
         )
         cmd = (
             f"{self.cmd} "
-            f"--db {self.db_path} "
+            f"--db {shlex.quote(str(self.db_path))} "
             f"--threads {self.threads} "
             f"{reads} "
-            f"--output {out_file} "
+            f"--output {shlex.quote(str(out_file))} "
             f"{self.extra}"
         )
         return skip_empty_reads_cmd(input_r1, outputs, cmd)
@@ -587,7 +592,7 @@ def _cmd_is_custom_wrapper(cmd: str) -> bool:
     text = str(cmd)
     if "custom.sh" in text:
         return True
-    token = text.split()[-1]
+    token = command_argv(text)[-1]
     return os.path.basename(token) in CUSTOM_WRAPPER_SCRIPTS
 
 
@@ -601,7 +606,7 @@ class CustomAnnotator(BaseAnnotator):
     @property
     def default_cmd(self) -> str:
         script = Path(__file__).resolve().parent.parent / "annotators" / "custom.sh"
-        return f"bash {script}"
+        return f"bash {shlex.quote(str(script))}"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         out_file = os.path.join(
@@ -627,15 +632,15 @@ class CustomAnnotator(BaseAnnotator):
             cmd = self.cmd if _cmd_is_custom_wrapper(self.cmd) else self.default_cmd
             return (
                 f"{cmd} "
-                f"-i {input_r1} "
+                f"-i {shlex.quote(str(input_r1))} "
                 f"{_r2_flag('-I', input_r2)}"
-                f"-d {self.db_path} "
-                f"-o {out_file} "
+                f"-d {shlex.quote(str(self.db_path))} "
+                f"-o {shlex.quote(str(out_file))} "
                 f"-p {self.tool_name} "
                 f"{tflag} "
                 f"{extra}"
             )
-        first = str(self.cmd or "").split()[0]
+        first = command_argv(self.cmd)[0]
         try:
             direct = bool(first) and Path(first).expanduser().is_file()
         except OSError:
@@ -643,20 +648,20 @@ class CustomAnnotator(BaseAnnotator):
         if direct:
             return (
                 f"{self.cmd} "
-                f"-i {input_r1} "
+                f"-i {shlex.quote(str(input_r1))} "
                 f"{_r2_flag('-I', input_r2)}"
-                f"-d {self.db_path} "
-                f"-o {out_file} "
+                f"-d {shlex.quote(str(self.db_path))} "
+                f"-o {shlex.quote(str(out_file))} "
                 f"{tflag} "
                 f"{extra}"
             )
         cmd = self.default_cmd
         return (
             f"{cmd} "
-            f"-i {input_r1} "
+            f"-i {shlex.quote(str(input_r1))} "
             f"{_r2_flag('-I', input_r2)}"
-            f"-d {self.db_path} "
-            f"-o {out_file} "
+            f"-d {shlex.quote(str(self.db_path))} "
+            f"-o {shlex.quote(str(out_file))} "
             f"-p {self.tool_name} "
             f"{tflag} "
             f"{extra}"
@@ -682,14 +687,14 @@ class ConstantTaxidAnnotator(CustomAnnotator):
     @property
     def default_cmd(self) -> str:
         script = Path(__file__).resolve().parent / "baselines" / "constant_taxid.py"
-        return f"{sys.executable} {script}"
+        return f"{shlex.quote(python_path())} {shlex.quote(str(script))}"
 
     def get_snakemake_shell_cmd(
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
         cmd = self.cmd
-        if not cmd or os.path.basename(str(cmd).split()[0]).split(".")[0].lower() in CONSTANT_TAXID_TOOL_NAMES:
+        if not cmd or os.path.basename(command_argv(cmd)[0]).split(".")[0].lower() in CONSTANT_TAXID_TOOL_NAMES:
             cmd = self.default_cmd
         extra = self.extra or ""
         run = (
@@ -708,7 +713,7 @@ class AssemblyAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.assembly_profiling"
+        return f"{shlex.quote(python_path())} -m samovar.assembly_profiling"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.assembly.out")]
@@ -725,7 +730,7 @@ class AssemblyAnnotator(BaseAnnotator):
         cmd = self.cmd or self.default_cmd
         # Prepare stores the bare name (`assembly_profiling`). That is not a
         # PATH binary; the implementation is this module.
-        bare = os.path.basename(str(cmd).split()[-1]) if str(cmd).strip() else ""
+        bare = os.path.basename(command_argv(cmd)[-1]) if str(cmd).strip() else ""
         if "samovar.assembly_profiling" not in str(cmd) and bare in {
             "assembly",
             "assembly_profiling",
@@ -758,7 +763,7 @@ class GcAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.gc"
+        return f"{shlex.quote(python_path())} -m samovar.gc"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.gc.out")]
@@ -769,7 +774,7 @@ class GcAnnotator(BaseAnnotator):
         out_file = outputs[0]
         extra = self.extra or ""
         cmd = self.cmd
-        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower().replace("-", "_") in GC_TOOL_NAMES:
             cmd = self.default_cmd
         run = (
@@ -793,7 +798,7 @@ class LengthAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.length"
+        return f"{shlex.quote(python_path())} -m samovar.length"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.length.out")]
@@ -804,7 +809,7 @@ class LengthAnnotator(BaseAnnotator):
         out_file = outputs[0]
         extra = self.extra or ""
         cmd = self.cmd
-        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower().replace("-", "_") in LENGTH_TOOL_NAMES:
             cmd = self.default_cmd
         run = (
@@ -831,7 +836,7 @@ class Kmer2Annotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.kmer2"
+        return f"{shlex.quote(python_path())} -m samovar.kmer2"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.kmer2.out")]
@@ -842,7 +847,7 @@ class Kmer2Annotator(BaseAnnotator):
         out_file = outputs[0]
         extra = self.extra or ""
         cmd = self.cmd
-        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower() in KMER2_TOOL_NAMES:
             cmd = self.default_cmd
         run = (
@@ -875,7 +880,7 @@ class KmerEncoderAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.kmer_encoder"
+        return f"{shlex.quote(python_path())} -m samovar.kmer_encoder"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.kmer_encoder.out")]
@@ -886,7 +891,7 @@ class KmerEncoderAnnotator(BaseAnnotator):
         out_file = outputs[0]
         extra = self.extra or ""
         cmd = self.cmd
-        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower().replace("-", "_") in KMER_ENCODER_TOOL_NAMES:
             cmd = self.default_cmd
         db = self.db_path or ""

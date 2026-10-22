@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from samovar.main_config import imported_flags_for_names, iter_tools
-from samovar.paths import load_config, resolve_executable
+from samovar.paths import command_argv, load_config, resolve_executable
 from samovar.seqio import assembly_read_libraries
 
 MAG_SUFFIXES = (".fa", ".fna", ".fasta", ".fa.gz", ".fna.gz")
@@ -68,7 +68,7 @@ def as_path(value: Any) -> Path:
 
 def _resolved_executable(token: str, tool_key: str) -> str:
     """Absolute executable from config, or empty when the token was not resolved."""
-    resolved = str(resolve_executable(token, tool_key=tool_key) or "").split()
+    resolved = command_argv(resolve_executable(token, tool_key=tool_key) or "")
     first = resolved[0] if resolved else ""
     if not first:
         return ""
@@ -254,6 +254,9 @@ def parse_slot_extra(extra: str) -> Dict[str, Any]:
 def _run(cmd: Sequence[str], **kwargs: Any) -> None:
     env = dict(kwargs.pop("env", None) or os.environ)
     env.setdefault("PYTHONNOUSERSITE", "1")
+    executable = Path(str(cmd[0]))
+    if executable.is_absolute():
+        env["PATH"] = str(executable.parent) + os.pathsep + env.get("PATH", "")
     subprocess.check_call([str(c) for c in cmd], env=env, **kwargs)
 
 

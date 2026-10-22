@@ -1495,7 +1495,7 @@ def _resolve_r_executable() -> Tuple[str, Optional[str]]:
     configured = (cfg.get("r_path") or "R").strip() or "R"
     lib = (cfg.get("r_lib_path") or "").strip()
     r_lib_path = lib or None
-    token = configured.split()[0]
+    token = configured
     if os.path.isfile(token) and os.access(token, os.X_OK):
         return token, r_lib_path
     found = shutil.which(configured)

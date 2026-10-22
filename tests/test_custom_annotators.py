@@ -1,6 +1,7 @@
 """OOP annotators: CustomAnnotator routes, native parsers, taxonomy_engine, features."""
 
 import os
+import json
 import stat
 import subprocess
 import sys
@@ -297,6 +298,9 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
     _tiny_fastq(r2, n=2)
     out = tmp_path / "cf.out"
     env = os.environ.copy()
+    payload = json.loads(cfg.read_text())
+    payload["compilers"] = {"python": sys.executable}
+    cfg.write_text(json.dumps(payload))
     env["SAMOVAR_CONFIG"] = str(cfg)
     env["SAMOVAR_ROOT"] = str(tmp_path)
     env["PYTHON_PATH"] = sys.executable
@@ -440,6 +444,9 @@ def test_custom_sh_metax_uses_configured_taxdump(tmp_path):
     out = tmp_path / "sample.metax.out"
     env = os.environ.copy()
     env["PATH"] = f"{mock_bin}{os.pathsep}{env.get('PATH', '')}"
+    payload = json.loads(cfg.read_text())
+    payload["compilers"] = {"python": sys.executable}
+    cfg.write_text(json.dumps(payload))
     env["SAMOVAR_CONFIG"] = str(cfg)
     env["PYTHONPATH"] = f"{REPO / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
     env.pop("METAX_DMP_DIR", None)
