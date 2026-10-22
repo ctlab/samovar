@@ -374,8 +374,15 @@ def ensure_taxid_name_map(taxids, cache_path=None) -> Dict[str, str]:
     if missing:
         translated: Dict[int, str] = {}
         try:
-            ids = [int(t) for t in missing]
-            translated = _ncbi_call("get_taxid_translator", ids) or {}
+            from samovar.taxdump import names_dmp, load_scientific_names
+
+            local_names = names_dmp()
+            if local_names:
+                names = load_scientific_names(local_names)
+                translated = {int(t): names[int(t)] for t in missing if int(t) in names}
+            else:
+                ids = [int(t) for t in missing]
+                translated = _ncbi_call("get_taxid_translator", ids) or {}
         except Exception:
             translated = {}
         for key in missing:
@@ -476,7 +483,12 @@ def remap_taxid_dataframe(
 def _get_ncbi() -> "NCBITaxa":
     global ncbi
     if ncbi is None:
-        ncbi = NCBITaxa()
+        # Never let worker processes create/download ETE's private database.
+        # The configured nodes/names dump remains the offline fallback below.
+        database = Path.home() / ".etetoolkit" / "taxa.sqlite"
+        if not database.is_file():
+            raise FileNotFoundError("No local ETE database; using configured taxdump without downloads")
+        ncbi = NCBITaxa(dbfile=str(database), update=False)
     return ncbi
 
 

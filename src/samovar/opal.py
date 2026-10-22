@@ -66,6 +66,8 @@ def opal_rank_range(rank: Optional[str]) -> str:
     start = order.index(requested)
     end = order.index("species") if "species" in order else start
     lo, hi = (start, end) if start <= end else (end, start)
+    if lo == hi:
+        lo = max(0, lo - 1)
     return f"{order[lo]},{order[hi]}"
 
 
@@ -102,7 +104,7 @@ def opal_command() -> Optional[List[str]]:
     if exe.endswith(".py") or not os.access(exe, os.X_OK):
         from samovar.paths import python_path
 
-        return [python_path(), exe]
+        return [python_path(), "-m", "samovar.opal", exe]
     return [exe]
 
 
@@ -322,22 +324,19 @@ def run_opal(
         "--silent",
         *files,
     ]
+    stdout_path, stderr_path = out / "stdout.log", out / "stderr.log"
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+            proc = subprocess.run(cmd, stdout=stdout, stderr=stderr, text=True,
+                                  timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning("OPAL did not run: %s", exc)
+        logger.warning("OPAL did not run: %s (logs: %s, %s)", exc, stdout_path, stderr_path)
         return None
     if proc.returncode != 0:
         logger.warning(
             "OPAL exited %s: %s",
             proc.returncode,
-            (proc.stderr or proc.stdout or "")[:500],
+            "\n".join(stderr_path.read_text(errors="replace").splitlines()[-30:]) + f" (full log: {stderr_path})",
         )
         return None
     return out
@@ -359,3 +358,21 @@ def maybe_run_opal(
     if gold is None or not profiles:
         return None
     return run_opal(gold, profiles, dest, rank=rank)
+
+
+def main():
+    """Run the configured OPAL script with process-local matplotlib compatibility."""
+    import runpy
+    import sys
+    import matplotlib
+    import matplotlib.cm
+
+    if not hasattr(matplotlib.cm, "get_cmap"):
+        matplotlib.cm.get_cmap = matplotlib.colormaps.get_cmap
+    script = sys.argv[1]
+    sys.argv = sys.argv[1:]
+    runpy.run_path(script, run_name="__main__")
+
+
+if __name__ == "__main__":
+    main()

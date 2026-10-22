@@ -64,7 +64,7 @@ def test_write_cami_profile_keeps_phage_without_genus(tmp_path):
 
 def test_opal_rank_range_includes_species():
     assert opal_rank_range("genus") == "genus,species"
-    assert opal_rank_range("species") == "species,species"
+    assert opal_rank_range("species") == "genus,species"
 
 
 def test_series_to_counts_skips_unclassified():
