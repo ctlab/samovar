@@ -143,11 +143,12 @@ def test_autocheck_taxid_types_mismatch():
         )
 
 
-def test_autocheck_foreign_numeric_is_gtdb():
+def test_autocheck_missing_numeric_is_unknown():
     from samovar.taxonomy import infer_taxid_type
 
-    # Hash-like GTDB node id that is not in NCBI nodes.dmp
-    assert infer_taxid_type(["2147483000"], ncbi_ids={"562", 562}) == "gtdb"
+    # A numeric ID absent from a local taxdump does not prove a GTDB namespace.
+    assert infer_taxid_type(["2147483000"], ncbi_ids={"562", 562}) == "unknown"
+    assert infer_taxid_type(["562", "2147483000"], ncbi_ids={"562", 562}) == "ncbi"
 
 
 def test_autocheck_from_abundance_tables():
@@ -160,3 +161,14 @@ def test_autocheck_from_abundance_tables():
     }
     with pytest.raises(TaxidTypeMismatchError):
         autocheck_taxid_types_from_tables(tables, fatal=True)
+
+
+def test_missing_numeric_ids_do_not_block_ncbi_annotation():
+    from samovar.taxonomy import autocheck_taxid_types
+
+    types = autocheck_taxid_types(
+        {"kraken": ["1000000002", "0"], "kraken2": ["562"],
+         "mixed_known_and_missing": ["562", "1000000002"]},
+        ncbi_ids={"562", 562}, fatal=True,
+    )
+    assert types == {"kraken": "unknown", "kraken2": "ncbi", "mixed_known_and_missing": "ncbi"}

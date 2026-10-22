@@ -28,6 +28,10 @@ def main():
     parser.add_argument('--index', default=None, help='Name to record in the install config databases block')
     parser.add_argument('--flags', default="", help='Extra CLI flags stored with --index')
     parser.add_argument(
+        '--minimizer-len', type=int, choices=range(1, 31), metavar='N',
+        help='Kraken/KrakenUniq minimizer length (default: 12–15 based on library size)',
+    )
+    parser.add_argument(
         '--threads',
         type=int,
         default=1,
@@ -37,12 +41,15 @@ def main():
     args = parser.parse_args()
     # If type is 'kraken', use krakenunique processing
     db_type = 'krakenunique' if args.type == 'kraken' else args.type
+    if args.minimizer_len is not None and db_type != 'krakenunique':
+        parser.error('--minimizer-len is only supported for kraken/krakenunique builds')
     build_database_from_config(
         args.config_path,
         db_type=db_type,
         db_path=args.db_path,
         example_omit=args.example_omit,
         threads=max(1, int(args.threads)),
+        minimizer_len=args.minimizer_len,
     )
     if args.index:
         from samovar.genome_index import register_database
@@ -52,4 +59,4 @@ def main():
         print(f"Indexed database {db_type}/{args.index} -> {args.db_path}")
 
 if __name__ == '__main__':
-    main() 
+    main()

@@ -644,7 +644,8 @@ def write_krakenuniq_skips(db_path: str, skips: List[KrakenUniqLibrarySkip]) -> 
 
 def build_database_krakenunique(
     db_path: str = "krakenuniq_db",
-    threads: int = 1
+    threads: int = 1,
+    minimizer_len: Optional[int] = None,
 ) -> None:
     """Build a custom KrakenUniq database from the library of sequences.
     
@@ -653,6 +654,7 @@ def build_database_krakenunique(
     Args:
         db_path (str, optional): Path to the database directory. Defaults to "krakenuniq_db".
         threads (int, optional): Number of threads to use for building. Defaults to 1.
+        minimizer_len: Override the library-sized minimizer index (12–15 by default).
     
     Note:
         Building a large database can be memory-intensive and time-consuming.
@@ -676,11 +678,23 @@ def build_database_krakenunique(
         raise RuntimeError("jellyfish not found. Import it next to krakenuniq (./install.sh full ask).")
 
     library = Path(db_path) / "library"
-    if not any(library.rglob("*.fa")) and not any(library.rglob("*.fna")):
+    library_files = list(library.rglob("*.fa")) + list(library.rglob("*.fna"))
+    if not library_files:
         raise FileNotFoundError(
             f"No nucleotide FASTA under {library}. "
             "KrakenUniq indexes library/*.fa; see missing-taxa.tsv for genomes that were skipped."
         )
+    if minimizer_len is None:
+        library_bytes = sum(path.stat().st_size for path in library_files)
+        minimizer_len = 12
+        # db_sort allocates 8 * 4**length bytes even for a tiny library.
+        # Grow beyond the 128 MiB baseline only when the library is as large.
+        for length in range(13, 16):
+            if 8 * 4**length > library_bytes:
+                break
+            minimizer_len = length
+    if not 1 <= minimizer_len < 31:
+        raise ValueError("KrakenUniq minimizer length must be between 1 and 30")
     taxonomy = Path(db_path) / "taxonomy"
     if not (taxonomy / "nodes.dmp").is_file() or not (taxonomy / "names.dmp").is_file():
         raise FileNotFoundError(
@@ -698,10 +712,12 @@ def build_database_krakenunique(
 
     build_cmd = [
         build_bin,
+        # Existing indexes/maps may contain synthetic IDs or a different index
+        # length. Rebuild from library/ rather than silently reusing those files.
+        "--rebuild",
         "--db", db_path,
         "--threads", str(threads),
-        "--taxids-for-genomes",
-        "--taxids-for-sequences"
+        "--minimizer-len", str(minimizer_len),
     ]
     
     # Run command with modified environment
@@ -716,6 +732,7 @@ def build_database_from_config(
     db_path: str = "tests_outs/db",
     example_omit: Optional[bool] = None,
     threads: int = 1,
+    minimizer_len: Optional[int] = None,
 ):
     """
     Build database from config file.
@@ -729,6 +746,7 @@ def build_database_from_config(
             auto-detect ``test_genomes`` input directories.
         threads: Workers for ``kaiju-mkbwt -n`` and ``kraken2-build --threads``.
             Same count as ``samovar prepare --cores``.
+        minimizer_len: Optional KrakenUniq minimizer length; default scales with the library.
     """
     threads = max(1, int(threads))
     from samovar.example_db import (
@@ -845,7 +863,7 @@ def build_database_from_config(
             )
         # Dumps belong in taxonomy/, not next to the FASTA. Reuse the configured taxdump.
         get_taxonomy_db(db_path=os.path.join(db_path, "taxonomy"))
-        build_database_krakenunique(db_path=db_path, threads=threads)
+        build_database_krakenunique(db_path=db_path, threads=threads, minimizer_len=minimizer_len)
     elif db_type in {"kmer_encoder", "metauto", "kmerenc"}:
         from samovar.kmer_encoder import train_encoder
 

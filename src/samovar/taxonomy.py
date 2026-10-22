@@ -212,7 +212,7 @@ def classify_taxid_token(
     if ncbi_ids:
         if digits in ncbi_ids or int(digits) in ncbi_ids:
             return TAXID_NCBI
-        return TAXID_GTDB
+        return TAXID_UNKNOWN
     return TAXID_NCBI
 
 
@@ -247,7 +247,7 @@ def infer_taxid_type(
     *,
     ncbi_ids: Optional[Any] = None,
 ) -> str:
-    """Majority taxID namespace for a column (ignores unclassified)."""
+    """Namespace evidence for a column; missing numeric IDs do not imply GTDB."""
     seen = set()
     membership = ncbi_ids
     for raw in values:
@@ -257,6 +257,8 @@ def infer_taxid_type(
         seen.add(kind)
     if not seen:
         return TAXID_UNCLASSIFIED
+    if seen & {TAXID_NCBI, TAXID_GTDB}:
+        seen.discard(TAXID_UNKNOWN)
     if len(seen) > 1:
         return TAXID_MIXED
     return next(iter(seen))
