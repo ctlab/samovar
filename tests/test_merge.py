@@ -113,15 +113,26 @@ def test_cli_help_lists_merge():
     assert "--mode regenerated" in result.stdout
 
 
-def test_merge_rejects_duplicate_sample_names(tmp_path):
+def test_merge_renames_duplicate_samples_consistently(tmp_path):
     a = _seed_run(tmp_path / "a", "same")
     b = _seed_run(tmp_path / "b", "same")
-    with pytest.raises(MergeError, match="Sample names need to be distinct"):
-        merge_runs([a, b], tmp_path / "out", "initial")
-    rc = merge_main(
-        ["--mode", "initial", "--output_dir", str(tmp_path / "cli"), str(a), str(b)]
-    )
-    assert rc == 1
+    for source in (a, b):
+        logs = source / "initial_reports/logs"
+        logs.mkdir()
+        (logs / "kaiju-multi.log").write_text(str(source))
+    dest = tmp_path / "out"
+    meta = merge_runs([a, b], dest, "regenerated")
+    combined = pd.read_csv(dest / "initial_annotations/combined_annotation_table.csv")
+    assert set(combined['sample']) == {'run1__same', 'run2__same'}
+    regen = pd.read_csv(dest / 'regenerated_annotations/combined_annotation_table.csv')
+    assert set(regen['sample']) == {'run1__same_k1', 'run2__same_k1'}
+    abundance = pd.read_csv(dest / 'regenerated/.regenerated_abundance/dummy.csv')
+    assert set(abundance.columns) == {'taxid', 'N_run1__same', 'N_run2__same'}
+    for index, source in enumerate((a, b), 1):
+        target = meta['sample_maps'][str(source)]['same']
+        assert (dest / 'initial' / f'{target}_R1.fastq').is_file()
+        assert (source / 'initial/same_R1.fastq').is_file()
+        assert (dest / f'.log/merge_sources/run{index}/initial_reports/logs/kaiju-multi.log').read_text() == str(source)
 
 
 def test_merge_initial_unions_annotations_redoes_downstream(tmp_path):
@@ -279,3 +290,24 @@ def test_merge_regenerated_exec_starts_at_reprofile(tmp_path):
     assert list((dest / "reprofiled_annotations").glob("*.csv")) or (
         dest / "reprofiled_annotations" / "trained_model.joblib"
     ).is_file()
+
+
+def test_merge_rejects_different_database_under_same_annotator_name(tmp_path):
+    from samovar.merge import assert_matching_annotators
+
+    sources = [tmp_path / 'a', tmp_path / 'b']
+    for i, src in enumerate(sources):
+        folder = src / '.log/configs'
+        folder.mkdir(parents=True)
+        (folder / 'config_init.yaml').write_text(yaml.safe_dump({'run_config': [
+            {'run_name': 'k2', 'type': 'kraken2', 'cmd': 'kraken2', 'db_path': f'/db/{i}'}
+        ]}))
+    with pytest.raises(MergeError, match='different annotator definitions'):
+        assert_matching_annotators(sources)
+
+
+def test_merge_sample_mapping_requires_artifacts(tmp_path):
+    from samovar.merge import _sample_maps
+
+    with pytest.raises(MergeError, match='no sample artifacts'):
+        _sample_maps([tmp_path], 'initial', False)
