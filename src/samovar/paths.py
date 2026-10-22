@@ -645,11 +645,11 @@ def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
 
 
 def shell_source_install_env_snippet(*, root_expr: str = '"$SAMOVAR_ROOT"') -> str:
-    """Bash fragment: source ``env`` next to the recorded main config."""
-    return f"""# Load install env from the main config location (build/config_path).
+    """Bash: source the selected config's env, honoring an explicit override."""
+    return f"""# Load the explicit config's env, else the recorded install env.
 XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
-_SAMOVAR_CFG=""
-if [ -f {root_expr}/build/config_path ]; then
+_SAMOVAR_CFG="${{SAMOVAR_CONFIG:-}}"
+if [ -z "$_SAMOVAR_CFG" ] && [ -f {root_expr}/build/config_path ]; then
   _SAMOVAR_CFG="$(tr -d '[:space:]' < {root_expr}/build/config_path)"
 fi
 if [ -n "$_SAMOVAR_CFG" ]; then
@@ -658,6 +658,8 @@ if [ -n "$_SAMOVAR_CFG" ]; then
     # shellcheck disable=SC1090
     . "$(dirname "$_SAMOVAR_CFG")/env"
   fi
+  # An env file may still export the path of an older installation.
+  export SAMOVAR_CONFIG="$_SAMOVAR_CFG"
 elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
   # shellcheck disable=SC1090
   . "$XDG_CONFIG_HOME/samovar/env"

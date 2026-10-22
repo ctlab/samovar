@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -18,7 +20,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from samovar.paths import resolve_executable
+from samovar.main_config import imported_flags_for_names, iter_tools
+from samovar.paths import load_config, resolve_executable
 from samovar.seqio import assembly_read_libraries
 
 MAG_SUFFIXES = (".fa", ".fna", ".fasta", ".fa.gz", ".fna.gz")
@@ -418,8 +421,9 @@ def run_metaflye(
     """Assemble FASTQ with metaFlye (``flye --meta``); write contig FASTA to dest.
 
     Same shape as ``run_megahit``: native Flye CLI, contig FASTA copied to the
-    assembler-contract ``-o``. ONT R10 uses ``--nano-hq`` unless ``extra``
-    already names a read type. A non-empty R2 is a second file of that type.
+    assembler-contract ``-o``. Default to noisy ONT (``--nano-raw``); read-mode
+    flags in ``extra`` override imported Flye flags. A non-empty R2 is another
+    file of the same type. Flye's explicit no-assembly outcome yields empty FASTA.
     """
     threads = _job_threads("flye", threads)
     out = as_path(dest)
@@ -427,17 +431,42 @@ def run_metaflye(
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True, exist_ok=True)
+    read_modes = {
+        "--nano-raw", "--nano-hq", "--nano-corr", "--pacbio-raw",
+        "--pacbio-corr", "--pacbio-hifi", "--subassemblies",
+    }
+    imported = shlex.split(imported_flags_for_names(
+        iter_tools(load_config()), "flye", "metaflye", "meta-flye"
+    ))
     extra_args = [str(x) for x in (extra or [])]
+    if any(arg in read_modes for arg in extra_args):
+        imported = [arg for arg in imported if arg not in read_modes]
+    extra_args = imported + extra_args
+    selected_modes = {arg for arg in extra_args if arg in read_modes}
+    if len(selected_modes) > 1:
+        raise ValueError("Flye requires exactly one read mode")
+    read_mode = next(iter(selected_modes), "--nano-raw")
+    extra_args = [arg for arg in extra_args if arg not in read_modes]
     cmd = [which_tool("flye", exe), "--meta", "-o", str(work), "-t", str(int(threads))]
-    if not any(
-        arg.startswith("--nano-") or arg.startswith("--pacbio-") for arg in extra_args
-    ):
-        cmd.append("--nano-hq")
+    cmd.extend(extra_args)
+    # Flye's read-mode option takes the following filenames (nargs='+').
+    cmd.append(read_mode)
     cmd.append(str(r1))
     if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size > 0:
         cmd.append(str(r2))
-    cmd.extend(extra_args)
-    _run(cmd)
+    try:
+        _run(cmd)
+    except subprocess.CalledProcessError as exc:
+        log_path = work / "flye.log"
+        log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        if exc.returncode != 1 or not any(message in log for message in (
+            "No contigs were assembled",
+            "No disjointigs were assembled",
+        )):
+            raise
+        logging.getLogger(__name__).warning("Flye assembled no contigs; writing empty FASTA (see %s)", log_path)
+        _touch_empty_fasta(out)
+        return out
     contigs = work / "assembly.fasta"
     out.parent.mkdir(parents=True, exist_ok=True)
     if contigs.is_file() and contigs.stat().st_size > 0:
@@ -1674,6 +1703,11 @@ def run_assembly_annotator(
     selected = work / "bins_selected"
     if not skip_new_bins:
         run_assembler(r1, r2, str(contigs), threads=threads, name=assembler)
+        if not _fasta_has_records(contigs):
+            feature = "MAP_MAG_ID" if mode_early == "map-initial" else "MAG_ID"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(f"seq\ttaxID\t{feature}\n", encoding="utf-8")
+            return out
         genes = work / "genes"
         try:
             run_gene_caller(str(contigs), str(genes), threads=threads, name=gene_caller)

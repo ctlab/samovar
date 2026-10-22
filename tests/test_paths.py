@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+
+import pytest
 
 from samovar.paths import (
     PACKAGE_VERSION,
@@ -415,3 +418,29 @@ def test_output_dir_cli_aliases_and_shell_override(tmp_path):
         check=True,
     )
     assert short.stdout.strip() == str(dest)
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_shell_install_env_preserves_config_selection(tmp_path, explicit):
+    import subprocess
+    from samovar.paths import shell_source_install_env_snippet
+
+    root = tmp_path / "repo"
+    (root / "build").mkdir(parents=True)
+    default = tmp_path / "default" / "config.json"
+    override = tmp_path / "override" / "config.json"
+    for config, marker in ((default, "default"), (override, "override")):
+        config.parent.mkdir()
+        config.write_text("{}")
+        (config.parent / "env").write_text(
+            f'export SELECTED_TEST_ENV={marker}\nexport SAMOVAR_CONFIG="{default}"\n'
+        )
+    (root / "build" / "config_path").write_text(str(default))
+    env = os.environ.copy()
+    env["SAMOVAR_ROOT"] = str(root)
+    env.pop("SAMOVAR_CONFIG", None)
+    if explicit:
+        env["SAMOVAR_CONFIG"] = str(override)
+    script = shell_source_install_env_snippet() + '\nprintf "%s\\n%s\\n" "$SAMOVAR_CONFIG" "$SELECTED_TEST_ENV"\n'
+    output = subprocess.check_output(["bash", "-eu", "-c", script], env=env, text=True)
+    assert output.splitlines() == ([str(override), "override"] if explicit else [str(default), "default"])

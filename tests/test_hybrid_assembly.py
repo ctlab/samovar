@@ -60,6 +60,7 @@ def test_hybrid_generation_staging_qc_and_assembly(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("assembler,expected", [("megahit", "illumina"), ("flye", "ont"), ("spades", "both")])
 def test_legacy_flattened_hybrid_routes_types(tmp_path, monkeypatch, assembler, expected):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
     r1 = _hybrid(tmp_path / "reads")
     for path in r1.parent.glob("1_illumina*"):
         path.unlink()
@@ -67,7 +68,7 @@ def test_legacy_flattened_hybrid_routes_types(tmp_path, monkeypatch, assembler, 
     observed = []
 
     def run(cmd):
-        read_args = ("-r",) if assembler == "megahit" else (("-s", "--nanopore") if assembler == "spades" else ("--nano-hq",))
+        read_args = ("-r",) if assembler == "megahit" else (("-s", "--nanopore") if assembler == "spades" else ("--nano-raw",))
         for flag in read_args:
             reads = Path(cmd[cmd.index(flag) + 1])
             observed.extend(r[0].split("read_type:")[1].strip() for r in iter_fastq_records(reads))

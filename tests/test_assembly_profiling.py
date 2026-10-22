@@ -344,6 +344,7 @@ def test_metaflye_invokes_flye_like_megahit(tmp_path, monkeypatch):
     assert "--meta" in cmd
     assert "--nano-hq" not in cmd
     assert "--nano-raw" in cmd
+    assert cmd[cmd.index("--nano-raw") + 1:] == [str(r1)]
     assert cmd[cmd.index("-t") + 1] == "3"
     assert str(r1) in cmd
     assert str(r2) not in cmd
@@ -604,3 +605,107 @@ def test_composite_annotator(tmp_path, monkeypatch):
     }:
         assert tax_cols
         assert any("MAG_ID" in c for c in feat_cols)
+
+
+@pytest.mark.parametrize("imported,extra,expected", [
+    ("", [], "--nano-raw"),
+    ("--nano-hq --read-error 0.03", [], "--nano-hq"),
+    ("--nano-hq", ["--nano-raw"], "--nano-raw"),
+    ("--nano-raw", ["--pacbio-hifi"], "--pacbio-hifi"),
+])
+def test_metaflye_read_mode_and_native_argument_order(tmp_path, monkeypatch, imported, extra, expected):
+    import json
+    from samovar.assembly_profiling import run_metaflye
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"tools": {"flye": {"flags": imported}}}))
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(config))
+    monkeypatch.setattr("samovar.assembly_profiling.which_tool", lambda *args: "/configured/flye")
+    calls = []
+    monkeypatch.setattr("samovar.assembly_profiling._run", lambda cmd: calls.append(cmd))
+    r1, r2 = tmp_path / "r1.fastq", tmp_path / "r2.fastq"
+    r1.write_text("@r\nAC\n+\nII\n")
+    r2.write_text("@r\nGT\n+\nII\n")
+    run_metaflye(str(r1), str(r2), str(tmp_path / "out.fa"), extra=extra)
+    cmd = calls[0]
+    assert cmd[cmd.index(expected) + 1:] == [str(r1), str(r2)]
+    assert sum(x.startswith(("--nano-", "--pacbio-")) for x in cmd) == 1
+    if "--read-error" in imported:
+        assert cmd[cmd.index("--read-error") + 1] == "0.03"
+
+
+@pytest.mark.parametrize("message", [
+    "No contigs were assembled - pipeline stopped",
+    "No disjointigs were assembled - pipeline stopped",
+    "No disjointigs were assembled - please check if the read type and genome size parameters are correct",
+])
+@pytest.mark.parametrize("mode", ["homology", "map-initial"])
+def test_metaflye_no_assembly_continues_composite_pipeline(tmp_path, monkeypatch, message, mode):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.delenv("SAMOVAR_ASSEMBLY_EXTRA", raising=False)
+    monkeypatch.setattr("samovar.assembly_profiling.which_tool", lambda *args: "/configured/flye")
+
+    def fail_empty(cmd):
+        work = Path(cmd[cmd.index("-o") + 1])
+        (work / "flye.log").write_text(f"[ERROR] {message}\n[ERROR] Pipeline aborted\n")
+        raise subprocess.CalledProcessError(1, cmd)
+    monkeypatch.setattr("samovar.assembly_profiling._run", fail_empty)
+    r1 = tmp_path / "sample_R1.fastq"
+    r1.write_text("@r|read_type:ont\nACGT\n+\nIIII\n")
+    output = tmp_path / "annotator.tsv"
+    run_assembly_annotator(
+        str(r1), "", str(output), assembler="metaflye", gene_caller="translate",
+        binners=["identity"], binner_qc="identity", binner_combine="identity",
+        mag_taxonomy="identity", aligner="identity", mag_quantifier="identity", mag_mode=mode,
+    )
+    assert (tmp_path / "annotator" / "contigs.fa").read_bytes() == b""
+    feature = "MAP_MAG_ID" if mode == "map-initial" else "MAG_ID"
+    assert output.read_text() == f"seq\ttaxID\t{feature}\n"
+    assert not (tmp_path / "annotator" / "genes").exists()
+
+
+@pytest.mark.parametrize("assembler", ["megahit", "metaflye"])
+def test_assemblers_success_without_contigs_writes_empty_fasta(tmp_path, monkeypatch, assembler):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr("samovar.assembly_profiling.which_tool", lambda *args: "/configured/assembler")
+    monkeypatch.setattr("samovar.assembly_profiling._run", lambda cmd: None)
+    r1 = tmp_path / "sample_R1.fastq"
+    r1.write_text("@r\nACGT\n+\nIIII\n")
+    dest = tmp_path / "out.fa"
+    dest.write_text(">old\nACGT\n")
+    run_assembler(str(r1), dest=str(dest), name=assembler)
+    assert dest.read_bytes() == b""
+
+
+@pytest.mark.parametrize("code,log", [
+    (1, "[ERROR] Looks like the system ran out of memory"),
+    (1, "[ERROR] flye-modules died with <Signals.SIGFPE: 8>"),
+    (2, "[ERROR] No contigs were assembled - pipeline stopped"),
+    (-9, "[ERROR] No contigs were assembled - pipeline stopped"),
+    (1, None),
+])
+def test_metaflye_real_failures_propagate(tmp_path, monkeypatch, code, log):
+    from samovar.assembly_profiling import run_metaflye
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr("samovar.assembly_profiling.which_tool", lambda *args: "/configured/flye")
+    dest = tmp_path / "out.fa"
+    # A no-contigs message from an earlier run must not mask the new failure.
+    stale_work = tmp_path / "out.metaflye"
+    stale_work.mkdir()
+    (stale_work / "flye.log").write_text("No contigs were assembled - pipeline stopped\n")
+
+    def fail(cmd):
+        if log is not None:
+            (stale_work / "flye.log").write_text(log)
+        raise subprocess.CalledProcessError(code, cmd)
+    monkeypatch.setattr("samovar.assembly_profiling._run", fail)
+    with pytest.raises(subprocess.CalledProcessError):
+        run_metaflye("reads.fastq", dest=str(dest))
+    assert not dest.exists()
+
+
+def test_metaflye_rejects_conflicting_read_modes(tmp_path, monkeypatch):
+    from samovar.assembly_profiling import run_metaflye
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    with pytest.raises(ValueError, match="exactly one read mode"):
+        run_metaflye("reads.fastq", dest=str(tmp_path / "out.fa"), extra=["--nano-raw", "--nano-hq"])
