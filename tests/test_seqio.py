@@ -80,7 +80,13 @@ def test_fastq_discovery(tmp_path):
         handle.write("@a\nT\n+\nI\n")
     (tmp_path / "other_R1.fq").write_text("@b\nA\n+\nI\n")
     (tmp_path / "other_R2.fq").write_text("@b\nT\n+\nI\n")
-    assert list_fastq_samples(tmp_path) == ["other", "sample_k1"]
+    (tmp_path / "bare.fastq").write_text("@c\nA\n+\nI\n")
+    with gzip.open(tmp_path / "compressed.fq.gz", "wt") as handle:
+        handle.write("@d\nT\n+\nI\n")
+    (tmp_path / "orphan_R2.fastq").write_text("@e\nT\n+\nI\n")
+    assert list_fastq_samples(tmp_path) == ["bare", "compressed", "other", "sample_k1"]
+    assert find_fastq_mate(tmp_path, "bare", "R1") == tmp_path / "bare.fastq"
+    assert find_fastq_mate(tmp_path, "bare", "R2") is None
     assert find_fastq_mate(tmp_path, "sample_k1", "R1") == r1
     assert has_r1_reads(tmp_path)
     dest = tmp_path / "cat.fastq"
@@ -140,7 +146,7 @@ def test_fastq_ignores_camisim_tech_duplicates(tmp_path):
     assert list_fastq_samples(tmp_path) == ["1_full", "2_full"]
 
 
-@pytest.mark.parametrize("other", ["sample_R1.fq", "sample_R1.fastq.gz", "sample_1.fastq"])
+@pytest.mark.parametrize("other", ["sample_R1.fq", "sample_R1.fastq.gz", "sample_1.fastq", "sample.fastq", "sample.fq.gz"])
 def test_fastq_discovery_rejects_colliding_names(tmp_path, other):
     first = tmp_path / "sample_R1.fastq"
     second = tmp_path / other

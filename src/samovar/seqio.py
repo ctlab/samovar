@@ -47,6 +47,9 @@ FASTQ_R2_SUFFIXES = (
     "_2.fq",
 )
 
+# Bare FASTQ names are single-end; explicit mate suffixes take precedence.
+FASTQ_SE_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
+
 PROCESSED_FASTA_EXTS = (
     ".fa.gz",
     ".fa",
@@ -292,7 +295,7 @@ def list_fasta_files(
 def mate_suffixes(mate: str) -> Tuple[str, ...]:
     mate = mate.upper()
     if mate == "R1":
-        return FASTQ_R1_SUFFIXES
+        return FASTQ_R1_SUFFIXES + FASTQ_SE_SUFFIXES
     if mate == "R2":
         return FASTQ_R2_SUFFIXES
     raise ValueError(f"mate must be R1 or R2, not {mate!r}")
@@ -300,7 +303,9 @@ def mate_suffixes(mate: str) -> Tuple[str, ...]:
 
 def sample_name_from_r1(path: PathLike) -> str:
     name = as_path(path).name
-    for suffix in FASTQ_R1_SUFFIXES:
+    if name.endswith(FASTQ_R2_SUFFIXES):
+        raise ValueError(f"Not a recognised R1 FASTQ name: {path}")
+    for suffix in mate_suffixes("R1"):
         if name.endswith(suffix):
             return name[: -len(suffix)]
     raise ValueError(f"Not a recognised R1 FASTQ name: {path}")
@@ -312,6 +317,10 @@ def r2_for_r1(r1: PathLike) -> Path:
     for s1, s2 in zip(FASTQ_R1_SUFFIXES, FASTQ_R2_SUFFIXES):
         if name.endswith(s1):
             return path.with_name(name[: -len(s1)] + s2)
+    if not name.endswith(FASTQ_R2_SUFFIXES):
+        for suffix in FASTQ_SE_SUFFIXES:
+            if name.endswith(suffix):
+                return path.with_name(name[: -len(suffix)] + "_R2" + suffix)
     raise ValueError(f"Not a recognised R1 FASTQ name: {r1}")
 
 
@@ -368,7 +377,9 @@ def list_fastq_samples(directory: PathLike, *, include_libraries: bool = False) 
         if not path.is_file():
             continue
         name = path.name
-        for suffix in FASTQ_R1_SUFFIXES:
+        if name.endswith(FASTQ_R2_SUFFIXES):
+            continue
+        for suffix in mate_suffixes("R1"):
             if name.endswith(suffix):
                 sample = name[: -len(suffix)]
                 if sample not in seen:
