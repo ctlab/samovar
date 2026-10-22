@@ -32,7 +32,7 @@ from samovar.main_config import (
     tool_path,
 )
 from samovar.paths import load_config
-from samovar.seqio import concat_fastq_files, fastq_pair_paths, is_fastq_name, open_text
+from samovar.seqio import concat_fastq_files, fastq_pair_paths, find_fastq_mate, is_fastq_name, open_text
 from samovar.table_regenerators import extra_flags_argv
 
 READS_GENERATOR_GROUPS = ("reads_generator", "metagenome_generator")
@@ -531,6 +531,27 @@ def alias_fastq_with_extra_ids(
     return written
 
 
+def has_hybrid_reads(path: Union[str, Path]) -> bool:
+    """Recognize explicitly tagged short + ONT reads in one canonical FASTQ."""
+    from samovar.camisim import extract_read_type
+    from samovar.seqio import iter_fastq_records
+
+    kinds = set()
+    if not Path(path).is_file():
+        return False
+    for header, *_ in iter_fastq_records(path):
+        tech = extract_read_type(header)
+        if not tech:
+            return False  # Untagged input needs an explicit generator selection.
+        if tech in {"ont", "nanosim3"}:
+            kinds.add("long")
+        elif tech in {"illumina", "art", "wgsim", "bgi", "mgi"}:
+            kinds.add("short")
+        if len(kinds) == 2:
+            return True
+    return False
+
+
 def _simulate_camisim_sample(
     name, counts, available_genomes, output_dir, sample, annotator, *,
     model, cpus, seed, gzip_reads, flags, ids, config,
@@ -563,6 +584,8 @@ def _simulate_camisim_sample(
     r1 = work / "initial" / "1_full_R1.fastq"
     if not r1.is_file() or not r1.stat().st_size:
         raise RuntimeError(f"{name} produced no regenerated reads for {sample}/{annotator}")
+    if name == "hybrid" and not has_hybrid_reads(r1):
+        raise RuntimeError(f"hybrid regeneration needs both short and ONT reads for {sample}/{annotator}")
     p1, p2 = fastq_pair_paths(
         str(Path(output_dir) / f"{sample}_{annotator}"), gzip_reads=gzip_reads
     )
@@ -573,6 +596,11 @@ def _simulate_camisim_sample(
                 shutil.copyfileobj(source, target)
         else:
             dest.unlink(missing_ok=True)
+    # A stale short-only cache may have used the other compression format.
+    for alternate in fastq_pair_paths(
+        str(Path(output_dir) / f"{sample}_{annotator}"), gzip_reads=not gzip_reads
+    ):
+        Path(alternate).unlink(missing_ok=True)
     # Preserve the original libraries alongside the classifier's merged R1.
     if cfg.get("mode") == "hybrid":
         for src in (work / "initial").glob("1_*_R*.fastq"):
@@ -581,6 +609,8 @@ def _simulate_camisim_sample(
             dest = Path(output_dir) / (f"{sample}_{annotator}_" + src.name[2:] + (".gz" if gzip_reads else ""))
             with open_text(src) as source, open_text(dest, "wt") as target:
                 shutil.copyfileobj(source, target)
+            alternate = dest.with_suffix("") if gzip_reads else Path(str(dest) + ".gz")
+            alternate.unlink(missing_ok=True)
     if ids:
         alias_fastq_with_extra_ids(p1, p2, ids, gzip_reads=gzip_reads)
 
@@ -740,9 +770,14 @@ def simulate_from_sample_tables(
 
             from samovar.add_annotator import annotator_fastqs_complete
 
-            if annotator_fastqs_complete(
+            cached = annotator_fastqs_complete(
                 output_dir, sample_names, annotator_name, gzip_reads=gzip_reads
-            ):
+            )
+            if cached and canon == "hybrid":
+                cached = all(has_hybrid_reads(
+                    find_fastq_mate(output_dir, f"{sample}_{annotator_name}") or ""
+                ) for sample in sample_names)
+            if cached:
                 logger.info(
                     "Skipping %s for %s: regenerated FASTQs already present",
                     canon,

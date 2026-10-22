@@ -544,3 +544,36 @@ def test_prepare_yaml_export_formats(tmp_path):
     config = PipelineConfig.from_args(args)
     assert config.export_formats == ["cami", "kraken2_mpa"]
     assert config.export_taxonomy == "gtdb"
+
+
+def test_prepare_preserves_tagged_hybrid_generator(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "s_R1.fastq").write_text(
+        "@short|taxid:562|read_type:illumina\nACGT\n+\nIIII\n"
+        "@long|taxid:562|read_type:ont\nACGTACGT\n+\nIIIIIIII\n"
+    )
+    args = argparse.Namespace(input_config=None, input_dir=str(reads), output_dir=str(tmp_path / "out"))
+    assert PipelineConfig.from_args(args).reads_generator == "hybrid"
+    args.reads_generator = "iss"
+    assert PipelineConfig.from_args(args).reads_generator == "iss"
+    args.reads_generator = None
+    config = tmp_path / "input.yaml"
+    config.write_text(yaml.safe_dump({"input_dir": str(reads)}))
+    args.input_config = str(config)
+    assert PipelineConfig.from_args(args).reads_generator == "hybrid"
+    config.write_text(yaml.safe_dump({"input_dir": str(reads), "reads_generator": "iss"}))
+    assert PipelineConfig.from_args(args).reads_generator == "iss"
+
+
+def test_prepare_inherits_pending_hybrid_generation(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    out = tmp_path / "run"
+    generated = out / ".generate" / "configs" / "camisim.yaml"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("mode: hybrid\n")
+    args = argparse.Namespace(input_config=None, input_dir=str(out / "initial"), output_dir=str(out))
+    assert PipelineConfig.from_args(args).reads_generator == "hybrid"
+    args.reads_generator = "iss"
+    assert PipelineConfig.from_args(args).reads_generator == "iss"

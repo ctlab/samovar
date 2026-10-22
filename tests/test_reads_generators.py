@@ -284,6 +284,13 @@ def test_regeneration_uses_selected_simulator(tmp_path, monkeypatch, generator, 
     if generator.startswith("meta:"):
         config = {"metagenome_generator": generator.split(":")[1],
                   "metagenome_generator_flags": "--custom-option value"}
+    if generator == "hybrid":
+        out.mkdir()
+        for sample in tables:
+            stale, _ = fastq_pair_paths(out / f"{sample}_kaiju", gzip_reads=not gzip_reads)
+            from samovar.seqio import open_text
+            with open_text(stale, "wt") as handle:
+                handle.write("@stale|taxid:562|read_type:illumina\nACGT\n+\nIIII\n")
     simulate_from_sample_tables(
         tables, genomes, str(out), annotator_cols={"kaiju": "N_kaiju"},
         reads_generator="iss" if generator.startswith("meta:") else generator,
@@ -299,6 +306,9 @@ def test_regeneration_uses_selected_simulator(tmp_path, monkeypatch, generator, 
     assert all(call[2] == "--custom-option value" for call in calls)
     for sample in tables:
         r1, r2 = fastq_pair_paths(out / f"{sample}_kaiju", gzip_reads=gzip_reads)
+        if generator == "hybrid":
+            from samovar.seqio import list_fastq_samples
+            assert sample + "_kaiju" in list_fastq_samples(out)
         records = list(iter_fastq_records(r1))
         lengths = {len(rec[1].strip()) for rec in records}
         assert lengths == ({150, 4000} if generator == "hybrid" else

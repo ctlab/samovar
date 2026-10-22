@@ -433,6 +433,7 @@ class PipelineConfig:
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
         config = cls()
+        input_config = {}
         config.cores = getattr(args, 'cores', 1) or 1
         config.gpu = bool(getattr(args, "gpu", False))
         requested_mem = getattr(args, "mem_mb", None)
@@ -1041,6 +1042,26 @@ class PipelineConfig:
             merged_p = dict(getattr(config, by_attr) or {})
             merged_p.update(by_val)
             setattr(config, by_attr, merged_p)
+        # Preserve a tagged hybrid community unless YAML or CLI selected a generator.
+        selected_generator = (
+            getattr(args, "reads_generator", None) or getattr(args, "metagenome_generator", None)
+            or input_config.get("reads_generator") or input_config.get("reads-generator")
+            or input_config.get("metagenome_generator")
+        )
+        if not selected_generator:
+            from samovar.reads_generators import has_hybrid_reads
+            from samovar.seqio import list_r1_files
+
+            generated = Path(config.output_dir) / ".generate" / "configs" / "camisim.yaml"
+            initial = Path(config.output_dir) / "initial"
+            own_initial = not config.input_dir or Path(config.input_dir).resolve() == initial.resolve()
+            generated_mode = ""
+            if own_initial and generated.is_file():
+                generated_mode = (yaml.safe_load(generated.read_text()) or {}).get("mode", "")
+            if generated_mode == "hybrid" or (config.input_dir and any(
+                has_hybrid_reads(p) for p in list_r1_files(config.input_dir)
+            )):
+                config.reads_generator = "hybrid"
         cli_reads = getattr(args, "reads_generator", None)
         if cli_reads:
             config.reads_generator = require_known_reads_generator(cli_reads)
