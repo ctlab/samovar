@@ -88,6 +88,17 @@ SIDECARS = {
         "group": "assembler",
         "hint": "Optional Flye / metaFlye assembler (./install.sh metaFlye).",
     },
+    "spades": {
+        "python": None,
+        "packages": ["spades"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "spades.py",
+        "config_path_key": "spades_path",
+        "tool_keys": ("spades",),
+        "group": "assembler",
+        "hint": "Optional hybrid SPAdes assembler (./install.sh SPAdes).",
+    },
     "metax": {
         "python": None,
         "packages": ["metax=0.9.23=beta_0", "ma=1.1.4"],

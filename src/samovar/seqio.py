@@ -358,7 +358,7 @@ def _drop_duplicate_camisim_tech_samples(samples: Sequence[str]) -> List[str]:
     return out
 
 
-def list_fastq_samples(directory: PathLike) -> List[str]:
+def list_fastq_samples(directory: PathLike, *, include_libraries: bool = False) -> List[str]:
     directory = as_path(directory)
     if not directory.is_dir():
         return []
@@ -378,13 +378,13 @@ def list_fastq_samples(directory: PathLike) -> List[str]:
     for sample in samples:
         for mate in ("R1", "R2"):
             find_fastq_mate(directory, sample, mate)
-    return _drop_duplicate_camisim_tech_samples(samples)
+    return samples if include_libraries else _drop_duplicate_camisim_tech_samples(samples)
 
 
-def list_r1_files(directory: PathLike) -> List[Path]:
+def list_r1_files(directory: PathLike, *, include_libraries: bool = False) -> List[Path]:
     directory = as_path(directory)
     files: List[Path] = []
-    for sample in list_fastq_samples(directory):
+    for sample in list_fastq_samples(directory, include_libraries=include_libraries):
         found = find_fastq_mate(directory, sample, "R1")
         if found is not None:
             files.append(found)
@@ -566,6 +566,12 @@ def drop_r2_if_source_single_end(output_dir: PathLike) -> List[Path]:
         if not path.is_file() or not _fastq_r2_name(path.name):
             continue
         stem = _stem_before_r2(path.name) or ""
+        # A hybrid canonical R1 is SE, but its Illumina library is still paired.
+        tail = _CAMISIM_TECH_TAIL.search(stem)
+        if tail and tail.group(1).lower() in {"illumina", "art", "wgsim", "bgi", "mgi"}:
+            base = stem[:tail.start()]
+            if any(find_fastq_mate(dest, f"{base}_{tech}") for tech in ("ont", "nanosim3")):
+                continue
         if all_se:
             drop = True
         else:
@@ -590,7 +596,7 @@ def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike, *, validate_only: b
     """Validate sample identities, then symlink/copy pairs unless validate_only."""
     src = as_path(src_dir).resolve()
     dst = as_path(dst_dir).resolve()
-    sources = list_r1_files(src)
+    sources = list_r1_files(src, include_libraries=True)
     list_fastq_samples(dst)
     if src == dst:
         return 0
@@ -683,3 +689,67 @@ def sibling_candidates(path: PathLike, taxid: str, suffixes: Sequence[str]) -> L
         seen.add(key)
         ordered.append(cand)
     return ordered
+
+
+@contextmanager
+def assembly_read_libraries(r1: PathLike, r2: PathLike = ""):
+    """Yield (short R1, short R2, ONT, typed) without guessing lost pairing.
+
+    Generated hybrids retain libraries beside the canonical classifier input.
+    Older flattened inputs can only recover short reads as an unpaired library.
+    Untagged inputs retain their caller's existing interpretation.
+    """
+    r1 = as_path(r1)
+    try:
+        stem = sample_name_from_r1(r1)
+    except ValueError:
+        stem = r1.stem
+    bases = [stem]
+    if stem.endswith("_full"):
+        bases.append(stem[:-5])
+    for base in bases:
+        short = []
+        long = []
+        present = set()
+        for tech in ("illumina", "art", "wgsim", "bgi", "mgi", "ont", "nanosim3"):
+            path = find_fastq_mate(r1.parent, f"{base}_{tech}")
+            kind = "long" if tech in {"ont", "nanosim3"} else "short"
+            if path:
+                present.add(kind)
+                if path.stat().st_size:
+                    (long if kind == "long" else short).append(path)
+        # A lone alias is not enough to replace a potentially mixed canonical R1.
+        if present != {"short", "long"}:
+            continue
+        if len(short) > 1 or len(long) > 1:
+            raise ValueError("Hybrid assembly requires one short-read and one ONT library")
+        mate = find_fastq_mate(r1.parent, sample_name_from_r1(short[0]), "R2") if short else None
+        yield str(short[0]) if short else "", str(mate or ""), str(long[0]) if long else "", True
+        return
+    with tempfile.TemporaryDirectory(prefix="samovar_libraries_") as tmp:
+        short_path = Path(tmp) / "short.fastq"
+        long_path = Path(tmp) / "ont.fastq"
+        tagged = untagged = 0
+        with short_path.open("w") as sh, long_path.open("w") as lg:
+            for path in (r1, as_path(r2) if r2 else None):
+                if path is None or not path.is_file():
+                    continue
+                for record in iter_fastq_records(path):
+                    match = re.search(r"(?:^|[|\s])read_type:([^|\s]+)", record[0].lstrip("@"))
+                    if not match:
+                        untagged += 1
+                        continue
+                    tech = match.group(1).lower()
+                    if tech not in {"illumina", "art", "wgsim", "bgi", "mgi", "ont", "nanosim", "nanosim3"}:
+                        raise ValueError(f"Unsupported assembly read_type: {tech}")
+                    tagged += 1
+                    (lg if tech in {"ont", "nanosim", "nanosim3"} else sh).writelines(record)
+        if tagged and untagged:
+            raise ValueError("Cannot assemble a mixture of tagged and untagged read types")
+        if not tagged:
+            yield str(r1), str(r2 or ""), "", False
+        elif long_path.stat().st_size:
+            yield str(short_path) if short_path.stat().st_size else "", "", str(long_path), True
+        else:
+            # Pure short reads retain their original pairing.
+            yield str(r1), str(r2 or ""), "", True

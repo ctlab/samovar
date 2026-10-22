@@ -573,6 +573,14 @@ def _simulate_camisim_sample(
                 shutil.copyfileobj(source, target)
         else:
             dest.unlink(missing_ok=True)
+    # Preserve the original libraries alongside the classifier's merged R1.
+    if cfg.get("mode") == "hybrid":
+        for src in (work / "initial").glob("1_*_R*.fastq"):
+            if src.name.startswith("1_full_"):
+                continue
+            dest = Path(output_dir) / (f"{sample}_{annotator}_" + src.name[2:] + (".gz" if gzip_reads else ""))
+            with open_text(src) as source, open_text(dest, "wt") as target:
+                shutil.copyfileobj(source, target)
     if ids:
         alias_fastq_with_extra_ids(p1, p2, ids, gzip_reads=gzip_reads)
 

@@ -63,6 +63,7 @@ KNOWN_TOOLS = (
     "seqtk",
     "samtools",
     "megahit",
+    "spades",
     "flye",
     "minimap2",
     "coverm",
@@ -699,7 +700,7 @@ def discover_tools() -> Dict[str, str]:
     if wgs:
         found.setdefault("wgsim", wgs)
     # which_tool asks for these names, not the short config keys.
-    for name in ("anvi-gen-contigs-database", "DAS_Tool"):
+    for name in ("anvi-gen-contigs-database", "DAS_Tool", "spades.py"):
         path = shutil.which(name)
         if path:
             found.setdefault(name, path)
@@ -707,6 +708,8 @@ def discover_tools() -> Dict[str, str]:
         found.setdefault("anvio", found["anvi-gen-contigs-database"])
     if found.get("DAS_Tool"):
         found.setdefault("dastool", found["DAS_Tool"])
+    if found.get("spades.py"):
+        found.setdefault("spades", found["spades.py"])
     return found
 
 
@@ -1178,6 +1181,14 @@ def install_status_rows() -> List[Dict[str, Any]]:
             path=_existing_tool("kaiju"),
             config_key="tools.kaiju / tool_envs.kaiju",
             install="conda create -c bioconda -n kaiju kaiju; set tool_envs.kaiju",
+        ),
+        row(
+            "SPAdes",
+            required=False,
+            role="short-read / hybrid assembler",
+            path=_existing_tool("spades") or _existing_tool("spades.py"),
+            config_key="tools.spades / tool_envs.spades",
+            install="./install.sh SPAdes",
         ),
         row(
             "metaphlan",

@@ -46,6 +46,13 @@
   "assembly": [
     "samovar_chechenina2023.bib"
   ],
+  "assembly_hybrid": [
+    "spades_bankevich2012.bib",
+    "hybridspades_antipov2016.bib",
+    "minimap2_li2018.bib",
+    "samtools_danecek2021.bib",
+    "kraken2_wood2019.bib"
+  ],
   "assembly_profiling": [
     "samovar_chechenina2023.bib"
   ],
@@ -185,6 +192,10 @@
   "snakemake": [
     "snakemake_koster2012.bib",
     "snakemake_molder2021.bib"
+  ],
+  "spades": [
+    "spades_bankevich2012.bib",
+    "hybridspades_antipov2016.bib"
   ],
   "sparsedossa2": [
     "sparsedossa2_ma2021.bib",

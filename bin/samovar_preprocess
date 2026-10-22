@@ -509,7 +509,7 @@ def main():
         '--assembler',
         dest='assembly_assembler',
         default=None,
-        help='Assembly annotator: contig assembler (default megahit)',
+        help='Assembly annotator: contig assembler: megahit (default), flye, spades (hybrid), or imported tool',
     )
     parser.add_argument(
         '--gene-caller',

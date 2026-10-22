@@ -19,10 +19,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from samovar.paths import resolve_executable
+from samovar.seqio import assembly_read_libraries
 
 MAG_SUFFIXES = (".fa", ".fna", ".fasta", ".fa.gz", ".fna.gz")
 BINARY_NAMES = {
     "megahit": "megahit",
+    "spades": "spades.py",
     "flye": "flye",
     "metaflye": "flye",
     "meta-flye": "flye",
@@ -345,6 +347,7 @@ def _touch_empty_fasta(dest: Path) -> None:
 # cap is how many genomes are called at once. GTDB-Tk's pplacer is RAM-bound.
 ASSEMBLY_STAGE_CAP = {
     "megahit": 16,
+    "spades": 16,
     "flye": 16,
     "metaflye": 16,
     "prodigal": 8,
@@ -444,6 +447,33 @@ def run_metaflye(
     return out
 
 
+def run_spades(r1, r2, ont, dest, threads=1, extra=None):
+    """Assemble short reads with an optional ONT library through native SPAdes."""
+    if not r1:
+        raise ValueError("SPAdes hybrid assembly requires short reads")
+    threads = _job_threads("spades", threads)
+    out = as_path(dest)
+    work = out.parent / (out.stem + ".spades")
+    if work.exists():
+        shutil.rmtree(work)
+    cmd = [which_tool("spades"), "--only-assembler", "-t", str(int(threads)), "-o", str(work)]
+    if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size:
+        cmd.extend(["-1", r1, "-2", r2])
+    else:
+        cmd.extend(["-s", r1])
+    if ont:
+        cmd.extend(["--nanopore", ont])
+    cmd.extend(str(x) for x in (extra or []))
+    _run(cmd)
+    contigs = work / "contigs.fasta"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if contigs.is_file() and contigs.stat().st_size:
+        shutil.copy2(contigs, out)
+    else:
+        _touch_empty_fasta(out)
+    return out
+
+
 def run_assembler(
     r1: str,
     r2: str = "",
@@ -460,10 +490,17 @@ def run_assembler(
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         _main(["-i", str(r1), "-I", str(r2 or ""), "-o", str(dest_path), "-t", str(int(threads))])
         return dest_path
-    if key in {"megahit", "assembler", ""}:
-        return run_megahit(r1, r2, dest, threads=threads, extra=extra)
-    if key in {"metaflye", "flye", "meta-flye"}:
-        return run_metaflye(r1, r2, dest, threads=threads, extra=extra)
+    if key in {"megahit", "assembler", "", "metaflye", "flye", "meta-flye", "spades"}:
+        with assembly_read_libraries(r1, r2) as (short, mate, ont, typed):
+            if key == "spades":
+                return run_spades(short, mate, ont, dest, threads=threads, extra=extra)
+            if key in {"metaflye", "flye", "meta-flye"}:
+                if typed and not ont:
+                    raise ValueError("Flye requires long reads; this sample contains only short reads")
+                return run_metaflye(ont or r1, "" if typed else r2, dest, threads=threads, extra=extra)
+            if not short:
+                raise ValueError("MEGAHIT requires short reads; this sample contains only ONT reads")
+            return run_megahit(short, mate, dest, threads=threads, extra=extra)
     exe = which_tool(name)
     out = as_path(dest)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1200,7 +1237,32 @@ def _concat_mag_fasta(mag_dir: Path, dest: Path) -> Path:
     return dest
 
 
-def run_minimap2(
+def run_minimap2(r1, r2, reference, dest, threads=1, preset="sr", extra=None):
+    """Map each technology with its preset, then combine the alignments."""
+    threads = _job_threads("minimap2", threads)
+    with assembly_read_libraries(r1, r2) as (short, mate, ont, typed):
+        if not ont:
+            if typed and not short:
+                raise ValueError("No non-empty read libraries to map")
+            return _run_minimap2(short, mate, reference, dest, threads, preset, extra)
+        if not short:
+            return _run_minimap2(ont, "", reference, dest, threads, "map-ont", extra)
+        out = as_path(dest)
+        short_bam = out.with_suffix(".short.bam")
+        long_bam = out.with_suffix(".ont.bam")
+        _run_minimap2(short, mate, reference, str(short_bam), threads, preset, extra)
+        _run_minimap2(ont, "", reference, str(long_bam), threads, "map-ont", extra)
+        samtools = which_tool("samtools")
+        _run([samtools, "merge", "-f", "-@", str(int(threads)), str(out), str(short_bam), str(long_bam)])
+        _run([samtools, "index", str(out)])
+        short_bam.unlink(missing_ok=True)
+        long_bam.unlink(missing_ok=True)
+        short_bam.with_suffix(".bam.bai").unlink(missing_ok=True)
+        long_bam.with_suffix(".bam.bai").unlink(missing_ok=True)
+        return out
+
+
+def _run_minimap2(
     r1: str,
     r2: str,
     reference: str,

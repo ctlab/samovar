@@ -248,29 +248,22 @@ PY
   "assembly_hybrid")
     echo "[INFO] Starting Assembly-Hybrid pipeline..."
     
-    MEGAHIT="$(cfg_tool megahit)"
-    BOWTIE2_BUILD="$(cfg_tool bowtie2-build)"
-    BOWTIE2="$(cfg_tool bowtie2)"
     KRAKEN2="$(cfg_tool kraken2)"
-    if [ -s "$R2" ]; then
-      "$MEGAHIT" -1 "$R1" -2 "$R2" -t "$THREADS" -o "$TMP_DIR/megahit" -f
-    else
-      "$MEGAHIT" -r "$R1" -t "$THREADS" -o "$TMP_DIR/megahit" -f
-    fi
-    CONTIGS="$TMP_DIR/megahit/final.contigs.fa"
-
+    CONTIGS="$TMP_DIR/contigs.fasta"
+    "${PYTHON_PATH:-python3}" - "$R1" "${R2:-}" "$CONTIGS" "$THREADS" "$TMP_DIR/map.bam" <<'PYCODE'
+import sys
+from pathlib import Path
+from samovar.assembly_profiling import run_assembler, run_minimap2, which_tool, _run
+r1, r2, contigs, threads, bam = sys.argv[1:]
+run_assembler(r1, r2, contigs, threads=int(threads), name="spades")
+if Path(contigs).stat().st_size:
+    run_minimap2(r1, r2, contigs, bam, threads=int(threads))
+    _run([which_tool("samtools"), "view", "-h", "-o", str(Path(bam).with_suffix(".sam")), bam])
+PYCODE
     if [ ! -s "$CONTIGS" ]; then
-        echo "[WARNING] MEGAHIT failed to assemble any contigs. Creating empty output."
+        echo "[WARNING] SPAdes produced no contigs. Creating empty output."
         touch "$OUT"
         exit 0
-    fi
-
-    # Step B: Map reads to contigs
-    "$BOWTIE2_BUILD" -q "$CONTIGS" "$TMP_DIR/index"
-    if [ -s "$R2" ]; then
-      "$BOWTIE2" -x "$TMP_DIR/index" -1 "$R1" -2 "$R2" -p "$THREADS" -S "$TMP_DIR/map.sam" 2>/dev/null
-    else
-      "$BOWTIE2" -x "$TMP_DIR/index" -U "$R1" -p "$THREADS" -S "$TMP_DIR/map.sam" 2>/dev/null
     fi
 
     # Step C: Classify contigs

@@ -102,6 +102,7 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool("sparsedossa2", ("sparsedossa2",), "table_reads_generator", "optional:sparsedossa2"),
     AskTool("R", ("R",), "runtime", "optional:r-package"),
     AskTool("megahit", ("megahit",), "assembler", "optional:megahit"),
+    AskTool("spades", ("spades.py",), "assembler", "optional:spades"),
     AskTool("flye", ("flye",), "assembler", "optional:flye"),
     AskTool("prodigal", ("prodigal",), "gene_caller", "optional:prodigal"),
     AskTool("minimap2", ("minimap2",), "aligner", "optional:minimap2"),

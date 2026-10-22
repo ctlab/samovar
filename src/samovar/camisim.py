@@ -1757,7 +1757,7 @@ def _merge_hybrid_reads(
             else:
                 _write_empty_fastq(dest)
             outputs.append(str(dest))
-    _remove_tech_fastq_copies(out_dir)
+    # Keep the original libraries for hybrid assembly (including Illumina mates).
     return outputs
 
 

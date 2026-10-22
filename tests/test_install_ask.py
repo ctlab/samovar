@@ -387,6 +387,7 @@ def test_assembly_tools_resolve_from_conda_prefix(tmp_path, monkeypatch):
 
     cases = (
         ("megahit", "megahit"),
+        ("spades", "spades.py"),
         ("minimap2", "minimap2"),
         ("anvio", "anvi-gen-contigs-database"),
         ("dastool", "DAS_Tool"),
@@ -412,6 +413,7 @@ def test_full_install_discovers_anvio_and_dastool_lookup_names(tmp_path, monkeyp
     hits = {
         "anvi-gen-contigs-database": "/opt/anvio/bin/anvi-gen-contigs-database",
         "DAS_Tool": "/opt/das/DAS_Tool",
+        "spades.py": "/opt/spades/bin/spades.py",
     }
     import samovar.paths as paths
 
@@ -421,6 +423,7 @@ def test_full_install_discovers_anvio_and_dastool_lookup_names(tmp_path, monkeyp
     assert found["anvio"] == hits["anvi-gen-contigs-database"]
     assert found["DAS_Tool"] == hits["DAS_Tool"]
     assert found["dastool"] == hits["DAS_Tool"]
+    assert found["spades"] == hits["spades.py"]
 
 
 def test_install_config_mirrors_short_keys_onto_lookup_names(tmp_path):
