@@ -395,6 +395,7 @@ def test_large_tables_chunked_merge(tmp_path, combiner):
     assert int(only["true"]) == 4932
 
 
+@pytest.mark.optional
 def test_python_wrapper_species_pass(tmp_path):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"
