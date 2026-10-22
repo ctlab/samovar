@@ -643,6 +643,7 @@ def test_metaflye_read_mode_and_native_argument_order(tmp_path, monkeypatch, imp
 @pytest.mark.parametrize("message", [
     "No contigs were assembled - pipeline stopped",
     "No disjointigs were assembled - pipeline stopped",
+    "No reads above minimum length threshold (1000)",
     "No disjointigs were assembled - please check if the read type and genome size parameters are correct",
 ])
 @pytest.mark.parametrize("mode", ["homology", "map-initial"])

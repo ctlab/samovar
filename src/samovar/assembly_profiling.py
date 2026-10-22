@@ -465,6 +465,7 @@ def run_metaflye(
         if exc.returncode != 1 or not any(message in log for message in (
             "No contigs were assembled",
             "No disjointigs were assembled",
+            "No reads above minimum length threshold",
         )):
             raise
         logging.getLogger(__name__).warning("Flye assembled no contigs; writing empty FASTA (see %s)", log_path)
