@@ -397,6 +397,12 @@ def test_anvio_binner_single_sample_skips_clustering(tmp_path, monkeypatch):
     )
     mags = _iter_mag_fastas(mag_dir)
     assert mags, "anvi'o single-sample path should write mag1.fa without clustering"
+    assert (mag_dir / ".anvio" / "CONTIGS.db").is_file()
+    assert (mag_dir / ".anvio" / "profile" / "PROFILE.db").is_file()
+    assert (mag_dir / ".anvio" / "contigs.bam").stat().st_size > 0
+    assembly_ids = {line[1:].split()[0] for line in contigs.read_text().splitlines() if line.startswith(">")}
+    mag_ids = {line[1:].split()[0] for line in mags[0].read_text().splitlines() if line.startswith(">")}
+    assert mag_ids == assembly_ids
     skipped = tmp_path / "bins" / "anvio_skip"
     run_binner(
         str(contigs),

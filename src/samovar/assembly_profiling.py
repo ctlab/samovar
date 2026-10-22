@@ -674,7 +674,8 @@ def run_anvio_binner(
     Internal contig mapping still runs. ``anvi-cluster-contigs`` needs a merged
     profile (two or more samples). With one sample, clustering is skipped and the
     assembly is written as ``mag1.fa``. Extra FASTQ pairs in ``additional_reads``
-    are profiled, merged, and clustered.
+    are profiled, merged, and clustered. FASTA headers are simplified only inside
+    anvi'o; exported MAGs retain the assembler's identifiers.
     """
     threads = _job_threads("anvio", threads)
     mag_dir = as_path(dest)
@@ -684,17 +685,19 @@ def run_anvio_binner(
         shutil.rmtree(work)
     work.mkdir(parents=True, exist_ok=True)
     simple = work / "contigs.fa"
+    original_names = {}
     i = 0
     lines = []
     for line in as_path(contigs).read_text(encoding="utf-8", errors="replace").splitlines():
         if line.startswith(">"):
             i += 1
+            original_names[f"c{i}"] = line[1:].split()[0]
             lines.append(f">c{i}")
         else:
             lines.append(line)
     simple.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if not _fasta_has_records(simple):
-        return _write_identity_mag(simple, mag_dir)
+        return _write_identity_mag(as_path(contigs), mag_dir)
     db = work / "CONTIGS.db"
     gen = which_tool("anvi-gen-contigs-database")
     gen_cmd = [
@@ -719,7 +722,7 @@ def run_anvio_binner(
         try:
             _run(gen_cmd + ["--skip-gene-calling"])
         except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-            return _write_identity_mag(simple, mag_dir)
+            return _write_identity_mag(as_path(contigs), mag_dir)
     bam = work / "contigs.bam"
     pairs: List[Tuple[str, str]] = []
     if r1 and as_path(r1).is_file():
@@ -827,7 +830,7 @@ def run_anvio_binner(
     elif want_cluster and len(profile_dbs) == 1:
         clustered = False
     if not clustered:
-        return _write_identity_mag(simple, mag_dir)
+        return _write_identity_mag(as_path(contigs), mag_dir)
     summary = work / "summary"
     try:
         _run(
@@ -849,9 +852,17 @@ def run_anvio_binner(
     if summary.is_dir():
         bins_fasta = [p for p in summary.rglob("*") if p.is_file() and _is_mag_fasta(p)]
     if not bins_fasta:
-        return _write_identity_mag(simple, mag_dir)
+        return _write_identity_mag(as_path(contigs), mag_dir)
     for i, fasta in enumerate(bins_fasta, start=1):
-        _copy_fasta(fasta, mag_dir / f"mag{i}.fa")
+        # anvi-summarize keeps local names, optionally adding _partial_START_END.
+        # Restore assembly IDs so other binners and DAS Tool see the same contigs.
+        restored = []
+        for line in fasta.read_text(encoding="utf-8").splitlines():
+            if line.startswith(">"):
+                name, separator, suffix = line[1:].split()[0].partition("_partial_")
+                line = f">{original_names[name]}{separator}{suffix}"
+            restored.append(line)
+        (mag_dir / f"mag{i}.fa").write_text("\n".join(restored) + "\n", encoding="utf-8")
     return mag_dir
 
 
