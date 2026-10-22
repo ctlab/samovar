@@ -8,32 +8,28 @@ eval "$runtime_exports"
 trap 'rm -rf "${TMP_DIR:-}" 2>/dev/null || true' EXIT
 # Default threads
 THREADS=4
+R1="" R2="" DB="" OUT="" TOOL=""
 
-# Short flags plus GNU --threads (Snakemake / flags-translate). Duplicate
-# thread flags keep the last value. getopts cannot parse --threads.
+# Consume wrapper options until the native tail. First wrapper values win.
+THREADS_SET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -i) R1="$2"; shift 2 ;;
-    -I) R2="$2"; shift 2 ;;
-    -d) DB="$2"; shift 2 ;;
-    -o) OUT="$2"; shift 2 ;;
-    -p) TOOL="$2"; shift 2 ;;
+    -i) R1="${R1:-$2}"; shift 2 ;;
+    -I) R2="${R2:-$2}"; shift 2 ;;
+    -d) DB="${DB:-$2}"; shift 2 ;;
+    -o) OUT="${OUT:-$2}"; shift 2 ;;
+    -p) TOOL="${TOOL:-$2}"; shift 2 ;;
     -t|--threads)
-      THREADS="$2"; shift 2 ;;
+      if [ "$THREADS_SET" = 0 ]; then THREADS="$2"; THREADS_SET=1; fi
+      shift 2 ;;
     --threads=*)
-      THREADS="${1#*=}"; shift ;;
+      if [ "$THREADS_SET" = 0 ]; then THREADS="${1#*=}"; THREADS_SET=1; fi
+      shift ;;
     --)
       shift
       break
       ;;
-    -*)
-      echo "Invalid option $1" >&2
-      exit 1
-      ;;
-    *)
-      echo "Invalid option $1" >&2
-      exit 1
-      ;;
+    *) break ;;
   esac
 done
 
@@ -44,6 +40,46 @@ if [ -z "$R1" ] || [ -z "$OUT" ] || [ -z "$TOOL" ]; then
   exit 1
 fi
 # No -I: single-end. Paired tools branch on a non-empty R2 below.
+
+# Remove only adapter-owned options from the native tail. Preserve every
+# other argument verbatim, including spaces, order, and literal shell tokens.
+EXTRA=()
+SEQUENCER=(--sequencer Illumina)
+while [ "$#" -gt 0 ]; do
+  token="$1"
+  key="${token%%=*}"
+  owned=0
+  boolean=0
+  case "$key" in
+    -i|-I|-d|-o|-p|-t|--threads) owned=1 ;;
+  esac
+  case "$TOOL:$key" in
+    metax:--db|metax:--dmp-dir|metax:--in-seq|metax:--outprefix) owned=1 ;;
+    metax:--is-paired|metax:--no-is-paired) owned=1; boolean=1 ;;
+    centrifuge:-x|centrifuge:-1|centrifuge:-2|centrifuge:-U|centrifuge:-S|centrifuge:--report-file) owned=1 ;;
+    metax:--sequencer) SEQUENCER=() ;;
+  esac
+  case "$token" in
+    -[iIdopt]?*) owned=1; boolean=1 ;;
+  esac
+  if [ "$TOOL" = centrifuge ]; then
+    case "$token" in -[x12US]?*) owned=1; boolean=1 ;; esac
+  fi
+  if [ "$owned" = 1 ]; then
+    echo "[WARNING] Ignoring extra option owned by SAMOVAR: $token" >&2
+    shift
+    if [ "$boolean" = 0 ] && [[ "$token" != *=* ]] && [ "$#" -gt 0 ] && [[ "$1" != -* ]]; then
+      shift
+    fi
+  else
+    EXTRA+=("$1")
+    shift
+  fi
+done
+if [ "$TOOL" = assembly_hybrid ] && [ "${#EXTRA[@]}" -gt 0 ]; then
+  echo "[ERROR] assembly_hybrid does not accept a shared native flag tail (assembler and classifier have different CLIs)." >&2
+  exit 2
+fi
 
 # Create a temporary working directory for this specific run
 TMP_DIR="$(dirname "$OUT")/tmp_$(basename "$OUT" .out)"
@@ -98,7 +134,7 @@ case "$TOOL" in
   # ----------------------------------------
   "dummy"|"dummy9606"|"constant9606"|"constant"|"random")
     echo "[INFO] Starting constant-taxID dummy classifier (9606)..."
-    "$PYTHON_PATH" "$SCRIPT_DIR/constant9606.py" -i "$R1" -I "$R2" -o "$OUT" --taxid 9606
+    "$PYTHON_PATH" "$SCRIPT_DIR/constant9606.py" -i "$R1" -I "$R2" -o "$OUT" --taxid 9606 "${EXTRA[@]}"
     ;;
 
   # ----------------------------------------
@@ -122,7 +158,7 @@ case "$TOOL" in
     fi
 
     # Run the python script
-    "$PYTHON_PATH" "$SCRIPT_DIR/metauto.py" work "$FQ_DIR" "$DB"
+    "$PYTHON_PATH" "$SCRIPT_DIR/metauto.py" work "$FQ_DIR" "$DB" "${EXTRA[@]}"
 
     # Concat output TSVs, remove headers, and take only seq and taxID (columns 1 and 2)
     cat "$FQ_DIR"/*.tsv | grep -v "^seq" | awk -F'\t' '{print $1 "\t" $2}' > "$OUT"
@@ -154,11 +190,11 @@ case "$TOOL" in
     if [ -s "$R2" ]; then
       "$CENTRIFUGE" -x "$INDEX" -1 "$R1" -2 "$R2" -p "$THREADS" --mm \
         -S "$TMP_DIR/centrifuge.out" \
-        --report-file "$TMP_DIR/centrifuge_report.tsv"
+        --report-file "$TMP_DIR/centrifuge_report.tsv" "${EXTRA[@]}"
     else
       "$CENTRIFUGE" -x "$INDEX" -U "$R1" -p "$THREADS" --mm \
         -S "$TMP_DIR/centrifuge.out" \
-        --report-file "$TMP_DIR/centrifuge_report.tsv"
+        --report-file "$TMP_DIR/centrifuge_report.tsv" "${EXTRA[@]}"
     fi
     
     # Parse output: skip header (NR>1), only print classified reads (taxID != 0)
@@ -227,12 +263,12 @@ PY
     PREFIX="$TMP_DIR/metax"
     if [ -s "$R2" ]; then
       "$METAX_BIN" profile --db "$DB_JSON" --dmp-dir "$DMP" \
-        --in-seq "${R1},${R2}" --is-paired --sequencer Illumina \
-        --outprefix "$PREFIX" --threads "$THREADS"
+        --in-seq "${R1},${R2}" --is-paired "${SEQUENCER[@]}" \
+        --outprefix "$PREFIX" --threads "$THREADS" "${EXTRA[@]}"
     else
       "$METAX_BIN" profile --db "$DB_JSON" --dmp-dir "$DMP" \
-        --in-seq "$R1" --sequencer Illumina \
-        --outprefix "$PREFIX" --threads "$THREADS"
+        --in-seq "$R1" "${SEQUENCER[@]}" \
+        --outprefix "$PREFIX" --threads "$THREADS" "${EXTRA[@]}"
     fi
     CLASSIFY="${PREFIX}.classify.txt"
     if [ ! -s "$CLASSIFY" ]; then

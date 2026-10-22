@@ -250,6 +250,7 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
     centrifuge = mock_bin / "centrifuge"
     centrifuge.write_text(
         "#!/bin/bash\n"
+        f'printf "%s\\n" "$@" > "{tmp_path / "cf.argv"}"\n'
         "OUT=''\n"
         "R1=''\n"
         "while [[ $# -gt 0 ]]; do\n"
@@ -320,7 +321,7 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
             "-p",
             "centrifuge",
             "-t",
-            "1",
+            "1", "--score-min", "17", "-x", "/wrong", "-p99",
         ],
         capture_output=True,
         text=True,
@@ -334,6 +335,10 @@ def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
     assert (df["taxID"].astype(str) == "562").all()
     assert "read0" in set(df["seq"].astype(str))
 
+
+    argv = (tmp_path / 'cf.argv').read_text().splitlines()
+    assert argv[-2:] == ['--score-min', '17']
+    assert argv.count('-x') == 1 and '/wrong' not in argv and '-p99' not in argv
 
 def test_prepare_custom_test_alias(tmp_path):
     reads = tmp_path / "reads"
@@ -410,7 +415,8 @@ def test_fastq_annotator_and_feature_merge(tmp_path):
     assert merged.loc[merged["seq"] == "r0", "gc"].notna().all()
 
 
-def test_custom_sh_metax_uses_configured_taxdump(tmp_path):
+@pytest.mark.parametrize("separator", [[], ["--"]])
+def test_custom_sh_metax_uses_configured_taxdump(tmp_path, separator):
     dump = tmp_path / "taxdump"
     dump.mkdir()
     (dump / "nodes.dmp").write_text("1\t|\t1\t|\n")
@@ -464,6 +470,10 @@ def test_custom_sh_metax_uses_configured_taxdump(tmp_path):
             "metax",
             "-t",
             "1",
+            *separator,
+            "--min-read-len", "80", "--sequencer", "Nanopore",
+            "--threads=99", "-t", "88", "--db", "/wrong", "--is-paired",
+            "--outprefix=/wrong", "--native-label", "literal $(no eval)",
         ],
         capture_output=True,
         text=True,
@@ -476,3 +486,11 @@ def test_custom_sh_metax_uses_configured_taxdump(tmp_path):
     assert (db / "taxonomy").is_symlink()
     assert (db / "taxonomy").resolve() == dump.resolve()
     assert "read1\t562" in out.read_text()
+
+    tokens = log.read_text().splitlines()
+    assert tokens.count('--threads') == 1 and tokens[tokens.index('--threads') + 1] == '1'
+    assert tokens.count('--db') == 1 and '/wrong' not in tokens
+    assert '--is-paired' not in tokens
+    assert '--min-read-len' in tokens and '80' in tokens
+    assert tokens.count('--sequencer') == 1 and 'Nanopore' in tokens and 'Illumina' not in tokens
+    assert tokens[-2:] == ['--native-label', 'literal $(no eval)']
