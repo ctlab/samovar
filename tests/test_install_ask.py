@@ -312,6 +312,7 @@ def test_ask_table_is_unique_and_typed():
         assert name in names
     core = {tool.name for tool in tools_for_ask(full=False)}
     assert core == {"kraken2", "kaiju"}
+    assert {tool.install for tool in tools_for_ask(full=False)} == {"optional:kraken2", "optional:kaiju"}
     full = {tool.name for tool in tools_for_ask(full=True)}
     assert "kraken" in full and "krakenuniq" in full
     for name in ("anvio", "centrifuge", "gtdbtk", "metax", "kraken2", "cuml"):

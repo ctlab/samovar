@@ -11,6 +11,8 @@
 #   ./install.sh full ask        core, then ask about every supported program
 #   ./install.sh full ask --no-check   same, without launching each imported program
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
+#   ./install.sh Kraken2        Kraken2 + build helpers in a separate conda env
+#   ./install.sh Kaiju          Kaiju + build helpers in a separate conda env
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
 #   ./install.sh MultiQC         optional MultiQC HTML reports
 #   ./install.sh CAMISIM         optional CAMISIM community/read simulator
@@ -44,6 +46,8 @@
 #   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
 #   SAMOVAR_INSTALL_CAMISIM=1  also clone optional CAMISIM (same as ./install.sh CAMISIM)
 #   SAMOVAR_INSTALL_NANOSIM=1  also sidecar-conda NanoSim (same as ./install.sh NanoSim)
+#   SAMOVAR_INSTALL_KRAKEN2=1  also install Kraken2 (included in full)
+#   SAMOVAR_INSTALL_KAIJU=1    also install Kaiju (included in full)
 #   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
@@ -623,6 +627,7 @@ normalize_optional_arg() {
     lower="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
     case "$lower" in
         r-package|rpackage|r) echo "r-package" ;;
+        kraken2|kaiju) echo "$lower" ;;
         opal) echo "opal" ;;
         multiqc) echo "multiqc" ;;
         camisim) echo "camisim" ;;
@@ -678,6 +683,7 @@ run_optional_named() {
         art) install_art ;;
         seqtk) install_seqtk ;;
         nextflow) install_nextflow ;;
+        kraken2|kaiju) "$PYTHON_PATH" -m samovar.sidecar "$1" ;;
         spades) "$PYTHON_PATH" -m samovar.sidecar spades ;;
         megahit) "$PYTHON_PATH" -m samovar.sidecar megahit ;;
         flye) "$PYTHON_PATH" -m samovar.sidecar flye ;;
@@ -712,6 +718,8 @@ rebuild_citations() {
 }
 
 enable_full_install_flags() {
+    export SAMOVAR_INSTALL_KRAKEN2=1
+    export SAMOVAR_INSTALL_KAIJU=1
     export SAMOVAR_INSTALL_R=1
     export SAMOVAR_INSTALL_OPAL=1
     export SAMOVAR_INSTALL_MULTIQC=1
@@ -947,6 +955,15 @@ fi
 if [ "$INSTALL_ASK" = "1" ]; then
     echo "Ask mode: optional extras are imported from your answers after the core install."
 else
+for tool in kraken2 kaiju; do
+    flag="SAMOVAR_INSTALL_${tool^^}"
+    if [ "${!flag:-0}" != "0" ]; then
+        "$PYTHON_PATH" -m samovar.sidecar "$tool" || {
+            echo "ERROR: required full-install annotator $tool failed to install."
+            exit 1
+        }
+    fi
+done
 if [ "${SAMOVAR_INSTALL_R:-0}" != "0" ]; then
     install_samovar_r_package || echo "Warning: optional R package install did not complete."
 else

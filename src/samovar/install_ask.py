@@ -59,12 +59,12 @@ class AskTool:
 # ``install=""`` is import-only.
 ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool(
-        "kraken2", ("kraken2",), "annotator", "conda:kraken2",
+        "kraken2", ("kraken2",), "annotator", "optional:kraken2",
         companions=("kraken2-build", "kraken2-inspect"),
         scope="core",
     ),
     AskTool(
-        "kaiju", ("kaiju",), "annotator", "conda:kaiju",
+        "kaiju", ("kaiju",), "annotator", "optional:kaiju",
         companions=("kaiju-mkbwt", "kaiju-mkfmi"),
         scope="core",
     ),
@@ -456,7 +456,17 @@ def install_action(spec: AskTool) -> None:
 
 
 def locate_installed(spec: AskTool) -> Tuple[str, str]:
-    """Find the binary after an install: PATH, active env, then the sidecar prefix."""
+    """Find the installed sidecar first, then PATH and the active environment."""
+    kind, _, arg = spec.install.partition(":")
+    if kind == "optional" and arg:
+        installed = configured_import(spec.name, spec.which)
+        if installed is not None and Path(installed.path).is_file():
+            return installed.path, installed.prefix
+        prefix = sidecar_envs_dir() / arg
+        for name in spec.which:
+            candidate = prefix / "bin" / name
+            if candidate.is_file():
+                return str(candidate.resolve()), str(prefix)
     hits = which_all(spec.which)
     active = os.environ.get("CONDA_PREFIX", "").strip()
     if hits:
@@ -465,13 +475,6 @@ def locate_installed(spec: AskTool) -> Tuple[str, str]:
         if parent.name == "bin":
             prefix = str(parent.parent)
         return hits[0], prefix or active
-    kind, _, arg = spec.install.partition(":")
-    if kind == "optional" and arg:
-        prefix = sidecar_envs_dir() / arg
-        for name in spec.which:
-            candidate = prefix / "bin" / name
-            if candidate.is_file():
-                return str(candidate.resolve()), str(prefix)
     if active:
         for name in spec.which:
             try:

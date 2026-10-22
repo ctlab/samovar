@@ -1041,6 +1041,9 @@ def conda_prefix_for_executable(exe: Optional[str]) -> Optional[str]:
         parent = path.resolve().parent
     except OSError:
         return None
+    for ancestor in (parent, *parent.parents):
+        if (ancestor / "conda-meta").is_dir():
+            return str(ancestor)
     if parent.name == "bin" and parent.parent.is_dir():
         return str(parent.parent)
     return None
@@ -1185,7 +1188,7 @@ def install_status_rows() -> List[Dict[str, Any]]:
             role="k-mer LCA annotator",
             path=_existing_tool("kraken2"),
             config_key="tools.kraken2 / tool_envs.kraken2",
-            install="conda create -c bioconda -n kraken2 kraken2; set tool_envs.kraken2",
+            install="./install.sh Kraken2",
         ),
         row(
             "kaiju",
@@ -1193,7 +1196,7 @@ def install_status_rows() -> List[Dict[str, Any]]:
             role="protein-level annotator",
             path=_existing_tool("kaiju"),
             config_key="tools.kaiju / tool_envs.kaiju",
-            install="conda create -c bioconda -n kaiju kaiju; set tool_envs.kaiju",
+            install="./install.sh Kaiju",
         ),
         row(
             "SPAdes",
