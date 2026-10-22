@@ -567,13 +567,47 @@ def test_prepare_preserves_tagged_hybrid_generator(tmp_path, monkeypatch):
     assert PipelineConfig.from_args(args).reads_generator == "iss"
 
 
-def test_prepare_inherits_pending_hybrid_generation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode, expected", [("hybrid", "hybrid"), ("ont", "nanosim"), ("illumina", "art"), ("wgsim", "wgsim"), ("table", "camisim")])
+def test_prepare_inherits_pending_hybrid_generation(tmp_path, monkeypatch, mode, expected):
     monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
     out = tmp_path / "run"
     generated = out / ".generate" / "configs" / "camisim.yaml"
     generated.parent.mkdir(parents=True)
-    generated.write_text("mode: hybrid\n")
+    generated.write_text(f"mode: {mode}\n")
     args = argparse.Namespace(input_config=None, input_dir=str(out / "initial"), output_dir=str(out))
-    assert PipelineConfig.from_args(args).reads_generator == "hybrid"
+    assert PipelineConfig.from_args(args).reads_generator == expected
     args.reads_generator = "iss"
     assert PipelineConfig.from_args(args).reads_generator == "iss"
+
+
+@pytest.mark.parametrize("field,generator", [("reads_generator", g) for g in ["iss", "nanosim", "art", "wgsim", "hybrid"]] + [("metagenome_generator", "nanosim"), ("metagenome_generator", "hybrid")])
+def test_prepare_inherits_generate_snapshot(tmp_path, monkeypatch, field, generator):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    source = tmp_path / "source"
+    snapshot = source / ".hydra" / "config.yaml"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text(yaml.safe_dump({"generate": {"args": {field: generator}}}))
+    # A stale CAMISIM YAML must not override the last recorded generate command.
+    stale = source / ".generate" / "configs" / "camisim.yaml"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("mode: hybrid\n")
+    args = argparse.Namespace(input_config=None, input_dir=str(source / "initial"), output_dir=str(tmp_path / "new"))
+    assert getattr(PipelineConfig.from_args(args), field) == generator
+    args.reads_generator = "iss"
+    assert PipelineConfig.from_args(args).reads_generator == "iss"
+
+
+@pytest.mark.parametrize("field", ["reads_generator", "metagenome_generator"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_prepare_inherits_camisim_ont_mode(tmp_path, monkeypatch, field, legacy):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    if legacy:
+        saved = tmp_path / ".generate" / "configs" / "camisim.yaml"
+        payload = {field: "camisim", "mode": "ont"}
+    else:
+        saved = tmp_path / ".hydra" / "config.yaml"
+        payload = {"generate": {"args": {field: "camisim", "camisim_mode": "ont"}}}
+    saved.parent.mkdir(parents=True)
+    saved.write_text(yaml.safe_dump(payload))
+    args = argparse.Namespace(input_config=None, input_dir=str(tmp_path / "initial"), output_dir=str(tmp_path))
+    assert getattr(PipelineConfig.from_args(args), field) == "nanosim"

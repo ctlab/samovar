@@ -1042,7 +1042,7 @@ class PipelineConfig:
             merged_p = dict(getattr(config, by_attr) or {})
             merged_p.update(by_val)
             setattr(config, by_attr, merged_p)
-        # Preserve a tagged hybrid community unless YAML or CLI selected a generator.
+        # Explicit prepare settings win over the generator recorded by generate.
         selected_generator = (
             getattr(args, "reads_generator", None) or getattr(args, "metagenome_generator", None)
             or input_config.get("reads_generator") or input_config.get("reads-generator")
@@ -1051,16 +1051,40 @@ class PipelineConfig:
         if not selected_generator:
             from samovar.reads_generators import has_hybrid_reads
             from samovar.seqio import list_r1_files
+            from samovar.repro import snapshot_path
 
-            generated = Path(config.output_dir) / ".generate" / "configs" / "camisim.yaml"
-            initial = Path(config.output_dir) / "initial"
-            own_initial = not config.input_dir or Path(config.input_dir).resolve() == initial.resolve()
-            generated_mode = ""
-            if own_initial and generated.is_file():
-                generated_mode = (yaml.safe_load(generated.read_text()) or {}).get("mode", "")
-            if generated_mode == "hybrid" or (config.input_dir and any(
-                has_hybrid_reads(p) for p in list_r1_files(config.input_dir)
-            )):
+            initial = Path(config.input_dir or (Path(config.output_dir) / "initial")).resolve()
+            generated_args = {}
+            if initial.name == "initial":
+                source_run = initial.parent
+                snapshot = snapshot_path(source_run)
+                if snapshot.is_file():
+                    recorded = yaml.safe_load(snapshot.read_text()) or {}
+                    generated_args = (recorded.get("generate") or {}).get("args") or {}
+                # Older runs may only have the editable CAMISIM configuration.
+                generated = source_run / ".generate" / "configs" / "camisim.yaml"
+                if not generated_args.get("reads_generator") and not generated_args.get("metagenome_generator") and generated.is_file():
+                    generated_args = yaml.safe_load(generated.read_text()) or {}
+                    if not generated_args.get("reads_generator") and not generated_args.get("metagenome_generator"):
+                        generated_args["reads_generator"] = "camisim"
+            # Generic CAMISIM can select its actual simulator through --camisim-mode.
+            generator_field = "metagenome_generator" if generated_args.get("metagenome_generator") else "reads_generator"
+            generated_mode = generated_args.get("camisim_mode") or generated_args.get("mode")
+            if generated_args.get(generator_field) == "camisim" and generated_mode:
+                from samovar.camisim import normalize_camisim_mode
+
+                mode = normalize_camisim_mode(generated_mode)
+                if generator_field == "metagenome_generator" and mode in {"illumina", "wgsim"}:
+                    generated_args["metagenome_generator"] = None
+                    generator_field = "reads_generator"
+                generated_args[generator_field] = "camisim" if mode == "table" else mode
+            if generated_args.get("metagenome_generator"):
+                config.metagenome_generator = require_known_metagenome_generator(
+                    generated_args["metagenome_generator"]
+                )
+            elif generated_args.get("reads_generator"):
+                config.reads_generator = require_known_reads_generator(generated_args["reads_generator"])
+            elif config.input_dir and any(has_hybrid_reads(p) for p in list_r1_files(config.input_dir)):
                 config.reads_generator = "hybrid"
         cli_reads = getattr(args, "reads_generator", None)
         if cli_reads:
