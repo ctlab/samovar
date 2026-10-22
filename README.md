@@ -29,7 +29,6 @@ chmod +x install.sh
 ./install.sh full ask
 ```
 
-`./install.sh full` includes Kraken2 and Kaiju with their database-building helpers in separate conda environments, registered in the main config. `./install.sh ask` asks about these two annotators: import an existing program/environment, or choose installation through the same sidecar mechanism. Individual commands are `./install.sh Kraken2` and `./install.sh Kaiju`. Reference databases are configured separately; classifier installation does not download large indexes.
 
 `install.sh` may ask you some questions, like e-mail for the NCBI API. If you use `ask` mode, it will also try to import all supported tools with your guides. The first prompt is short (`conda ENV EXEC`, `base EXEC`, or `no`). A failed import asks again with a full example and does not move on. `./install.sh full ask` then launches the program (`--help`, `-h`, `--version`, or with no arguments) and keeps it when there is output; `--no-check` skips that launch.
 

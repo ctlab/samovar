@@ -20,7 +20,7 @@
 #   ./install.sh ART             optional ART Illumina simulator in a separate conda env
 #   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
 #   ./install.sh MegaHIT         optional MegaHIT assembler (sidecar)
-#   ./install.sh SPAdes          optional SPAdes hybrid assembler (sidecar)
+#   ./install.sh SPAdes          optional SPAdes / metaSPAdes assembler (sidecar; included in full)
 #   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
 #   ./install.sh Metax          optional Metax profiler (sidecar; custom.sh -p metax)
 #   ./install.sh Prodigal        optional Prodigal gene caller (sidecar)
@@ -51,6 +51,7 @@
 #   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
+#   SAMOVAR_INSTALL_SPADES=1   also sidecar-conda SPAdes (included in full; same as ./install.sh SPAdes)
 #   SAMOVAR_INSTALL_CUML=1     also install cuML (same as ./install.sh cuml)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
@@ -635,7 +636,7 @@ normalize_optional_arg() {
         art|art_illumina) echo "art" ;;
         nextflow) echo "nextflow" ;;
         seqtk) echo "seqtk" ;;
-        spades|spades.py) echo "spades" ;;
+        spades|spades.py|metaspades|meta-spades|metaspades.py) echo "spades" ;;
         megahit|mega-hit) echo "megahit" ;;
         metaflye|meta-flye|flye) echo "flye" ;;
         prodigal) echo "prodigal" ;;
@@ -730,6 +731,7 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_NEXTFLOW=1
     export SAMOVAR_INSTALL_SPARSEDOSSA2=1
     export SAMOVAR_INSTALL_METAX=1
+    export SAMOVAR_INSTALL_SPADES=1
 }
 
 INSTALL_FULL=0
@@ -1029,7 +1031,7 @@ fi
 if [ "${SAMOVAR_INSTALL_SPADES:-0}" != "0" ]; then
     "$PYTHON_PATH" -m samovar.sidecar spades || echo "Warning: optional SPAdes install did not complete."
 else
-    echo "Skipping SPAdes (not required). Use ./install.sh SPAdes for hybrid assembly."
+    echo "Skipping SPAdes (not required). Use ./install.sh SPAdes or ./install.sh full for hybrid assembly."
 fi
 
 if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then

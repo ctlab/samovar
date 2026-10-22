@@ -109,7 +109,7 @@ SIDECARS = {
         "config_path_key": "spades_path",
         "tool_keys": ("spades",),
         "group": "assembler",
-        "hint": "Optional hybrid SPAdes assembler (./install.sh SPAdes).",
+        "hint": "Optional SPAdes / metaSPAdes assembler (./install.sh SPAdes; included in full).",
     },
     "metax": {
         "python": None,
@@ -448,6 +448,9 @@ def install_named(name: str) -> Path:
         "gtdb_tk": "gtdbtk",
         "mega-hit": "megahit",
         "metaflye": "flye",
+        "metaspades": "spades",
+        "meta-spades": "spades",
+        "metaspades.py": "spades",
         "metax": "metax",
         "meta-flye": "flye",
         "metflye": "flye",

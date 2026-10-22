@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -302,6 +304,7 @@ def test_ask_table_is_unique_and_typed():
         "anvio",
         "megahit",
         "flye",
+        "spades",
         "prodigal",
         "samtools",
         "metabat2",
@@ -315,8 +318,12 @@ def test_ask_table_is_unique_and_typed():
     assert {tool.install for tool in tools_for_ask(full=False)} == {"optional:kraken2", "optional:kaiju"}
     full = {tool.name for tool in tools_for_ask(full=True)}
     assert "kraken" in full and "krakenuniq" in full
-    for name in ("anvio", "centrifuge", "gtdbtk", "metax", "kraken2", "cuml"):
+    for name in ("anvio", "centrifuge", "gtdbtk", "metax", "kraken2", "cuml", "spades"):
         assert name in full
+    spades = next(tool for tool in ASK_TOOLS if tool.name == "spades")
+    assert spades.install == "optional:spades"
+    assert spades.scope == "full"
+    assert spades.which == ("spades.py",)
     assert "cuml" not in core
     assert ask_full_requested(["--full"])
     assert not ask_full_requested([])
