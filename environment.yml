@@ -9,6 +9,7 @@ dependencies:
   - cxx-compiler
   - make
   - zlib
+  - pigz
   - snakemake-minimal>=7.0
   - numpy>=1.20
   - pandas>=1.3
