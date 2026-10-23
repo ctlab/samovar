@@ -39,8 +39,7 @@ from samovar.seqio import (
 
 # Thin R CLI used with the optional samovaR package (GitHub branch r-package).
 # Not an R package source; it only calls exported samovaR functions.
-R_REGENERATE_DRIVER = r'''library(tidyverse)
-library(samovaR)
+R_REGENERATE_DRIVER = r'''library(samovaR)
 
 args <- commandArgs(trailingOnly = TRUE)
 annotation_dir <- NULL

@@ -183,6 +183,7 @@ install_samovar_r_package() {
 
     if ! command -v R >/dev/null 2>&1; then
         echo "R is not on PATH; cannot install the optional samovaR package."
+        echo "Activate the environment from environment.yml, or update it with conda env update -f environment.yml."
         return 1
     fi
 
@@ -217,6 +218,10 @@ install_samovar_r_package() {
         fi
         info="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("samovaR"))) } else cat("MISSING")' 2>/dev/null || true)"
         echo "samovaR: $info"
+        if ! echo "$info" | grep -q '^INSTALLED'; then
+            echo "samovaR could not be loaded after installation. Check its required R dependencies."
+            return 1
+        fi
     fi
 
     mkdir -p "$USER_CFG_DIR"
@@ -254,6 +259,7 @@ PY
 install_sparsedossa2() {
     if ! command -v R >/dev/null 2>&1 && ! command -v Rscript >/dev/null 2>&1; then
         echo "R is not on PATH; cannot install SparseDOSSA2."
+        echo "Activate the environment from environment.yml, or update it with conda env update -f environment.yml."
         echo "See https://github.com/biobakery/SparseDOSSA2 and https://github.com/biobakery/biobakery/wiki/SparseDOSSA2"
         return 1
     fi
@@ -282,7 +288,7 @@ if (length(missing)) {
         echo "Installing SparseDOSSA2 from https://github.com/biobakery/SparseDOSSA2 ..."
         # Do not swallow stderr: failed Rmpfr/huge builds are the usual GHA failure mode.
         # Do not use remotes::install_github: bundled PAT → HTTP 401 on GHA.
-        if ! r_install_github_local "biobakery/SparseDOSSA2" "" "TRUE"; then
+        if ! r_install_github_local "biobakery/SparseDOSSA2" "" "NA"; then
             echo "GitHub SparseDOSSA2 install failed."
             echo "On Debian/Ubuntu install build deps first:"
             echo "  sudo apt-get install -y libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran"
@@ -988,7 +994,10 @@ for tool in kraken2 kaiju; do
     fi
 done
 if [ "${SAMOVAR_INSTALL_R:-0}" != "0" ]; then
-    install_samovar_r_package || echo "Warning: optional R package install did not complete."
+    if ! install_samovar_r_package; then
+        echo "ERROR: samovaR package install did not complete."
+        [ "$INSTALL_FULL" = "1" ] && exit 1
+    fi
 else
     echo "Skipping R package (not required). Use ./install.sh R-package to install samovaR from GitHub branch r-package."
 fi

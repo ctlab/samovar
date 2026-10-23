@@ -23,5 +23,35 @@ dependencies:
   - ete3
   - biopython>=1.80
   - insilicoseq
+  # Binary dependencies of samovaR and SparseDOSSA2 (./install.sh full).
+  - r-base>=4.2
+  - r-remotes
+  - r-magrittr
+  - r-dplyr
+  - r-ggplot2
+  - r-tibble
+  - r-tidyr
+  - r-forcats
+  - r-stringr
+  - r-plotly
+  - r-httr
+  - r-jsonlite
+  - r-xml2
+  - r-tsne
+  - r-matrix
+  - r-scclust
+  - r-distances
+  - r-htmlwidgets
+  - r-progress
+  - r-ggnewscale
+  - r-yaml
+  - r-ks
+  - r-mvtnorm
+  - r-huge
+  - r-future
+  - r-future.apply
+  - r-truncnorm
+  - r-igraph
+  - r-rmpfr
   - pip:
       - cnsplots>=0.6.0
