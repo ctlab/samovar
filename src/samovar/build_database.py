@@ -57,10 +57,11 @@ def get_taxonomy_db(
     db_path: str="kraken_db",
     taxonomy_path: str=None
 ) -> None:
-    """Place NCBI ``nodes.dmp`` / ``names.dmp`` into ``db_path`` via symlinks.
+    """Place NCBI ``nodes.dmp`` / ``names.dmp`` into ``db_path`` as real files.
 
     Source is ``taxonomy_path`` or the install ``genomes.taxdump`` directory
-    (downloaded there once if missing). Does not copy or re-fetch into each DB.
+    (downloaded there once if missing). Copies the dumps so a moved DB folder
+    still has ``nodes.dmp``. Replaces leftover symlinks from older builds.
     """
     from samovar.taxdump import ensure_taxdump, link_taxdump_into
 
@@ -68,7 +69,14 @@ def get_taxonomy_db(
     dest = Path(db_path)
     existing_nodes = dest / "nodes.dmp"
     existing_nested = dest / "taxonomy" / "nodes.dmp"
-    if existing_nodes.exists() or existing_nested.exists():
+
+    def _portable(path: Path) -> bool:
+        try:
+            return path.is_file() and not path.is_symlink()
+        except OSError:
+            return False
+
+    if _portable(existing_nodes) or _portable(existing_nested):
         logger.info(f"Taxonomy already present under {db_path}; skipping download")
         return
 
@@ -699,7 +707,7 @@ def build_database_krakenunique(
     if not (taxonomy / "nodes.dmp").is_file() or not (taxonomy / "names.dmp").is_file():
         raise FileNotFoundError(
             f"KrakenUniq needs {taxonomy}/nodes.dmp and names.dmp "
-            "(symlinks to the configured taxdump)."
+            "(copied from the configured taxdump)."
         )
     # An empty or stale list hides the library. build_db.sh rebuilds it when absent.
     stale_list = Path(db_path) / "library-files.txt"

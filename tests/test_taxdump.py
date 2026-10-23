@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ from samovar.main_config import build_install_config, disk_payload
 from samovar.version import get_version
 
 
-def test_link_taxdump_into_symlinks_dmp_only(tmp_path):
+def test_link_taxdump_into_copies_dmp_only(tmp_path):
     src = tmp_path / "taxdump"
     src.mkdir()
     (src / "nodes.dmp").write_text("1\t|\t1\t|\n")
@@ -28,10 +29,30 @@ def test_link_taxdump_into_symlinks_dmp_only(tmp_path):
     (src / "prot.accession2taxid.gz").write_text("huge")
     dest = tmp_path / "kaiju_db"
     link_taxdump_into(dest, src)
-    assert (dest / "nodes.dmp").is_symlink()
-    assert (dest / "nodes.dmp").resolve() == (src / "nodes.dmp").resolve()
-    assert (dest / "names.dmp").is_symlink()
+    assert (dest / "nodes.dmp").is_file()
+    assert not (dest / "nodes.dmp").is_symlink()
+    assert (dest / "nodes.dmp").read_text() == "1\t|\t1\t|\n"
+    assert (dest / "names.dmp").is_file()
+    assert not (dest / "names.dmp").is_symlink()
     assert not (dest / "prot.accession2taxid.gz").exists()
+
+
+def test_link_taxdump_into_survives_moving_the_db(tmp_path):
+    src = tmp_path / "taxdump"
+    src.mkdir()
+    (src / "nodes.dmp").write_text("1\t|\t1\t|\n")
+    (src / "names.dmp").write_text("1\t|\troot\t|\n")
+    dest = tmp_path / "kaiju_db"
+    dest.mkdir()
+    (dest / "kaiju_db.fmi").write_text("index")
+    link_taxdump_into(dest, src)
+    moved = tmp_path / "elsewhere" / "kaiju_db"
+    shutil.move(str(dest), str(moved))
+    shutil.rmtree(src)
+    assert (moved / "nodes.dmp").is_file()
+    assert not (moved / "nodes.dmp").is_symlink()
+    assert (moved / "nodes.dmp").read_text() == "1\t|\t1\t|\n"
+    assert (moved / "kaiju_db.fmi").read_text() == "index"
 
 
 def test_get_taxonomy_db_uses_source_dir(tmp_path, monkeypatch):
@@ -41,7 +62,22 @@ def test_get_taxonomy_db_uses_source_dir(tmp_path, monkeypatch):
     (src / "names.dmp").write_text("1\t|\troot\t|\n")
     db = tmp_path / "db"
     get_taxonomy_db(db_path=str(db), taxonomy_path=str(src))
-    assert (db / "nodes.dmp").is_symlink()
+    assert (db / "nodes.dmp").is_file()
+    assert not (db / "nodes.dmp").is_symlink()
+
+
+def test_get_taxonomy_db_replaces_symlink_with_copy(tmp_path):
+    src = tmp_path / "shared"
+    src.mkdir()
+    (src / "nodes.dmp").write_text("1\t|\t1\t|\n")
+    (src / "names.dmp").write_text("1\t|\troot\t|\n")
+    db = tmp_path / "db"
+    db.mkdir()
+    (db / "nodes.dmp").symlink_to(src / "nodes.dmp")
+    get_taxonomy_db(db_path=str(db), taxonomy_path=str(src))
+    assert (db / "nodes.dmp").is_file()
+    assert not (db / "nodes.dmp").is_symlink()
+    assert (db / "nodes.dmp").read_text() == "1\t|\t1\t|\n"
 
 
 def test_build_install_config_records_taxdump(tmp_path):

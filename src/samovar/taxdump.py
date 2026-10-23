@@ -2,7 +2,8 @@
 
 Configured as ``genomes.taxdump`` (env ``SAMOVAR_TAXDUMP``). Default:
 ``{samovar_database}/taxdump``. Downloads land there once; Kaiju/Kraken DBs
-get symlinks to the ``.dmp`` files instead of a fresh NCBI fetch.
+get copies of the ``.dmp`` files so the index stays readable after the folder
+is moved.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import hashlib
 import logging
 import os
 import pickle
+import shutil
 import tarfile
 import tempfile
 from datetime import datetime
@@ -591,20 +593,27 @@ def ensure_taxdump(cfg: Optional[Dict[str, Any]] = None) -> Path:
     return dest
 
 
-def _replace_symlink(dest: Path, source: Path) -> None:
+def _place_dmp(dest: Path, source: Path) -> None:
+    """Copy ``source`` onto ``dest``. Replace a symlink so the DB is portable."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    resolved = source.resolve()
     try:
-        if dest.is_symlink() or dest.is_file():
+        if dest.is_symlink():
             dest.unlink()
-        elif dest.exists():
+        elif dest.is_file() or dest.exists():
             return
     except OSError:
         return
-    os.symlink(source, dest)
+    shutil.copy2(resolved, dest)
 
 
 def link_taxdump_into(db_path: PathLike, source: Optional[PathLike] = None) -> Path:
-    """Symlink ``nodes.dmp`` / ``names.dmp`` (and siblings) into ``db_path``."""
+    """Copy ``nodes.dmp`` / ``names.dmp`` (and siblings) into ``db_path``.
+
+    Copies, not symlinks: a moved Kaiju/Kraken folder must still open
+    ``nodes.dmp``. Existing regular files are left in place; dangling or
+    live symlinks are replaced with copies.
+    """
     src_root = _as_path(source) if source else ensure_taxdump()
     if src_root.is_file() and str(src_root).endswith(".gz"):
         src_root = ensure_taxdump()
@@ -615,11 +624,11 @@ def link_taxdump_into(db_path: PathLike, source: Optional[PathLike] = None) -> P
         found = find_dmp(name, src_root)
         if found is None:
             continue
-        _replace_symlink(dest / name, found.resolve())
+        _place_dmp(dest / name, found)
         linked += 1
     if linked == 0:
         raise FileNotFoundError(f"No taxdump .dmp files under {src_root}")
-    logger.info("Linked %s taxdump file(s) into %s", linked, dest)
+    logger.info("Copied %s taxdump file(s) into %s", linked, dest)
     return dest
 
 
