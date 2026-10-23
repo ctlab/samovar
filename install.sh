@@ -19,6 +19,7 @@
 #   ./install.sh NanoSim         optional NanoSim in a separate conda env (ONT / hybrid)
 #   ./install.sh ART             optional ART Illumina simulator in a separate conda env
 #   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
+#   ./install.sh nextflow        optional Nextflow >=25.04.2 (CAMISIM read modes)
 #   ./install.sh MegaHIT         optional MegaHIT assembler (sidecar)
 #   ./install.sh SPAdes          optional SPAdes / metaSPAdes assembler (sidecar; included in full)
 #   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
@@ -547,37 +548,57 @@ install_seqtk() {
     return 1
 }
 
+nextflow_compatible() {
+    # 25.04.2 removed `conda create --mkdir`, rejected by conda >=25.3.
+    local version
+    version="$(nextflow -version 2>&1)" || return 1
+    [[ "$version" =~ version[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
+    (( 10#${BASH_REMATCH[1]} > 25 ||
+       (10#${BASH_REMATCH[1]} == 25 &&
+        (10#${BASH_REMATCH[2]} > 4 ||
+         (10#${BASH_REMATCH[2]} == 4 && 10#${BASH_REMATCH[3]} >= 2))) ))
+}
+
 install_nextflow() {
-    if command -v nextflow >/dev/null 2>&1; then
-        echo "nextflow: $(command -v nextflow)"
-        return 0
+    if ! nextflow_compatible; then
+        if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+            echo "Nextflow >=25.04.2 is required. Offline mode: install it before running CAMISIM."
+            return 1
+        fi
+        local conda_bin="${SAMOVAR_CONDA:-}"
+        if [ -z "$conda_bin" ]; then
+            conda_bin="$(command -v mamba || command -v conda || true)"
+        fi
+        if [ -z "$conda_bin" ]; then
+            echo "Nextflow >=25.04.2 is missing and conda/mamba was not found."
+            echo "Install with: conda install -c conda-forge -c bioconda 'nextflow>=25.04.2'"
+            echo "or https://www.nextflow.io/docs/latest/install.html"
+            return 1
+        fi
+        echo "Installing/upgrading optional Nextflow >=25.04.2 (CAMISIM 2 read simulation) ..."
+        if ! "$conda_bin" install -y -c conda-forge -c bioconda 'nextflow>=25.04.2'; then
+            echo "Warning: nextflow install failed. CAMISIM table+ISS mode still works without it."
+            return 1
+        fi
+        hash -r 2>/dev/null || true
+        if ! nextflow_compatible; then
+            echo "Nextflow on PATH is still unavailable or older than 25.04.2. Check PATH and NXF_VER."
+            return 1
+        fi
     fi
-    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
-        echo "Skipping nextflow install in offline mode. conda install -c bioconda nextflow"
-        return 1
-    fi
-    local conda_bin="${SAMOVAR_CONDA:-}"
-    if [ -z "$conda_bin" ]; then
-        conda_bin="$(command -v mamba || command -v conda || true)"
-    fi
-    if [ -z "$conda_bin" ]; then
-        echo "nextflow is not on PATH and conda/mamba was not found."
-        echo "Install with: conda install -c bioconda nextflow"
-        echo "or https://www.nextflow.io/docs/latest/install.html"
-        return 1
-    fi
-    echo "Installing optional Nextflow via bioconda (needed for CAMISIM 2 read simulation) ..."
-    if ! "$conda_bin" install -y -c bioconda -c conda-forge nextflow; then
-        echo "Warning: nextflow install failed. CAMISIM table+ISS mode still works without it."
-        return 1
-    fi
-    hash -r 2>/dev/null || true
-    if command -v nextflow >/dev/null 2>&1; then
-        echo "nextflow: $(command -v nextflow)"
-        return 0
-    fi
-    echo "nextflow installed but not on PATH in this shell."
-    return 1
+    local nextflow_bin
+    nextflow_bin="$(command -v nextflow)"
+    echo "nextflow: $nextflow_bin"
+    "$PYTHON_PATH" - "$nextflow_bin" <<'PYCONFIG'
+import sys
+from samovar.main_config import set_tool
+from samovar.paths import load_config, write_config
+
+cfg = load_config()
+cfg["nextflow_path"] = sys.argv[1]
+set_tool(cfg, "nextflow", path=sys.argv[1], group="workflow")
+write_config(cfg)
+PYCONFIG
 }
 
 print_install_status() {
