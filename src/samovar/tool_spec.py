@@ -392,7 +392,17 @@ def record_to_spec(record: Mapping[str, Any], name: str = "") -> List[str]:
     )
 
 
-def probe_tool_version(path: str, name: str = "") -> str:
+def probe_tool_version(
+    path: str, name: str = "", *, cfg: Optional[Mapping[str, Any]] = None,
+) -> str:
+    bare = bare_tool_name(name)
+    if cfg is not None:
+        from samovar.paths import python_path, resolve_executable
+
+        try:
+            path = python_path(cfg) if bare in {"python", "python3"} else resolve_executable(path, tool_key=bare, cfg=cfg)
+        except OSError:
+            return ""
     exe = str(path or "").strip()
     if not exe:
         return ""
@@ -413,7 +423,6 @@ def probe_tool_version(path: str, name: str = "") -> str:
         match = _VERSION_TOKEN.search(blob)
         if match:
             return match.group(1)
-    bare = bare_tool_name(name)
     if bare in {"python", "python3"}:
         try:
             proc = subprocess.run(
@@ -530,13 +539,14 @@ def version_mismatch_rows(cfg: Optional[Mapping[str, Any]] = None) -> List[Tuple
     for key, value in raw.items():
         rec = parse_tool_record(value, str(key))
         bare, prev = split_tool_key(key)
-        found = probe_tool_version(str((rec.get("exec") or {}).get("path") or ""), bare)
         tested = TESTED_TOOL_VERSIONS.get(bare) or prev
         if bare == "samovar":
             from samovar.version import get_version
 
             found = get_version()
             tested = get_version()
+        else:
+            found = probe_tool_version(str((rec.get("exec") or {}).get("path") or ""), bare, cfg=data)
         if not found or not tested:
             continue
         if found.split(".")[:2] != tested.split(".")[:2] and found != tested:

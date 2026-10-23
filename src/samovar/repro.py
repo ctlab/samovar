@@ -207,9 +207,16 @@ def capture_tools(cfg: Optional[Mapping[str, Any]] = None) -> Tuple[Dict[str, An
         bare, ver = split_tool_key(key)
         exe = dict(rec.get("exec") or {})
         path = str(exe.get("path") or "")
-        found = ver or probe_tool_version(path, bare)
-        if bare in {"samovar"}:
+        if bare in {"python", "python3"}:
+            from samovar.paths import python_path
+
+            path = python_path(data)
+            exe["path"] = path
+            found = probe_tool_version(path, bare, cfg=data)
+        elif bare == "samovar":
             found = get_version()
+        else:
+            found = ver or probe_tool_version(path, bare, cfg=data)
         lazy = str(rec.get("lazy-install") or "").strip() or lazy_install_for(bare, found)
         builtin = is_builtin_tool(bare)
         row = {
@@ -405,15 +412,20 @@ def compare_tools(snap: DictConfig) -> List[Dict[str, str]]:
         found = ""
         if bare in {"samovar"}:
             found = get_version()
+        elif bare in {"python", "python3"}:
+            from samovar.paths import python_path
+
+            path = python_path()
+            found = probe_tool_version(path, bare, cfg=load_config())
         elif want:
-            found = probe_tool_version(path, bare) if path else ""
+            found = probe_tool_version(path, bare, cfg=load_config()) if path else ""
             if not found:
                 from samovar.main_config import lookup_tool_record
 
                 live = lookup_tool_record(load_config(), bare)
                 if live:
                     live_path = str((live.get("exec") or {}).get("path") or "")
-                    found = probe_tool_version(live_path, bare)
+                    found = probe_tool_version(live_path, bare, cfg=load_config())
                     found = found or str(live.get("_version") or "")
                     path = live_path or path
         status = "ok"

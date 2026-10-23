@@ -140,3 +140,43 @@ def test_direct_shell_wrapper_uses_configured_python(runtime, tmp_path):
     assert result.returncode == 0, result.stderr
     assert output.read_text().strip() == 'r\t9606'
     assert not called.exists()
+
+
+@pytest.mark.parametrize("schema", ["legacy", "canonical"])
+def test_public_prepare_exec_provenance_uses_configured_python(runtime, tmp_path, schema):
+    from omegaconf import OmegaConf
+
+    config, python, snake, capture, called = runtime
+    payload = json.loads(config.read_text())
+    if schema == "legacy":
+        payload.pop("compilers")
+        payload["python_path"] = str(python)
+        payload["tools"]["python3"] = ["", "bash", "python3", "runtime"]
+        payload["tools"]["samovar"] = ["", "bash", "python3", "runtime"]
+    else:
+        payload["tools"]["python3:99.7.3"] = {"exec": {"path": "python3"}, "type": "runtime"}
+        payload["tools"]["samovar"] = {"exec": {"path": "python3"}, "type": "runtime"}
+    config.write_text(json.dumps(payload))
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "sample.fastq").write_text("@r|taxid:562\nACGT\n+\nIIII\n")
+    output = tmp_path / "provenance space's Ω"
+    commands = [
+        ["prepare", "--input_dir", str(reads), "--output_dir", str(output),
+         "--endpoint", "setup_reads", "--cores", "1", "--scoring", "none",
+         "--no-multiqc", "--autoimport", "0"],
+        ["exec", "--output_dir", str(output)],
+    ]
+    for args in commands:
+        result = subprocess.run([str(REPO / "bin/samovar"), *args], text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not called.exists(), result.stdout + result.stderr
+        snap = OmegaConf.load(output / ".hydra/config.yaml")
+        assert args[0] in snap.stages
+        assert Path(snap.env.python).resolve() == python.resolve()
+        rows = [rec for rec in snap.tools.values() if rec.name == "python3"]
+        assert len(rows) == 1
+        assert rows[0].version == sys.version.split()[0]
+        assert Path(rows[0].exec.path).resolve() == python.resolve()
+    assert (output / ".log/checkpoints/setup_reads.done").is_file()
+    assert (output / "initial/sample.fastq").read_text() == (reads / "sample.fastq").read_text()

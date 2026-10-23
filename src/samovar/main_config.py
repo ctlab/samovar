@@ -1646,7 +1646,7 @@ def _tools_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
         if bare == "samovar" and not ver:
             ver = get_version()
         elif not ver and exe.get("path") and bare not in {"samovar"}:
-            ver = probe_tool_version(str(exe.get("path")), bare)
+            ver = probe_tool_version(str(exe.get("path")), bare, cfg=cfg)
         if not rec.get("lazy-install"):
             rec["lazy-install"] = lazy_install_for(bare, ver)
         if not rec.get("flags-translate"):

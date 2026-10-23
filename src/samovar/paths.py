@@ -416,8 +416,8 @@ def load_config() -> Dict[str, Any]:
     return as_install_config(merged)
 
 
-def python_path() -> str:
-    cfg = load_config()
+def python_path(cfg: Optional[Dict[str, Any]] = None) -> str:
+    cfg = load_config() if cfg is None else cfg
     configured = compiler_python(cfg).strip()
     if not configured:
         return sys.executable
@@ -574,7 +574,10 @@ def command_argv(command: str) -> List[str]:
     return shlex.split(text)
 
 
-def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = None) -> str:
+def resolve_executable(
+    name_or_path: Optional[str], tool_key: Optional[str] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> str:
     """Return an absolute executable path when possible; otherwise the original token."""
     if not name_or_path:
         return ""
@@ -592,7 +595,7 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
     ):
         return shlex.join([str(token_path.resolve()), *rest]) if rest else str(token_path.resolve())
 
-    cfg = load_config()
+    cfg = load_config() if cfg is None else cfg
     tools_map = iter_tools(cfg)
     name = Path(tool_key or token).name
     mapped = tool_entry_path(tools_map.get(name) or tools_map.get(Path(name).stem), name)
