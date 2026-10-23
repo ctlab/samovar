@@ -118,17 +118,30 @@ if (!length(samovar_data_list)) {
   samovar_data_long <- read_annotation_dir(annotation_dir)
   samovar_data_list <- annotation2samovar(samovar_data_long)
 }
+if (!length(samovar_data_list)) stop("No input tables for samovaR regeneration")
 for (i in seq_along(samovar_data_list)) {
   annotator <- names(samovar_data_list)[i]
   tryCatch({
     config$samovar_data <- samovar_data_list[[i]]$copy()
     samovar <- do.call(samovar_preprocess, config)
-    if (!is.null(config$seed)) {
-      new_data <- samovar_boil(samovar, N = config$N, seed = config$seed)
-    } else {
-      new_data <- samovar_boil(samovar, N = config$N)
+    new_data <- withCallingHandlers({
+      if (!is.null(config$seed)) {
+        samovar_boil(samovar, N = config$N, seed = config$seed)
+      } else {
+        samovar_boil(samovar, N = config$N)
+      }
+    }, warning = function(w) {
+      if (grepl("incomplete|incompete", conditionMessage(w), ignore.case = TRUE)) {
+        stop(conditionMessage(w), call. = FALSE)
+      }
+    })
+    values <- round(as.matrix(new_data$data) * config$N_reads)
+    if ("error" %in% rownames(values) || ncol(values) != config$N ||
+        !nrow(values) || any(!is.finite(values)) || any(values < 0) ||
+        any(colSums(values) <= 0)) {
+      stop("Incomplete or invalid generated samples")
     }
-    result_df <- as.data.frame(round(new_data$data * config$N_reads))
+    result_df <- as.data.frame(values)
     result_df <- tibble::rownames_to_column(result_df, "taxid")
     colnames(result_df)[-1] <- paste0("N_", colnames(result_df)[-1])
     write.csv(
@@ -137,7 +150,7 @@ for (i in seq_along(samovar_data_list)) {
       row.names = FALSE
     )
   }, error = function(e) {
-    warning(paste0("samovaR generation failed for ", annotator, ": ", conditionMessage(e)))
+    stop(paste0("samovaR generation failed for ", annotator, ": ", conditionMessage(e)), call. = FALSE)
   })
 }
 '''
@@ -1518,6 +1531,33 @@ def _resolve_r_executable() -> Tuple[str, Optional[str]]:
     )
 
 
+def _read_samovar_tables(output_dir, expected_names, n_samples):
+    """Accept only complete, fresh samovaR results (shared by both R callers)."""
+    import numpy as np
+    from samovar.abundance import n_sample_columns
+
+    root = Path(output_dir)
+    names = list(expected_names) or [p.stem for p in root.glob("*.csv")]
+    if not names:
+        raise RuntimeError("samovaR did not generate any abundance tables")
+    written = {}
+    for name in names:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name))
+        path = root / f"{safe}.csv"
+        if not path.is_file():
+            raise RuntimeError(f"samovaR did not generate the required table: {name}")
+        table = pd.read_csv(path)
+        cols = n_sample_columns(table)
+        values = table[cols].apply(pd.to_numeric, errors="coerce")
+        if ("taxid" not in table or table.empty or len(cols) != n_samples
+                or table["taxid"].astype(str).eq("error").any()
+                or not np.isfinite(values.to_numpy()).all()
+                or (values < 0).any().any() or (values.sum() <= 0).any()):
+            raise RuntimeError(f"samovaR generated an incomplete or invalid table: {name}")
+        written[safe] = table
+    return written
+
+
 def _samovar_annotation_regenerate_python(
     annotation_dir: str,
     config_samovar_dict: dict,
@@ -1566,7 +1606,6 @@ def samovar_annotation_regenerate(
     """
     from samovar.regenerate import resolve_regeneration_mode
 
-    tmp_config_path = None
     if config_samovar is None:
         config_samovar_dict = {
             "threshold_amount": 1e-5,
@@ -1593,49 +1632,38 @@ def samovar_annotation_regenerate(
         )
         return
 
-    annotation_regenerate = str(_optional_r_regenerator_script())
+    from samovar.abundance import dir_looks_like_annotation, input_to_abundance_tables, load_table_input
+    from samovar.regenerate import _write_abundance_tables
 
+    annotation_regenerate = str(_optional_r_regenerator_script())
     r_path, r_lib_path = _resolve_r_executable()
     os.makedirs(output_dir, exist_ok=True)
     env = os.environ.copy()
     if r_lib_path:
         env["R_LIBS"] = r_lib_path
         env["R_LIBS_USER"] = r_lib_path
-
-    config_path = config_samovar
-    if config_path is None:
-        handle = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-        )
-        yaml.dump(config_samovar_dict, handle)
-        handle.close()
-        tmp_config_path = handle.name
-        config_path = tmp_config_path
-
-    cmd = [
-        r_path,
-        "--vanilla",
-        "-s",
-        "-f",
-        annotation_regenerate,
-        "--args",
-        "--config",
-        str(config_path),
-        "--annotation_dir",
-        str(annotation_dir),
-        "--output_dir",
-        str(output_dir),
-    ]
-    try:
-        subprocess.run(cmd, check=True, env=env)
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            "samovar_annotation_regenerate failed while running R "
-            f"(exit {exc.returncode}). Command: {' '.join(cmd)}"
-        ) from exc
-    finally:
-        if tmp_config_path:
-            try:
-                os.unlink(tmp_config_path)
-            except OSError:
-                pass
+    expected = list(input_to_abundance_tables(load_table_input(annotation_dir)))
+    if dir_looks_like_annotation(annotation_dir):
+        expected = ["taxID_" + name for name in expected]
+    n_samples = int(config_samovar_dict.get("N", config_samovar_dict.get(False, 1)) or 1)
+    with tempfile.TemporaryDirectory(prefix=".samovar_r_", dir=output_dir) as tmp:
+        work = Path(tmp)
+        generated = work / "output"
+        generated.mkdir()
+        r_cfg = dict(config_samovar_dict, output_dir=str(generated))
+        config_path = work / "config.yaml"
+        config_path.write_text(yaml.safe_dump(r_cfg), encoding="utf-8")
+        cmd = [
+            r_path, "--vanilla", "-s", "-f", annotation_regenerate, "--args",
+            "--config", str(config_path), "--annotation_dir", str(annotation_dir),
+            "--output_dir", str(generated),
+        ]
+        try:
+            subprocess.run(cmd, check=True, env=env)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "samovar_annotation_regenerate failed while running R "
+                f"(exit {exc.returncode}). Command: {' '.join(cmd)}"
+            ) from exc
+        written = _read_samovar_tables(generated, expected, n_samples)
+    _write_abundance_tables(output_dir, written)

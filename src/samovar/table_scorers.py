@@ -1044,20 +1044,31 @@ def write_table_score_plots(
     return written
 
 
+def _candidate_generation_errors(dest: Path) -> Dict[str, str]:
+    selection = dest / ".table_candidates" / "table_selection.json"
+    if not selection.is_file():
+        return {}
+    return json.loads(selection.read_text(encoding="utf-8")).get("generate_errors") or {}
+
+
 def load_tables_by_mode_from_run(output_dir: PathLike) -> Dict[str, Dict[str, pd.DataFrame]]:
     from samovar.abundance import load_abundance_dir, regenerated_abundance_dir
 
     dest = regenerated_abundance_dir(output_dir)
     candidates = dest / ".table_candidates"
+    failed = {
+        re.sub(r"[^A-Za-z0-9._-]+", "_", mode)
+        for mode in _candidate_generation_errors(dest)
+    }
     tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
     if candidates.is_dir():
         for child in sorted(candidates.iterdir()):
-            if not child.is_dir():
+            if not child.is_dir() or child.name in failed:
                 continue
             loaded = load_abundance_dir(child)
             if loaded:
                 tables_by_mode[child.name] = loaded
-    if not tables_by_mode:
+    if not tables_by_mode and not failed:
         loaded = load_abundance_dir(dest)
         if loaded:
             tables_by_mode["generated"] = loaded
@@ -1095,6 +1106,7 @@ def stage_score_regenerated_tables(
     )
     mixed = ranked.get("tables") or {}
     dest = regenerated_abundance_dir(root)
+    ranked["generate_errors"] = _candidate_generation_errors(dest)
     if mixed:
         write_abundance_dir(dest, mixed)
     payload = {k: v for k, v in ranked.items() if k != "tables"}

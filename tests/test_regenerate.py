@@ -69,6 +69,7 @@ def _n_matrix(df):
 
 
 def _fake_iss(cmd, **kwargs):
+    """Emit requested pairs with ISS source IDs so composition splitting is realistic."""
     class Result:
         returncode = 0
 
@@ -76,8 +77,17 @@ def _fake_iss(cmd, **kwargs):
         output = cmd[cmd.index("--output") + 1]
         os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
         with open(f"{output}_R1.fastq", "w") as r1, open(f"{output}_R2.fastq", "w") as r2:
-            r1.write("@read/1\nACGT\n+\nIIII\n")
-            r2.write("@read/2\nTGCA\n+\nIIII\n")
+            if "--readcount_file" in cmd:
+                lines = Path(cmd[cmd.index("--readcount_file") + 1]).read_text().splitlines()
+                sources = [(line.split()[0], int(line.split()[1])) for line in lines if line.strip()]
+            else:
+                fasta = Path(cmd[cmd.index("--genomes") + 1])
+                source = next(line[1:].split()[0] for line in fasta.read_text().splitlines() if line.startswith(">"))
+                sources = [(source, int(cmd[cmd.index("--n_reads") + 1]))]
+            for source, total in sources:
+                for i in range(total // 2):
+                    r1.write(f"@{source}_{i}_0/1\nACGT\n+\nIIII\n")
+                    r2.write(f"@{source}_{i}_0/2\nTGCA\n+\nIIII\n")
     return Result()
 
 

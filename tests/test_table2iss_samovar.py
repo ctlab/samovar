@@ -155,7 +155,7 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypa
         "samovar.table2iss.annotation_regenerate_r", lambda: script
     )
     config_path = _write_config(
-        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "samovar"}
+        {**mock_config, "N": 1, "output_dir": str(output_dir), "regeneration_mode": "samovar"}
     )
 
     calls = []
@@ -165,9 +165,10 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypa
         class Result:
             returncode = 0
 
-        output_dir.mkdir(parents=True, exist_ok=True)
+        generated = Path(cmd[cmd.index("--output_dir") + 1])
+        generated.mkdir(parents=True, exist_ok=True)
         pd.DataFrame({"taxid": [562], "N_1": [10]}).to_csv(
-            output_dir / "kaiju.csv", index=False
+            generated / "kaiju.csv", index=False
         )
         return Result()
 
@@ -284,13 +285,15 @@ def test_samovar_annotation_regenerate_basic(
         )
 
         output_files = list(test_output_dir.glob("*.csv"))
-        assert len(output_files) > 0, "No output files were created"
+        assert {p.name for p in output_files} == {"taxID_kraken2.csv", "taxID_kaiju.csv"}
 
         for output_file in output_files:
             df = pd.read_csv(output_file)
             assert not df.empty, f"Output file {output_file} is empty"
             assert "taxid" in df.columns
+            assert "error" not in set(df["taxid"].astype(str))
             numeric = df.drop(columns=["taxid"], errors="ignore")
+            assert len(numeric.columns) == mock_config["N"]
             if not numeric.empty:
                 values = numeric.apply(pd.to_numeric, errors="coerce")
                 assert (values.fillna(0) >= 0).all().all()

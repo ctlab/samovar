@@ -787,6 +787,9 @@ def regenerate_annotation_tables(
         except Exception as exc:
             tables_by_mode[mode] = {}
             generate_errors[mode] = str(exc)
+            import warnings
+
+            warnings.warn(f"Table regenerator '{mode}' failed: {exc}", RuntimeWarning, stacklevel=2)
 
     mixed: Dict[str, pd.DataFrame] = {}
     for mode in modes:
@@ -802,6 +805,10 @@ def regenerate_annotation_tables(
 
     if not select_best:
         _write_abundance_tables(out, mixed)
+        selected = next(mode for mode in modes if tables_by_mode.get(mode))
+        payload = {"winner": selected, "generate_errors": generate_errors}
+        write_table_selection(out / "table_selection.json", payload)
+        write_table_selection(candidates_root / "table_selection.json", payload)
         return mixed
 
     from samovar.table_scorers import rank_methods_per_annotator

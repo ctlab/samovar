@@ -405,12 +405,9 @@ class GlmTableRegenerator(TableRegenerator):
 
 class SamovarRTableRegenerator(TableRegenerator):
     def run(self, annotation, metadata, config):
-        from samovar.abundance import input_to_abundance_tables
+        from samovar.abundance import input_to_abundance_tables, load_table_input
         from samovar.regenerate import _write_abundance_tables, write_samovar_config_defaults
-        from samovar.table2iss import (
-            R_REGENERATE_DRIVER,
-            _resolve_r_executable,
-        )
+        from samovar.table2iss import R_REGENERATE_DRIVER, _read_samovar_tables, _resolve_r_executable
         import os
         import tempfile
         import yaml
@@ -420,16 +417,10 @@ class SamovarRTableRegenerator(TableRegenerator):
         out = Path(str(cfg.get("output_dir") or "regenerated_abundance"))
         out.mkdir(parents=True, exist_ok=True)
         tables = input_to_abundance_tables(annotation)
-        staging = out / ".samovar_r_input"
-        if tables:
-            _write_abundance_tables(staging, tables)
-            input_dir = str(staging)
-        else:
-            input_dir = str(cfg.get("annotation_dir") or "")
-            if not input_dir:
-                raise ValueError(
-                    "regeneration_mode='samovar' needs an abundance table or annotation_dir."
-                )
+        if not tables and cfg.get("annotation_dir"):
+            tables = input_to_abundance_tables(load_table_input(cfg["annotation_dir"]))
+        if not tables:
+            raise ValueError("regeneration_mode='samovar' needs abundance tables or annotation_dir.")
         r_cfg = {
             "N": int(cfg.get("N") or 1),
             "N_reads": int(cfg.get("N_reads") or 100),
@@ -443,57 +434,36 @@ class SamovarRTableRegenerator(TableRegenerator):
         if r_lib_path:
             env["R_LIBS"] = r_lib_path
             env["R_LIBS_USER"] = r_lib_path
-        cfg_tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-        )
-        # Quote N: YAML 1.1 reads a bare key N as boolean false.
-        dumped = yaml.safe_dump(r_cfg, sort_keys=False)
-        cfg_tmp.write(re.sub(r"(?m)^N:", '"N":', dumped))
-        cfg_tmp.close()
-        drv_tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".R", delete=False, encoding="utf-8"
-        )
-        drv_tmp.write(R_REGENERATE_DRIVER)
-        drv_tmp.close()
-        cmd = [
-            r_path,
-            "--vanilla",
-            "-s",
-            "-f",
-            drv_tmp.name,
-            "--args",
-            "--config",
-            cfg_tmp.name,
-            "--annotation_dir",
-            input_dir,
-            "--output_dir",
-            str(out),
-        ]
-        try:
-            subprocess.run(cmd, check=True, env=env)
-        except FileNotFoundError as exc:
-            raise ValueError(
-                "regeneration_mode='samovar' uses the optional R regenerator. "
-                "Install samovaR (./install.sh R-package) and set r_path."
-            ) from exc
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                f"samovaR regenerator failed (exit {exc.returncode})"
-            ) from exc
-        finally:
-            Path(cfg_tmp.name).unlink(missing_ok=True)
-            Path(drv_tmp.name).unlink(missing_ok=True)
-        written = {
-            p.stem: pd.read_csv(p)
-            for p in sorted(out.glob("*.csv"))
-            if "taxid" in pd.read_csv(p, nrows=0).columns
-        }
-        if written:
-            return written
-        raise ValueError(
-            "regeneration_mode='samovar' uses the optional R regenerator. "
-            "Install samovaR (./install.sh R-package) and set SAMOVAR_R_REGENERATE."
-        )
+        # A previous CSV must not stand in for a missing result of this run.
+        with tempfile.TemporaryDirectory(prefix=".samovar_r_", dir=out) as tmp:
+            work = Path(tmp)
+            staging = work / "input"
+            generated = work / "output"
+            generated.mkdir()
+            _write_abundance_tables(staging, tables)
+            config_path = work / "config.yaml"
+            config_path.write_text(yaml.safe_dump(r_cfg, sort_keys=False), encoding="utf-8")
+            driver = work / "driver.R"
+            driver.write_text(R_REGENERATE_DRIVER, encoding="utf-8")
+            cmd = [
+                r_path, "--vanilla", "-s", "-f", str(driver), "--args",
+                "--config", str(config_path), "--annotation_dir", str(staging),
+                "--output_dir", str(generated),
+            ]
+            try:
+                subprocess.run(cmd, check=True, env=env)
+            except FileNotFoundError as exc:
+                raise ValueError(
+                    "regeneration_mode='samovar' uses the optional R regenerator. "
+                    "Install samovaR (./install.sh R-package) and set r_path."
+                ) from exc
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    f"samovaR regenerator failed (exit {exc.returncode})"
+                ) from exc
+            written = _read_samovar_tables(generated, tables, r_cfg["N"])
+        _write_abundance_tables(out, written)
+        return written
 
 
 class CamisimTableRegenerator(TableRegenerator):
