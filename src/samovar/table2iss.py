@@ -1209,7 +1209,7 @@ def generate_iss_test_samples(
     Generate one host pool and one metagenome pool, then split them into samples.
     """
     from samovar.regenerate import coerce_seed
-    from samovar.seqio import taxid_from_fasta_name
+    from samovar.genome_index import numeric_taxid_from_fasta
 
     if int(n_samples) <= 0 or int(total_reads) <= 0:
         raise ValueError("n_samples and total_reads must be positive")
@@ -1275,7 +1275,7 @@ def generate_iss_test_samples(
                 cpus=cpus,
                 seed=seed,
             )
-            host_tax = taxid_from_fasta_name(host_genome) or ""
+            host_tax = numeric_taxid_from_fasta(host_genome)
             if host_tax:
                 from samovar.camisim import tag_fastq_file
 
@@ -1351,7 +1351,7 @@ def generate_iss_from_abundance_table(
     max_genomes: Any = None,
 ) -> List[str]:
     """ISS from a taxid × ``N_<sample>`` table; names ``{sample}_{annotator}_R*``."""
-    from samovar.seqio import taxid_from_fasta_name
+    from samovar.genome_index import numeric_taxid_from_fasta
 
     annotator_name = str(annotator_name or "full")
 
@@ -1450,7 +1450,7 @@ def generate_iss_from_abundance_table(
             )
     if host_genome and os.path.exists(host_genome) and str(host_fraction).upper() not in {"0", "0.0", ""}:
         # Optional host spike-in on top of the table (same fractions as generate).
-        host_tax = taxid_from_fasta_name(host_genome) or ""
+        host_tax = numeric_taxid_from_fasta(host_genome)
         rng = random.Random(seed)
         for sample_name in sample_tables:
             dest_r1 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
