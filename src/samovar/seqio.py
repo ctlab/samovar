@@ -547,13 +547,32 @@ def single_end_sample_names(directory: PathLike) -> List[str]:
     return names
 
 
+def canonicalize_single_end_fastqs(directory: PathLike) -> dict[Path, Path]:
+    """Use bare FASTQ names for generated unpaired libraries; preserve pairs."""
+    renamed = {}
+    for r1 in list_r1_files(directory, include_libraries=True):
+        sample = sample_name_from_r1(r1)
+        r2 = find_fastq_mate(directory, sample, "R2")
+        if r2 is not None and r2.stat().st_size > 0:
+            continue
+        for suffix in FASTQ_R1_SUFFIXES:
+            if r1.name.endswith(suffix):
+                dest = r1.with_name(sample + suffix[suffix.index("."):])
+                r1.rename(dest)
+                renamed[r1] = dest
+                break
+        if r2 is not None:
+            r2.unlink()
+    return renamed
+
+
 def drop_r2_if_source_single_end(output_dir: PathLike) -> List[Path]:
     """Delete regenerated R2 when the matching input sample was single-end.
 
     ISS and ONT simulators write ``*_R2.fastq`` even for an unpaired source.
     A present R2 file, including an empty one, makes later stages call the
-    paired CLI. R1 is left in place; its record count is the pair count the
-    abundance table already uses.
+    paired CLI. The surviving unpaired file uses a bare FASTQ name; its record
+    count is the pair count the abundance table already uses.
     """
     dest = as_path(output_dir)
     if not dest.is_dir():
@@ -565,13 +584,9 @@ def drop_r2_if_source_single_end(output_dir: PathLike) -> List[Path]:
         if candidate.is_dir() and candidate.resolve() != dest.resolve() and list_r1_files(candidate):
             source = candidate
             break
-    if source is None:
-        return []
-    se_names = set(single_end_sample_names(source))
-    if not se_names:
-        return []
-    source_names = list_fastq_samples(source)
-    all_se = len(se_names) == len(source_names)
+    se_names = set(single_end_sample_names(source)) if source is not None else set()
+    source_names = list_fastq_samples(source) if source is not None else []
+    all_se = bool(se_names) and len(se_names) == len(source_names)
     removed: List[Path] = []
     for path in list(dest.iterdir()):
         if not path.is_file() or not _fastq_r2_name(path.name):
@@ -600,6 +615,7 @@ def drop_r2_if_source_single_end(output_dir: PathLike) -> List[Path]:
         except OSError:
             continue
         removed.append(path)
+    canonicalize_single_end_fastqs(dest)
     return removed
 
 

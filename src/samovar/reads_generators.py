@@ -508,15 +508,13 @@ def alias_fastq_with_extra_ids(
             tag_fastq_file(r1, r1, read_type, "")
         if r2.is_file():
             tag_fastq_file(r2, r2, read_type, "")
-    stem = str(r1)
-    for suffix in ("_R1.fastq.gz", "_R1.fastq"):
-        if stem.endswith(suffix):
-            prefix = stem[: -len(suffix)]
-            break
-    else:
-        prefix = str(r1.with_name(r1.name.split("_R1")[0]))
+    from samovar.seqio import sample_name_from_r1
+
+    prefix = str(r1.parent / sample_name_from_r1(r1))
     for eid in extra_ids:
         dest_r1, dest_r2 = fastq_pair_paths(f"{prefix}_{eid}", gzip_reads=gzip_reads)
+        if not r2.is_file():
+            dest_r1 = f"{prefix}_{eid}.fastq" + (".gz" if gzip_reads else "")
         if Path(primary_r1).is_file() and dest_r1 != str(primary_r1):
             shutil.copy2(primary_r1, dest_r1)
             written.append(dest_r1)
@@ -560,6 +558,7 @@ def _simulate_camisim_sample(
     import yaml
 
     from samovar.camisim import default_generate_config, run_from_config
+    from samovar.seqio import FASTQ_R1_SUFFIXES, list_r1_files, sample_name_from_r1
 
     work = Path(output_dir).resolve() / ".camisim" / annotator / sample
     work.mkdir(parents=True, exist_ok=True)
@@ -581,17 +580,20 @@ def _simulate_camisim_sample(
     config_path = work / "camisim.yaml"
     config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     run_from_config(str(config_path))
-    r1 = work / "initial" / "1_full_R1.fastq"
-    if not r1.is_file() or not r1.stat().st_size:
+    r1 = find_fastq_mate(work / "initial", "1_full")
+    if r1 is None or not r1.stat().st_size:
         raise RuntimeError(f"{name} produced no regenerated reads for {sample}/{annotator}")
     if name == "hybrid" and not has_hybrid_reads(r1):
         raise RuntimeError(f"hybrid regeneration needs both short and ONT reads for {sample}/{annotator}")
     p1, p2 = fastq_pair_paths(
         str(Path(output_dir) / f"{sample}_{annotator}"), gzip_reads=gzip_reads
     )
+    previous = find_fastq_mate(output_dir, f"{sample}_{annotator}")
+    if previous is not None and not previous.name.endswith(FASTQ_R1_SUFFIXES):
+        p1 = str(previous)
     for mate, dest in zip(("R1", "R2"), (Path(p1), Path(p2))):
-        src = work / "initial" / f"1_full_{mate}.fastq"
-        if src.is_file():
+        src = find_fastq_mate(work / "initial", "1_full", mate)
+        if src is not None:
             with open_text(src) as source, open_text(dest, "wt") as target:
                 shutil.copyfileobj(source, target)
         else:
@@ -600,17 +602,26 @@ def _simulate_camisim_sample(
     for alternate in fastq_pair_paths(
         str(Path(output_dir) / f"{sample}_{annotator}"), gzip_reads=not gzip_reads
     ):
-        Path(alternate).unlink(missing_ok=True)
+        if alternate not in (p1, p2):
+            Path(alternate).unlink(missing_ok=True)
     # Preserve the original libraries alongside the classifier's merged R1.
     if cfg.get("mode") == "hybrid":
-        for src in (work / "initial").glob("1_*_R*.fastq"):
-            if src.name.startswith("1_full_"):
+        for library in list_r1_files(work / "initial", include_libraries=True):
+            stem = sample_name_from_r1(library)
+            if stem == "1_full":
                 continue
-            dest = Path(output_dir) / (f"{sample}_{annotator}_" + src.name[2:] + (".gz" if gzip_reads else ""))
-            with open_text(src) as source, open_text(dest, "wt") as target:
-                shutil.copyfileobj(source, target)
-            alternate = dest.with_suffix("") if gzip_reads else Path(str(dest) + ".gz")
-            alternate.unlink(missing_ok=True)
+            for mate in ("R1", "R2"):
+                src = find_fastq_mate(work / "initial", stem, mate)
+                if src is None:
+                    continue
+                dest = Path(output_dir) / (f"{sample}_{annotator}_" + src.name[2:] + (".gz" if gzip_reads else ""))
+                previous = find_fastq_mate(output_dir, f"{sample}_{annotator}_{stem[2:]}", mate)
+                with open_text(src) as source, open_text(dest, "wt") as target:
+                    shutil.copyfileobj(source, target)
+                if previous is not None and previous != dest:
+                    previous.unlink()
+                alternate = dest.with_suffix("") if gzip_reads else Path(str(dest) + ".gz")
+                alternate.unlink(missing_ok=True)
     if ids:
         alias_fastq_with_extra_ids(p1, p2, ids, gzip_reads=gzip_reads)
 

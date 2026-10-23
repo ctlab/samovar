@@ -219,12 +219,13 @@ def test_drop_r2_when_source_is_single_end(tmp_path):
     regen = tmp_path / "regenerated"
     initial.mkdir()
     regen.mkdir()
-    (initial / "sample_0_R1.fq.gz").write_bytes(b"\x1f\x8b")
+    (initial / "sample_0.fq.gz").write_bytes(b"\x1f\x8b")
     (regen / "sample_0_concat_R1.fastq").write_text("@a\nA\n+\nI\n")
     (regen / "sample_0_concat_R2.fastq").write_text("@a\nT\n+\nI\n")
     (regen / "sample_0_metax_R2.fastq.gz").write_bytes(b"\x1f\x8b")
     removed = drop_r2_if_source_single_end(regen)
-    assert (regen / "sample_0_concat_R1.fastq").is_file()
+    assert (regen / "sample_0_concat.fastq").is_file()
+    assert not (regen / "sample_0_concat_R1.fastq").exists()
     assert not (regen / "sample_0_concat_R2.fastq").exists()
     assert not (regen / "sample_0_metax_R2.fastq.gz").exists()
     assert {p.name for p in removed} == {

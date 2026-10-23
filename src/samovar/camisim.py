@@ -50,6 +50,7 @@ from samovar.paths import (
 )
 from samovar.seqio import (
     concat_fastq_files,
+    find_fastq_mate,
     is_fastq_name,
     iter_fastq_records,
     list_fasta_files,
@@ -1323,6 +1324,10 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
     else:
         read_type = next(iter(harvested))
         outputs = _promote_to_full(harvested[read_type], out_dir, int(cfg.get("n_samples") or 1), read_type)
+    from samovar.seqio import canonicalize_single_end_fastqs
+
+    renamed = canonicalize_single_end_fastqs(out_dir)
+    outputs = [str(renamed.get(Path(path), Path(path))) for path in outputs]
     require_generated_samples(out_dir, [str(i + 1) for i in range(int(cfg.get("n_samples") or 1))])
     return {
         "mode": mode,
@@ -1639,7 +1644,7 @@ def _harvest_camisim_reads(
     for i, files in enumerate(groups, start=1):
         r1_src = [p for p in files if _mate_kind(p, rows) == "R1"]
         r2_src = [p for p in files if _mate_kind(p, rows) == "R2"]
-        r1_dest = out_dir / f"{i}_{read_type}_R1.fastq"
+        r1_dest = find_fastq_mate(out_dir, f"{i}_{read_type}") or out_dir / f"{i}_{read_type}_R1.fastq"
         r2_dest = out_dir / f"{i}_{read_type}_R2.fastq"
         _concat_tagged(r1_src, r1_dest, read_type, rows)
         written.append(r1_dest)
@@ -1682,7 +1687,7 @@ def _write_empty_fastq(path: Path) -> None:
 
 
 _TECH_FASTQ = re.compile(
-    r"^(\d+)_(illumina|ont|wgsim|nanosim3|art)_(R[12])\.fastq(?:\.gz)?$",
+    r"^(\d+)_(illumina|ont|wgsim|nanosim3|art)(?:_(R[12]))?\.fastq(?:\.gz)?$",
     re.IGNORECASE,
 )
 
@@ -1716,7 +1721,7 @@ def _merge_hybrid_reads(
     for i in range(1, n_samples + 1):
         by_type = {
             read_type: {
-                mate: out_dir / f"{i}_{read_type}_{mate}.fastq"
+                mate: find_fastq_mate(out_dir, f"{i}_{read_type}", mate) or out_dir / f"{i}_{read_type}_{mate}.fastq"
                 for mate in ("R1", "R2")
             }
             for read_type in harvested
@@ -1737,7 +1742,7 @@ def _merge_hybrid_reads(
                     path = paths[mate]
                     if path.is_file() and path.stat().st_size > 0:
                         r1_parts.append(path)
-            r1_dest = out_dir / f"{i}_full_R1.fastq"
+            r1_dest = find_fastq_mate(out_dir, f"{i}_full") or out_dir / f"{i}_full_R1.fastq"
             r2_dest = out_dir / f"{i}_full_R2.fastq"
             concat_fastq_files(r1_parts, r1_dest)
             if r2_dest.exists():
@@ -1750,7 +1755,7 @@ def _merge_hybrid_reads(
                 for paths in by_type.values()
                 if paths[mate].is_file() and paths[mate].stat().st_size > 0
             ]
-            dest = out_dir / f"{i}_full_{mate}.fastq"
+            dest = find_fastq_mate(out_dir, f"{i}_full", mate) or out_dir / f"{i}_full_{mate}.fastq"
             if parts:
                 concat_fastq_files(parts, dest)
             else:
@@ -1770,8 +1775,8 @@ def _promote_to_full(
     outputs: List[str] = []
     for i in range(1, n_samples + 1):
         for mate in ("R1", "R2"):
-            src = out_dir / f"{i}_{read_type}_{mate}.fastq"
-            dest = out_dir / f"{i}_full_{mate}.fastq"
+            src = find_fastq_mate(out_dir, f"{i}_{read_type}", mate) or out_dir / f"{i}_{read_type}_{mate}.fastq"
+            dest = find_fastq_mate(out_dir, f"{i}_full", mate) or out_dir / f"{i}_full_{mate}.fastq"
             if src.is_file() and src.stat().st_size > 0:
                 shutil.copy2(src, dest)
                 outputs.append(str(dest))

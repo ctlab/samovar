@@ -550,6 +550,7 @@ def test_promote_removes_tech_fastq_copies(tmp_path):
 
 def test_hybrid_flattens_paired_and_single_end_reads(tmp_path):
     from samovar.camisim import _merge_hybrid_reads
+    from samovar.seqio import assembly_read_libraries, canonicalize_single_end_fastqs, list_fastq_samples
 
     out = tmp_path / "initial"
     out.mkdir()
@@ -558,9 +559,20 @@ def test_hybrid_flattens_paired_and_single_end_reads(tmp_path):
     (out / "1_nanosim3_R1.fastq").write_text("@n1\nAAAA\n+\nIIII\n")
     (out / "1_nanosim3_R2.fastq").write_text("")
 
-    _merge_hybrid_reads({"art": [], "nanosim3": []}, out, 1)
+    for _ in range(2):
+        _merge_hybrid_reads({"art": [], "nanosim3": []}, out, 1)
+        canonicalize_single_end_fastqs(out)
 
-    full_r1 = (out / "1_full_R1.fastq").read_text()
+    full_r1 = (out / "1_full.fastq").read_text()
     assert "@a1" in full_r1 and "@a2" in full_r1 and "@n1" in full_r1
     assert not (out / "1_full_R2.fastq").exists()
+    assert (out / "1_nanosim3.fastq").is_file()
+    assert (out / "1_art_R1.fastq").is_file()
+    assert (out / "1_art_R2.fastq").is_file()
+    assert list_fastq_samples(out) == ["1_full"]
+    with assembly_read_libraries(out / "1_full.fastq") as (r1, r2, ont, typed):
+        assert typed
+        assert Path(r1).name == "1_art_R1.fastq"
+        assert Path(r2).name == "1_art_R2.fastq"
+        assert Path(ont).name == "1_nanosim3.fastq"
 

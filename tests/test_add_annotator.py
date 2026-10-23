@@ -9,6 +9,7 @@ from argparse import Namespace
 from pathlib import Path
 
 import yaml
+import pytest
 
 from samovar.add_annotator import (
     active_pipeline_script,
@@ -130,9 +131,13 @@ def test_abundance_dir_does_not_use_annotator_stems_as_samples(tmp_path):
     assert "N_kraken2" in tables["1_full"].columns
 
 
-def test_annotator_fastqs_complete(tmp_path):
-    r1 = tmp_path / "s1_kaiju_R1.fastq"
-    r1.write_text("@a\nACGT\n+\nIIII\n")
+@pytest.mark.parametrize("suffix", ["_R1.fastq", ".fastq", ".fq.gz"])
+def test_annotator_fastqs_complete(tmp_path, suffix):
+    from samovar.seqio import open_text
+
+    r1 = tmp_path / ("s1_kaiju" + suffix)
+    with open_text(r1, "wt") as handle:
+        handle.write("@a\nACGT\n+\nIIII\n")
     (tmp_path / "s1_kaiju_R2.fastq").write_text("@a\nACGT\n+\nIIII\n")
     assert annotator_fastqs_complete(str(tmp_path), ["s1"], "kaiju")
     assert not annotator_fastqs_complete(str(tmp_path), ["s1", "s2"], "kaiju")

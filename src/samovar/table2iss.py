@@ -22,6 +22,7 @@ from samovar.seqio import (
     concat_fastq_files,
     fastq_pair_paths,
     find_genome_file,
+    find_fastq_mate,
     gzip_file,
     gunzip_file,
     is_gzip_file,
@@ -562,6 +563,9 @@ def split_metagenome_to_samples(
             os.path.join(output_dir, f"{sample}_{annotator_name}"),
             gzip_reads=gzip_reads,
         )
+        # Reuse a previous bare SE filename when rebuilding an incomplete cache.
+        r1_out = str(find_fastq_mate(output_dir, f"{sample}_{annotator_name}") or r1_out)
+        r2_out = str(find_fastq_mate(output_dir, f"{sample}_{annotator_name}", "R2") or r2_out)
         os.makedirs(output_dir, exist_ok=True)
         output_handles[sample] = (open_text(r1_out, "wt"), open_text(r2_out, "wt"))
 
