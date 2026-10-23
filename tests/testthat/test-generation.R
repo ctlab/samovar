@@ -7,7 +7,9 @@ test_that("Samova.R: build", {
 
 test_that("Samova.R: generation", {
   expect_no_error({
-    data.samovar %>%
-      samovar_boil(N = 1, avoid_zero_generations = T)
+    generated <- data.samovar %>%
+      samovar_boil(N = 2, avoid_zero_generations = T)
+    expect_equal(ncol(generated$data), 2)
+    expect_false("error" %in% rownames(generated$data))
   })
 })

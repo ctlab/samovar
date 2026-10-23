@@ -44,8 +44,8 @@ samovar_boil <- function(samovar_base, N = 1,
       tmp <- samovar_base$samovar_data$data %>%
         subset(rownames(.) %in% init_sp[sp]) %>%
         as.numeric
-      init_ab[sp] <- tmp[tmp > samovar_base$samovar_data$min_value] %>%
-        sample(1)
+      positive <- tmp[tmp > samovar_base$samovar_data$min_value]
+      init_ab[sp] <- positive[sample.int(length(positive), 1)]
     }
   } else if (init_ab == "auto") {
     for (sp in seq_along(init_sp)) {
@@ -129,12 +129,11 @@ samovar_boil <- function(samovar_base, N = 1,
           tmp1 <- get_clean_samovar(samovar_base$samovar_data, from_to[1]) %>% colnames
           tmp <- get_data_samovar(samovar_base$samovar_data, from_to[2])
 
-          tmp2 <- tmp[,tmp1]
-          tmp2 <- tmp2[,apply(tmp2, 2, function(x) sum(x) > 0)]
+          tmp2 <- tmp[,tmp1, drop = FALSE]
+          tmp2 <- tmp2[,apply(tmp2, 2, function(x) sum(x) > 0), drop = FALSE]
           sp_cl <- rownames(tmp2)
-          tmp2 <- tmp2[,sample(colnames(tmp2), 1)]
-
           if(sum(tmp2) != 0) {
+            tmp2 <- tmp2[,sample(colnames(tmp2), 1)]
             init <- sp_cl[which(tmp2 > 0)] %>% sample(.,1)
             means <- suppressWarnings(tmp %>% apply(1, mean, na.rm = T))
             init_level <- means[init] / mean(means) * cluster_init_level

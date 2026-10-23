@@ -40,7 +40,7 @@ teabag_brew <- function(
     return(c(max(tmp), which.max(tmp) %>% names %>% as.numeric()))
   }
 
-  while ((max_cluster()[1] < max_cluster_size) | max_iter > 0){
+  while ((max_cluster()[1] > max_cluster_size) && max_iter > 0){
     mc <-  max_cluster()[2]
 
     new_sc <- data$data %>%

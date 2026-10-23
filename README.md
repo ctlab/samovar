@@ -43,7 +43,7 @@ R installs into the first library in `.libPaths()`. If you keep a custom library
 
 ```r
 library(samovaR)
-packageVersion("samovaR")   # expect 1.0.0
+packageVersion("samovaR")   # expect 1.0.1
 ```
 
 If several R versions are installed, run the same check with that version’s `Rscript`:

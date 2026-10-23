@@ -83,7 +83,7 @@ concotion_pour <- function(
       df_pr <- prep_matrix(cl_len)
 
       # calculate
-      for (i in 1:(cl_len-1)) {
+      for (i in seq_len(max(0L, cl_len - 1L))) {
         X <- df_cluster[i, ]
         for (j in (i+1):cl_len) {
           Y <- df_cluster[j, ]
@@ -112,7 +112,7 @@ concotion_pour <- function(
       Rs_il <- prep_matrix(cl_len)
       Pr_il <- prep_matrix(cl_len)
 
-      for (i in 1:(cl_len-1)) {
+      for (i in seq_len(max(0L, cl_len - 1L))) {
         X <- get_data_samovar(samovar_data, clust_list[i])
         for (j in (i+1):cl_len) {
           Y <- get_data_samovar(samovar_data, clust_list[j])

@@ -20,6 +20,8 @@ test_that("Samova.R: preprocessing", {
     concotion_test <- teabag %>%
       teabag_brew(min_cluster_size = 4,
                   max_cluster_size = 6)
+    expect_true(all(table(concotion_test$cluster) >= 4))
+    expect_true(all(table(concotion_test$cluster) <= 6))
   })
 
 })
