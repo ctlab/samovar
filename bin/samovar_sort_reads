@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from samovar.seqio import (
+    fastq_record_id,
     iter_fastq_records,
     list_r1_files,
     open_text,
@@ -14,7 +15,7 @@ from samovar.seqio import (
 def read_fastq_records(path: Path):
     records = []
     for h, s, p, q in iter_fastq_records(path):
-        key = h.split()[0].replace("/1", "").replace("/2", "")
+        key = fastq_record_id(h)
         records.append((key, h, s, p, q))
     return records
 
@@ -81,6 +82,13 @@ def main():
     if not out_dir.exists():
         raise SystemExit(f"Output directory not found: {out_dir}")
 
+    try:
+        _sort_output_dir(out_dir)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def _sort_output_dir(out_dir: Path):
     for r1_path in _r1_files(out_dir):
         r2_path = r2_for_r1(r1_path)
         if r2_path.is_file() and r2_path.stat().st_size > 0:

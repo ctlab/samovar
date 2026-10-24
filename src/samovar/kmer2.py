@@ -19,6 +19,8 @@ import subprocess
 from pathlib import Path
 from typing import Iterator, List, Optional, TextIO, Tuple
 
+from samovar.seqio import fastq_record_id
+
 
 def _open_text(path: str) -> TextIO:
     gzipped = str(path).endswith(".gz")
@@ -54,7 +56,7 @@ def iter_fastq_records(path: str) -> Iterator[Tuple[str, str]]:
             tokens = stripped.split()
             if not tokens:
                 continue
-            read_id = tokens[0].replace("/1", "").replace("/2", "")
+            read_id = fastq_record_id(header)
             yield read_id, seq.strip().upper()
 
 

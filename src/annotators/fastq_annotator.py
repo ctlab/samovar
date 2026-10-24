@@ -8,6 +8,8 @@ from itertools import product
 
 import numpy as np
 import pandas as pd
+
+from samovar.seqio import fastq_record_id
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.decomposition import IncrementalPCA
 
@@ -28,8 +30,7 @@ def read_fastq(path):
             qual = f.readline().strip()
 
             # [FIX]: Clean read ID to match the annotation table exactly (remove paired-end suffixes)
-            raw_id = header[1:].split()[0]
-            clean_id = raw_id.replace("/1", "").replace("/2", "")
+            clean_id = fastq_record_id(header)
 
             yield clean_id, seq, qual
 

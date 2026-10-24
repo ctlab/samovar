@@ -15,6 +15,8 @@ from typing import Iterator, Optional, TextIO
 
 import pandas as pd
 
+from samovar.seqio import fastq_record_id
+
 
 def _open_text(path: str) -> TextIO:
     gzipped = str(path).endswith(".gz")
@@ -50,7 +52,7 @@ def iter_fastq_ids(path: str) -> Iterator[str]:
             tokens = stripped.split()
             if not tokens:
                 continue
-            yield tokens[0].replace("/1", "").replace("/2", "")
+            yield fastq_record_id(header)
 
 
 def parse_output(file_path: str) -> pd.DataFrame:

@@ -409,17 +409,47 @@ def fastq_pair_paths(prefix: PathLike, gzip_reads: bool = False) -> Tuple[str, s
     return f"{prefix_s}_R1{ext}", f"{prefix_s}_R2{ext}"
 
 
+def fastq_record_id(header: str) -> str:
+    """Read id with only a trailing ``/1`` or ``/2`` mate suffix removed.
+
+    ``r/10`` stays ``r/10``. A suffix in the middle of the token is not a mate mark.
+    """
+    token = str(header or "").strip()
+    if token.startswith("@"):
+        token = token[1:]
+    token = token.split()[0] if token else ""
+    if not token:
+        raise ValueError(f"FASTQ record has an empty read id: {header!r}")
+    if len(token) >= 2 and token[-2] == "/" and token[-1] in "12":
+        return token[:-2]
+    return token
+
+
 def iter_fastq_records(path: PathLike) -> Iterator[Tuple[str, str, str, str]]:
-    with open_text(path) as handle:
+    """Yield ``(header, seq, plus, qual)`` lines, including their newlines.
+
+    A blank line or a record cut off before the quality line is an error.
+    """
+    target = as_path(path)
+    with open_text(target) as handle:
+        line_no = 0
         while True:
             header = handle.readline()
             if not header:
                 return
+            line_no += 1
+            if not header.strip():
+                raise ValueError(f"Blank line in FASTQ {target} at line {line_no}")
+            if not header.startswith("@"):
+                raise ValueError(f"FASTQ record at {target}:{line_no} does not start with @")
             seq = handle.readline()
             plus = handle.readline()
             qual = handle.readline()
+            line_no += 3
             if not (seq and plus and qual):
-                return
+                raise ValueError(f"Truncated FASTQ record in {target} at line {line_no}")
+            if not plus.startswith("+"):
+                raise ValueError(f"FASTQ record at {target}:{line_no} is missing the + line")
             yield header, seq, plus, qual
 
 
@@ -459,7 +489,7 @@ def fastq_has_reads(
             n += 1
             if n >= need_reads:
                 return True
-    except OSError:
+    except (OSError, ValueError):
         return False
     return False
 
