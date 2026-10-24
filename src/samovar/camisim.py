@@ -1440,6 +1440,18 @@ def write_conda_mkdir_shim(directory: Path, conda_bin: Optional[str] = None) -> 
     return script
 
 
+def nextflow_cache_dir(work: Path, cam_type: str) -> Path:
+    """Per-run Nextflow cache. The CAMISIM checkout must stay the cwd.
+
+    ``-resume`` locks the session in ``NXF_CACHE_DIR`` (otherwise the shared
+    clone's ``.nextflow``). Parallel runs in that clone then fail with
+    ``Unable to acquire lock on session``.
+    """
+    path = Path(work) / f"nf_cache_{cam_type}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
+
+
 def nextflow_run_cmd(
     nextflow_bin: str,
     camisim_root: str,
@@ -1501,6 +1513,7 @@ def _run_camisim_reads(
         )
         cmd.extend(extra)
         env = os.environ.copy()
+        env["NXF_CACHE_DIR"] = str(nextflow_cache_dir(work, cam_type))
         shim = write_conda_mkdir_shim(work / "conda_shim")
         if shim is not None:
             env["PATH"] = str(shim.parent) + os.pathsep + env.get("PATH", "")
