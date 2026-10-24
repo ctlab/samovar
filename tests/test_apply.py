@@ -24,7 +24,7 @@ from samovar.apply import (
     load_pipeline_state,
     main as apply_main,
 )
-from samovar.paths import write_config
+from samovar.paths import python_path, write_config
 from samovar.reprofilers import run_reprofiler
 from samovar.tools_import import import_tool
 
@@ -92,8 +92,13 @@ def _dump(path: Path, data: dict) -> None:
 
 def _source_pipeline(tmp_path: Path, monkeypatch, *, with_model: bool = True) -> Path:
     cfg = tmp_path / "install.json"
+    # Capture the install interpreter before this fixture replaces SAMOVAR_CONFIG.
+    interpreter = python_path()
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
-    write_config({"root": str(REPO), "tools": {}}, also_repo_build=False)
+    write_config(
+        {"root": str(REPO), "python_path": interpreter, "tools": {}},
+        also_repo_build=False,
+    )
     import_tool(
         name="adaptwrap",
         tool_type="ml",
