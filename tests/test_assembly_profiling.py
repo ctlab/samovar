@@ -685,10 +685,8 @@ def test_assemblers_success_without_contigs_writes_empty_fasta(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("code,log", [
-    (1, "[ERROR] Looks like the system ran out of memory"),
     (1, "[ERROR] flye-modules died with <Signals.SIGFPE: 8>"),
     (2, "[ERROR] No contigs were assembled - pipeline stopped"),
-    (-9, "[ERROR] No contigs were assembled - pipeline stopped"),
     (1, None),
 ])
 def test_metaflye_real_failures_propagate(tmp_path, monkeypatch, code, log):
@@ -707,6 +705,28 @@ def test_metaflye_real_failures_propagate(tmp_path, monkeypatch, code, log):
         raise subprocess.CalledProcessError(code, cmd)
     monkeypatch.setattr("samovar.assembly_profiling._run", fail)
     with pytest.raises(subprocess.CalledProcessError):
+        run_metaflye("reads.fastq", dest=str(dest))
+    assert not dest.exists()
+
+
+@pytest.mark.parametrize("code,log", [
+    (1, "[ERROR] Looks like the system ran out of memory"),
+    (-9, "[ERROR] No contigs were assembled - pipeline stopped"),
+    (137, ""),
+])
+def test_metaflye_oom_is_not_an_empty_assembly(tmp_path, monkeypatch, code, log):
+    from samovar.assembly_profiling import FlyeMemoryError, run_metaflye
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setattr("samovar.assembly_profiling.which_tool", lambda *args: "/configured/flye")
+    dest = tmp_path / "out.fa"
+
+    def fail(cmd):
+        work = Path(cmd[cmd.index("-o") + 1])
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "flye.log").write_text(log)
+        raise subprocess.CalledProcessError(code, cmd)
+    monkeypatch.setattr("samovar.assembly_profiling._run", fail)
+    with pytest.raises(FlyeMemoryError, match="72 GB"):
         run_metaflye("reads.fastq", dest=str(dest))
     assert not dest.exists()
 

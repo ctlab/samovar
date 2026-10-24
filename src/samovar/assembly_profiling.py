@@ -413,6 +413,29 @@ def run_megahit(
     return out
 
 
+class FlyeMemoryError(RuntimeError):
+    """Flye was killed for lack of RAM. No contig FASTA is written."""
+
+
+def _flye_out_of_memory(returncode: int, log: str) -> bool:
+    # Python reports a killed child as -9. A shell reports the same SIGKILL as 137.
+    if returncode == -9 or returncode == 137:
+        return True
+    return "Looks like the system ran out of memory" in log
+
+
+def _flye_memory_error(returncode: int, log_path: Path) -> FlyeMemoryError:
+    return FlyeMemoryError(
+        f"Flye ran out of memory (exit {returncode}) and wrote no contig FASTA. "
+        "Flye 2.9.6 benchmarks use about 2 GB for an E. coli isolate and "
+        "72 GB (HMP mock), 76 GB (Zymo log, ONT), and 129 GB (Zymo even, ONT) "
+        "for metagenomes. A 15 GB machine without swap is below those metagenome rows. "
+        "Pass Flye's --asm-coverage and --genome-size to lower the peak; "
+        "40x of the longest reads is its usual disjointig coverage. "
+        f"See {log_path}."
+    )
+
+
 def run_metaflye(
     r1: str,
     r2: str = "",
@@ -427,6 +450,7 @@ def run_metaflye(
     assembler-contract ``-o``. Default to noisy ONT (``--nano-raw``); read-mode
     flags in ``extra`` override imported Flye flags. A non-empty R2 is another
     file of the same type. Flye's explicit no-assembly outcome yields empty FASTA.
+    An out-of-memory kill raises ``FlyeMemoryError`` instead.
     """
     threads = _job_threads("flye", threads)
     out = as_path(dest)
@@ -462,6 +486,8 @@ def run_metaflye(
     except subprocess.CalledProcessError as exc:
         log_path = work / "flye.log"
         log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        if _flye_out_of_memory(exc.returncode, log):
+            raise _flye_memory_error(exc.returncode, log_path) from exc
         if exc.returncode != 1 or not any(message in log for message in (
             "No contigs were assembled",
             "No disjointigs were assembled",
