@@ -465,7 +465,9 @@ def apply_saved_reprofiler(
         raise FileNotFoundError(f"trained reprofiler model not found: {src_model}")
     dest = Path(output_dir)
     dest.mkdir(parents=True, exist_ok=True)
-    if not any(iter_annotation_csvs(initial_dir)):
+    if not any(iter_annotation_csvs(initial_dir)) and not any(
+        Path(initial_dir).glob("combined_annotation_table*.csv")
+    ):
         raise FileNotFoundError(f"no initial annotation CSVs under {initial_dir}")
     cfg["output_dir"] = str(dest)
     cfg["initial_dir"] = str(initial_dir)

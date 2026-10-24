@@ -23,10 +23,10 @@ import yaml
 
 from samovar.abundance import materialize_observed_abundance, regenerated_abundance_dir
 from samovar.abundance_correctors import export_run_dir, is_skipped_export
-from samovar.combine_tables import combine_with_cpp
+from samovar.combine_tables import combine_with_cpp, finalize_annotations
 from samovar.exec_control import CHECKPOINT_STEPS, mark_done, resolve_window
 from samovar.memory import memory_limit_mb
-from samovar.paths import add_output_dir_argument, repo_root, runtime_path_prefix
+from samovar.paths import add_output_dir_argument, python_path, repo_root, runtime_path_prefix
 from samovar.tool_spec import scheduler_threads
 from samovar.qc import trim_stage
 from samovar.regenerate import stage_regenerate_tables
@@ -218,6 +218,7 @@ def _apply_env(dest: Path) -> Dict[str, str]:
     env["PYTHONPATH"] = f"{root / 'src'}{os.pathsep}{env['PYTHONPATH']}" if env.get("PYTHONPATH") else str(root / "src")
     env["SAMOVAR_ROOT"] = str(root)
     env["SAMOVAR_RUN_DIR"] = str(dest)
+    env["PYTHON_PATH"] = python_path()
     return env
 
 
@@ -229,6 +230,7 @@ def _retarget_init_config(
     out["r1_dir"] = str(trimmed)
     out["r2_dir"] = str(trimmed)
     out["output_dir"] = str(dest / "initial_reports")
+    out["annotation_dir"] = str(dest / "initial_annotations")
     out["cores"] = int(cores)
     out["mem_mb"] = int(mem_mb)
     from samovar.taxdump import require_metax_taxdump
@@ -249,6 +251,24 @@ def _retarget_annotation2iss(cfg: Dict[str, Any], dest: Path, cores: int) -> Dic
     out["output_dir"] = str(dest / "regenerated")
     out["cores"] = cores
     return out
+
+
+def _combine_initial(dest: Path, cfg: Dict[str, Any]) -> None:
+    """Finish tables in ``dest``. Incremental ingest already filled per-sample CSVs."""
+    reports = dest / "initial_reports"
+    ann = dest / "initial_annotations"
+    parts = list(ann.glob("*.annotation.csv")) if ann.is_dir() else []
+    ingested = reports.is_dir() and any(reports.glob("*.ingested"))
+    truth = str(cfg.get("truth_table") or "").strip() or None
+    if parts or ingested:
+        finalize_annotations(ann, truth_table=truth)
+        return
+    combine_with_cpp(
+        str(reports),
+        str(ann),
+        int(cfg.get("split_sample_name") or 1),
+        truth_table=truth,
+    )
 
 
 def _run_annotators(
@@ -423,11 +443,7 @@ def apply_pipeline(
         elif step == "annotate_initial":
             _run_annotators(init_cfg, dest, cores, env, limit)
         elif step == "combine_initial":
-            combine_with_cpp(
-                str(dest / "initial_reports"),
-                str(dest / "initial_annotations"),
-                1,
-            )
+            _combine_initial(dest, init_cfg)
             _export_stage(
                 dest,
                 "initial",

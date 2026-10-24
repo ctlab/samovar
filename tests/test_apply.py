@@ -121,6 +121,8 @@ def _source_pipeline(tmp_path: Path, monkeypatch, *, with_model: bool = True) ->
             "r1_dir": str(source / "initial_trimmed"),
             "r2_dir": str(source / "initial_trimmed"),
             "output_dir": str(source / "initial_reports"),
+            "annotation_dir": str(source / "initial_annotations"),
+            "incremental_annotations": True,
             "run_config": [
                 {
                     "run_name": "dummy",
@@ -306,6 +308,7 @@ def test_normal_apply_integration_and_contracts(tmp_path, monkeypatch):
     _fastq_pair(reads)
     out = tmp_path / "apply_out"
     prov = apply_pipeline(reads, source, out, full=False, cores=1)
+    assert not (source / "initial_annotations").exists()
     assert prov["retrained"] is False
     assert prov["mode"] == "normal"
     profiles = list((out / "reprofiled_annotations").glob("*_reprofiled.csv"))
