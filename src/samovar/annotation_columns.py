@@ -30,6 +30,9 @@ DROP_RAW_COLUMNS = frozenset(
 _TAX_PREFIX = re.compile(r"^(taxid|tax)([_.].+)?$", re.I)
 _FEAT_PREFIX = re.compile(r"^feat([_.].+)?$", re.I)
 _CONF = re.compile(r"confidence|_conf$", re.I)
+_KMER_ID = re.compile(r"^[ACGT]{1,8}$", re.I)
+_LATENT_ID = re.compile(r"^z[0-9]+$", re.I)
+_FEATURE_NAMES = frozenset({"length", "gc", "gc_content", "mag_id", "map_mag_id"})
 
 
 def _name(col) -> str:
@@ -87,6 +90,23 @@ def feat_annotator_columns(columns: Iterable) -> List:
     return [col for col in columns if is_feat_column(col)]
 
 
+def is_allowed_feature_column(col) -> bool:
+    """Raw feature columns a custom table may emit.
+
+    ``feat_`` names, length/GC/MAG ids, ACGT k-mer ids, and ``z<n>`` latents.
+    Anything else is not a feature and is not a taxid.
+    """
+    name = _name(col)
+    low = name.lower()
+    if not name or _CONF.search(name):
+        return False
+    if is_feat_column(name):
+        return True
+    if low in _FEATURE_NAMES:
+        return True
+    return bool(_KMER_ID.match(name) or _LATENT_ID.match(name))
+
+
 def sanitize_column_id(raw: str) -> str:
     text = re.sub(r"[^A-Za-z0-9]+", "_", str(raw).strip())
     text = text.strip("_")
@@ -132,11 +152,18 @@ def classify_raw_columns(columns: Iterable) -> Tuple[Optional[object], List, Lis
             continue
         if low in DROP_RAW_COLUMNS or low in {"k-mer", "kmer"}:
             continue
+        if _CONF.search(name):
+            continue
         if is_tax_column(name) or low in {"taxid", "tax_id"}:
             tax_cols.append(col)
             continue
-        if is_feat_column(name) or low not in {"seq", "sample", "true", "read_type"}:
+        if is_allowed_feature_column(name):
             feat_cols.append(col)
+            continue
+        raise ValueError(
+            f"Column {name!r} is not a taxID column or an allowed feature column "
+            "(feat_*, length, GC, MAG_ID, ACGT k-mer ids, z<n>)"
+        )
     return seq_col, tax_cols, feat_cols
 
 

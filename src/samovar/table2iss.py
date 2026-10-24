@@ -849,9 +849,12 @@ def _resolve_genomes_for_taxids(
 
     available = {}
     from samovar.regenerate import finite_max_genomes
+    from samovar.taxonomy import require_regeneration_taxids
 
+    queued = [str(taxid) for taxid in taxids]
+    require_regeneration_taxids(queued, source="abundance table")
     limit = finite_max_genomes(max_genomes, default_from_env=False)
-    for taxid in taxids:
+    for taxid in queued:
         if limit is not None and len(available) >= limit:
             break
         taxid = str(taxid).split(".")[0]

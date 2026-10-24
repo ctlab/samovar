@@ -11,6 +11,7 @@
 #include <limits>
 #include <queue>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -97,6 +98,78 @@ bool is_skip_header(const std::string& h) {
            l == "sample" || l == "true" || l == "read_type";
 }
 
+bool is_acgt_kmer_id(const std::string& name) {
+    if (name.empty() || name.size() > 8) {
+        return false;
+    }
+    for (unsigned char ch : name) {
+        char u = static_cast<char>(std::toupper(ch));
+        if (u != 'A' && u != 'C' && u != 'G' && u != 'T') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_latent_id(const std::string& name) {
+    std::string l = to_lower(name);
+    if (l.size() < 2 || l[0] != 'z') {
+        return false;
+    }
+    for (size_t i = 1; i < l.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(l[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_allowed_feature_header(const std::string& h) {
+    std::string l = to_lower(h);
+    if (l == "feat" || l.rfind("feat_", 0) == 0 || l.rfind("feat.", 0) == 0) {
+        return true;
+    }
+    if (l == "length" || l == "gc" || l == "gc_content" || l == "mag_id" || l == "map_mag_id") {
+        return true;
+    }
+    return is_acgt_kmer_id(h) || is_latent_id(h);
+}
+
+bool is_gtdb_taxid(const std::string& text) {
+    return text.find("__") != std::string::npos;
+}
+
+bool is_nonnegative_taxid(const std::string& text) {
+    if (text.empty()) {
+        return false;
+    }
+    std::string body = text;
+    if (body.size() > 2 && body.compare(body.size() - 2, 2, ".0") == 0) {
+        body.resize(body.size() - 2);
+    }
+    for (unsigned char ch : body) {
+        if (!std::isdigit(ch)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_unclassified_taxid(const std::string& text) {
+    std::string l = to_lower(text);
+    return l.empty() || l == "0" || l == "unclassified" || l == "unclassified_root" || l == "nan" ||
+           l == "none" || l == "na" || l == "<na>" || l == "null" || l == "other";
+}
+
+void require_taxid_token(const std::string& raw) {
+    if (is_unclassified_taxid(raw) || is_nonnegative_taxid(raw) || is_gtdb_taxid(raw)) {
+        return;
+    }
+    throw std::runtime_error(
+        "Invalid taxid '" + raw +
+        "'. Taxonomy values must be non-negative integers, unclassified, or GTDB tokens");
+}
+
 bool is_tax_header(const std::string& h) {
     std::string l = to_lower(h);
     if (l.rfind("feat", 0) == 0) {
@@ -160,9 +233,13 @@ Schema schema_from_header(const std::vector<std::string>& header) {
         if (is_tax_header(header[i])) {
             s.tax_ids.push_back(tax_header_id(header[i]));
             s.tax_cols.push_back(static_cast<int>(i));
-        } else {
+        } else if (is_allowed_feature_header(header[i])) {
             s.feat_ids.push_back(feat_header_id(header[i]));
             s.feat_cols.push_back(static_cast<int>(i));
+        } else {
+            throw std::runtime_error(
+                "Column '" + header[i] +
+                "' is not a taxID column or an allowed feature column");
         }
     }
     return s;
@@ -191,10 +268,9 @@ Schema unheadered_custom_schema(size_t nfields) {
         s.feat_ids.push_back("length");
         s.feat_cols.push_back(2);
     } else if (nfields > 3) {
-        for (size_t i = 2; i < nfields; ++i) {
-            s.feat_ids.push_back(std::to_string(i - 2));
-            s.feat_cols.push_back(static_cast<int>(i));
-        }
+        throw std::runtime_error(
+            "Unheadered custom table has extra columns; name feature columns "
+            "(feat_*, length, GC, MAG_ID, ACGT k-mer ids, or z<n>)");
     }
     return s;
 }
@@ -305,8 +381,12 @@ std::string csv_escape(const std::string& s) {
 }
 
 std::string normalize_taxid(std::string t) {
-    if (t.empty() || t == "NA" || t == "NaN" || t == "nan" || t == "None") {
+    require_taxid_token(t);
+    if (is_unclassified_taxid(t)) {
         return "0";
+    }
+    if (t.size() > 2 && t.compare(t.size() - 2, 2, ".0") == 0 && is_nonnegative_taxid(t)) {
+        t.resize(t.size() - 2);
     }
     return t;
 }

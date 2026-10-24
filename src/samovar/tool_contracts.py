@@ -39,6 +39,9 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "TSV with seq plus one or more taxID columns and/or feature columns. "
         "Combined tables label tax as taxID_<tool>_<n>[_id] and features as "
         "feat_<tool>_<n>[_id]. A tool may emit only tax, only features, or both. "
+        "taxID cells must be non-negative integers, unclassified, or GTDB tokens. "
+        "Other columns are features only when named feat_*, length, GC, MAG_ID, "
+        "an ACGT k-mer id, or z<n>; any other column is an error. "
         "--type feature is an alias of annotator (seq2feature).",
     },
     "table_reads_generator": {

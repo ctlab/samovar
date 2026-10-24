@@ -242,6 +242,64 @@ def _ncbi_taxid_membership() -> set:
         return _NCBI_ID_CACHE
 
 
+def regeneration_taxid_error(value: Any) -> Optional[str]:
+    """Return the token when it must not be sent to genome regeneration.
+
+    Allowed: unclassified/empty, non-negative integers (``562`` or ``562.0``),
+    and GTDB tokens (``d__Bacteria``). Names such as ``Ecoli`` and negatives
+    are rejected. This is not the feature-column allowlist.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float):
+        import math
+
+        if math.isnan(value):
+            return None
+    text = str(value).strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    lowered = text.lower()
+    if lowered in {
+        "",
+        "0",
+        "unclassified",
+        "unclassified_root",
+        "nan",
+        "none",
+        "na",
+        "<na>",
+        "null",
+        "other",
+    }:
+        return None
+    if "__" in text:
+        return None
+    if text.isdigit():
+        return None
+    return text
+
+
+def require_regeneration_taxids(values: Iterable[Any], *, source: str = "annotation") -> None:
+    """Stop before regeneration when a tax column holds a non-taxid."""
+    bad: List[str] = []
+    seen = set()
+    for raw in values:
+        token = regeneration_taxid_error(raw)
+        if token is None or token in seen:
+            continue
+        seen.add(token)
+        bad.append(token)
+        if len(bad) >= 5:
+            break
+    if bad:
+        shown = ", ".join(repr(item) for item in bad)
+        raise ValueError(
+            f"Invalid taxid {shown} in {source}. "
+            "Taxonomy values must be non-negative integers, unclassified, or GTDB tokens."
+        )
+
+
 def infer_taxid_type(
     values: Iterable[Any],
     *,

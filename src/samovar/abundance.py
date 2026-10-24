@@ -183,6 +183,9 @@ def annotation_to_abundance_tables(frame: pd.DataFrame) -> Dict[str, pd.DataFram
     result: Dict[str, pd.DataFrame] = {}
     for col in taxid_annotation_columns(work):
         piece = work[[col, "sample"]].copy()
+        from samovar.taxonomy import require_regeneration_taxids
+
+        require_regeneration_taxids(piece[col].tolist(), source=str(col))
         piece[col] = piece[col].astype(str)
         mat = piece.groupby([col, "sample"], dropna=False).size().unstack(fill_value=0)
         mat.index = mat.index.astype(str)
