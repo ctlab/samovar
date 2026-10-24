@@ -1042,8 +1042,10 @@ params {{
 
 process.time = '2h'
 """
+    # Nextflow 25 defaults to mamba. Force the conda binary our launch shim provides.
+    body += "\nconda.useMamba = false\n"
     if conda_cache:
-        body += f'\nconda.cacheDir = "{conda_cache}"\n'
+        body += f'conda.cacheDir = "{conda_cache}"\n'
     nano_env = (
         tool_env_prefix("nanosim")
         or tool_env_prefix("nanosim3")
@@ -1370,6 +1372,74 @@ def _try_camisim_community(cfg: Dict[str, Any], work: Path) -> bool:
         return False
 
 
+def nextflow_version(binary: str) -> Optional[Tuple[int, int, int]]:
+    """``(major, minor, patch)`` from ``nextflow -version``, or None."""
+    try:
+        result = subprocess.run(
+            [str(binary), "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = (result.stdout or "") + (result.stderr or "")
+    match = re.search(r"version\s+(\d+)\.(\d+)\.(\d+)", text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def nextflow_supports_camisim(version: Optional[Tuple[int, int, int]]) -> bool:
+    """Nextflow 26 rejects CAMISIM's ``if`` / ``includeConfig`` mix."""
+    if version is None:
+        return True
+    return version < (26, 0, 0)
+
+
+def absolute_conda_executable() -> Optional[str]:
+    """Conda binary Nextflow should exec, not the shell function named ``conda``."""
+    env = os.environ.get("CONDA_EXE", "").strip()
+    candidates = [env, shutil.which("conda") or ""]
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        path = Path(text).expanduser()
+        try:
+            if path.is_file():
+                return str(path.resolve())
+        except OSError:
+            continue
+    return None
+
+
+def write_conda_mkdir_shim(directory: Path, conda_bin: Optional[str] = None) -> Optional[Path]:
+    """``conda`` on PATH that drops ``--mkdir`` and execs the absolute conda binary.
+
+    Nextflow <=24.10 passes ``conda create --mkdir``, which conda >=25.3 rejects.
+    A shell function named ``conda`` is invisible to that process, so the shim
+    must call ``CONDA_EXE`` by path.
+    """
+    real = conda_bin or absolute_conda_executable()
+    if not real:
+        return None
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "conda"
+    py = python_path()
+    script.write_text(
+        f"#!{py}\n"
+        "import os, sys\n"
+        f"real = {str(Path(real).resolve())!r}\n"
+        "args = [arg for arg in sys.argv[1:] if arg != '--mkdir']\n"
+        "os.execv(real, [real, *args])\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
 def nextflow_run_cmd(
     nextflow_bin: str,
     camisim_root: str,
@@ -1417,11 +1487,31 @@ def _run_camisim_reads(
     log_path = dest / "camisim.nextflow.log"
     if kind == "nextflow":
         nxt = discover_nextflow() or run_cfg.get("nextflow") or "nextflow"
+        version = nextflow_version(str(nxt))
+        if not nextflow_supports_camisim(version):
+            logger.warning(
+                "Nextflow %s breaks CAMISIM (if statements cannot be mixed with "
+                "config statements). Install nextflow>=25.04.2,<26.",
+                ".".join(str(part) for part in (version or ())),
+            )
+            return False
         cmd = nextflow_run_cmd(str(nxt), str(root), nf, work / f"nf_work_{cam_type}")
         extra = extra_flags_argv(
             run_cfg.get("extra_flags") or run_cfg.get("reads_generator_flags")
         )
         cmd.extend(extra)
+        env = os.environ.copy()
+        shim = write_conda_mkdir_shim(work / "conda_shim")
+        if shim is not None:
+            env["PATH"] = str(shim.parent) + os.pathsep + env.get("PATH", "")
+            real_conda = absolute_conda_executable()
+            if real_conda:
+                env["CONDA_EXE"] = real_conda
+        elif version is not None and version < (25, 4, 2):
+            logger.warning(
+                "Nextflow %s calls conda create --mkdir and no conda binary was found to wrap.",
+                ".".join(str(part) for part in version),
+            )
         logger.info("Running CAMISIM: %s (cwd=%s)", " ".join(cmd), root)
         try:
             with open(log_path, "w", encoding="utf-8") as log:
@@ -1430,6 +1520,7 @@ def _run_camisim_reads(
                 result = subprocess.run(
                     cmd,
                     cwd=str(root),
+                    env=env,
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     check=False,
