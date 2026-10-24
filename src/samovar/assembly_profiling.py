@@ -497,7 +497,18 @@ def run_spades(r1, r2, ont, dest, threads=1, extra=None):
     if ont:
         cmd.extend(["--nanopore", ont])
     cmd.extend(str(x) for x in (extra or []))
-    _run(cmd)
+    try:
+        _run(cmd)
+    except subprocess.CalledProcessError:
+        log_path = work / "spades.log"
+        log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        if "Invalid kmer coverage histogram" not in log:
+            raise
+        logging.getLogger(__name__).warning(
+            "SPAdes assembled no contigs; writing empty FASTA (see %s)", log_path
+        )
+        _touch_empty_fasta(out)
+        return out
     contigs = work / "contigs.fasta"
     out.parent.mkdir(parents=True, exist_ok=True)
     if contigs.is_file() and contigs.stat().st_size:
