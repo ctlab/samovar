@@ -835,7 +835,7 @@ private:
 };
 
 fs::path write_run(const fs::path& dir, size_t idx, std::vector<Record>& recs, const Schema& sch) {
-    std::sort(recs.begin(), recs.end(), [](const Record& a, const Record& b) {
+    std::stable_sort(recs.begin(), recs.end(), [](const Record& a, const Record& b) {
         return a.seq < b.seq;
     });
     fs::path path = dir / ("run_" + std::to_string(idx) + ".tsv");
@@ -843,13 +843,8 @@ fs::path write_run(const fs::path& dir, size_t idx, std::vector<Record>& recs, c
     std::vector<char> buf(kIoBuf);
     out.rdbuf()->pubsetbuf(buf.data(), static_cast<std::streamsize>(buf.size()));
     write_schema(out, sch);
-    std::string prev;
     for (const Record& r : recs) {
-        if (r.seq == prev) {
-            continue;
-        }
         write_tsv_record(out, r);
-        prev = r.seq;
     }
     return path;
 }
@@ -881,14 +876,10 @@ fs::path merge_runs(const std::vector<fs::path>& runs, const fs::path& out_path,
     std::vector<char> buf(kIoBuf);
     out.rdbuf()->pubsetbuf(buf.data(), static_cast<std::streamsize>(buf.size()));
     write_schema(out, sch);
-    std::string prev;
     while (!heap.empty()) {
         Item cur = heap.top();
         heap.pop();
-        if (cur.rec.seq != prev) {
-            write_tsv_record(out, cur.rec);
-            prev = cur.rec.seq;
-        }
+        write_tsv_record(out, cur.rec);
         Record nxt;
         if (streams[cur.src].next(&nxt)) {
             heap.push(Item{std::move(nxt), cur.src});
@@ -962,8 +953,72 @@ struct JoinStream {
     explicit JoinStream(const fs::path& path) : in(path) { alive = in.next(&rec); }
 };
 
+bool share_seq(const fs::path& left, const fs::path& right) {
+    BufferedIn a(left);
+    BufferedIn b(right);
+    Record ra;
+    Record rb;
+    bool have_a = a.next(&ra);
+    bool have_b = b.next(&rb);
+    while (have_a && have_b) {
+        if (ra.seq == rb.seq) {
+            return true;
+        }
+        if (ra.seq < rb.seq) {
+            have_a = a.next(&ra);
+        } else {
+            have_b = b.next(&rb);
+        }
+    }
+    return false;
+}
+
+// Natives always open rows. A custom file whose read ids share nothing with
+// those natives must not outer-join its own ids in (that doubles the table
+// with zero-filled rows). With no native file, the first tool is the anchor.
+std::vector<char> row_sources(const std::vector<fs::path>& sorted, const std::vector<std::string>& tools) {
+    std::vector<char> introduce(sorted.size(), 1);
+    std::vector<size_t> natives;
+    for (size_t i = 0; i < tools.size(); ++i) {
+        if (tool_kind(tools[i]) != ToolKind::Custom) {
+            natives.push_back(i);
+        }
+    }
+    if (!natives.empty()) {
+        for (size_t i = 0; i < tools.size(); ++i) {
+            if (tool_kind(tools[i]) != ToolKind::Custom) {
+                continue;
+            }
+            bool hit = false;
+            for (size_t native : natives) {
+                if (share_seq(sorted[i], sorted[native])) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) {
+                introduce[i] = 0;
+                std::cerr << "WARNING: " << tools[i]
+                          << " read ids do not overlap the other annotators; "
+                          << "its rows were not added to the table\n";
+            }
+        }
+        return introduce;
+    }
+    for (size_t i = 1; i < sorted.size(); ++i) {
+        if (!share_seq(sorted[0], sorted[i])) {
+            introduce[i] = 0;
+            std::cerr << "WARNING: " << tools[i]
+                      << " read ids do not overlap the other annotators; "
+                      << "its rows were not added to the table\n";
+        }
+    }
+    return introduce;
+}
+
 void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::string>& tools,
                   const fs::path& csv_path, const TruthIndex* truth) {
+    const std::vector<char> introduce = row_sources(sorted, tools);
     std::vector<JoinStream> streams;
     streams.reserve(sorted.size());
     for (const auto& p : sorted) {
@@ -989,56 +1044,65 @@ void merge_sample(const std::vector<fs::path>& sorted, const std::vector<std::st
     while (true) {
         std::string min_seq;
         bool any = false;
-        for (auto& s : streams) {
-            if (!s.alive) {
+        for (size_t i = 0; i < streams.size(); ++i) {
+            if (!introduce[i] || !streams[i].alive) {
                 continue;
             }
-            if (!any || s.rec.seq < min_seq) {
-                min_seq = s.rec.seq;
+            if (!any || streams[i].rec.seq < min_seq) {
+                min_seq = streams[i].rec.seq;
                 any = true;
             }
         }
         if (!any) {
             break;
         }
-        std::string length;
-        std::vector<std::vector<std::string>> tax_row(streams.size());
-        std::vector<std::vector<std::string>> feat_row(streams.size());
         for (size_t i = 0; i < streams.size(); ++i) {
-            const Schema& sch = streams[i].in.schema();
-            tax_row[i].assign(sch.tax_ids.size(), "0");
-            feat_row[i].assign(sch.feat_ids.size(), "");
-        }
-        for (size_t i = 0; i < streams.size(); ++i) {
-            auto& s = streams[i];
-            if (!s.alive || s.rec.seq != min_seq) {
+            if (introduce[i]) {
                 continue;
             }
-            tax_row[i] = s.rec.tax;
-            feat_row[i] = s.rec.feat;
-            const Schema& sch = s.in.schema();
-            for (size_t k = 0; k < sch.feat_ids.size() && k < s.rec.feat.size(); ++k) {
-                if (length.empty() && sch.feat_ids[k] == "length" && !s.rec.feat[k].empty()) {
-                    length = s.rec.feat[k];
-                }
-            }
-            s.alive = s.in.next(&s.rec);
-            while (s.alive && s.rec.seq == min_seq) {
+            auto& s = streams[i];
+            while (s.alive && s.rec.seq < min_seq) {
                 s.alive = s.in.next(&s.rec);
             }
         }
-        out << csv_escape(min_seq);
+        std::vector<std::vector<Record>> copies(streams.size());
         for (size_t i = 0; i < streams.size(); ++i) {
-            for (const auto& t : tax_row[i]) {
-                out << ',' << csv_escape(t);
-            }
-            for (const auto& feat : feat_row[i]) {
-                out << ',' << csv_escape(feat);
+            auto& s = streams[i];
+            while (s.alive && s.rec.seq == min_seq) {
+                copies[i].push_back(s.rec);
+                s.alive = s.in.next(&s.rec);
             }
         }
-        out << ',' << csv_escape(length) << ',' << csv_escape(true_taxid_for(min_seq, truth))
-            << ',' << csv_escape(extract_read_type(min_seq)) << '\n';
-        ++n;
+        size_t rows = 1;
+        for (size_t i = 0; i < copies.size(); ++i) {
+            if (introduce[i] && copies[i].size() > rows) {
+                rows = copies[i].size();
+            }
+        }
+        for (size_t r = 0; r < rows; ++r) {
+            std::string length;
+            out << csv_escape(min_seq);
+            for (size_t i = 0; i < streams.size(); ++i) {
+                const Schema& sch = streams[i].in.schema();
+                const Record* rec = nullptr;
+                if (!copies[i].empty()) {
+                    rec = &copies[i][r < copies[i].size() ? r : 0];
+                }
+                for (size_t k = 0; k < sch.tax_ids.size(); ++k) {
+                    out << ',' << csv_escape(rec && k < rec->tax.size() ? rec->tax[k] : "0");
+                }
+                for (size_t k = 0; k < sch.feat_ids.size(); ++k) {
+                    const std::string feat = rec && k < rec->feat.size() ? rec->feat[k] : "";
+                    if (length.empty() && sch.feat_ids[k] == "length" && !feat.empty()) {
+                        length = feat;
+                    }
+                    out << ',' << csv_escape(feat);
+                }
+            }
+            out << ',' << csv_escape(length) << ',' << csv_escape(true_taxid_for(min_seq, truth))
+                << ',' << csv_escape(extract_read_type(min_seq)) << '\n';
+            ++n;
+        }
     }
     std::cerr << "Exported " << csv_path.filename().string() << " (" << n << " rows)\n";
 }

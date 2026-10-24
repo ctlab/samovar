@@ -981,6 +981,58 @@ def read_tool_output(file_path: str, tool_type: str) -> pd.DataFrame:
     return trim_raw_tool_frame(frame)
 
 
+_NATIVE_ANNOTATORS = {
+    "kaiju",
+    "kraken",
+    "kraken1",
+    "kraken2",
+    "krakenuniq",
+    "krakenu",
+    "krakenunique",
+}
+
+
+def _native_annotator(tool_type: str) -> bool:
+    name = str(tool_type or "").split("_")[-1].split(".")[0].lower()
+    return name in _NATIVE_ANNOTATORS
+
+
+def _align_tool_frames(frames: List[pd.DataFrame], native: List[bool]) -> pd.DataFrame:
+    """Outer-join tool tables on read id without dropping duplicate ids.
+
+    A custom table that shares no read id with a native table does not add
+    rows. Duplicate ids stay as separate rows (aligned by occurrence).
+    """
+    if not frames:
+        return pd.DataFrame()
+    anchor = set()
+    for flag, frame in zip(native, frames):
+        if flag:
+            anchor.update(frame.index)
+    if not anchor:
+        anchor.update(frames[0].index)
+    aligned = []
+    for flag, frame in zip(native, frames):
+        ids = set(frame.index)
+        if not flag and anchor and ids.isdisjoint(anchor):
+            warnings.warn(
+                f"custom annotator read ids do not overlap the other tools; "
+                f"{len(frame)} rows were not added",
+                stacklevel=2,
+            )
+            frame = frame.iloc[0:0]
+        if frame.empty:
+            aligned.append(frame)
+            continue
+        work = frame.copy()
+        work["_occ"] = work.groupby(level=0).cumcount()
+        aligned.append(work.set_index("_occ", append=True))
+    out = pd.concat(aligned, axis=1)
+    if isinstance(out.index, pd.MultiIndex):
+        out.index = out.index.droplevel(-1)
+    return out
+
+
 def read_annotation(file_path_type: Dict[str, str], trimmed: bool = True) -> pd.DataFrame:
     """Read and combine multiple annotation files.
     
@@ -1026,18 +1078,20 @@ class Annotation:
         self.abundance_tables = None
         
         # Read and combine all annotation files (taxID_* and/or feat_*)
+        frames = []
+        native = []
         for path, tool_type in file_path_type.items():
             raw = read_tool_output(path, tool_type)
             labeled = prefix_tool_columns(raw, tool_type, self.id)
             if "seq" in labeled.columns:
                 labeled = labeled.set_index("seq")
-            if labeled.index.duplicated().any():
-                labeled = labeled[~labeled.index.duplicated(keep="first")]
-            try:
-                self.DataFrame = pd.concat([self.DataFrame, labeled], axis=1)
-            except Exception as exc:
-                raise ValueError(f"Error concatenating {path}") from exc
+            frames.append(labeled)
+            native.append(_native_annotator(tool_type))
             self.id += 1
+        try:
+            self.DataFrame = _align_tool_frames(frames, native)
+        except Exception as exc:
+            raise ValueError("Error concatenating annotation files") from exc
 
         tax_cols = tax_annotator_columns(self.DataFrame.columns)
         feat_cols = feat_annotator_columns(self.DataFrame.columns)

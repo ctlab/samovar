@@ -166,21 +166,43 @@ def test_sort_merge_outer_join(tmp_path, combiner):
     )
     df = pd.read_csv(out / "s1.annotation.csv")
     df["seq"] = df["seq"].astype(str)
-    by_seq = df.set_index("seq")
-    assert set(by_seq.index) == {
+    assert set(df["seq"]) == {
         "readA|taxid:9606|",
         "readB|taxid:562|",
         "readC|taxid:4932|",
     }
-    assert str(int(by_seq.loc["readA|taxid:9606|", "taxID_kaiju_0"])) == "9606"
-    assert str(int(by_seq.loc["readA|taxid:9606|", "taxID_kraken2_1"])) == "9606"
+    read_a = df[df["seq"] == "readA|taxid:9606|"]
+    assert len(read_a) == 2
+    assert set(int(x) for x in read_a["taxID_kaiju_0"]) == {9606, 999}
+    assert set(int(x) for x in read_a["taxID_kraken2_1"]) == {9606}
+    assert set(int(x) for x in read_a["length"]) == {126}
+    by_seq = df.drop_duplicates("seq").set_index("seq")
     assert str(int(by_seq.loc["readB|taxid:562|", "taxID_kaiju_0"])) == "562"
     assert int(by_seq.loc["readB|taxid:562|", "taxID_kraken2_1"]) == 0
     assert int(by_seq.loc["readC|taxid:4932|", "taxID_kaiju_0"]) == 0
     assert str(int(by_seq.loc["readA|taxid:9606|", "true"])) == "9606"
     assert str(int(by_seq.loc["readC|taxid:4932|", "true"])) == "4932"
-    assert int(by_seq.loc["readA|taxid:9606|", "length"]) == 126
     assert int(by_seq.loc["readA|taxid:9606|", "feat_kraken2_1_length"]) == 126
+
+
+def test_custom_ids_without_overlap_do_not_add_rows(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_kaiju(
+        reports / "s1_kaiju.kaiju.out",
+        [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")],
+    )
+    _write_custom(
+        reports / "s1_other.custom_other.out",
+        [("unknown-1", "1"), ("unknown-2", "2")],
+    )
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv")
+    assert list(df["seq"]) == ["readA|taxid:9606|", "readB|taxid:562|"]
+    assert "taxID_other_1" in df.columns
+    assert set(int(x) for x in df["taxID_other_1"]) == {0}
+    assert set(int(x) for x in df["taxID_kaiju_0"]) == {9606, 562}
 
 
 def test_true_taxid_prefix_without_token(tmp_path, combiner):
