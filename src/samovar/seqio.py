@@ -792,7 +792,7 @@ def assembly_read_libraries(r1: PathLike, r2: PathLike = ""):
                 if path is None or not path.is_file():
                     continue
                 for record in iter_fastq_records(path):
-                    match = re.search(r"(?:^|[|\s])read_type:([^|\s]+)", record[0].lstrip("@"))
+                    match = re.search(r"(?:^|[|\s])read_type:([^|\s/]+)", record[0].lstrip("@"))
                     if not match:
                         untagged += 1
                         continue
