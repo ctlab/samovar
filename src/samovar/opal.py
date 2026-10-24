@@ -273,12 +273,14 @@ def write_profiles_for_annotators(
     gold.write_text("\n".join(gold_parts) + "\n", encoding="utf-8")
 
     profiles: List[Tuple[str, Path]] = []
+    seen_names = set()
     for name in annotators:
-        if name not in work.columns:
+        if name not in work.columns or name in seen_names:
             continue
+        seen_names.add(name)
         chunks = []
         for sample, idx in samples.groupby(samples).groups.items():
-                chunks.append(
+            chunks.append(
                 write_cami_profile(
                     series_to_counts(work.loc[idx, name]),
                     dest_dir / f"_{name}_{sample}.profile",
@@ -293,6 +295,132 @@ def write_profiles_for_annotators(
     return gold, profiles
 
 
+def complete_opal_metrics(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add an F1 row wherever OPAL stored purity and completeness without F1.
+
+    OPAL's ``print_by_tool`` indexes the ``F1 score`` column unconditionally.
+    A rank that only has abundance metrics used to abort the whole report
+    after ``results.tsv`` was already written.
+    """
+    needed = {"tool", "rank", "metric", "sample", "value"}
+    if not isinstance(frame, pd.DataFrame) or frame.empty or not needed.issubset(frame.columns):
+        return frame
+    extra = []
+    for (tool, rank, sample), part in frame.groupby(["tool", "rank", "sample"], dropna=False):
+        metrics = set(part["metric"].astype(str))
+        if "F1 score" in metrics or "Purity" not in metrics or "Completeness" not in metrics:
+            continue
+        try:
+            purity = float(part.loc[part["metric"] == "Purity", "value"].iloc[0])
+            recall = float(part.loc[part["metric"] == "Completeness", "value"].iloc[0])
+        except (TypeError, ValueError):
+            continue
+        f1 = 0.0 if purity + recall == 0 else 2.0 * purity * recall / (purity + recall)
+        extra.append(
+            {"tool": tool, "rank": rank, "metric": "F1 score", "sample": sample, "value": f1}
+        )
+    if not extra:
+        return frame
+    return pd.concat([frame, pd.DataFrame(extra)], ignore_index=True)
+
+
+def _dedupe_profiles(
+    profiles: Sequence[Tuple[str, Path]],
+) -> List[Tuple[str, Path]]:
+    """One profile per label. Repeated labels make OPAL's Categorical index fail."""
+    seen = set()
+    unique: List[Tuple[str, Path]] = []
+    for name, path in profiles:
+        label = str(name)
+        if label in seen:
+            continue
+        seen.add(label)
+        unique.append((label, path))
+    return unique
+
+
+def _opal_score_ready(output_dir: Path) -> bool:
+    path = Path(output_dir) / "results.tsv"
+    if not path.is_file():
+        return False
+    try:
+        frame = pd.read_csv(path, sep="\t")
+    except Exception:
+        return False
+    return (
+        not frame.empty
+        and {"metric", "value"}.issubset(frame.columns)
+        and frame["metric"].astype(str).ne("").any()
+    )
+
+
+def _install_opal_plot_compat() -> None:
+    """Keep OPAL's score tables when a small profile cannot draw a spider chart.
+
+    With three or more tools, a rank that has no values is a length-0 series
+    against a length-N axis (``shapes (N,) and (0,)``). That used to exit
+    after metrics were saved. Unknown ranks raise ``KeyError`` in the same plot.
+    """
+    import cami_opal.plots as plots
+
+    if getattr(plots, "_samovar_small_profile", False):
+        return
+    orig_spider = plots.spider_plot
+    orig_plot_all = plots.plot_all
+
+    def spider_plot(metrics, labels, rank_to_metric_to_toolvalues, *args, **kwargs):
+        try:
+            return orig_spider(metrics, labels, rank_to_metric_to_toolvalues, *args, **kwargs)
+        except ValueError as exc:
+            if "same first dimension" not in str(exc):
+                raise
+            logger.info("OPAL spider plot skipped: %s", exc)
+            return []
+
+    def plot_all(*args, **kwargs):
+        try:
+            return orig_plot_all(*args, **kwargs)
+        except (KeyError, ValueError) as exc:
+            logger.info("OPAL summary plots skipped: %s", exc)
+            return []
+
+    plots.spider_plot = spider_plot
+    plots.plot_all = plot_all
+    plots._samovar_small_profile = True
+
+
+def _patched_opal_source(script: str) -> str:
+    """Tolerate a missing F1 column and repeated category labels in ``opal.py``.
+
+    The installed script is not ours. These are the three small-data crashes:
+    ``KeyError: 'F1 score'``, ``Categorical categories must be unique``, and
+    the spider-plot shape error handled in ``_install_opal_plot_compat``.
+    """
+    source = Path(script).read_text(encoding="utf-8")
+    source = source.replace(
+        "table = table.loc[:, order_columns]",
+        "table = table.loc[:, [col for col in order_columns if col in table.columns]]",
+    )
+    source = source.replace(
+        "categories=order_rows, ordered=True",
+        "categories=list(dict.fromkeys(order_rows)), ordered=True",
+    )
+    source = source.replace(
+        "categories=ranks_in_metrics, ordered=True",
+        "categories=list(dict.fromkeys(ranks_in_metrics)), ordered=True",
+    )
+    needle = "    logger.info('Saving computed metrics')"
+    if needle in source:
+        source = source.replace(
+            needle,
+            "    from samovar.opal import complete_opal_metrics as _complete_opal_metrics\n"
+            "    pd_metrics = _complete_opal_metrics(pd_metrics)\n"
+            "    logger.info('Saving computed metrics')",
+            1,
+        )
+    return source
+
+
 def run_opal(
     gold: Path,
     profiles: Sequence[Tuple[str, Path]],
@@ -301,6 +429,7 @@ def run_opal(
     timeout: int = 180,
 ) -> Optional[Path]:
     """Invoke OPAL if installed. Returns the output directory on success."""
+    profiles = _dedupe_profiles(profiles)
     if not opal_enabled() or not profiles:
         return None
     exe = opal_command()
@@ -333,6 +462,13 @@ def run_opal(
         logger.warning("OPAL did not run: %s (logs: %s, %s)", exc, stdout_path, stderr_path)
         return None
     if proc.returncode != 0:
+        if _opal_score_ready(out):
+            logger.info(
+                "OPAL exited %s after writing results.tsv; score table kept (%s)",
+                proc.returncode,
+                stderr_path,
+            )
+            return out
         logger.warning(
             "OPAL exited %s: %s",
             proc.returncode,
@@ -362,7 +498,6 @@ def maybe_run_opal(
 
 def main():
     """Run the configured OPAL script with process-local matplotlib compatibility."""
-    import runpy
     import sys
     import matplotlib
     import matplotlib.cm
@@ -371,7 +506,9 @@ def main():
         matplotlib.cm.get_cmap = matplotlib.colormaps.get_cmap
     script = sys.argv[1]
     sys.argv = sys.argv[1:]
-    runpy.run_path(script, run_name="__main__")
+    _install_opal_plot_compat()
+    source = _patched_opal_source(script)
+    exec(compile(source, script, "exec"), {"__name__": "__main__", "__file__": script})
 
 
 if __name__ == "__main__":
