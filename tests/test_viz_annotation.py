@@ -262,12 +262,27 @@ def test_compare_annotations_skips_empty_dir(tmp_path):
     assert data.empty
 
 
-def test_compare_annotations_skips_combined_only(tmp_path):
-    pd.DataFrame({"seq": ["r1"]}).to_csv(
-        tmp_path / "combined_annotation_table.csv", index=False
+def test_compare_annotations_reads_combined_when_parts_are_gone(tmp_path):
+    pd.DataFrame(
+        {"seq": ["r1"], "taxID_kaiju_0": [562], "true": [562], "sample": ["s1"]}
+    ).to_csv(tmp_path / "combined_annotation_table.csv", index=False)
+    data = compare_annotations(annotation_dir=str(tmp_path), types=())
+    assert list(data["sample"].astype(str)) == ["s1"]
+    tax = [c for c in data.columns if str(c).lower().startswith("taxid")]
+    assert int(data.loc[0, tax[0]]) == 562
+
+
+def test_compare_annotations_prefers_per_sample_csv(tmp_path):
+    pd.DataFrame(
+        {"seq": ["r1"], "taxID_kaiju_0": [1], "sample": ["combined"]}
+    ).to_csv(tmp_path / "combined_annotation_table.csv", index=False)
+    pd.DataFrame({"seq": ["r1"], "taxID_kaiju_0": [562]}).to_csv(
+        tmp_path / "s1.annotation.csv", index=False
     )
-    data = compare_annotations(annotation_dir=str(tmp_path))
-    assert data.empty
+    data = compare_annotations(annotation_dir=str(tmp_path), types=())
+    assert set(data["sample"].astype(str)) == {"s1"}
+    tax = [c for c in data.columns if str(c).lower().startswith("taxid")]
+    assert int(data.loc[0, tax[0]]) == 562
 
 
 def test_compare_annotations_cli_skips_empty_dir(tmp_path):

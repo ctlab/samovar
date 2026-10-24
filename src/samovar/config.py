@@ -205,6 +205,29 @@ def _indent_bash(text: str, spaces: int = 2) -> str:
     return "\n".join(pad + line if line.strip() else line for line in lines)
 
 
+def _annotation_combine_bash(
+    batch: str,
+    reports: str,
+    annotations: str,
+    truth_suffix: str,
+    incremental: bool,
+) -> str:
+    """Keep the batch combiner, and finalize when incremental sentinels exist."""
+    if not incremental:
+        return batch
+    final = (
+        '"$PYTHON_PATH" -m samovar.combine_tables finalize \\\n'
+        f'    --annotations "$out_dir/{annotations}"{truth_suffix}'
+    )
+    return (
+        f"if find \"$out_dir/{reports}\" -name '*.ingested' -print -quit | grep -q .; then\n"
+        f"{_indent_bash(final, 2)}\n"
+        "else\n"
+        f"{_indent_bash(batch, 2)}\n"
+        "fi"
+    )
+
+
 def _checkpoint_block(name: str, body: str) -> str:
     """Wrap a bash snippet so it is skipped when the named checkpoint exists."""
     return (
@@ -362,6 +385,7 @@ class PipelineConfig:
     max_genome_mb: float = DEFAULT_MAX_GENOME_MB
     genome_skip_list: Optional[List[str]] = None
     run_multiqc: Optional[bool] = None
+    incremental_annotations: bool = True
     initial_ground_truth_table: Optional[str] = None
     regenerated_metagenomes: str = "parse-genome"
     scoring_flags: Optional[str] = None
@@ -686,6 +710,8 @@ class PipelineConfig:
                     config.gzip_genomes = bool(input_config.get('gzip_genomes'))
                 if 'gzip_reads' in input_config:
                     config.gzip_reads = bool(input_config.get('gzip_reads'))
+                if 'incremental_annotations' in input_config:
+                    config.incremental_annotations = bool(input_config.get('incremental_annotations'))
                 yaml_max_g = input_config.get("max_genomes", input_config.get("max-genomes"))
                 if yaml_max_g is not None:
                     config.max_genomes = parse_max_genomes(
@@ -939,6 +965,8 @@ class PipelineConfig:
         )
         if getattr(args, "run_multiqc", None) is not None:
             config.run_multiqc = bool(args.run_multiqc)
+        if getattr(args, "incremental_annotations", None) is not None:
+            config.incremental_annotations = bool(args.incremental_annotations)
         extra_dirs = getattr(args, "genome_dirs", None)
         if extra_dirs:
             if isinstance(extra_dirs, str):
@@ -1450,6 +1478,10 @@ class PipelineConfig:
             'output_dir': str(base_path / 'initial_reports'),
             'cores': int(self.cores),
             'mem_mb': int(self.mem_mb or 0),
+            'incremental_annotations': bool(self.incremental_annotations),
+            'annotation_dir': str(base_path / 'initial_annotations'),
+            'split_sample_name': 1,
+            'truth_table': str(self.initial_ground_truth_table or ''),
             'run_config': [
                 {
                     'run_name': ann.run_name,
@@ -1608,6 +1640,10 @@ class PipelineConfig:
             'output_dir': str(base_path / 'regenerated_reports'),
             'cores': int(self.cores),
             'mem_mb': int(self.mem_mb or 0),
+            'incremental_annotations': bool(self.incremental_annotations),
+            'annotation_dir': str(base_path / 'regenerated_annotations'),
+            'split_sample_name': 2,
+            'truth_table': '',
             'run_config': [
                 {
                     'run_name': ann.run_name,
@@ -1740,18 +1776,29 @@ class PipelineConfig:
             gt_initial = f' \\\n    --truth-table "{gt_path}"'
         regen_truth = Path(base_dir) / ".log" / "regenerated_ground_truth.tsv"
         if regen_mode == GROUND_TRUTH_TABLE:
-            combine_regen_body = f""""$PYTHON_PATH" -m samovar.ground_truth from-genomes \\
+            gt_regen = f' \\\n    --truth-table "{regen_truth}"'
+            regen_prefix = f""""$PYTHON_PATH" -m samovar.ground_truth from-genomes \\
     --genome-dir "$out_dir/genomes" --output "{regen_truth}" --overwrite
-"$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
+"""
+            regen_batch = f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/regenerated_reports" \\
     -o "$out_dir/regenerated_annotations" \\
     -s 2 \\
     --truth-table "{regen_truth}" """
         else:
-            combine_regen_body = f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
+            gt_regen = ""
+            regen_prefix = ""
+            regen_batch = f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/regenerated_reports" \\
     -o "$out_dir/regenerated_annotations" \\
     -s 2"""
+        combine_regen_body = regen_prefix + _annotation_combine_bash(
+            regen_batch,
+            "regenerated_reports",
+            "regenerated_annotations",
+            gt_regen,
+            self.incremental_annotations,
+        )
         combine_regen_body = combine_regen_body + self._annotation_export_bash(
             "regenerated_annotations", "regenerated"
         ) + self._annotation_export_bash(
@@ -1862,9 +1909,15 @@ fi""",
 
         combine_initial = _checkpoint_block(
             "combine_initial",
-            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
+            _annotation_combine_bash(
+                f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/initial_reports" \\
-    -o "$out_dir/initial_annotations"{gt_initial}"""
+    -o "$out_dir/initial_annotations"{gt_initial}""",
+                "initial_reports",
+                "initial_annotations",
+                gt_initial,
+                self.incremental_annotations,
+            )
             + self._annotation_export_bash("initial_annotations", "initial"),
         )
 

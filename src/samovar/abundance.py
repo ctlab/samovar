@@ -239,13 +239,24 @@ def dir_looks_like_annotation(path: PathLike) -> bool:
     folder = Path(path)
     if not folder.is_dir():
         return False
+    combined = None
     for csv in sorted(folder.glob("*.csv")):
-        if csv.name.startswith("combined_annotation_table") or csv.name.startswith("."):
+        if csv.name.startswith("."):
+            continue
+        if csv.name.startswith("combined_annotation_table"):
+            combined = csv
             continue
         try:
             peek = pd.read_csv(csv, nrows=5)
         except Exception:
             continue
+        if looks_like_annotation(peek) and not is_abundance_table(peek):
+            return True
+    if combined is not None:
+        try:
+            peek = pd.read_csv(combined, nrows=5)
+        except Exception:
+            return False
         if looks_like_annotation(peek) and not is_abundance_table(peek):
             return True
     return False

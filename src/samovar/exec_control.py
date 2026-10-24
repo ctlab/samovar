@@ -244,7 +244,10 @@ def needs_regen_early_exit(
 def _has_out_reports(directory: Path) -> bool:
     if not directory.is_dir():
         return False
-    return any(path.is_file() for path in directory.rglob("*.out"))
+    for pattern in ("*.out", "*.ingested"):
+        if any(path.is_file() for path in directory.rglob(pattern)):
+            return True
+    return False
 
 
 def _has_csv_tables(directory: Path) -> bool:

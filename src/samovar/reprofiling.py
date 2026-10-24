@@ -748,22 +748,63 @@ def passthrough_reprofile_tables(
     """
     os.makedirs(output_dir, exist_ok=True)
     written = 0
-    for filename in sorted(os.listdir(reprofiling_dir)):
-        if not filename.endswith(".csv"):
-            continue
-        if filename.startswith("combined_annotation_table"):
-            continue
+    names = sorted(os.listdir(reprofiling_dir))
+    per_sample = [
+        name
+        for name in names
+        if name.endswith(".csv") and not name.startswith("combined_annotation_table")
+    ]
+    if not per_sample:
+        for name in names:
+            if name.startswith("combined_annotation_table") and name.endswith(".csv"):
+                written += _passthrough_combined(
+                    os.path.join(reprofiling_dir, name), output_dir, features_df
+                )
+        return written
+    for filename in per_sample:
         sample_file = os.path.join(reprofiling_dir, filename)
         df = pd.read_csv(sample_file)
-        df = merge_read_features(df, features_df)
-        if "taxid_SAMOVAR" not in df.columns:
-            if "true" in df.columns:
-                df["taxid_SAMOVAR"] = df["true"]
-            else:
-                df["taxid_SAMOVAR"] = 0
-            df["taxid_SAMOVAR_confidence"] = 0
-        stem = os.path.basename(sample_file).split(".")[0]
-        output_file = os.path.join(output_dir, f"{stem}_reprofiled.csv")
-        df.to_csv(output_file, index=False)
+        _write_passthrough_frame(df, output_dir, os.path.basename(sample_file).split(".")[0], features_df)
         written += 1
     return written
+
+
+def _write_passthrough_frame(df, output_dir, stem, features_df):
+    df = merge_read_features(df, features_df)
+    if "sample" in df.columns:
+        df = df.drop(columns=["sample"])
+    if "taxid_SAMOVAR" not in df.columns:
+        if "true" in df.columns:
+            df["taxid_SAMOVAR"] = df["true"]
+        else:
+            df["taxid_SAMOVAR"] = 0
+        df["taxid_SAMOVAR_confidence"] = 0
+    output_file = os.path.join(output_dir, f"{stem}_reprofiled.csv")
+    df.to_csv(output_file, index=False)
+
+
+def _passthrough_combined(path, output_dir, features_df) -> int:
+    seen = set()
+    n = 0
+    for chunk in pd.read_csv(path, chunksize=20_000):
+        if "sample" not in chunk.columns:
+            groups = [(os.path.basename(path).split(".")[0], chunk)]
+        else:
+            groups = list(chunk.groupby("sample", sort=False))
+        for sample, group in groups:
+            key = str(sample)
+            stem = key[:-11] if key.endswith("_reprofiled") else key
+            out = os.path.join(output_dir, f"{stem}_reprofiled.csv")
+            frame = merge_read_features(group.drop(columns=["sample"], errors="ignore"), features_df)
+            if "taxid_SAMOVAR" not in frame.columns:
+                if "true" in frame.columns:
+                    frame["taxid_SAMOVAR"] = frame["true"]
+                else:
+                    frame["taxid_SAMOVAR"] = 0
+                frame["taxid_SAMOVAR_confidence"] = 0
+            first = key not in seen
+            frame.to_csv(out, index=False, mode="w" if first else "a", header=first)
+            seen.add(key)
+            if first:
+                n += 1
+    return n

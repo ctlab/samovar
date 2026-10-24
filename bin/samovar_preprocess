@@ -422,6 +422,13 @@ def main():
         help='Do not run MultiQC from exec (stage JSON is still written)',
     )
     parser.add_argument(
+        '--no-incremental-annotations',
+        dest='incremental_annotations',
+        action='store_false',
+        default=None,
+        help='Keep per-read annotator files and combine them in one batch',
+    )
+    parser.add_argument(
         '--startpoint',
         '--start-point',
         dest='startpoint',

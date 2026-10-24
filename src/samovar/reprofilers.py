@@ -301,16 +301,63 @@ def stream_profile_dir(
     dest = Path(output_dir)
     dest.mkdir(parents=True, exist_ok=True)
     n = 0
-    for path in iter_annotation_csvs(initial_dir):
-        stem = _reprofiled_stem(path.stem)
-        stream_profile_csv(
+    paths = list(iter_annotation_csvs(initial_dir))
+    if paths:
+        for path in paths:
+            stem = _reprofiled_stem(path.stem)
+            stream_profile_csv(
+                path,
+                model,
+                dest / f"{stem}.csv",
+                features_df=features_df,
+                classify_unclassified=classify_unclassified,
+            )
+            n += 1
+        return n
+    root = Path(initial_dir)
+    for path in sorted(root.glob("combined_annotation_table*.csv")):
+        n += _stream_profile_combined(
             path,
             model,
-            dest / f"{stem}.csv",
+            dest,
             features_df=features_df,
             classify_unclassified=classify_unclassified,
         )
-        n += 1
+    return n
+
+
+def _stream_profile_combined(
+    path: Path,
+    model,
+    dest: Path,
+    *,
+    features_df=None,
+    classify_unclassified: bool = False,
+) -> int:
+    """Split one combined table by ``sample`` into ``{sample}_reprofiled.csv``."""
+    seen = set()
+    n = 0
+    for chunk in pd.read_csv(path, chunksize=20_000):
+        if "sample" not in chunk.columns:
+            sample = path.stem.split(".")[0]
+            groups = [(sample, chunk)]
+        else:
+            groups = list(chunk.groupby("sample", sort=False))
+        for sample, group in groups:
+            raw = group.drop(columns=["sample"], errors="ignore")
+            result = _profile_frame(
+                raw,
+                model,
+                features_df=features_df,
+                classify_unclassified=classify_unclassified,
+            )
+            key = str(sample)
+            out = dest / f"{_reprofiled_stem(key)}.csv"
+            first = key not in seen
+            result.to_csv(out, index=False, mode="w" if first else "a", header=first)
+            seen.add(key)
+            if first:
+                n += 1
     return n
 
 
@@ -323,7 +370,10 @@ def load_regenerated_table(path: Optional[PathLike]) -> pd.DataFrame:
     if target.is_dir():
         combined = target / "combined_annotation_table.csv"
         if combined.is_file():
-            return pd.read_csv(combined)
+            frame = pd.read_csv(combined)
+            if "sample" in frame.columns:
+                frame = frame.drop(columns=["sample"])
+            return frame
         parts = sorted(target.glob("*.annotation.csv"))
         frames = []
         for path in parts:
@@ -618,7 +668,10 @@ def _align_ml_tables(regenerated, initial, initial_dir):
         if root.is_dir():
             seen = []
             known = set(contract_column_names(frames[0].columns))
-            for path in iter_annotation_csvs(root):
+            paths = list(iter_annotation_csvs(root))
+            if not paths:
+                paths = sorted(root.glob("combined_annotation_table*.csv"))
+            for path in paths:
                 try:
                     header = pd.read_csv(path, nrows=0)
                 except Exception:

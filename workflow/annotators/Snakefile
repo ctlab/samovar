@@ -1,4 +1,5 @@
 import os
+import shlex
 
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
 from samovar.memory import annotator_mem_mb
@@ -87,12 +88,54 @@ KAIJU_RUNS = [
 # rule that also writes the same files would be ambiguous, so it is omitted.
 BATCH_KAIJU = use_kaiju_multi(len(SAMPLES)) and bool(KAIJU_RUNS)
 
+# Default: fold each finished annotator into a per-sample CSV and drop the per-read file.
+# The Snakemake target is then a sentinel, so a deleted *.out is not rerun.
+_INCREMENTAL_OFF = {"0", "false", "no", "off"}
+INCREMENTAL = str(config.get("incremental_annotations", True)).strip().lower() not in _INCREMENTAL_OFF
+ANN_DIR = str(config.get("annotation_dir") or "")
+if not ANN_DIR:
+    _reports_dir = str(config["output_dir"]).rstrip("/")
+    _parent, _name = os.path.split(_reports_dir)
+    if _name.endswith("_reports"):
+        ANN_DIR = os.path.join(_parent, _name[: -len("_reports")] + "_annotations")
+SPLIT = int(config.get("split_sample_name") or 1)
+TRUTH = str(config.get("truth_table") or "")
+
+
+def marker_output(suffix):
+    raw = config["output_dir"] + "/{sample}_{run_name}." + suffix
+    if INCREMENTAL and raw.endswith(".out"):
+        return raw[:-4] + ".ingested"
+    return raw
+
+
+def disk_out(wildcards, suffix):
+    return f"{config['output_dir']}/{wildcards.sample}_{wildcards.run_name}.{suffix}"
+
+
+def ingest_shell(wildcards, suffix):
+    if not INCREMENTAL:
+        return ""
+    written = disk_out(wildcards, suffix)
+    sentinel = written[:-4] + ".ingested" if written.endswith(".out") else written + ".ingested"
+    return (
+        '"$PYTHON_PATH" -m samovar.combine_tables ingest '
+        f"--out {shlex.quote(written)} "
+        f"--annotations {shlex.quote(ANN_DIR)} "
+        f"--sentinel {shlex.quote(sentinel)} "
+        f"--split {SPLIT} "
+        f"--truth-table {shlex.quote(TRUTH)}"
+    )
+
+
 def get_all_expected_outputs():
     outputs = []
     for run_name, annotator in ANNOTATORS.items():
         for sample in SAMPLES:
-            expected_files = annotator.get_expected_outputs(sample, config['output_dir'])
-            outputs.extend(expected_files)
+            for path in annotator.get_expected_outputs(sample, config["output_dir"]):
+                if INCREMENTAL and path.endswith(".out"):
+                    path = path[:-4] + ".ingested"
+                outputs.append(path)
     return outputs
 
 rule all:
@@ -107,7 +150,7 @@ rule custom_tool:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.custom_{{tool_name}}.out"
+        out = marker_output("custom_{tool_name}.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -116,14 +159,17 @@ rule custom_tool:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
+        written = lambda wildcards: disk_out(wildcards, f"custom_{wildcards.tool_name}.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, f"custom_{wildcards.tool_name}.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, f"custom_{wildcards.tool_name}.out")]
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 # ==========================================
@@ -134,7 +180,7 @@ rule assembly:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.assembly.out"
+        out = marker_output("assembly.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -143,14 +189,17 @@ rule assembly:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
+        written = lambda wildcards: disk_out(wildcards, "assembly.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "assembly.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "assembly.out")]
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kraken2:
@@ -159,7 +208,7 @@ rule kraken2:
         r2 = r2_input
     output:
         report = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.report",
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.out"
+        out = marker_output("kraken2.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -168,14 +217,17 @@ rule kraken2:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
     params:
+        written = lambda wildcards: disk_out(wildcards, "kraken2.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kraken2.out"),
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.report, output.out]
+            input.r1, shell_r2(wildcards, input), [output.report, disk_out(wildcards, "kraken2.out")]
         )
     shell:
         """
         mkdir -p "$(dirname {output.report:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 if not BATCH_KAIJU:
@@ -184,7 +236,7 @@ if not BATCH_KAIJU:
             r1 = r1_input,
             r2 = r2_input
         output:
-            out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
+            out = marker_output("kaiju.out")
         threads:
             lambda wildcards: THREADS.get(wildcards.run_name, 1)
         resources:
@@ -193,14 +245,17 @@ if not BATCH_KAIJU:
         log:
             f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
         params:
-            cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-                input.r1, shell_r2(wildcards, input), [output.out]
+            written = lambda wildcards: disk_out(wildcards, "kaiju.out"),
+            ingest = lambda wildcards: ingest_shell(wildcards, "kaiju.out"),
+            cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+                input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kaiju.out")]
             )
         shell:
             """
-            mkdir -p "$(dirname {output.out:q})"
+            mkdir -p "$(dirname {params.written:q})"
             mkdir -p "$(dirname {log:q})"
             {params.cmd} 2> {log:q}
+            {params.ingest}
             """
 
 if BATCH_KAIJU:
@@ -210,7 +265,7 @@ if BATCH_KAIJU:
                 f"kaiju_multi_{_kaiju_run}"
             output:
                 expand(
-                    f"{config['output_dir']}/{{sample}}_{_kaiju_run}.kaiju.out",
+                    marker_output("kaiju.out").replace("{run_name}", _kaiju_run),
                     sample=SAMPLES,
                 )
             threads:
@@ -225,11 +280,19 @@ if BATCH_KAIJU:
             params:
                 cmd = lambda wildcards, output, run_name=_kaiju_run: ANNOTATORS[run_name].batch_shell(
                     SAMPLES, config["r1_dir"], config["r2_dir"], config["output_dir"]
+                ),
+                ingest = "\n".join(
+                    ingest_shell(
+                        type("W", (), {"sample": sample, "run_name": _kaiju_run})(),
+                        "kaiju.out",
+                    )
+                    for sample in SAMPLES
                 )
             shell:
                 """
                 mkdir -p "$(dirname {log:q})"
                 {params.cmd} 2> {log:q}
+                {params.ingest}
                 """
 
 rule metaphlan4:
@@ -237,7 +300,7 @@ rule metaphlan4:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.out",
+        out = marker_output("metaphlan4.out"),
         raw = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.raw",
         bowtie = f"{config['output_dir']}/{{sample}}_{{run_name}}.bowtie2.bz2"
     threads:
@@ -248,14 +311,19 @@ rule metaphlan4:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
     params:
+        written = lambda wildcards: disk_out(wildcards, "metaphlan4.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "metaphlan4.out"),
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out, output.raw, output.bowtie]
+            input.r1,
+            shell_r2(wildcards, input),
+            [disk_out(wildcards, "metaphlan4.out"), output.raw, output.bowtie],
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kmer2:
@@ -263,7 +331,7 @@ rule kmer2:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kmer2.out"
+        out = marker_output("kmer2.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -272,14 +340,17 @@ rule kmer2:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
+        written = lambda wildcards: disk_out(wildcards, "kmer2.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kmer2.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kmer2.out")]
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule gc:
@@ -287,7 +358,7 @@ rule gc:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.gc.out"
+        out = marker_output("gc.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -296,14 +367,17 @@ rule gc:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
+        written = lambda wildcards: disk_out(wildcards, "gc.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "gc.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "gc.out")]
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kmer_encoder:
@@ -311,7 +385,7 @@ rule kmer_encoder:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kmer_encoder.out"
+        out = marker_output("kmer_encoder.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -320,14 +394,17 @@ rule kmer_encoder:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
+        written = lambda wildcards: disk_out(wildcards, "kmer_encoder.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kmer_encoder.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kmer_encoder.out")]
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kraken:
@@ -335,7 +412,7 @@ rule kraken:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken.out"
+        out = marker_output("kraken.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -344,14 +421,17 @@ rule kraken:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
+        written = lambda wildcards: disk_out(wildcards, "kraken.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kraken.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kraken.out")]
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule krakenuniq:
@@ -359,7 +439,7 @@ rule krakenuniq:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.krakenuniq.out"
+        out = marker_output("krakenuniq.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
     resources:
@@ -368,12 +448,15 @@ rule krakenuniq:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, shell_r2(wildcards, input), [output.out]
+        written = lambda wildcards: disk_out(wildcards, "krakenuniq.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "krakenuniq.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "krakenuniq.out")]
         )
     shell:
         """
-        mkdir -p "$(dirname {output.out:q})"
+        mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
+        {params.ingest}
         """

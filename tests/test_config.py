@@ -316,6 +316,9 @@ def test_generate_pipeline():
         
         # Check Python and R commands
         assert "workflow/combine_annotation_tables.py" in pipeline_content
+        assert "samovar.combine_tables finalize" in pipeline_content
+        init_yaml = Path(test_output_dir) / ".log" / "configs" / "config_init.yaml"
+        assert "incremental_annotations: true" in init_yaml.read_text(encoding="utf-8")
         assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/ML.py" in pipeline_content
         assert "--seed 42" in pipeline_content

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import csv
+import fcntl
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from samovar.parse_annotators import (
     DEFAULT_TAX_RANK,
@@ -154,3 +155,228 @@ def combine_with_cpp(
                 Path(tmp_truth.name).unlink()
             except OSError:
                 pass
+
+
+def sample_name_from(filename: str, split_n: int = 1) -> str:
+    """Sample id from ``{sample}_{run}.{tool}.out``, matching the C++ combiner."""
+    name = Path(filename).name
+    last = name.rfind(".")
+    prev = name.rfind(".", 0, last) if last > 0 else -1
+    if prev > 0:
+        stem = name[:prev]
+        us = stem.rfind("_")
+        if us > 0:
+            return stem[:us]
+        if stem:
+            return stem
+    parts = name.split("_")
+    n = max(int(split_n), 1)
+    if len(parts) < n:
+        return name
+    return "_".join(parts[:n])
+
+
+def annotation_csv_path(annotation_dir: Path, sample: str) -> Path:
+    return Path(annotation_dir) / f"{sample}.annotation.csv"
+
+
+def _sidecar(csv_path: Path) -> Path:
+    return Path(str(csv_path) + ".tools")
+
+
+def _tool_already_ingested(csv_path: Path, filename: str) -> bool:
+    side = _sidecar(csv_path)
+    if not side.is_file():
+        return False
+    name = Path(filename).name
+    for line in side.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.split("\t", 1)[0] == name:
+            return True
+    return False
+
+
+def _has_data_lines(path: Path) -> bool:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            text = line.strip()
+            if text and not text.startswith("#"):
+                return True
+    return False
+
+
+def _append_annotator(
+    out_file: Path,
+    csv_path: Path,
+    *,
+    truth_table: Optional[str] = None,
+    chunk_rows: int = 500000,
+) -> None:
+    binary = ensure_combine_binary()
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        str(binary),
+        "--add",
+        str(out_file),
+        "--name",
+        out_file.name,
+        "--out",
+        str(csv_path),
+        "--chunk-rows",
+        str(chunk_rows),
+    ]
+    if csv_path.is_file():
+        cmd.extend(["--base", str(csv_path)])
+    if truth_table:
+        cmd.extend(["--truth-table", str(truth_table)])
+    subprocess.check_call(cmd)
+
+
+def ingest_annotator(
+    out_file: Path,
+    annotation_dir: Path,
+    sentinel: Path,
+    *,
+    split_n: int = 1,
+    truth_table: Optional[str] = None,
+    chunk_rows: int = 500000,
+) -> Path:
+    """Fold one per-read annotator file into the sample CSV, then drop that file.
+
+    The sample CSV is replaced only after the combiner exits 0. A parse failure
+    leaves both the CSV and the per-read file in place and does not write the sentinel.
+    """
+    out_file = Path(out_file)
+    annotation_dir = Path(annotation_dir)
+    sentinel = Path(sentinel)
+    sample = sample_name_from(out_file.name, split_n)
+    csv_path = annotation_csv_path(annotation_dir, sample)
+    annotation_dir.mkdir(parents=True, exist_ok=True)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = annotation_dir / f"{sample}.annotation.lock"
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if not out_file.is_file():
+            if _tool_already_ingested(csv_path, out_file.name):
+                sentinel.write_text("ok\n", encoding="utf-8")
+                return csv_path
+            raise FileNotFoundError(f"Annotator output is missing: {out_file}")
+        if not _has_data_lines(out_file):
+            raise RuntimeError(f"Annotator output has no records: {out_file}")
+        _append_annotator(
+            out_file, csv_path, truth_table=truth_table, chunk_rows=chunk_rows
+        )
+        if not csv_path.is_file() or not _tool_already_ingested(csv_path, out_file.name):
+            raise RuntimeError(f"Annotator {out_file.name} was not committed to {csv_path}")
+        out_file.unlink()
+        sentinel.write_text("ok\n", encoding="utf-8")
+    return csv_path
+
+
+def retrue_annotation(csv_path: Path, truth_table: str) -> None:
+    binary = ensure_combine_binary()
+    subprocess.check_call(
+        [str(binary), "--retrue", str(csv_path), "--truth-table", str(truth_table)]
+    )
+
+
+def finalize_annotations(
+    annotation_dir: Path,
+    *,
+    truth_table: Optional[str] = None,
+    delete_parts: bool = True,
+) -> Path:
+    """Stream per-sample CSVs into ``combined_annotation_table.csv``.
+
+    Per-sample files are removed only after the combined table is in place.
+    """
+    annotation_dir = Path(annotation_dir)
+    parts = sorted(annotation_dir.glob("*.annotation.csv"))
+    dest = annotation_dir / "combined_annotation_table.csv"
+    if not parts:
+        if dest.is_file():
+            return dest
+        raise FileNotFoundError(f"No per-sample annotation CSVs in {annotation_dir}")
+    if truth_table:
+        for path in parts:
+            retrue_annotation(path, truth_table)
+    headers: list[list[str]] = []
+    for path in parts:
+        with path.open(newline="") as handle:
+            header = next(csv.reader(handle), None)
+        if not header:
+            raise RuntimeError(f"Empty annotation CSV: {path}")
+        headers.append(header)
+    columns = ["seq"]
+    seen = {"seq", "sample"}
+    for header in headers:
+        for name in header:
+            if name in seen or name == "sample":
+                continue
+            columns.append(name)
+            seen.add(name)
+    if "sample" not in columns:
+        columns.append("sample")
+    tmp = dest.with_suffix(".csv.tmp")
+    with tmp.open("w", newline="") as out:
+        writer = csv.DictWriter(out, fieldnames=columns, lineterminator="\n", extrasaction="ignore")
+        writer.writeheader()
+        for path, header in zip(parts, headers):
+            sample = path.name[: -len(".annotation.csv")]
+            with path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                for row in reader:
+                    row["sample"] = sample
+                    writer.writerow(row)
+    tmp.replace(dest)
+    if delete_parts:
+        for path in parts:
+            path.unlink()
+            side = _sidecar(path)
+            if side.is_file():
+                side.unlink()
+            lock = path.with_suffix(".lock")
+            if lock.is_file():
+                lock.unlink()
+    return dest
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m samovar.combine_tables")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    ingest = sub.add_parser("ingest")
+    ingest.add_argument("--out", required=True)
+    ingest.add_argument("--annotations", required=True)
+    ingest.add_argument("--sentinel", required=True)
+    ingest.add_argument("--split", type=int, default=1)
+    ingest.add_argument("--truth-table", default="")
+    ingest.add_argument("--chunk-rows", type=int, default=500000)
+
+    final = sub.add_parser("finalize")
+    final.add_argument("--annotations", required=True)
+    final.add_argument("--truth-table", default="")
+    final.add_argument("--keep-parts", action="store_true")
+
+    args = parser.parse_args(argv)
+    if args.cmd == "ingest":
+        ingest_annotator(
+            Path(args.out),
+            Path(args.annotations),
+            Path(args.sentinel),
+            split_n=args.split,
+            truth_table=args.truth_table or None,
+            chunk_rows=args.chunk_rows,
+        )
+        return 0
+    finalize_annotations(
+        Path(args.annotations),
+        truth_table=args.truth_table or None,
+        delete_parts=not args.keep_parts,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

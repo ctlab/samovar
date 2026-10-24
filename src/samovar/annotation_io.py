@@ -104,11 +104,26 @@ def align_contract_columns(*frames: pd.DataFrame) -> list:
     return aligned
 
 
+def _read_annotation_csv(path: Path) -> Optional[pd.DataFrame]:
+    try:
+        tmp = pd.read_csv(path)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError):
+        return None
+    if tmp.empty:
+        return None
+    tmp.columns = _normalize_colnames(tmp.columns)
+    return _coalesce_duplicate_columns(tmp)
+
+
 def read_annotation_dir(
     data_dir: Union[str, Path],
     sample_name_position: int = 0,
 ) -> pd.DataFrame:
-    """Load per-sample annotation CSVs, skipping combined tables."""
+    """Load per-sample annotation CSVs.
+
+    When those files are gone, read ``combined_annotation_table*.csv`` and keep
+    its ``sample`` column.
+    """
     data_dir = Path(data_dir)
     frames = []
     for path in sorted(data_dir.glob("*.csv")):
@@ -116,16 +131,19 @@ def read_annotation_dir(
             continue
         parts = path.name.split(".")
         sample_name = "_".join(parts[: sample_name_position + 1])
-        try:
-            tmp = pd.read_csv(path)
-        except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError):
+        tmp = _read_annotation_csv(path)
+        if tmp is None:
             continue
-        if tmp.empty:
-            continue
-        tmp.columns = _normalize_colnames(tmp.columns)
-        tmp = _coalesce_duplicate_columns(tmp)
         tmp["sample"] = sample_name
         frames.append(tmp)
+    if not frames:
+        for path in sorted(data_dir.glob("combined_annotation_table*.csv")):
+            tmp = _read_annotation_csv(path)
+            if tmp is None:
+                continue
+            if "sample" not in tmp.columns:
+                tmp["sample"] = path.stem
+            frames.append(tmp)
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True, sort=False)

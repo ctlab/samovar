@@ -10,11 +10,14 @@ import pandas as pd
 import pytest
 
 from samovar.parse_annotators import Annotation, extract_true_taxid
+from samovar.annotation_io import read_annotation_dir
 from samovar.combine_tables import (
     apply_rank_level_csv,
     apply_species_level_csv,
     combine_with_cpp,
     ensure_combine_binary,
+    finalize_annotations,
+    ingest_annotator,
 )
 
 
@@ -509,3 +512,195 @@ def test_tenbac_reports_merge(tmp_path, combiner):
         zeros = sum(1 for row in rows if (row.get("true") or "") == "0")
         assert zeros == 0
     assert total > 1000
+
+
+def _same_table(left: Path, right: Path) -> None:
+    a = pd.read_csv(left)
+    b = pd.read_csv(right)
+    a = a.reindex(sorted(a.columns), axis=1).sort_values(list(sorted(a.columns)), kind="mergesort")
+    b = b.reindex(sorted(b.columns), axis=1).sort_values(list(sorted(b.columns)), kind="mergesort")
+    a = a.reset_index(drop=True)
+    b = b.reset_index(drop=True)
+    pd.testing.assert_frame_equal(a, b, check_dtype=False)
+
+
+def _ingest(path: Path, ann: Path, sentinel: Path, split_n: int = 1, truth: str = "") -> None:
+    ingest_annotator(
+        path,
+        ann,
+        sentinel,
+        split_n=split_n,
+        truth_table=truth or None,
+    )
+
+
+def test_append_matches_batch_for_both_orders(tmp_path, combiner):
+    kaiju_s1 = [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")]
+    kraken_s1 = [
+        ("readA|taxid:9606|", "9606", "126"),
+        ("readC|taxid:4932|", "4932", "150"),
+    ]
+    kaiju_s2 = [("readD|taxid:562|", "562")]
+    kraken_s2 = [("readD|taxid:562|", "562", "80"), ("readE|taxid:9606|", "9606", "90")]
+    batch_reports = tmp_path / "batch_reports"
+    batch_reports.mkdir()
+    _write_kaiju(batch_reports / "s1_kaiju.kaiju.out", kaiju_s1)
+    _write_kraken2(batch_reports / "s1_kraken2.kraken2.out", kraken_s1)
+    _write_kaiju(batch_reports / "s2_kaiju.kaiju.out", kaiju_s2)
+    _write_kraken2(batch_reports / "s2_kraken2.kraken2.out", kraken_s2)
+    batch = tmp_path / "batch"
+    subprocess.check_call([str(combiner), "-i", str(batch_reports), "-o", str(batch), "-s", "1"])
+
+    orders = (("kaiju", "kraken2"), ("kraken2", "kaiju"))
+    for order in orders:
+        ann = tmp_path / ("ann_" + "_".join(order))
+        ann.mkdir()
+        reports = tmp_path / ("rep_" + "_".join(order))
+        reports.mkdir()
+        written = {
+            "kaiju": [
+                ("s1_kaiju.kaiju.out", lambda path: _write_kaiju(path, kaiju_s1)),
+                ("s2_kaiju.kaiju.out", lambda path: _write_kaiju(path, kaiju_s2)),
+            ],
+            "kraken2": [
+                ("s1_kraken2.kraken2.out", lambda path: _write_kraken2(path, kraken_s1)),
+                ("s2_kraken2.kraken2.out", lambda path: _write_kraken2(path, kraken_s2)),
+            ],
+        }
+        for tool in order:
+            for name, write in written[tool]:
+                path = reports / name
+                write(path)
+                _ingest(path, ann, reports / (name[:-4] + ".ingested"))
+                assert not path.exists()
+        for sample in ("s1", "s2"):
+            _same_table(ann / f"{sample}.annotation.csv", batch / f"{sample}.annotation.csv")
+
+
+def test_append_regenerated_names_match_batch_split_two(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    _write_kaiju(reports / "sample_0_k1.kaiju.out", [("readA|taxid:9606|", "9606")])
+    _write_kraken2(
+        reports / "sample_0_k1.kraken2.out",
+        [("readA|taxid:9606|", "562", "100")],
+    )
+    _write_kaiju(reports / "sample_1_k1.kaiju.out", [("readB|taxid:562|", "562")])
+    batch = tmp_path / "batch"
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(batch), "-s", "2"])
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    for name in (
+        "sample_1_k1.kaiju.out",
+        "sample_0_k1.kraken2.out",
+        "sample_0_k1.kaiju.out",
+    ):
+        src = reports / name
+        copy = tmp_path / "one" / name
+        copy.parent.mkdir(exist_ok=True)
+        copy.write_bytes(src.read_bytes())
+        _ingest(copy, ann, tmp_path / "one" / (name[:-4] + ".ingested"), split_n=2)
+    _same_table(ann / "sample_0.annotation.csv", batch / "sample_0.annotation.csv")
+    _same_table(ann / "sample_1.annotation.csv", batch / "sample_1.annotation.csv")
+    truth = tmp_path / "truth.tsv"
+    truth.write_text("seq\ttaxid\nreadA|taxid:9606|\t818\nreadB|taxid:562|\t562\n", encoding="utf-8")
+    finalize_annotations(ann, truth_table=str(truth))
+    combined = pd.read_csv(ann / "combined_annotation_table.csv")
+    assert not list(ann.glob("*.annotation.csv"))
+    got = read_annotation_dir(ann)
+    assert set(got["sample"].astype(str)) == {"sample_0", "sample_1"}
+    by_seq = combined.set_index("seq")
+    assert str(int(by_seq.loc["readA|taxid:9606|", "true"])) == "818"
+
+
+def test_append_resume_redo_and_failed_commit(tmp_path, combiner):
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606")])
+    sentinel = reports / "s1_kaiju.ingested"
+    _ingest(kaiju, ann, sentinel)
+    assert sentinel.read_text(encoding="utf-8") == "ok\n"
+    assert not kaiju.exists()
+    csv_path = ann / "s1.annotation.csv"
+    committed = csv_path.read_text(encoding="utf-8")
+    sentinel.unlink()
+    _ingest(kaiju, ann, sentinel)
+    assert sentinel.is_file()
+    assert csv_path.read_text(encoding="utf-8") == committed
+
+    kaiju.write_text("C\treadA|taxid:9606|\t562\n", encoding="utf-8")
+    _ingest(kaiju, ann, sentinel)
+    redone = pd.read_csv(csv_path)
+    assert int(redone.loc[0, "taxID_kaiju_0"]) == 562
+
+    bad = reports / "s1_extra.kaiju.out"
+    bad.write_text("C\treadA|taxid:9606|\tNOT_TAX\n", encoding="utf-8")
+    before = csv_path.read_text(encoding="utf-8")
+    with pytest.raises(subprocess.CalledProcessError):
+        _ingest(bad, ann, reports / "s1_extra.ingested")
+    assert bad.is_file()
+    assert csv_path.read_text(encoding="utf-8") == before
+    assert not (reports / "s1_extra.ingested").exists()
+
+
+def test_append_one_sample_is_serialized(tmp_path, combiner):
+    import threading
+
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    kraken = reports / "s1_kraken2.kraken2.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")])
+    _write_kraken2(kraken, [("readA|taxid:9606|", "9606", "40")])
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    hold = tmp_path / "hold"
+    hold.mkdir()
+    shutil.copy(kaiju, hold / kaiju.name)
+    shutil.copy(kraken, hold / kraken.name)
+    subprocess.check_call([str(combiner), "-i", str(hold), "-o", str(batch), "-s", "1"])
+    errors = []
+
+    def run(path, sentinel):
+        try:
+            _ingest(path, ann, sentinel)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run, args=(kaiju, reports / "s1_kaiju.ingested")),
+        threading.Thread(target=run, args=(kraken, reports / "s1_kraken2.ingested")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    _same_table(ann / "s1.annotation.csv", batch / "s1.annotation.csv")
+
+
+def test_reprofile_passthrough_splits_combined_table(tmp_path):
+    from samovar.reprofiling import passthrough_reprofile_tables
+
+    src = tmp_path / "ann"
+    src.mkdir()
+    pd.DataFrame(
+        {
+            "seq": ["a", "b"],
+            "taxID_kaiju_0": [1, 2],
+            "true": [1, 2],
+            "sample": ["s1", "s2"],
+        }
+    ).to_csv(src / "combined_annotation_table.csv", index=False)
+    dest = tmp_path / "out"
+    written = passthrough_reprofile_tables(str(src), str(dest))
+    assert written == 2
+    s1 = pd.read_csv(dest / "s1_reprofiled.csv")
+    assert "sample" not in s1.columns
+    assert list(s1["seq"]) == ["a"]
+    assert int(s1.loc[0, "taxid_SAMOVAR"]) == 1
