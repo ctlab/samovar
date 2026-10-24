@@ -188,14 +188,15 @@ install_samovar_r_package() {
     fi
 
     local info
-    info="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("samovaR")), find.package("samovaR")) } else cat("MISSING")' 2>/dev/null || true)"
+    local package_check='if (requireNamespace("samovaR", quietly=TRUE)) { cat(if (packageVersion("samovaR") >= "1.0.1") "INSTALLED" else "OUTDATED", as.character(packageVersion("samovaR")), find.package("samovaR")) } else cat("MISSING")'
+    info="$(R --vanilla -s -e "$package_check" 2>/dev/null || true)"
     if echo "$info" | grep -q '^INSTALLED'; then
         local ver lib
         ver="$(echo "$info" | awk '{print $2}')"
         lib="$(echo "$info" | awk '{print $3}')"
-        echo "Warning: samovaR is already installed (version ${ver:-unknown}${lib:+ at $lib})."
-        echo "Skipping GitHub install. Uninstall the package (not its dependencies) to reinstall from $repo@$branch."
+        echo "samovaR is already installed (version ${ver:-unknown}${lib:+ at $lib}); minimum required version is 1.0.1."
     else
+        echo "samovaR 1.0.1 or newer is required (${info:-unavailable}); installing from $repo@$branch."
         if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
             echo "Skipping samovaR install in offline mode."
             return 1
@@ -216,10 +217,10 @@ install_samovar_r_package() {
             fi
             rm -rf "$tmp"
         fi
-        info="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("samovaR"))) } else cat("MISSING")' 2>/dev/null || true)"
+        info="$(R --vanilla -s -e "$package_check" 2>/dev/null || true)"
         echo "samovaR: $info"
         if ! echo "$info" | grep -q '^INSTALLED'; then
-            echo "samovaR could not be loaded after installation. Check its required R dependencies."
+            echo "samovaR 1.0.1 or newer could not be loaded after installation. Check its version and required R dependencies."
             return 1
         fi
     fi
