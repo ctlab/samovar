@@ -31,6 +31,17 @@ def write_fastq_records(path: Path, records):
 def sort_paired_files(r1_path: Path, r2_path: Path):
     r1 = sorted(read_fastq_records(r1_path), key=lambda x: x[0])
     r2 = sorted(read_fastq_records(r2_path), key=lambda x: x[0])
+    if len(r1) != len(r2):
+        raise SystemExit(
+            f"Paired FASTQ files do not match: {r1_path.name} has {len(r1)} reads, "
+            f"{r2_path.name} has {len(r2)}"
+        )
+    for left, right in zip(r1, r2):
+        if left[0] != right[0]:
+            raise SystemExit(
+                f"Paired FASTQ read ids do not match: {r1_path.name} {left[0]} vs "
+                f"{r2_path.name} {right[0]}"
+            )
     write_fastq_records(r1_path, r1)
     write_fastq_records(r2_path, r2)
 
