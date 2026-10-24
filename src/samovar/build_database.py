@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import shutil
 import subprocess
 import logging
 import tempfile
@@ -111,6 +112,33 @@ def process_fasta_kraken2(input_file: str,
     SeqIO.write(records, temp_fasta.name, "fasta")
     temp_fasta.close()
     return temp_fasta.name
+
+def kraken2_db_workdir(db_path: str) -> Tuple[str, Optional[str]]:
+    """Directory Kraken2 scripts may see, and the final path when it differs.
+
+    ``mask_low_complexity.sh`` and ``add_to_library.sh`` expand ``$filename``
+    without quotes. A database path that contains whitespace is built in a
+    temporary directory and moved into place afterwards. Quoting SAMOVAR's
+    own ``--configfile`` does not reach those scripts.
+    """
+    text = str(db_path)
+    if not any(ch.isspace() for ch in text):
+        return text, None
+    parent = tempfile.gettempdir()
+    if any(ch.isspace() for ch in parent) or not os.path.isdir(parent):
+        parent = "/tmp"
+    stage = tempfile.mkdtemp(prefix="samovar-kraken2-", dir=parent)
+    return stage, text
+
+
+def install_kraken2_db(stage: str, dest: str) -> None:
+    """Move a database built without whitespace into ``dest``."""
+    destination = Path(dest)
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(stage, destination)
+
 
 def add_database_kraken2(
     input_file: str,
@@ -840,11 +868,25 @@ def build_database_from_config(
         get_taxonomy_db(db_path=db_path)
         build_database_kaiju(db_path=db_path, threads=threads, protein=False)
     elif db_type == "kraken2":
-        for input_file, taxid in zip(input_files, taxids):
-            add_database_kraken2(input_file, taxid, db_path=db_path)
-        get_taxonomy_db(db_path=db_path+"/taxonomy")
-        build_database_kraken2(db_path=db_path, threads=threads, kmer_len=35, 
-                             minimizer_len=31, minimizer_spaces=7, skip_maps=True)
+        work_dir, final_dir = kraken2_db_workdir(db_path)
+        try:
+            for input_file, taxid in zip(input_files, taxids):
+                add_database_kraken2(input_file, taxid, db_path=work_dir)
+            get_taxonomy_db(db_path=work_dir + "/taxonomy")
+            build_database_kraken2(
+                db_path=work_dir,
+                threads=threads,
+                kmer_len=35,
+                minimizer_len=31,
+                minimizer_spaces=7,
+                skip_maps=True,
+            )
+            if final_dir is not None:
+                install_kraken2_db(work_dir, final_dir)
+                work_dir = ""
+        finally:
+            if work_dir and final_dir is not None and os.path.isdir(work_dir):
+                shutil.rmtree(work_dir, ignore_errors=True)
     elif db_type == "krakenunique":
         os.makedirs(db_path, exist_ok=True)
         skips: List[KrakenUniqLibrarySkip] = []
