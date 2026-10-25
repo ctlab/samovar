@@ -210,6 +210,7 @@ def test_snakemake_constant_taxid_rule(tmp_path):
                 "r1_dir": str(r1_dir),
                 "r2_dir": str(r1_dir),
                 "output_dir": str(out_dir),
+                "incremental_annotations": False,
                 "run_config": [
                     {
                         "run_name": "dummy",
