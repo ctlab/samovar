@@ -58,6 +58,14 @@ def test_append_from_fasta_uses_filename_taxid(tmp_path):
     assert "plasmid\t562" in text
 
 
+def test_kraken_header_taxid_beats_nonnumeric_filename(tmp_path):
+    fa = tmp_path / "test.fna"
+    fa.write_text(">test1|kraken:taxid|1 toy\nATGC\n")
+    dest = tmp_path / "gt.tsv"
+    assert append_from_fasta(fa, dest) == 1
+    assert dest.read_text().splitlines() == ["seq\ttaxid", "test1|kraken:taxid|1\t1"]
+
+
 def test_from_genomes_cli_appends_test_genomes(tmp_path):
     dest = tmp_path / "gt.tsv"
     rc = gt_main(["from-genomes", "--genome-dir", str(TEST_GENOMES / "meta"), "-o", str(dest)])

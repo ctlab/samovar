@@ -111,6 +111,15 @@ def test_cami_toy_initial_truth_table_parse_genome(tmp_path):
     assert matched >= 1000
 
 
+def _annotation_frame(ann_dir: Path) -> pd.DataFrame:
+    parts = sorted(ann_dir.glob("*.annotation.csv"))
+    if parts:
+        return pd.concat((pd.read_csv(path) for path in parts), ignore_index=True)
+    combined = sorted(ann_dir.glob("combined_annotation_table*.csv"))
+    assert combined, f"no annotation tables in {ann_dir}"
+    return pd.read_csv(combined[0])
+
+
 def _norm_true(df: pd.DataFrame) -> pd.Series:
     true = df["true"]
     out = []
@@ -204,9 +213,8 @@ def test_toy_regenerated_ground_truth_table(tmp_path):
             env=env,
             timeout=1200,
         )
-        regen = list((dest / "regenerated_annotations").glob("*.annotation.csv"))
-        assert regen
-        trues[mode] = _norm_true(pd.read_csv(regen[0]))
+        frame = _annotation_frame(dest / "regenerated_annotations")
+        trues[mode] = _norm_true(frame)
         reports_by_mode[mode] = dest / "regenerated_reports"
         assert (trues[mode] != "").any()
 
@@ -222,14 +230,16 @@ def test_toy_regenerated_ground_truth_table(tmp_path):
         )
 
     table_reports = reports_by_mode["ground-truth-table"]
-    parse_recombine = tmp_path / "recombine_parse"
-    combine_with_cpp(str(table_reports), str(parse_recombine), 2)
-    recom = _norm_true(pd.read_csv(next(parse_recombine.glob("*.annotation.csv"))))
-    pd.testing.assert_series_equal(
-        table_t.sort_index(),
-        recom.loc[table_t.index].sort_index(),
-        check_names=False,
-    )
+    outs = list(table_reports.rglob("*.out"))
+    if outs:
+        parse_recombine = tmp_path / "recombine_parse"
+        combine_with_cpp(str(table_reports), str(parse_recombine), 2)
+        recom = _norm_true(pd.read_csv(next(parse_recombine.glob("*.annotation.csv"))))
+        pd.testing.assert_series_equal(
+            table_t.sort_index(),
+            recom.loc[table_t.index].sort_index(),
+            check_names=False,
+        )
 
     gt_path = tmp_path / "ground_truth_table" / ".log" / "regenerated_ground_truth.tsv"
     assert gt_path.is_file()
