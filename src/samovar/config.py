@@ -2007,11 +2007,17 @@ mkdir -p "$out_dir/genomes"
         )
 
         early_exit = """if "$PYTHON_PATH" -m samovar.exec_control needs-regen; then
-if ! "$PYTHON_PATH" -c 'import sys; from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads(sys.argv[1]) else 1)' "$out_dir/regenerated"; then
-    echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
-    cleanup_tmp_if_requested
-    exit 0
-fi
+  if "$PYTHON_PATH" -m samovar.exec_control regen-reads "$out_dir"; then
+    :
+  else
+    rc=$?
+    if [ "$rc" -eq 3 ]; then
+      echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
+      cleanup_tmp_if_requested
+      exit 0
+    fi
+    exit "$rc"
+  fi
 fi
 """
 

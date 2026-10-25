@@ -253,3 +253,38 @@ def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
                 annotator_name="k1",
                 genome_ids=["562"],
             )
+
+
+def test_nonzero_abundance_without_genomes_fails(tmp_path, monkeypatch):
+    abund = tmp_path / "abund"
+    abund.mkdir()
+    pd.DataFrame({"taxid": ["562"], "N_a": [2000], "N_b": [2000]}).to_csv(
+        abund / "concat_weighted.csv", index=False
+    )
+    monkeypatch.setattr("samovar.table2iss._resolve_genomes_for_taxids", lambda *args, **kwargs: {})
+    with pytest.raises(RuntimeError, match="no genome files"):
+        process_annotation_tables(
+            table_paths=[str(abund / "concat_weighted.csv")],
+            genome_dir=str(tmp_path / "genomes"),
+            output_dir=str(tmp_path / "regenerated"),
+            abundance_dir=str(abund),
+            regeneration_config={"abundance_dir": str(abund), "seed": 1},
+        )
+
+
+def test_zero_abundance_without_genomes_stays_empty(tmp_path, monkeypatch):
+    abund = tmp_path / "abund"
+    abund.mkdir()
+    pd.DataFrame({"taxid": ["562"], "N_a": [0]}).to_csv(abund / "concat_weighted.csv", index=False)
+    monkeypatch.setattr("samovar.table2iss._resolve_genomes_for_taxids", lambda *args, **kwargs: {})
+    out = tmp_path / "regenerated"
+    process_annotation_tables(
+        table_paths=[str(abund / "concat_weighted.csv")],
+        genome_dir=str(tmp_path / "genomes"),
+        output_dir=str(out),
+        abundance_dir=str(abund),
+        regeneration_config={"abundance_dir": str(abund), "seed": 1},
+    )
+    from samovar.seqio import has_r1_reads
+
+    assert not has_r1_reads(out)

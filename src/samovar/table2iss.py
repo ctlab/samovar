@@ -875,6 +875,31 @@ def _resolve_genomes_for_taxids(
     return available
 
 
+def _abundance_total(table: pd.DataFrame, annotator: Optional[str] = None) -> int:
+    total = 0
+    for col in _n_columns(table):
+        if annotator is not None and _annotator_from_n_col(col) != annotator:
+            continue
+        total += int(pd.to_numeric(table[col], errors="coerce").fillna(0).sum())
+    return total
+
+
+def require_positive_abundance_reads(
+    output_dir: str,
+    sample_tables: Dict[str, pd.DataFrame],
+    annotators: Sequence[str],
+) -> None:
+    """Fail when a table asks for reads and that sample's FASTQ is empty."""
+    for annotator in annotators:
+        samples = [
+            sample
+            for sample, table in sample_tables.items()
+            if _abundance_total(table, annotator) > 0
+        ]
+        if samples:
+            require_generated_samples(output_dir, samples, annotator)
+
+
 def _emit_empty_for_annotators(
     output_dir: str,
     sample_names: Sequence[str],
@@ -1178,6 +1203,11 @@ def process_annotation_tables(
         genome_skip_list=genome_skip_list,
     )
     if not available_genomes:
+        if any(_abundance_total(table) > 0 for table in sample_tables.values()):
+            raise RuntimeError(
+                "Abundance tables request reads but no genome files were resolved; "
+                f"refusing to write empty FASTQ under {output_dir}."
+            )
         _emit_empty_for_annotators(output_dir, sample_names, annotators, gzip_reads=gzip_reads)
         warnings.warn("No genome files available for any taxid; emitted empty FASTQ files")
         from samovar.seqio import drop_r2_if_source_single_end
@@ -1204,6 +1234,7 @@ def process_annotation_tables(
         config=regen_cfg,
         genome_dir=genome_dir,
     )
+    require_positive_abundance_reads(output_dir, sample_tables, annotators)
     from samovar.seqio import drop_r2_if_source_single_end
 
     drop_r2_if_source_single_end(output_dir)

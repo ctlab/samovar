@@ -230,6 +230,44 @@ def step_in_window(
     return CHECKPOINT_STEPS.index(start_s) <= idx <= CHECKPOINT_STEPS.index(end_s)
 
 
+def regen_reads_status(output_dir: PathLike) -> int:
+    """0 when regenerated FASTQ exists.
+
+    3 when it does not and the abundance table is empty or all zero (later
+    stages may be skipped). 1 when the table requests reads and the FASTQ is
+    empty: that is a failed simulation, not a successful pipeline.
+    """
+    from samovar.abundance import load_abundance_dir, n_sample_columns
+    from samovar.seqio import has_r1_reads
+    import pandas as pd
+
+    root = as_path(output_dir)
+    if (root / "regenerated").is_dir():
+        reads_dir = root / "regenerated"
+        abund_dir = reads_dir / ".regenerated_abundance"
+    else:
+        reads_dir = root
+        abund_dir = root / ".regenerated_abundance"
+    if has_r1_reads(reads_dir):
+        return 0
+    positive = False
+    for frame in load_abundance_dir(abund_dir).values():
+        cols = n_sample_columns(frame)
+        if not cols:
+            continue
+        total = float(pd.to_numeric(frame[cols].stack(), errors="coerce").fillna(0).sum())
+        if total > 0:
+            positive = True
+            break
+    if not positive:
+        return 3
+    print(
+        f"Error: abundance under {abund_dir} requests reads but {reads_dir} has no FASTQ.",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def needs_regen_early_exit(
     start: Optional[str] = None,
     end: Optional[str] = None,
@@ -586,6 +624,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     regen.add_argument("--start", default=None)
     regen.add_argument("--end", default=None)
+    reads = sub.add_parser(
+        "regen-reads",
+        help="Exit 1 when abundance requests reads but regenerated FASTQ is empty",
+    )
+    reads.add_argument("output_dir")
     steps = sub.add_parser("steps", help="Print canonical checkpoint names")
     return parser
 
@@ -650,6 +693,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 2
+    if args.command == "regen-reads":
+        return regen_reads_status(args.output_dir)
     if args.command == "steps":
         for name in CHECKPOINT_STEPS:
             print(name)
