@@ -63,7 +63,7 @@ def extract_true_taxid(seq_id: str, pattern: Optional[str] = None) -> str:
             if token:
                 return token
 
-    match = re.search(r"taxid:([0-9]+)", seq_id, flags=re.IGNORECASE)
+    match = re.search(r"taxid[:|]([0-9]+)", seq_id, flags=re.IGNORECASE)
     if match:
         return match.group(1)
 

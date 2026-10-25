@@ -73,6 +73,7 @@ def test_extract_true_taxid_from_headers():
     assert extract_true_taxid("Scer.fna-NC_001134.8_0_0", pattern) == "4932"
     assert extract_true_taxid("Scer.fna-NC_001139.9_1_1/1", pattern) == "4932"
     assert extract_true_taxid("taxid:562_0_0/1", pattern) == "562"
+    assert extract_true_taxid("seq0|kraken:taxid|562", pattern) == "562"
     assert extract_true_taxid("random_read", pattern) == ""
 
 

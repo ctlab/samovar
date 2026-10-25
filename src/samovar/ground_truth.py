@@ -146,19 +146,25 @@ def fasta_header_token(header: str) -> str:
 
 
 def taxid_from_header(header: str, fallback: str = "") -> str:
+    """Taxid from ``taxid:N`` or Kraken ``kraken:taxid|N``. A non-numeric fallback is ignored."""
     token = fasta_header_token(header)
     lower = token.lower()
-    idx = lower.find("taxid:")
-    if idx >= 0:
+    for marker in ("taxid:", "taxid|"):
+        idx = lower.find(marker)
+        if idx < 0:
+            continue
         digits = []
-        for ch in token[idx + 6 :]:
+        for ch in token[idx + len(marker) :]:
             if ch.isdigit():
                 digits.append(ch)
             else:
                 break
         if digits:
             return "".join(digits)
-    return str(fallback or "").strip()
+    fb = str(fallback or "").strip()
+    if fb.endswith(".0") and fb[:-2].isdigit():
+        fb = fb[:-2]
+    return fb if fb.isdigit() else ""
 
 
 def iter_genome_truth_rows(

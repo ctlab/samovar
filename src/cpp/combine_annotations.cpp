@@ -467,7 +467,7 @@ std::string extract_read_type(const std::string& seq) {
 }
 
 std::string extract_true_taxid(const std::string& seq) {
-    const std::string key = "taxid:";
+    const std::string key = "taxid";
     for (size_t i = 0; i < seq.size(); ++i) {
         bool match = true;
         for (size_t j = 0; j < key.size(); ++j) {
@@ -485,6 +485,10 @@ std::string extract_true_taxid(const std::string& seq) {
             continue;
         }
         size_t k = i + key.size();
+        if (k >= seq.size() || (seq[k] != ':' && seq[k] != '|')) {
+            continue;
+        }
+        ++k;
         std::string digits;
         while (k < seq.size() && std::isdigit(static_cast<unsigned char>(seq[k]))) {
             digits.push_back(seq[k]);
