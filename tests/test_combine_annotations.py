@@ -646,6 +646,59 @@ def test_append_resume_redo_and_failed_commit(tmp_path, combiner):
     assert not (reports / "s1_extra.ingested").exists()
 
 
+def test_add_after_finalize_keeps_previous_columns(tmp_path, combiner):
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    kraken = reports / "s1_kraken2.kraken2.out"
+    extra = reports / "s1_extra.custom_extra.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606")])
+    _write_kraken2(kraken, [("readA|taxid:9606|", "562", "40")])
+    _write_custom(extra, [("readA|taxid:9606|", "111")])
+    hold = tmp_path / "hold"
+    hold.mkdir()
+    for path in (kaiju, kraken, extra):
+        shutil.copy(path, hold / path.name)
+    batch = tmp_path / "batch"
+    subprocess.check_call([str(combiner), "-i", str(hold), "-o", str(batch), "-s", "1"])
+    _ingest(kaiju, ann, reports / "s1_kaiju.ingested")
+    _ingest(kraken, ann, reports / "s1_kraken2.ingested")
+    finalize_annotations(ann)
+    assert not (ann / "s1.annotation.csv").exists()
+    assert (ann / "s1.annotation.csv.tools").is_file()
+    _ingest(extra, ann, reports / "s1_extra.ingested")
+    _same_table(ann / "s1.annotation.csv", batch / "s1.annotation.csv")
+    finalize_annotations(ann)
+    combined = pd.read_csv(ann / "combined_annotation_table.csv")
+    assert any(name.startswith("taxID_kaiju_") for name in combined.columns)
+    assert any(name.startswith("taxID_kraken2_") for name in combined.columns)
+    assert any(name.startswith("taxID_extra_") for name in combined.columns)
+
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    reports2 = tmp_path / "reports2"
+    reports2.mkdir()
+    for name, write in (
+        ("s1_kaiju.kaiju.out", lambda path: _write_kaiju(path, [("readA|taxid:9606|", "9606")])),
+        ("s1_kraken2.kraken2.out", lambda path: _write_kraken2(path, [("readA|taxid:9606|", "562", "40")])),
+    ):
+        path = reports2 / name
+        write(path)
+        _ingest(path, bare, reports2 / (name[:-4] + ".ingested"))
+    finalize_annotations(bare)
+    (bare / "s1.annotation.csv.tools").unlink()
+    extra2 = reports2 / "s1_extra.custom_extra.out"
+    _write_custom(extra2, [("readA|taxid:9606|", "111")])
+    _ingest(extra2, bare, reports2 / "s1_extra.ingested")
+    restored = pd.read_csv(bare / "s1.annotation.csv")
+    row = restored.iloc[0]
+    assert int(row[[c for c in restored.columns if c.startswith("taxID_kaiju_")][0]]) == 9606
+    assert int(row[[c for c in restored.columns if c.startswith("taxID_kraken2_")][0]]) == 562
+    assert int(row[[c for c in restored.columns if c.startswith("taxID_extra_")][0]]) == 111
+
+
 def test_append_one_sample_is_serialized(tmp_path, combiner):
     import threading
 

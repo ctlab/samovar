@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import fcntl
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional, Sequence
@@ -262,6 +263,13 @@ def ingest_annotator(
             raise FileNotFoundError(f"Annotator output is missing: {out_file}")
         if not _has_data_lines(out_file):
             raise RuntimeError(f"Annotator output has no records: {out_file}")
+        if not csv_path.is_file():
+            _restore_sample_csv(csv_path, sample)
+            if not csv_path.is_file() and _combined_has_sample(annotation_dir, sample):
+                raise RuntimeError(
+                    f"Cannot add {out_file.name}: {sample} is already in the combined "
+                    "table but its columns could not be restored"
+                )
         _append_annotator(
             out_file, csv_path, truth_table=truth_table, chunk_rows=chunk_rows
         )
@@ -270,6 +278,156 @@ def ingest_annotator(
         out_file.unlink()
         sentinel.write_text("ok\n", encoding="utf-8")
     return csv_path
+
+
+_TOOL_COL = re.compile(r"^(taxID|feat)_(.+)_(\d+)(?:_(.*))?$")
+_RESTORE_SKIP = {"seq", "sample", "length", "true", "read_type"}
+
+
+def _pipe_ids(n: int, text: str) -> list:
+    if n <= 0:
+        return []
+    if text == "" and n == 1:
+        return [""]
+    parts = text.split("|")
+    if len(parts) != n:
+        raise RuntimeError("tools sidecar id list length mismatch")
+    return parts
+
+
+def _read_tools(csv_path: Path) -> list:
+    side = _sidecar(csv_path)
+    if not side.is_file():
+        return []
+    tools = []
+    for line in side.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) < 4:
+            raise RuntimeError(f"Bad tools sidecar for {csv_path}")
+        n_tax = int(fields[2])
+        n_feat = int(fields[3])
+        tools.append(
+            {
+                "filename": fields[0],
+                "tool": fields[1],
+                "tax_ids": _pipe_ids(n_tax, fields[4] if len(fields) > 4 else ""),
+                "feat_ids": _pipe_ids(n_feat, fields[5] if len(fields) > 5 else ""),
+            }
+        )
+    return tools
+
+
+def _write_tools(csv_path: Path, tools: list) -> None:
+    lines = []
+    for tool in tools:
+        lines.append(
+            "\t".join(
+                [
+                    tool["filename"],
+                    tool["tool"],
+                    str(len(tool["tax_ids"])),
+                    str(len(tool["feat_ids"])),
+                    "|".join(tool["tax_ids"]),
+                    "|".join(tool["feat_ids"]),
+                ]
+            )
+        )
+    text = "\n".join(lines)
+    _sidecar(csv_path).write_text(text + ("\n" if text else ""), encoding="utf-8")
+
+
+def _tools_from_header(header: list) -> list:
+    groups = {}
+    for name in header:
+        if name in _RESTORE_SKIP:
+            continue
+        match = _TOOL_COL.match(name)
+        if not match:
+            continue
+        prefix, tool, index_s, ident = match.groups()
+        key = (int(index_s), tool)
+        spec = groups.setdefault(key, {"tax_ids": [], "feat_ids": []})
+        bucket = "tax_ids" if prefix == "taxID" else "feat_ids"
+        spec[bucket].append("" if ident is None else ident)
+    tools = []
+    for position, (index_s, tool) in enumerate(sorted(groups)):
+        spec = groups[(index_s, tool)]
+        tools.append(
+            {
+                "filename": f"{position:06d}_{tool}.out",
+                "tool": tool,
+                "tax_ids": spec["tax_ids"],
+                "feat_ids": spec["feat_ids"],
+            }
+        )
+    return tools
+
+
+def _column_name(prefix: str, tool: str, index: int, ident: str) -> str:
+    base = f"{prefix}_{tool}_{index}"
+    return base if ident == "" else f"{base}_{ident}"
+
+
+def _combined_has_sample(annotation_dir: Path, sample: str) -> bool:
+    combined = annotation_dir / "combined_annotation_table.csv"
+    if not combined.is_file():
+        return False
+    with combined.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            return False
+        if "sample" not in reader.fieldnames:
+            return True
+        return any(row.get("sample") == sample for row in reader)
+
+
+def _restore_sample_csv(csv_path: Path, sample: str) -> None:
+    """Rebuild a deleted per-sample CSV from the combined table before another append.
+
+    Finalize removes the CSV but keeps the tool sidecar. Without this, the next
+    annotator starts a new table and the combined file loses the earlier columns.
+    """
+    if csv_path.is_file():
+        return
+    combined = csv_path.parent / "combined_annotation_table.csv"
+    if not combined.is_file():
+        return
+    tools = _read_tools(csv_path)
+    wrote_sidecar = False
+    with combined.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        header = list(reader.fieldnames or [])
+        if not tools:
+            tools = _tools_from_header(header)
+            if not tools:
+                return
+            _write_tools(csv_path, tools)
+            wrote_sidecar = True
+        columns = ["seq"]
+        for index, tool in enumerate(tools):
+            for ident in tool["tax_ids"]:
+                columns.append(_column_name("taxID", tool["tool"], index, ident))
+            for ident in tool["feat_ids"]:
+                columns.append(_column_name("feat", tool["tool"], index, ident))
+        columns.extend(["length", "true", "read_type"])
+        rows = []
+        for row in reader:
+            if row.get("sample") not in (None, "", sample):
+                continue
+            rows.append(row)
+    if not rows:
+        if wrote_sidecar and _sidecar(csv_path).is_file():
+            _sidecar(csv_path).unlink()
+        return
+    with csv_path.open("w", newline="") as out:
+        writer = csv.DictWriter(
+            out, fieldnames=columns, lineterminator="\n", extrasaction="ignore"
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name, "") for name in columns})
 
 
 def retrue_annotation(csv_path: Path, truth_table: str) -> None:
@@ -314,26 +472,40 @@ def finalize_annotations(
                 continue
             columns.append(name)
             seen.add(name)
+    fresh = {path.name[: -len(".annotation.csv")] for path in parts}
+    if dest.is_file():
+        with dest.open(newline="") as handle:
+            previous = next(csv.reader(handle), None) or []
+        for name in previous:
+            if name in seen or name == "sample":
+                continue
+            columns.append(name)
+            seen.add(name)
     if "sample" not in columns:
         columns.append("sample")
     tmp = dest.with_suffix(".csv.tmp")
     with tmp.open("w", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=columns, lineterminator="\n", extrasaction="ignore")
         writer.writeheader()
-        for path, header in zip(parts, headers):
+        for path in parts:
             sample = path.name[: -len(".annotation.csv")]
             with path.open(newline="") as handle:
                 reader = csv.DictReader(handle)
                 for row in reader:
                     row["sample"] = sample
                     writer.writerow(row)
+        if dest.is_file():
+            with dest.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                if reader.fieldnames and "sample" in reader.fieldnames:
+                    for row in reader:
+                        if row.get("sample") in fresh:
+                            continue
+                        writer.writerow(row)
     tmp.replace(dest)
     if delete_parts:
         for path in parts:
             path.unlink()
-            side = _sidecar(path)
-            if side.is_file():
-                side.unlink()
             lock = path.with_suffix(".lock")
             if lock.is_file():
                 lock.unlink()
