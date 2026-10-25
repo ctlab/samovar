@@ -13,12 +13,15 @@ Config is read from:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -281,12 +284,14 @@ def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict
     """Merge ``updates`` into the install config and write it back."""
     from samovar.main_config import apply_legacy_updates
 
-    cfg = dict(load_config())
-    before = disk_payload(cfg)
-    apply_legacy_updates(cfg, updates)
-    after = disk_payload(cfg)
-    if before != after or not user_config_path().is_file():
-        write_config(cfg, also_repo_build=also_repo_build)
+    dest = user_config_path()
+    with _exclusive_config(dest):
+        cfg = dict(load_config())
+        before = disk_payload(cfg)
+        apply_legacy_updates(cfg, updates)
+        after = disk_payload(cfg)
+        if before != after or not dest.is_file():
+            _write_config_unlocked(cfg, also_repo_build=also_repo_build)
     return as_install_config(cfg)
 
 
@@ -647,32 +652,64 @@ def _companion_siblings(name: str, tools_map: Dict[str, Any]) -> List[str]:
     return found
 
 
-def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
-    """Write main config, record ``build/config_path``, and optionally mirror JSON."""
+def _exclusive_config(dest: Path):
+    """Process-wide lock for one config file. Reenters in the thread that holds it."""
+    local = _exclusive_config.local
+    if getattr(local, "held", False):
+        yield
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = dest.parent / f".{dest.name}.lock"
+    handle = lock_path.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        local.held = True
+        try:
+            yield
+        finally:
+            local.held = False
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+_exclusive_config = contextmanager(_exclusive_config)
+_exclusive_config.local = threading.local()
+
+
+def _write_config_unlocked(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
     payload = disk_payload(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
     dest = user_config_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=2) + "\n"
-    dest.write_text(text, encoding="utf-8")
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, dest)
     if also_repo_build:
         write_install_config_pointer(dest, root=repo_root())
         try:
             build = repo_root() / "build"
             build.mkdir(parents=True, exist_ok=True)
             mirror = build / "config.json"
-            # Avoid rewriting the primary file if it *is* the mirror.
             try:
                 same = mirror.resolve() == dest.expanduser().resolve()
             except OSError:
                 same = False
             if not same:
-                mirror.write_text(text, encoding="utf-8")
+                mirror_tmp = mirror.with_name(f".{mirror.name}.{os.getpid()}.tmp")
+                mirror_tmp.write_text(text, encoding="utf-8")
+                os.replace(mirror_tmp, mirror)
         except OSError:
-            # Read-only shared checkout: recorded path + primary file are enough.
             pass
     return dest
+
+
+def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
+    """Write main config, record ``build/config_path``, and optionally mirror JSON."""
+    with _exclusive_config(user_config_path()):
+        return _write_config_unlocked(data, also_repo_build=also_repo_build)
 
 
 def shell_source_install_env_snippet(*, root_expr: str = '"$SAMOVAR_ROOT"') -> str:

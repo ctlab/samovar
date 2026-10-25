@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from samovar.paths import (
     resolve_executable,
     user_config_dir,
     user_config_path,
+    update_config,
     workflow_dir,
     write_config,
     write_install_config_pointer,
@@ -76,6 +78,33 @@ def test_write_config_records_pointer(tmp_path, monkeypatch):
     assert dest.is_file()
     assert (tmp_path / "build" / "config_path").read_text().strip() == str(dest.resolve())
     assert (tmp_path / "build" / "config.json").is_file()
+
+
+def test_parallel_update_config_keeps_every_tool(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+
+    def one(index: int) -> None:
+        update_config(
+            {
+                "tools": {
+                    f"race_{index}": {
+                        "type": "annotator",
+                        "exec": {"path": "/bin/true", "parser": "bash"},
+                    }
+                }
+            },
+            also_repo_build=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(one, range(18)))
+    tools = json.loads(cfg.read_text())["tools"]
+    kept = [name for name in tools if str(name).startswith("race_")]
+    assert len(kept) == 18
 
 
 def test_discover_opal_from_config(tmp_path, monkeypatch):
