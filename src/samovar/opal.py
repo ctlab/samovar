@@ -46,9 +46,21 @@ OPAL_RANKS = (
 
 
 def _taxon_helpers():
-    from samovar.viz_annotation import is_special_taxon, normalize_taxon_token
+    from samovar.viz_annotation import is_special_taxon, normalize_taxon_token  # noqa: F401
 
     return is_special_taxon, normalize_taxon_token
+
+
+def normalize_series(values):
+    from samovar.viz_annotation import normalize_series as _f
+
+    return _f(values)
+
+
+def special_mask(values):
+    from samovar.viz_annotation import special_mask as _f
+
+    return _f(values)
 
 
 def cami_rank(rank: Optional[str]) -> str:
@@ -135,12 +147,8 @@ def series_to_counts(values: Iterable) -> Dict[str, float]:
 def confusion_rates(true: Iterable, pred: Iterable) -> Dict[str, float]:
     """Macro one-vs-rest rates, including true-negative and false-negative %."""
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    y = pd.Series(list(true) if not isinstance(true, pd.Series) else true).map(
-        normalize_taxon_token
-    )
-    p = pd.Series(list(pred) if not isinstance(pred, pd.Series) else pred).map(
-        normalize_taxon_token
-    )
+    y = normalize_series(true)
+    p = normalize_series(pred)
     classes = [t for t in pd.unique(y) if not is_special_taxon(t)]
     empty = {
         "tpr": 0.0,
@@ -189,14 +197,10 @@ def opal_style_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
     L1 and Bray–Curtis use relative abundances over all classified reads.
     """
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    y = pd.Series(list(true) if not isinstance(true, pd.Series) else true).map(
-        normalize_taxon_token
-    )
-    p = pd.Series(list(pred) if not isinstance(pred, pd.Series) else pred).map(
-        normalize_taxon_token
-    )
-    gold = {t for t in y if not is_special_taxon(t)}
-    pred_set = {t for t in p if not is_special_taxon(t)}
+    y = normalize_series(true)
+    p = normalize_series(pred)
+    gold = {t for t in pd.unique(y) if not is_special_taxon(t)}
+    pred_set = {t for t in pd.unique(p) if not is_special_taxon(t)}
     tp = float(len(gold & pred_set))
     fp = float(len(pred_set - gold))
     fn = float(len(gold - pred_set))
@@ -210,8 +214,8 @@ def opal_style_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
     union = tp + fp + fn
     jaccard = tp / union if union else 0.0
 
-    y_c = y[~y.map(is_special_taxon)]
-    p_c = p[~p.map(is_special_taxon)]
+    y_c = y[~special_mask(y)]
+    p_c = p[~special_mask(p)]
     taxa = sorted(gold | pred_set)
     yt = y_c.value_counts(normalize=True) if len(y_c) else pd.Series(dtype=float)
     pt = p_c.value_counts(normalize=True) if len(p_c) else pd.Series(dtype=float)

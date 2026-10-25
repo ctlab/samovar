@@ -8,7 +8,6 @@ assigned to the same majority label.
 
 from __future__ import annotations
 
-from collections import Counter
 import re
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -19,9 +18,21 @@ from samovar.annotation_columns import is_feat_column, select_scoring_annotators
 
 
 def _taxon_helpers():
-    from samovar.viz_annotation import is_special_taxon, normalize_taxon_token
+    from samovar.viz_annotation import is_special_taxon, normalize_taxon_token  # noqa: F401
 
     return is_special_taxon, normalize_taxon_token
+
+
+def normalize_series(values):
+    from samovar.viz_annotation import normalize_series as _f
+
+    return _f(values)
+
+
+def special_mask(values):
+    from samovar.viz_annotation import special_mask as _f
+
+    return _f(values)
 
 ENSEMBLE_NAME = "SAMOVAR"
 COMBINATION_ANNOTATORS = frozenset({"samovar", "consensus"})
@@ -70,33 +81,34 @@ def majority_vote(frame: pd.DataFrame, annotators: Sequence[str]) -> pd.Series:
     cols = [c for c in annotators if c in frame.columns]
     if not cols:
         return pd.Series(dtype=str)
+    if len(frame) == 0:
+        return pd.Series(dtype=object)
 
-    def _row_vote(row) -> str:
-        tokens = [normalize_taxon_token(row[c]) for c in cols]
-        classified = [t for t in tokens if not is_special_taxon(t)]
-        pool = classified or tokens
-        counts = Counter(pool)
-        top = counts.most_common()
-        if not top:
-            return "0"
-        best_n = top[0][1]
-        tied = [lab for lab, n in top if n == best_n]
-        if len(tied) == 1:
-            return tied[0]
-        for token in tokens:
-            if token in tied:
-                return token
-        return tied[0]
-
-    return frame[cols].apply(_row_vote, axis=1)
+    # Same tie-break as the row walk: the first column among the tied labels.
+    k = len(cols)
+    toks = np.empty((len(frame), k), dtype=object)
+    for j, c in enumerate(cols):
+        toks[:, j] = normalize_series(frame[c])
+    codes, uniq = pd.factorize(toks.ravel(), use_na_sentinel=False)
+    codes = codes.reshape(len(frame), k)
+    special = np.array([is_special_taxon(u) for u in uniq], dtype=bool)[codes]
+    valid = ~special
+    no_classified = ~valid.any(axis=1)
+    valid[no_classified] = True
+    counts = np.zeros((len(frame), k), dtype=np.int32)
+    for j in range(k):
+        counts[:, j] = ((codes == codes[:, [j]]) & valid).sum(axis=1)
+    counts[~valid] = -1
+    best = codes[np.arange(len(frame)), counts.argmax(axis=1)]
+    return pd.Series(np.asarray(uniq, dtype=object)[best], index=frame.index)
 
 
 def _confusion(true: Iterable, pred: Iterable) -> pd.DataFrame:
     _, normalize_taxon_token = _taxon_helpers()
     tmp = pd.DataFrame(
         {
-            "true": pd.Series(true, dtype=object).map(normalize_taxon_token),
-            "pred": pd.Series(pred, dtype=object).map(normalize_taxon_token),
+            "true": normalize_series(true),
+            "pred": normalize_series(pred),
         }
     )
     if tmp.empty:
@@ -107,8 +119,8 @@ def _confusion(true: Iterable, pred: Iterable) -> pd.DataFrame:
 def _f1_accuracy(true: pd.Series, pred: pd.Series) -> float:
     """Current heatmap F1: P = R = TP/N, so F1 equals per-read accuracy."""
     _, normalize_taxon_token = _taxon_helpers()
-    t = true.map(normalize_taxon_token)
-    p = pred.map(normalize_taxon_token)
+    t = normalize_series(true)
+    p = normalize_series(pred)
     n = len(t)
     if n == 0:
         return 0.0
@@ -118,20 +130,11 @@ def _f1_accuracy(true: pd.Series, pred: pd.Series) -> float:
 
 def standard_classification_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
     """sklearn-style single-label scores (macro / weighted / micro / accuracy)."""
-    from sklearn.metrics import (
-        accuracy_score,
-        f1_score,
-        precision_score,
-        recall_score,
-    )
+    from sklearn.metrics import precision_recall_fscore_support
 
     _, normalize_taxon_token = _taxon_helpers()
-    y = pd.Series(list(true) if not isinstance(true, pd.Series) else true).map(
-        normalize_taxon_token
-    ).astype(str)
-    p = pd.Series(list(pred) if not isinstance(pred, pd.Series) else pred).map(
-        normalize_taxon_token
-    ).astype(str)
+    y = normalize_series(true).astype(str)
+    p = normalize_series(pred).astype(str)
     if y.empty:
         return {
             "accuracy": 0.0,
@@ -141,22 +144,30 @@ def standard_classification_metrics(true: Iterable, pred: Iterable) -> Dict[str,
             "f1_macro": 0.0,
             "f1_weighted": 0.0,
         }
-    labels = sorted(set(y) | set(p))
-    kwargs = {"labels": labels, "zero_division": 0}
+    # Integer codes in sorted-label order. sklearn on ints matches the string scores.
+    codes, uniq = pd.factorize(np.concatenate([y.to_numpy(), p.to_numpy()]))
+    order = np.argsort(np.asarray(uniq, dtype=str), kind="stable")
+    rank = np.empty(len(order), dtype=np.int64)
+    rank[order] = np.arange(len(order))
+    yc, pc = rank[codes[: len(y)]], rank[codes[len(y) :]]
+    kwargs = {"labels": np.arange(len(uniq)), "zero_division": 0}
+    pm, rm, fm, _ = precision_recall_fscore_support(yc, pc, average="macro", **kwargs)
+    _, _, fmi, _ = precision_recall_fscore_support(yc, pc, average="micro", **kwargs)
+    _, _, fw, _ = precision_recall_fscore_support(yc, pc, average="weighted", **kwargs)
     return {
-        "accuracy": float(accuracy_score(y, p)),
-        "precision_macro": float(precision_score(y, p, average="macro", **kwargs)),
-        "recall_macro": float(recall_score(y, p, average="macro", **kwargs)),
-        "f1_micro": float(f1_score(y, p, average="micro", **kwargs)),
-        "f1_macro": float(f1_score(y, p, average="macro", **kwargs)),
-        "f1_weighted": float(f1_score(y, p, average="weighted", **kwargs)),
+        "accuracy": float((yc == pc).mean()),
+        "precision_macro": float(pm),
+        "recall_macro": float(rm),
+        "f1_micro": float(fmi),
+        "f1_macro": float(fm),
+        "f1_weighted": float(fw),
     }
 
 
 def _r2_abundance(true: pd.Series, pred: pd.Series) -> float:
     _, normalize_taxon_token = _taxon_helpers()
-    t = true.map(normalize_taxon_token)
-    p = pred.map(normalize_taxon_token)
+    t = normalize_series(true)
+    p = normalize_series(pred)
     true_n = t.value_counts()
     pred_n = p.value_counts()
     taxa = sorted(set(true_n.index) | set(pred_n.index))
@@ -328,7 +339,7 @@ def rows_with_usable_truth(work: pd.DataFrame, true_col: str = "true") -> Option
     if not has_usable_truth(work, true_col):
         return None
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    mask = work[true_col].map(lambda v: not is_special_taxon(normalize_taxon_token(v)))
+    mask = ~special_mask(normalize_series(work[true_col]))
     return work.loc[mask].copy()
 
 
@@ -362,8 +373,8 @@ def _empty_score_row(name: str, n_reads: float, n_taxa: float) -> Dict[str, floa
 
 def _pred_counts(pred: pd.Series) -> tuple:
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    tokens = pred.map(normalize_taxon_token)
-    classified = {t for t in tokens if not is_special_taxon(t)}
+    tokens = normalize_series(pred)
+    classified = {t for t in pd.unique(tokens) if not is_special_taxon(t)}
     return float(len(tokens)), float(len(classified))
 
 

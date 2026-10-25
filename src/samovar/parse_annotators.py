@@ -5,6 +5,7 @@ from tools like Kraken, Kaiju, and MetaPhlAn. It standardizes the output format
 to allow for easy comparison and analysis of results from different tools.
 """
 
+import numpy as np
 import pandas as pd
 import os
 import re
@@ -472,11 +473,17 @@ def remap_taxid_dataframe(
         unique.update(out[col].dropna().unique())
     mapping = ensure_taxid_rank_map(unique, rank_name, cache_path)
     for col in cols:
-        out[col] = out[col].map(
-            lambda v, m=mapping: m.get(str(v), m.get(canonical_taxid(v), canonical_taxid(v)))
-            if pd.notna(v)
-            else v
+        codes, uniq = pd.factorize(out[col], use_na_sentinel=True)
+        mapped = np.array(
+            [mapping.get(str(v), mapping.get(canonical_taxid(v), canonical_taxid(v))) for v in uniq],
+            dtype=object,
         )
+        vals = np.where(
+            codes >= 0,
+            mapped[np.maximum(codes, 0)] if len(mapped) else None,
+            out[col].to_numpy(dtype=object),
+        )
+        out[col] = pd.Series(vals, index=out.index, dtype=object)
     return out
 
 

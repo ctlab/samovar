@@ -88,6 +88,14 @@ def test_majority_vote_prefers_classified():
     assert list(votes) == ["562", "562", "9606"]
 
 
+def test_majority_vote_tie_keeps_the_first_column():
+    df = pd.DataFrame({"a": ["562", "0"], "b": ["9606", "9606"], "c": ["562", "0"]})
+    assert list(majority_vote(df, ["a", "b", "c"])) == ["562", "9606"]
+    tied = pd.DataFrame({"a": ["111"], "b": ["222"]})
+    assert list(majority_vote(tied, ["a", "b"])) == ["111"]
+    assert list(majority_vote(tied, ["b", "a"])) == ["222"]
+
+
 def test_score_annotators_adds_consensus_and_keeps_samovar():
     df = pd.DataFrame(
         {

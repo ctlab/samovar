@@ -95,9 +95,25 @@ def normalize_taxon_token(x) -> str:
     return text
 
 
+def normalize_series(values) -> pd.Series:
+    """Vectorized ``normalize_taxon_token``: map each unique value once."""
+    s = values if isinstance(values, pd.Series) else pd.Series(list(values), dtype=object)
+    codes, uniq = pd.factorize(s, use_na_sentinel=False)
+    mapped = np.array([normalize_taxon_token(u) for u in uniq] + ["0"], dtype=object)
+    return pd.Series(mapped[codes], index=s.index, dtype=object)
+
+
+def special_mask(values) -> np.ndarray:
+    """Vectorized ``is_special_taxon`` over a Series or iterable."""
+    s = values if isinstance(values, pd.Series) else pd.Series(list(values), dtype=object)
+    codes, uniq = pd.factorize(s, use_na_sentinel=False)
+    flags = np.array([is_special_taxon(u) for u in uniq] + [True], dtype=bool)
+    return flags[codes]
+
+
 def fpc_taxon_order(freq_df: pd.DataFrame, col_x: str, col_y: str, freq_col: str = "Freq") -> List[str]:
-    x = freq_df[col_x].map(normalize_taxon_token)
-    y = freq_df[col_y].map(normalize_taxon_token)
+    x = normalize_series(freq_df[col_x])
+    y = normalize_series(freq_df[col_y])
     f = pd.to_numeric(freq_df[freq_col], errors="coerce").fillna(0)
     core = [t for t in pd.unique(pd.concat([x, y], ignore_index=True)) if not is_special_taxon(t)]
     if len(core) <= 1:
@@ -179,16 +195,16 @@ def _annotator_names(df: pd.DataFrame) -> List[str]:
 
 
 def _collapse_other(pred: pd.Series, true: pd.Series) -> pd.Series:
-    allowed = set(true.map(normalize_taxon_token)) | {"0"}
-    out = pred.map(normalize_taxon_token)
+    allowed = set(normalize_series(true)) | {"0"}
+    out = normalize_series(pred)
     return out.where(out.isin(allowed), "other")
 
 
 def _confusion_counts(true: pd.Series, pred: pd.Series) -> pd.DataFrame:
     tmp = pd.DataFrame(
         {
-            "true": true.map(normalize_taxon_token),
-            "pred": pred.map(normalize_taxon_token),
+            "true": normalize_series(true),
+            "pred": normalize_series(pred),
         }
     )
     return tmp.value_counts().rename("Freq").reset_index()
@@ -631,7 +647,7 @@ def viz_annotation(
     if use_names:
         ids = []
         for col in annotators + (["true"] if "true" in work.columns else []):
-            ids.extend(work[col].dropna().astype(str).tolist())
+            ids.extend(pd.unique(work[col].dropna().astype(str)).tolist())
         name_cache = str(out_dir / "taxid_names.tsv") if out_dir else None
         try:
             name_map = ensure_taxid_name_map(ids, cache_path=name_cache)
@@ -739,7 +755,7 @@ def viz_annotation(
         f1_work = truth_frame
         for name in annotators:
             pred = _collapse_other(f1_work[name], f1_work["true"])
-            true = f1_work["true"].map(normalize_taxon_token)
+            true = normalize_series(f1_work["true"])
             counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
             if reord == "fpc":
                 fpc_core = fpc_taxon_order(counts, "pred", "true")
@@ -784,7 +800,7 @@ def viz_annotation(
                     continue
                 for name in annotators:
                     pred = _collapse_other(sub[name], sub["true"])
-                    true = sub["true"].map(normalize_taxon_token)
+                    true = normalize_series(sub["true"])
                     counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
                     if counts.empty:
                         continue
@@ -819,7 +835,7 @@ def viz_annotation(
         r2_work = truth_frame
         for name in annotators:
             pred = _collapse_other(r2_work[name], r2_work["true"])
-            true = r2_work["true"].map(normalize_taxon_token)
+            true = normalize_series(r2_work["true"])
             table, r2 = _r2_table(true, pred)
             if np.isnan(r2):
                 continue
@@ -847,7 +863,7 @@ def viz_annotation(
                     continue
                 for name in annotators:
                     pred = _collapse_other(sub[name], sub["true"])
-                    true = sub["true"].map(normalize_taxon_token)
+                    true = normalize_series(sub["true"])
                     table, r2 = _r2_table(true, pred)
                     if np.isnan(r2):
                         continue
