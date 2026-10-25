@@ -65,7 +65,7 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     ),
     AskTool(
         "kaiju", ("kaiju",), "annotator", "optional:kaiju",
-        companions=("kaiju-mkbwt", "kaiju-mkfmi"),
+        companions=("kaiju-mkbwt", "kaiju-mkfmi", "kaiju-multi"),
         scope="core",
     ),
     AskTool(

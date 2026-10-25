@@ -252,6 +252,26 @@ def test_resolve_executable_uses_tool_envs(tmp_path, monkeypatch):
     assert resolve_executable("kaiju", tool_key="kaiju") == str(exe.resolve())
 
 
+def test_resolve_kaiju_multi_beside_registered_kaiju(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    kaiju = bindir / "kaiju"
+    multi = bindir / "kaiju-multi"
+    for path in (kaiju, multi):
+        path.write_text("#!/bin/sh\n")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    cfg = {
+        "tools": {
+            "kaiju": {
+                "exec": {"env": "conda", "parser": "conda", "path": str(kaiju)},
+                "type": "annotator",
+            }
+        }
+    }
+    assert resolve_executable("kaiju-multi", cfg=cfg) == str(multi.resolve())
+
+
 def test_cli_help_from_other_directory(tmp_path):
     import subprocess
 

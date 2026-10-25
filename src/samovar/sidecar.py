@@ -44,7 +44,7 @@ SIDECARS = {
     "kaiju": {
         "python": None, "packages": ["kaiju"], "runtime_modules": (),
         "runtime_versions": {}, "binary": "kaiju", "tool_keys": ("kaiju",),
-        "companions": ("kaiju-mkbwt", "kaiju-mkfmi"), "group": "annotator",
+        "companions": ("kaiju-mkbwt", "kaiju-mkfmi", "kaiju-multi"), "group": "annotator",
         "hint": "Core ensemble annotator (./install.sh Kaiju; included in full).",
     },
     "nanosim": {

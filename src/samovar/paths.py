@@ -612,7 +612,7 @@ def resolve_executable(
 
     # Other-env prefixes in tool_envs beat a same-named binary already on PATH
     # (and beat tools.* discovered at install time).
-    candidates = [*env_candidates, mapped, token]
+    candidates = [*env_candidates, mapped, *_companion_siblings(name, tools_map), token]
     for cand in candidates:
         if not cand:
             continue
@@ -626,6 +626,25 @@ def resolve_executable(
         if which:
             return shlex.join([which, *rest]) if rest else which
     return raw
+
+
+def _companion_siblings(name: str, tools_map: Dict[str, Any]) -> List[str]:
+    """Binaries that ship next to an already registered tool."""
+    from samovar.install_ask import ASK_TOOLS
+
+    found: List[str] = []
+    for spec in ASK_TOOLS:
+        if name not in spec.companions:
+            continue
+        parent = tool_entry_path(tools_map.get(spec.name), spec.name)
+        if not parent:
+            continue
+        parent_path = Path(parent).expanduser()
+        found.append(str(parent_path.parent / name))
+        prefix = tool_entry_env_prefix(tools_map.get(spec.name), spec.name)
+        if prefix:
+            found.append(str(Path(prefix).expanduser() / "bin" / name))
+    return found
 
 
 def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:

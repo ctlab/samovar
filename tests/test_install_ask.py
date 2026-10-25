@@ -299,6 +299,8 @@ def test_ask_table_is_unique_and_typed():
     assert metaphlan.install == ""
     kraken2 = next(tool for tool in ASK_TOOLS if tool.name == "kraken2")
     assert "kraken2-build" in kraken2.companions
+    kaiju = next(tool for tool in ASK_TOOLS if tool.name == "kaiju")
+    assert "kaiju-multi" in kaiju.companions
     for name in (
         "minimap2",
         "anvio",
