@@ -129,6 +129,7 @@ show_usage() {
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
 
+case "${1:-}" in --version|-V|version) echo "SAMOVAR $(SAMOVAR_ROOT="$SCRIPT_DIR/.." _samovar_version)"; exit 0 ;; esac
 if [ "${1:-help}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     SAMOVAR_ROOT="$SCRIPT_DIR/.." show_usage
     exit 0

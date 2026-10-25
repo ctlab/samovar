@@ -73,6 +73,19 @@ def test_cli_help_flags_print_version(flag):
     assert "prepare" in result.stdout
 
 
+@pytest.mark.parametrize("flag", ["--version", "-V", "version"])
+def test_cli_version_flags(flag):
+    result = subprocess.run(
+        ["bash", str(REPO / "bin" / "samovar"), flag],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"SAMOVAR {get_version()}"
+    assert "prepare" not in result.stdout
+
+
 def test_prepare_writes_pipeline_and_configs(tmp_path):
     args = type(
         "Args",
