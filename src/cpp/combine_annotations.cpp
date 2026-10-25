@@ -823,6 +823,12 @@ bool fill_from_fields(const std::vector<std::string>& f, const Schema& sch, Reco
             ch = ' ';
         }
     }
+    // Custom files often copy the FASTQ token, including a mate mark. Native
+    // tools and fastq_record_id drop only a trailing /1 or /2; r/10 stays.
+    if (rec->seq.size() >= 2 && rec->seq[rec->seq.size() - 2] == '/' &&
+        (rec->seq.back() == '1' || rec->seq.back() == '2')) {
+        rec->seq.resize(rec->seq.size() - 2);
+    }
     return !rec->seq.empty();
 }
 

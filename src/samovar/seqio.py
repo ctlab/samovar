@@ -409,6 +409,14 @@ def fastq_pair_paths(prefix: PathLike, gzip_reads: bool = False) -> Tuple[str, s
     return f"{prefix_s}_R1{ext}", f"{prefix_s}_R2{ext}"
 
 
+def strip_mate_suffix(read_id: str) -> str:
+    """Drop only a trailing ``/1`` or ``/2``. ``r/10`` stays ``r/10``."""
+    token = str(read_id)
+    if len(token) >= 2 and token[-2] == "/" and token[-1] in "12":
+        return token[:-2]
+    return token
+
+
 def fastq_record_id(header: str) -> str:
     """Read id with only a trailing ``/1`` or ``/2`` mate suffix removed.
 
@@ -420,9 +428,7 @@ def fastq_record_id(header: str) -> str:
     token = token.split()[0] if token else ""
     if not token:
         raise ValueError(f"FASTQ record has an empty read id: {header!r}")
-    if len(token) >= 2 and token[-2] == "/" and token[-1] in "12":
-        return token[:-2]
-    return token
+    return strip_mate_suffix(token)
 
 
 def iter_fastq_records(path: PathLike) -> Iterator[Tuple[str, str, str, str]]:

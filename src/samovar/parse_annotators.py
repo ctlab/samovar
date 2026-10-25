@@ -931,7 +931,12 @@ def read_custom_raw(file_path: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["seq", "taxID"])
     if df is None or df.empty:
         return pd.DataFrame(columns=["seq", "taxID"])
-    return trim_raw_tool_frame(df)
+    out = trim_raw_tool_frame(df)
+    if "seq" in out.columns:
+        from samovar.seqio import strip_mate_suffix
+
+        out["seq"] = out["seq"].map(lambda value: strip_mate_suffix("" if pd.isna(value) else str(value)))
+    return out
 
 
 # Dictionary mapping tool names to their respective read functions

@@ -534,6 +534,27 @@ def _ingest(path: Path, ann: Path, sentinel: Path, split_n: int = 1, truth: str 
     )
 
 
+def test_custom_trailing_mate_suffix_joins_native_id(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    _write_kaiju(reports / "s1_kaiju.kaiju.out", [("readA|taxid:9606|", "9606")])
+    _write_custom(
+        reports / "s1_w8ok.custom_w8ok.out",
+        [("readA|taxid:9606|/1", "562"), ("readB/10", "111")],
+    )
+    out = tmp_path / "ann"
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv").set_index("seq")
+    col = next(name for name in df.columns if name.startswith("taxID_w8ok"))
+    assert "readA|taxid:9606|/1" not in df.index
+    assert int(df.loc["readA|taxid:9606|", col]) == 562
+    assert int(df.loc["readB/10", col]) == 111
+    from samovar.parse_annotators import read_custom_raw
+
+    parsed = read_custom_raw(str(reports / "s1_w8ok.custom_w8ok.out"))
+    assert set(parsed["seq"]) == {"readA|taxid:9606|", "readB/10"}
+
+
 def test_append_matches_batch_for_both_orders(tmp_path, combiner):
     kaiju_s1 = [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")]
     kraken_s1 = [
