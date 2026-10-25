@@ -778,3 +778,29 @@ def test_reprofile_passthrough_splits_combined_table(tmp_path):
     assert "sample" not in s1.columns
     assert list(s1["seq"]) == ["a"]
     assert int(s1.loc[0, "taxid_SAMOVAR"]) == 1
+
+
+def test_empty_annotator_output_skips_and_finalize_still_writes(tmp_path):
+    ann = tmp_path / "ann"
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    empty = reports / "s1_custom.custom_empty.out"
+    empty.write_text("\n# comment only\n", encoding="utf-8")
+    sentinel = reports / "s1_custom.ingested"
+    _ingest(empty, ann, sentinel)
+    assert sentinel.read_text(encoding="utf-8") == "empty\n"
+    assert empty.is_file()
+    assert not (ann / "s1.annotation.csv").exists()
+    dest = finalize_annotations(ann)
+    assert dest.read_text(encoding="utf-8") == "seq,length,true,read_type,sample\n"
+    assert read_annotation_dir(ann).empty
+
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606")])
+    _ingest(kaiju, ann, reports / "s1_kaiju.ingested")
+    other = reports / "s1_blank.custom_blank.out"
+    other.write_text("", encoding="utf-8")
+    _ingest(other, ann, reports / "s1_blank.ingested")
+    finalize_annotations(ann)
+    combined = pd.read_csv(ann / "combined_annotation_table.csv")
+    assert int(combined.loc[0, [c for c in combined.columns if c.startswith("taxID_kaiju_")][0]]) == 9606

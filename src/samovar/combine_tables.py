@@ -262,7 +262,8 @@ def ingest_annotator(
                 return csv_path
             raise FileNotFoundError(f"Annotator output is missing: {out_file}")
         if not _has_data_lines(out_file):
-            raise RuntimeError(f"Annotator output has no records: {out_file}")
+            sentinel.write_text("empty\n", encoding="utf-8")
+            return csv_path
         if not csv_path.is_file():
             _restore_sample_csv(csv_path, sample)
             if not csv_path.is_file() and _combined_has_sample(annotation_dir, sample):
@@ -453,7 +454,9 @@ def finalize_annotations(
     if not parts:
         if dest.is_file():
             return dest
-        raise FileNotFoundError(f"No per-sample annotation CSVs in {annotation_dir}")
+        annotation_dir.mkdir(parents=True, exist_ok=True)
+        dest.write_text("seq,length,true,read_type,sample\n", encoding="utf-8")
+        return dest
     if truth_table:
         for path in parts:
             retrue_annotation(path, truth_table)
