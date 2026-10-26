@@ -96,6 +96,25 @@ def test_majority_vote_tie_keeps_the_first_column():
     assert list(majority_vote(tied, ["b", "a"])) == ["222"]
 
 
+def test_default_scores_skip_opal_and_split_read_types_once():
+    df = pd.DataFrame(
+        {
+            "kaiju": ["562", "562", "9606", "9606"],
+            "kraken2": ["562", "9606", "9606", "9606"],
+            "true": ["562", "562", "9606", "9606"],
+            "read_type": ["illumina", "illumina", "ont", "ont"],
+        }
+    )
+    full = score_annotators(df.drop(columns=["read_type"]), ["kaiju", "kraken2"], opal=True)
+    plain = score_annotators(df, ["kaiju", "kraken2"])
+    overall = plain[plain["read_type"] == "all"]
+    assert overall["completeness"].isna().all()
+    assert overall["accuracy"].tolist() == full["accuracy"].tolist()
+    assert set(plain["read_type"]) == {"all", "illumina", "ont"}
+    sampled = score_annotators(df.drop(columns=["read_type"]), ["kaiju"], metrics_sample=2, seed=1)
+    assert int(sampled["n_sampled"].iloc[0]) == 2
+
+
 def test_score_annotators_adds_consensus_and_keeps_samovar():
     df = pd.DataFrame(
         {
@@ -164,6 +183,7 @@ def test_viz_annotation_writes_scores_barplot(tmp_path):
         plot=False,
         rank="none",
         use_names=False,
+        opal=True,
     )
     assert "scores" in results
     assert not results["scores"].empty

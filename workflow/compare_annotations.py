@@ -18,6 +18,22 @@ def main(argv=None) -> int:
     parser.add_argument("--rank", default="genus")
     parser.add_argument("--split", action="store_true")
     parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Also write F1, R2, and CV plots. Default is the scores table and bar plot.",
+    )
+    parser.add_argument(
+        "--opal",
+        action="store_true",
+        help="Fill OPAL profile columns and write opal_scores.png. Default leaves them empty.",
+    )
+    parser.add_argument(
+        "--viz-metrics-sample",
+        type=int,
+        default=0,
+        help="Score a seeded subset of this many rows. 0 scores every row.",
+    )
+    parser.add_argument(
         "--spearman-full",
         action="store_true",
         help="Spearman on the concatenated per-read table (default: 10000 reads per sample, in C++)",
@@ -32,10 +48,12 @@ def main(argv=None) -> int:
         output_dir=args.output_dir,
         csv_file=args.csv_file,
         show_top=args.show_top,
-        types=("f1", "R2", "cv", "scores"),
+        types=("f1", "R2", "cv", "scores") if args.full else ("scores",),
         rank=args.rank,
         split=args.split,
         spearman_full=True if args.spearman_full else None,
+        opal=args.opal,
+        metrics_sample=args.viz_metrics_sample,
     )
     return 0
 

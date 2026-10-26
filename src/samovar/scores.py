@@ -281,7 +281,7 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
     return float(np.dot(table["f1"].to_numpy(dtype=float), weights) / denom)
 
 
-def annotation_scores(true: Iterable, pred: Iterable) -> Dict[str, float]:
+def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = False) -> Dict[str, float]:
     true_s = pd.Series(list(true) if not isinstance(true, pd.Series) else true.reset_index(drop=True))
     pred_s = pd.Series(list(pred) if not isinstance(pred, pd.Series) else pred.reset_index(drop=True))
     n = len(true_s)
@@ -295,9 +295,10 @@ def annotation_scores(true: Iterable, pred: Iterable) -> Dict[str, float]:
         "r2": _r2_abundance(true_s, pred_s),
     }
     stats.update(standard_classification_metrics(true_s, pred_s))
-    from samovar.opal import opal_style_metrics
+    if include_opal:
+        from samovar.opal import opal_style_metrics
 
-    stats.update(opal_style_metrics(true_s, pred_s))
+        stats.update(opal_style_metrics(true_s, pred_s))
     return stats
 
 
@@ -383,51 +384,84 @@ def score_annotators(
     annotators: Sequence[str],
     true_col: str = "true",
     include_consensus: bool = True,
+    opal: bool = False,
+    metrics: Optional[Sequence[str]] = None,
+    metrics_sample: int = 0,
+    seed: int = 0,
+    _split_read_types: bool = True,
 ) -> pd.DataFrame:
     """Score each annotator plus optional majority-vote SAMOVAR ensemble.
 
     When ``SAMOVAR`` is already a column (re-profiled tables), majority vote is
     not added again. When ground truth is missing or all-unclassified, F1 / R²
     and related metrics are left as NaN; ``n_reads`` / ``n_taxa`` are still filled.
+
+    ``opal=False`` leaves OPAL profile columns NaN. ``metrics`` limits which
+    score columns are filled. ``metrics_sample`` above 0 draws a seeded subset
+    and records ``n_sampled``; 0 scores every row.
     """
     names = [n for n in annotators if str(n).lower() != "read_type" and not is_feat_column(n)]
     names = select_scoring_annotators(work, names)
     tools = tool_annotators(names)
-    scored = rows_with_usable_truth(work, true_col) if work is not None else None
+    frame = work
+    n_sampled = 0
+    if (
+        frame is not None
+        and metrics_sample
+        and int(metrics_sample) > 0
+        and len(frame) > int(metrics_sample)
+    ):
+        frame = frame.sample(n=int(metrics_sample), random_state=int(seed))
+        n_sampled = int(metrics_sample)
+    elif frame is not None:
+        n_sampled = int(len(frame))
+    scored = rows_with_usable_truth(frame, true_col) if frame is not None else None
     true = scored[true_col] if scored is not None else None
+    wanted = None if metrics is None else {str(name) for name in metrics}
     rows = []
 
     def _add(name: str, pred: pd.Series) -> None:
         label = canonical_annotator_name(name)
         if scored is None or true is None:
             n_reads, n_taxa = _pred_counts(pred)
-            rows.append(_empty_score_row(label, n_reads, n_taxa))
+            row = _empty_score_row(label, n_reads, n_taxa)
+            row["n_sampled"] = float(n_sampled)
+            rows.append(row)
             return
         from samovar.viz_annotation import _collapse_other
 
         aligned = pred.reindex(scored.index)
         collapsed = _collapse_other(aligned, true)
-        stats = annotation_scores(true, aligned)
+        stats = annotation_scores(true, aligned, include_opal=False)
         stats["f1"] = _f1_accuracy(true, collapsed)
         stats["r2"] = _r2_abundance(true, collapsed)
         stats.update(standard_classification_metrics(true, collapsed))
-        from samovar.opal import opal_style_metrics
+        if opal and (wanted is None or wanted & {
+            "completeness", "opal_purity", "opal_f1", "jaccard", "l1_norm", "bray_curtis",
+            "opal_tp", "opal_fp", "opal_fn",
+        }):
+            from samovar.opal import opal_style_metrics
 
-        stats.update(opal_style_metrics(true, collapsed))
+            stats.update(opal_style_metrics(true, collapsed))
+        if wanted is not None:
+            for key in list(stats):
+                if key not in wanted and key not in {"n_reads", "n_taxa"}:
+                    stats[key] = np.nan
+        stats["n_sampled"] = float(len(scored) if scored is not None else n_sampled)
         rows.append({"annotator": label, **stats})
 
     have_ensemble_col = any(
-        _is_combination(n) and n in work.columns for n in names
-    ) if work is not None else False
+        _is_combination(n) and n in frame.columns for n in names
+    ) if frame is not None else False
     seen_labels = set()
     for name in names:
-        if work is None or name not in work.columns:
+        if frame is None or name not in frame.columns:
             continue
         label = canonical_annotator_name(name)
         if label.lower() in seen_labels:
             continue
         seen_labels.add(label.lower())
-        _add(name, work[name])
+        _add(name, frame[name])
 
     have = {str(r["annotator"]).lower() for r in rows}
     if (
@@ -435,38 +469,43 @@ def score_annotators(
         and len(tools) >= 2
         and ENSEMBLE_NAME.lower() not in have
         and not have_ensemble_col
-        and work is not None
+        and frame is not None
     ):
-        _add(ENSEMBLE_NAME, majority_vote(work, tools))
+        _add(ENSEMBLE_NAME, majority_vote(frame, tools))
 
     table = pd.DataFrame(rows)
     if table.empty:
-        empty = pd.DataFrame(columns=list(SCORE_COLUMNS))
+        empty = pd.DataFrame(columns=list(SCORE_COLUMNS) + ["n_sampled"])
         return empty
-    for col in SCORE_COLUMNS:
+    for col in list(SCORE_COLUMNS) + ["n_sampled"]:
         if col not in table.columns:
             table[col] = np.nan
-    table = table[list(SCORE_COLUMNS)]
+    table = table[list(SCORE_COLUMNS) + ["n_sampled"]]
     ordered = order_annotators(list(table["annotator"]))
     table["annotator"] = pd.Categorical(table["annotator"], categories=ordered, ordered=True)
     table = table.sort_values("annotator").reset_index(drop=True)
 
-    type_col = "read_type" if work is not None and "read_type" in work.columns else None
-    if type_col:
-        grouped = work.copy()
-        grouped["_rt"] = grouped[type_col].astype(str).str.strip().str.lower()
-        types = sorted({rt for rt in grouped["_rt"] if is_platform_read_type(rt)})
+    type_col = "read_type" if frame is not None and "read_type" in frame.columns else None
+    if _split_read_types and type_col:
+        labels = frame[type_col].astype(str).str.strip().str.lower()
+        types = sorted({rt for rt in labels.unique() if is_platform_read_type(rt)})
         if len(types) >= 2:
             table["read_type"] = "all"
             parts = [table]
-            for rt, sub in grouped.groupby("_rt"):
-                if not is_platform_read_type(rt) or sub.empty:
+            for rt in types:
+                sub = frame.loc[labels == rt]
+                if sub.empty:
                     continue
                 sub_tab = score_annotators(
-                    sub.drop(columns=["read_type", "_rt"], errors="ignore"),
+                    sub,
                     names,
                     true_col=true_col,
                     include_consensus=include_consensus,
+                    opal=opal,
+                    metrics=metrics,
+                    metrics_sample=0,
+                    seed=seed,
+                    _split_read_types=False,
                 )
                 if sub_tab.empty:
                     continue

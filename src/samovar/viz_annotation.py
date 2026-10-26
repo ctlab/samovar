@@ -593,6 +593,8 @@ def viz_annotation(
     use_names: bool = True,
     reord: str = "fpc",
     spearman_full: Optional[bool] = None,
+    opal: bool = False,
+    metrics_sample: int = 0,
 ) -> dict:
     """Mirror ``viz_annotation()`` in R: F1 / R2 / CV / confidence / scores plots."""
     results: dict = {}
@@ -684,7 +686,9 @@ def viz_annotation(
             score_annotators,
         )
 
-        scores_table = score_annotators(work, annotators)
+        scores_table = score_annotators(
+            work, annotators, opal=opal, metrics_sample=metrics_sample
+        )
         results["scores"] = scores_table
         if out_dir and not scores_table.empty:
             scores_table.to_csv(out_dir / "quality_scores.csv", index=False)
@@ -695,13 +699,14 @@ def viz_annotation(
                 title=f"Annotation quality{caption_rank}",
             )
             save_scores_altair(scores_table, out_dir / "scores.html")
-            save_scores_barplot(
-                scores_table,
-                out_dir / "opal_scores.png",
-                title=f"OPAL-style profile metrics{caption_rank}",
-                display=OPAL_DISPLAY,
-                ymax=2.0,
-            )
+            if opal:
+                save_scores_barplot(
+                    scores_table,
+                    out_dir / "opal_scores.png",
+                    title=f"OPAL-style profile metrics{caption_rank}",
+                    display=OPAL_DISPLAY,
+                    ymax=2.0,
+                )
             save_scores_altair(
                 scores_table,
                 out_dir / "opal_scores.html",
@@ -926,10 +931,12 @@ def compare_annotations(
     output_dir: Optional[str] = None,
     csv_file: Optional[str] = None,
     show_top: int = 0,
-    types: Sequence[str] = ("f1", "R2", "cv", "scores"),
+    types: Sequence[str] = ("scores",),
     rank: str = "genus",
     split: bool = False,
     spearman_full: Optional[bool] = None,
+    opal: bool = False,
+    metrics_sample: int = 0,
 ) -> pd.DataFrame:
     """CLI analog of ``workflow/compare_annotations.R``."""
     from samovar.annotation_correlation import (
@@ -975,6 +982,8 @@ def compare_annotations(
         split=split,
         rank=rank,
         spearman_full=spearman_full,
+        opal=opal,
+        metrics_sample=metrics_sample,
     )
     if csv_file:
         Path(csv_file).parent.mkdir(parents=True, exist_ok=True)

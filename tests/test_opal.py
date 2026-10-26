@@ -95,10 +95,13 @@ def test_score_table_includes_opal_and_tn(tmp_path):
             "true": ["562", "562", "9606", "9606"],
         }
     )
-    table = score_annotators(df, ["kaiju", "kraken2"])
+    table = score_annotators(df, ["kaiju", "kraken2"], opal=True)
     for col in ("tnr", "fnr", "tn_pct", "fn_pct", "completeness", "opal_purity", "l1_norm"):
         assert col in table.columns
         assert table[col].notna().all()
+    plain = score_annotators(df, ["kaiju", "kraken2"])
+    assert plain["completeness"].isna().all()
+    assert plain["accuracy"].tolist() == table["accuracy"].tolist()
 
 
 def test_viz_writes_opal_scores_plot(tmp_path):
@@ -119,6 +122,7 @@ def test_viz_writes_opal_scores_plot(tmp_path):
         plot=False,
         rank="none",
         use_names=False,
+        opal=True,
     )
     csv = pd.read_csv(out / "quality_scores.csv")
     assert "tn_pct" in csv.columns
