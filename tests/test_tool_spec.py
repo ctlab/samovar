@@ -131,6 +131,7 @@ def test_check_external_flags_allows_missing_input(tmp_path):
 
 def test_check_external_flags_skips_missing_binary():
     check_external_flags("/no/such/samovar-tool", "--not-a-real-flag")
+    check_external_flags("/path/to/kraken2", "--minK 2 --maxK 10")
 
 
 def test_installed_kraken2_rejects_unknown_flag():

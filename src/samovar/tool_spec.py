@@ -614,16 +614,22 @@ def check_external_flags(cmd: str, extra: Optional[str], *, timeout: float = 5) 
     token = argv[0]
     if Path(token).name in {"python", "python3"}:
         return
-    resolved = resolve_executable(token)
-    exe = command_argv(resolved)[0] if resolved else ""
-    path = Path(exe).expanduser() if exe else Path()
-    if not (path.is_file() and os.access(path, os.X_OK)):
-        import shutil
-
-        found = shutil.which(exe or token)
-        if not found:
+    token_path = Path(token).expanduser()
+    if token_path.is_absolute() or "/" in token:
+        if not (token_path.is_file() and os.access(token_path, os.X_OK)):
             return
-        path = Path(found)
+        path = token_path.resolve()
+    else:
+        resolved = resolve_executable(token)
+        exe = command_argv(resolved)[0] if resolved else ""
+        path = Path(exe).expanduser() if exe else Path()
+        if not (path.is_file() and os.access(path, os.X_OK)):
+            import shutil
+
+            found = shutil.which(token)
+            if not found:
+                return
+            path = Path(found)
     try:
         proc = subprocess.run(
             [str(path), *flags],
