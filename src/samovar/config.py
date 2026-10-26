@@ -1889,7 +1889,9 @@ if [ -n "$SAMOVAR_INPUT_DIR" ] && [ -d "$SAMOVAR_INPUT_DIR" ]; then
     if [ "$src_dir" != "$dst_dir" ]; then
         "$PYTHON_PATH" -c 'import sys; from samovar.seqio import link_or_copy_reads; link_or_copy_reads(sys.argv[1], sys.argv[2])' "$src_dir" "$dst_dir"
     fi
-fi""",
+fi
+"$PYTHON_PATH" -c 'import sys; from samovar.seqio import validate_fastq_directory; validate_fastq_directory(sys.argv[1])' "$out_dir/initial"
+""",
         )
 
         qc_initial = _checkpoint_block(

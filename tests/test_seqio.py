@@ -14,6 +14,7 @@ from samovar.seqio import (
     list_fasta_files,
     drop_r2_if_source_single_end,
     list_fastq_samples,
+    validate_fastq_directory,
     open_text,
     processed_genome_path,
     sequence_stem,
@@ -144,6 +145,18 @@ def test_fastq_ignores_camisim_tech_duplicates(tmp_path):
     (tmp_path / "1_wgsim_R2.fastq").write_text("@b\nT\n+\nI\n")
     (tmp_path / "2_full_R1.fastq").write_text("@c\nA\n+\nI\n")
     assert list_fastq_samples(tmp_path) == ["1_full", "2_full"]
+
+
+def test_validate_fastq_directory_rejects_blank_and_truncated(tmp_path):
+    path = tmp_path / "a_R1.fastq"
+    path.write_text("@a\nAC\n+\nII\n\n")
+    with pytest.raises(ValueError, match="Blank line in FASTQ"):
+        validate_fastq_directory(tmp_path)
+    path.write_text("@a\nAC\n")
+    with pytest.raises(ValueError, match="Truncated FASTQ record"):
+        validate_fastq_directory(tmp_path)
+    path.write_text("@a\nAC\n+\nII\n")
+    validate_fastq_directory(tmp_path)
 
 
 @pytest.mark.parametrize("other", ["sample_R1.fq", "sample_R1.fastq.gz", "sample_1.fastq", "sample.fastq", "sample.fq.gz"])

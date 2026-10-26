@@ -459,6 +459,17 @@ def iter_fastq_records(path: PathLike) -> Iterator[Tuple[str, str, str, str]]:
             yield header, seq, plus, qual
 
 
+def validate_fastq_directory(directory: PathLike) -> None:
+    """Read every FASTQ in ``directory``. A blank or truncated record raises."""
+    directory = as_path(directory)
+    if not directory.is_dir():
+        return
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and is_fastq_name(path.name):
+            for _ in iter_fastq_records(path):
+                pass
+
+
 DEFAULT_MIN_FASTQ_BYTES = 1
 DEFAULT_MIN_FASTQ_READS = 1
 

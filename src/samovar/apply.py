@@ -32,7 +32,12 @@ from samovar.qc import trim_stage
 from samovar.regenerate import stage_regenerate_tables
 from samovar.reprofilers import apply_saved_reprofiler, run_reprofiler
 from samovar.scorers import run_custom_scorers
-from samovar.seqio import has_r1_reads, link_or_copy_reads, list_r1_files
+from samovar.seqio import (
+    has_r1_reads,
+    link_or_copy_reads,
+    list_r1_files,
+    validate_fastq_directory,
+)
 from samovar.table_scorers import stage_score_regenerated_tables
 from samovar.sample_scorers import sample_qc_configured, stage_score_sample_qc
 from samovar.sample_filters import sample_filter_configured, stage_filter_sample_qc
@@ -438,6 +443,7 @@ def apply_pipeline(
         if step == "setup_reads":
             (dest / "initial").mkdir(parents=True, exist_ok=True)
             link_or_copy_reads(src_reads, dest / "initial")
+            validate_fastq_directory(dest / "initial")
         elif step == "qc_initial":
             trim_stage(dest, "initial", qc_cfg)
         elif step == "annotate_initial":
