@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -219,7 +220,7 @@ def test_apply_module_help():
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO / "src") + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
-        [os.environ.get("PYTHON_PATH") or "python3", "-m", "samovar.apply", "--help"],
+        [sys.executable, "-m", "samovar.apply", "--help"],
         cwd=REPO,
         capture_output=True,
         text=True,
