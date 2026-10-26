@@ -67,12 +67,12 @@ def r_regenerator_script(monkeypatch):
 
 @pytest.fixture
 def test_data_dir():
-    return Path("data/test_annotations")
+    return Path(__file__).resolve().parents[1] / "data" / "test_annotations"
 
 
 @pytest.fixture
-def test_output_dir():
-    output_dir = Path("tests_outs/test_samovar")
+def test_output_dir(tmp_path):
+    output_dir = tmp_path / "test_samovar"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
