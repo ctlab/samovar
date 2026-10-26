@@ -396,14 +396,22 @@ def _install_opal_plot_compat() -> None:
 def _patched_opal_source(script: str) -> str:
     """Tolerate a missing F1 column and repeated category labels in ``opal.py``.
 
-    The installed script is not ours. These are the three small-data crashes:
-    ``KeyError: 'F1 score'``, ``Categorical categories must be unique``, and
+    The installed script is not ours. These are the small-data crashes:
+    ``KeyError: 'F1 score'``, ``Categorical categories must be unique``,
+    a tool with an empty profile missing from ``print_by_rank``, and
     the spider-plot shape error handled in ``_install_opal_plot_compat``.
     """
     source = Path(script).read_text(encoding="utf-8")
     source = source.replace(
         "table = table.loc[:, order_columns]",
         "table = table.loc[:, [col for col in order_columns if col in table.columns]]",
+    )
+    source = source.replace(
+        "table = table.loc[pd.IndexSlice[order_rows, :], order_columns_rank]",
+        "order_rows_present = [row for row in order_rows if row in table.index.get_level_values('tool')]\n"
+        "        if not order_rows_present:\n"
+        "            continue\n"
+        "        table = table.loc[pd.IndexSlice[order_rows_present, :], order_columns_rank]",
     )
     source = source.replace(
         "categories=order_rows, ordered=True",

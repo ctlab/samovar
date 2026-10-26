@@ -11,8 +11,10 @@ from samovar.opal import (
     opal_executable,
     opal_rank_range,
     opal_style_metrics,
+    run_opal,
     series_to_counts,
     write_cami_profile,
+    write_profiles_for_annotators,
 )
 from samovar.scores import score_annotators
 from samovar.viz_annotation import viz_annotation
@@ -129,3 +131,24 @@ def test_viz_writes_opal_scores_plot(tmp_path):
     assert "completeness" in csv.columns
     assert (out / "scores.png").is_file()
     assert (out / "opal_scores.png").is_file()
+
+
+def test_empty_profile_still_writes_opal_html(tmp_path):
+    if opal_executable() is None:
+        pytest.skip("OPAL is not installed")
+    work = pd.DataFrame(
+        {
+            "sample": ["a", "a", "b", "b"],
+            "true": ["562", "562", "9606", "9606"],
+            "kaiju": ["562", "562", "9606", "9606"],
+            "assembly": ["0", "0", "0", "0"],
+            "kraken2": ["562", "0", "0", "9606"],
+        }
+    )
+    gold, profiles = write_profiles_for_annotators(
+        work, ["kaiju", "assembly", "kraken2"], tmp_path / "profiles"
+    )
+    out = run_opal(gold, profiles, tmp_path / "opal")
+    assert out is not None
+    assert (out / "results.html").is_file()
+    assert "OPAL finished successfully" in (out / "log.txt").read_text(errors="replace")
