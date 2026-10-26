@@ -1423,6 +1423,10 @@ class PipelineConfig:
                         p for p in (ann.extra, slot) if p
                     ) or None
         _apply_translated_cli_flags(config, args)
+        from samovar.tool_spec import check_external_flags
+
+        for ann in config.annotators or []:
+            check_external_flags(ann.cmd, ann.extra)
         params = {}
         if config.sample_filter_n is not None:
             params["n"] = config.sample_filter_n

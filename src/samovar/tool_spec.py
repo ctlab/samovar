@@ -582,3 +582,59 @@ def parse_known_with_custom(parser, argv: Optional[Sequence[str]] = None):
         except (TypeError, ValueError):
             pass
     return args, leftover
+
+
+_UNKNOWN_OPTION = re.compile(
+    r"(?:unknown|unrecognized|unrecognised|invalid|illegal)\s+option\b",
+    re.IGNORECASE,
+)
+
+
+def check_external_flags(cmd: str, extra: Optional[str], *, timeout: float = 5) -> None:
+    """Ask an installed tool whether ``extra`` flags are accepted.
+
+    The tool is started with only those flags and no inputs. A missing binary,
+    a built-in Python module, or a check that does not finish is left alone.
+    A message such as ``Unknown option`` stops prepare before annotation.
+    """
+    text = str(extra or "").strip()
+    if not text:
+        return
+    try:
+        flags = shlex.split(text)
+    except ValueError as exc:
+        raise ValueError(f"Cannot parse flags for {cmd}: {exc}") from exc
+    if not any(token.startswith("-") for token in flags):
+        return
+    from samovar.paths import command_argv, resolve_executable
+
+    argv = command_argv(cmd)
+    if not argv or "-m" in argv:
+        return
+    token = argv[0]
+    if Path(token).name in {"python", "python3"}:
+        return
+    resolved = resolve_executable(token)
+    exe = command_argv(resolved)[0] if resolved else ""
+    path = Path(exe).expanduser() if exe else Path()
+    if not (path.is_file() and os.access(path, os.X_OK)):
+        import shutil
+
+        found = shutil.which(exe or token)
+        if not found:
+            return
+        path = Path(found)
+    try:
+        proc = subprocess.run(
+            [str(path), *flags],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    blob = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+    line = next((row.strip() for row in blob.splitlines() if _UNKNOWN_OPTION.search(row)), "")
+    if line:
+        raise ValueError(f"{path.name}: {line}")

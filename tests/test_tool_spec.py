@@ -1,8 +1,13 @@
 import argparse
+import shutil
+from pathlib import Path
+
+import pytest
 
 from samovar.main_config import disk_payload, migrate_legacy, parse_tool_entry
 from samovar.tool_spec import (
     apply_translated_flags,
+    check_external_flags,
     parse_flags_translate,
     parse_known_with_custom,
     parse_tool_record,
@@ -107,3 +112,30 @@ def test_prepare_threads_reach_iss_and_snakemake(tmp_path, monkeypatch):
     assert "cores: 6" in a2iss
     script = Path(config.generate_pipeline(str(tmp_path / "out"))).read_text()
     assert "--cores 6" in script
+
+
+def test_check_external_flags_reports_unknown_option(tmp_path):
+    exe = tmp_path / "fake-kraken"
+    exe.write_text("#!/bin/sh\nprintf 'Unknown option: %s\\n' \"$1\" >&2\nexit 64\n")
+    exe.chmod(0o755)
+    with pytest.raises(ValueError, match="Unknown option: --not-a-real-flag"):
+        check_external_flags(str(exe), "--not-a-real-flag")
+
+
+def test_check_external_flags_allows_missing_input(tmp_path):
+    exe = tmp_path / "fake-kraken"
+    exe.write_text("#!/bin/sh\nprintf 'Need to specify input filenames!\\n' >&2\nexit 64\n")
+    exe.chmod(0o755)
+    check_external_flags(str(exe), "--confidence 0.2")
+
+
+def test_check_external_flags_skips_missing_binary():
+    check_external_flags("/no/such/samovar-tool", "--not-a-real-flag")
+
+
+def test_installed_kraken2_rejects_unknown_flag():
+    if not shutil.which("kraken2"):
+        pytest.skip("kraken2 is not installed")
+    with pytest.raises(ValueError, match="Unknown option"):
+        check_external_flags("kraken2", "--not-a-real-flag")
+    check_external_flags("kraken2", "--confidence 0.2")
