@@ -230,6 +230,40 @@ def step_in_window(
     return CHECKPOINT_STEPS.index(start_s) <= idx <= CHECKPOINT_STEPS.index(end_s)
 
 
+def _abundance_requests_reads(directory: Path) -> bool:
+    """True when a CSV under ``directory`` asks for a positive number of reads.
+
+    ``N_*`` columns count even if the rest of the table looks like an annotation.
+    Other numeric columns count only after the abundance normalizer accepts them.
+    """
+    from samovar.abundance import (
+        abundance_csv_paths,
+        is_abundance_table,
+        n_sample_columns,
+        normalize_abundance_table,
+    )
+    import pandas as pd
+
+    if not directory.is_dir():
+        return False
+    for path in abundance_csv_paths(directory):
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            continue
+        frame = frame.rename(columns=lambda name: str(name).strip().rstrip("\r"))
+        cols = n_sample_columns(frame)
+        if not cols and is_abundance_table(frame):
+            frame = normalize_abundance_table(frame)
+            cols = n_sample_columns(frame)
+        if not cols:
+            continue
+        total = float(pd.to_numeric(frame[cols].stack(), errors="coerce").fillna(0).sum())
+        if total > 0:
+            return True
+    return False
+
+
 def regen_reads_status(output_dir: PathLike) -> int:
     """0 when regenerated FASTQ exists.
 
@@ -237,9 +271,7 @@ def regen_reads_status(output_dir: PathLike) -> int:
     stages may be skipped). 1 when the table requests reads and the FASTQ is
     empty: that is a failed simulation, not a successful pipeline.
     """
-    from samovar.abundance import load_abundance_dir, n_sample_columns
     from samovar.seqio import has_r1_reads
-    import pandas as pd
 
     root = as_path(output_dir)
     if (root / "regenerated").is_dir():
@@ -250,22 +282,15 @@ def regen_reads_status(output_dir: PathLike) -> int:
         abund_dir = root / ".regenerated_abundance"
     if has_r1_reads(reads_dir):
         return 0
-    positive = False
-    for frame in load_abundance_dir(abund_dir).values():
-        cols = n_sample_columns(frame)
-        if not cols:
-            continue
-        total = float(pd.to_numeric(frame[cols].stack(), errors="coerce").fillna(0).sum())
-        if total > 0:
-            positive = True
-            break
-    if not positive:
-        return 3
-    print(
-        f"Error: abundance under {abund_dir} requests reads but {reads_dir} has no FASTQ.",
-        file=sys.stderr,
-    )
-    return 1
+    if _abundance_requests_reads(abund_dir) or (
+        reads_dir != abund_dir and _abundance_requests_reads(reads_dir)
+    ):
+        print(
+            f"Error: abundance under {abund_dir} requests reads but {reads_dir} has no FASTQ.",
+            file=sys.stderr,
+        )
+        return 1
+    return 3
 
 
 def needs_regen_early_exit(

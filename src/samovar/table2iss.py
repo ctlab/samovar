@@ -708,7 +708,13 @@ def generate_reads_metagenome(
         for path, gid, n in zip(genome_files, genome_ids, amount)
         if path is not None and os.path.exists(path) and int(n) > 0
     ]
+    requested = sum(max(0, int(n)) for n in amount)
     if not pairs:
+        if requested > 0:
+            raise RuntimeError(
+                f"Read generation requested {requested} reads but no usable genome "
+                f"was available for {output_prefix}."
+            )
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
         return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 
@@ -734,6 +740,11 @@ def generate_reads_metagenome(
         or not os.path.exists(combined_fasta)
         or os.path.getsize(combined_fasta) == 0
     ):
+        if requested > 0:
+            raise RuntimeError(
+                f"Read generation requested {requested} reads but the combined genome "
+                f"FASTA for {output_prefix} is empty."
+            )
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
         return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 

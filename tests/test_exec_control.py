@@ -354,6 +354,14 @@ def test_empty_regen_with_positive_abundance_is_an_error(tmp_path):
     (run / "regenerated" / "b_concat_weighted.fastq").write_text("")
     assert exec_control_main(["regen-reads", str(run)]) == 1
 
+    sibling = tmp_path / "sibling"
+    (sibling / "regenerated").mkdir(parents=True)
+    pd.DataFrame({"taxid": [562], "N_a": [50]}).to_csv(
+        sibling / "regenerated" / "concat_weighted.csv", index=False
+    )
+    (sibling / "regenerated" / "a_concat_weighted.fastq").write_text("")
+    assert exec_control_main(["regen-reads", str(sibling)]) == 1
+
     zero = tmp_path / "zero"
     zero_ab = zero / "regenerated" / ".regenerated_abundance"
     zero_ab.mkdir(parents=True)

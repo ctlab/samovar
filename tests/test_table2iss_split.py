@@ -234,6 +234,20 @@ def test_table_generate_rejects_empty_sample(tmp_path, monkeypatch):
         )
 
 
+def test_empty_genome_file_with_requested_reads_fails(tmp_path):
+    genome = tmp_path / "562.fa"
+    genome.write_text("")
+    with pytest.raises(RuntimeError, match="empty"):
+        generate_reads_metagenome(
+            genome_files=[str(genome)],
+            output_dir=str(tmp_path / "reads"),
+            amount=[10],
+            genome_ids=["562"],
+            sample_name="s",
+            annotator_name="concat_weighted",
+        )
+
+
 def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
     genomes = [_write_fasta(tmp_path / "genomes" / "562.fa", "orig562")]
 
