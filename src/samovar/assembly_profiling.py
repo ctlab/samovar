@@ -1172,6 +1172,7 @@ def run_gtdbtk(
     db: str = "",
     threads: int = 1,
     extra: Optional[Sequence[str]] = None,
+    require_markers: bool = False,
 ) -> Path:
     threads = _job_threads("gtdbtk", threads)
     out = as_path(dest)
@@ -1209,7 +1210,15 @@ def run_gtdbtk(
         "fa",
     ]
     cmd.extend(str(x) for x in (extra or []))
+    if require_markers and "--keep_intermediates" not in cmd:
+        cmd.append("--keep_intermediates")
     _run(cmd, env=env)
+    # ANI can classify all MAGs without identifying genes. We need its valid
+    # classification plus marker evidence, not an unnecessary pplacer rerun.
+    if require_markers and not any(work.rglob("*markers_summary.tsv")):
+        _run([which_tool("gtdbtk"), "identify", "--genome_dir", str(mag_dir),
+              "--out_dir", str(work), "--cpus", str(int(threads)),
+              "--extension", "fa"], env=env)
     rows = ["mag_id\ttaxid\tlineage"]
     for summary in work.rglob("*summary.tsv"):
         with summary.open(newline="") as handle:
@@ -1219,6 +1228,17 @@ def run_gtdbtk(
                 lineage = rec.get("classification") or rec.get("fastani_taxonomy") or ""
                 taxid = _gtdb_taxid_from_lineage(lineage)
                 rows.append(f"{mag}\t{taxid}\t{lineage}")
+    # GTDB-Tk exposes summaries through both root links and subdirectories;
+    # an empty auxiliary/other-domain row must not overwrite a classification.
+    merged = {}
+    for row in rows[1:]:
+        mag, taxid, lineage = row.split("\t", 2)
+        if not mag:
+            continue
+        rank = (taxid != "0", bool(lineage), len(lineage))
+        if mag not in merged or rank > merged[mag][0]:
+            merged[mag] = (rank, row)
+    rows = [rows[0]] + [merged[mag][1] for mag in sorted(merged)]
     if len(rows) == 1:
         for fasta in _iter_mag_fastas(as_path(mag_dir)):
             rows.append(f"{fasta.stem}\t0\t")
@@ -1234,6 +1254,7 @@ def run_mag_taxonomy(
     threads: int = 1,
     name: str = "gtdbtk",
     extra: Optional[Sequence[str]] = None,
+    require_markers: bool = False,
 ) -> Path:
     key = str(name or "gtdbtk").lower().replace("-", "_")
     if key in {"identity", "constant", "baseline", "dummy", "constant_mag_taxonomy"}:
@@ -1255,7 +1276,7 @@ def run_mag_taxonomy(
         )
         return dest_path
     if key in {"gtdbtk", "gtdb", "mag_taxonomy", ""}:
-        return run_gtdbtk(mag_dir, dest, db=db, threads=threads, extra=extra)
+        return run_gtdbtk(mag_dir, dest, db=db, threads=threads, extra=extra, require_markers=require_markers)
     exe = which_tool(name)
     out = as_path(dest)
     cmd = [exe, "-c", str(mag_dir), "-d", str(db or ""), "-o", str(out), "-t", str(int(threads))]
@@ -1647,7 +1668,8 @@ def _alignment_needs_samtools(path: Path) -> bool:
     """
     if not path.is_file():
         return False
-    head = path.read_bytes()[:4]
+    with path.open("rb") as handle:
+        head = handle.read(4)
     if head == b"BAM\x01" or head[:4] == b"CRAM" or head[:2] == b"\x1f\x8b":
         return True
     return path.suffix.lower() == ".cram"
@@ -1750,46 +1772,67 @@ def run_assembly_annotator(
         slots.get("mag_mode") or mag_mode or os.environ.get("SAMOVAR_MAG_MODE") or "homology"
     ).lower().replace("_", "-")
     catalog_early = Path(os.environ.get("SAMOVAR_MAG_CATALOG") or (work / "mag_catalog.tsv"))
-    stored_early = _catalog_fasta_dir(catalog_early)
-    skip_new_bins = mode_early == "map-initial" and any(stored_early.glob("*.fa"))
+    phase = os.environ.get("SAMOVAR_MAG_PHASE", "map")
+    if mode_early == "map-initial" and phase != "build":
+        from samovar.MAG.homology import validate_mapping_catalog
+        from samovar.MAG.mapping import write_mapping_table
+
+        validate_mapping_catalog(catalog_early)
+        return write_mapping_table(r1, r2, str(_catalog_fasta_dir(catalog_early)),
+                                   str(catalog_early.parent / "taxonomy.tsv"), str(out),
+                                   threads=threads, markers=str(catalog_early.parent / "markers.tsv"))
     selected = work / "bins_selected"
-    if not skip_new_bins:
-        run_assembler(r1, r2, str(contigs), threads=threads, name=assembler)
-        if not _fasta_has_records(contigs):
-            feature = "MAP_MAG_ID" if mode_early == "map-initial" else "MAG_ID"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(f"seq\ttaxID\t{feature}\n", encoding="utf-8")
-            return out
-        genes = work / "genes"
+    run_assembler(r1, r2, str(contigs), threads=threads, name=assembler)
+    if not _fasta_has_records(contigs):
+        feature = "MAG_ID"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(f"seq\ttaxID\t{feature}\n", encoding="utf-8")
+        return out
+    genes = work / "genes"
+    try:
+        run_gene_caller(str(contigs), str(genes), threads=threads, name=gene_caller)
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+        if mode_early == "map-initial":
+            raise
+        genes.mkdir(parents=True, exist_ok=True)
+    bin_dirs = []
+    for name in names:
+        folder = work / "bins" / name
         try:
-            run_gene_caller(str(contigs), str(genes), threads=threads, name=gene_caller)
+            run_binner(str(contigs), str(folder), r1=r1, r2=r2, threads=threads, name=name)
         except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-            genes.mkdir(parents=True, exist_ok=True)
-        bin_dirs = []
-        for name in names:
-            folder = work / "bins" / name
-            try:
-                run_binner(str(contigs), str(folder), r1=r1, r2=r2, threads=threads, name=name)
-            except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-                _write_identity_mag(contigs, folder)
-            bin_dirs.append(str(folder))
-            qc_path = work / "bins_qc" / f"{name}.tsv"
-            try:
-                run_binner_qc(str(folder), str(qc_path), db="", threads=threads, name=binner_qc)
-            except (FileNotFoundError, subprocess.CalledProcessError):
-                dummy_qc = as_path(qc_path)
-                dummy_qc.parent.mkdir(parents=True, exist_ok=True)
-                dummy_qc.write_text("mag_id\tcompleteness\tcontamination\tscore\n", encoding="utf-8")
+            if mode_early == "map-initial":
+                raise
+            _write_identity_mag(contigs, folder)
+        bin_dirs.append(str(folder))
+        qc_path = work / "bins_qc" / f"{name}.tsv"
         try:
-            run_binner_combine(
-                bin_dirs,
-                str(selected),
-                contigs=str(contigs),
-                threads=threads,
-                name=binner_combine,
-            )
+            run_binner_qc(str(folder), str(qc_path), db="", threads=threads, name=binner_qc)
         except (FileNotFoundError, subprocess.CalledProcessError):
-            run_binner_combine(bin_dirs, str(selected), name="identity")
+            if mode_early == "map-initial":
+                raise
+            dummy_qc = as_path(qc_path)
+            dummy_qc.parent.mkdir(parents=True, exist_ok=True)
+            dummy_qc.write_text("mag_id\tcompleteness\tcontamination\tscore\n", encoding="utf-8")
+    try:
+        run_binner_combine(
+            bin_dirs,
+            str(selected),
+            contigs=str(contigs),
+            threads=threads,
+            name=binner_combine,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        if mode_early == "map-initial":
+            raise
+        run_binner_combine(bin_dirs, str(selected), name="identity")
+    if mode_early == "map-initial" and phase == "build":
+        from samovar.MAG.homology import stabilize_mags
+
+        stabilize_mags(selected, catalog_early, work / "bins_stable", preserve_contigs=True)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("seq\ttaxID\tMAG_ID\n")
+        return out
     mag_genes = work / "mag_genes"
     try:
         run_gene_caller(str(selected), str(mag_genes), threads=threads, name=gene_caller)
@@ -1797,25 +1840,13 @@ def run_assembly_annotator(
         mag_genes.mkdir(parents=True, exist_ok=True)
     dest_path = as_path(out)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    from samovar.MAG.homology import catalog_fasta_dir, stabilize_mags
+    from samovar.MAG.homology import stabilize_mags
 
-    mode = str(
-        slots.get("mag_mode") or mag_mode or os.environ.get("SAMOVAR_MAG_MODE") or "homology"
-    ).lower()
-    mode = mode.replace("_", "-")
     catalog = Path(os.environ.get("SAMOVAR_MAG_CATALOG") or (work / "mag_catalog.tsv"))
     feature = "MAG_ID"
-    reference_mags = selected
-    stored = catalog_fasta_dir(catalog)
-    if mode == "map-initial" and any(stored.glob("*.fa")):
-        reference_mags = stored
-        feature = "MAP_MAG_ID"
-    else:
-        stable = work / "bins_stable"
-        stabilize_mags(selected, catalog, stable)
-        reference_mags = stable
-        if mode == "map-initial":
-            feature = "MAP_MAG_ID"
+    stable = work / "bins_stable"
+    stabilize_mags(selected, catalog, stable)
+    reference_mags = stable
     if not any(_fasta_has_records(p) for p in _iter_mag_fastas(reference_mags)):
         dest_path.write_text(f"seq\ttaxID\t{feature}\n", encoding="utf-8")
         return dest_path
@@ -1828,10 +1859,6 @@ def run_assembly_annotator(
         for fasta in _iter_mag_fastas(selected):
             rows.append(f"{fasta.stem}\t0\t")
         tax_table.write_text("\n".join(rows) + "\n", encoding="utf-8")
-    if feature == "MAP_MAG_ID" and str(aligner).lower() in {"identity", "baseline", "dummy"}:
-        from samovar.MAG.mapping import write_mapping_table
-
-        return write_mapping_table(r1, r2, str(selected), str(tax_table), str(out), feature=feature)
     bam = work / "reads_to_mag.bam"
     run_aligner(r1, r2, str(selected), str(bam), threads=threads, name=aligner)
     mag_abund = work / "mag_abundance.tsv"

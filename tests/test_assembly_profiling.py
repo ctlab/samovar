@@ -648,6 +648,8 @@ def test_metaflye_read_mode_and_native_argument_order(tmp_path, monkeypatch, imp
 ])
 @pytest.mark.parametrize("mode", ["homology", "map-initial"])
 def test_metaflye_no_assembly_continues_composite_pipeline(tmp_path, monkeypatch, message, mode):
+    if mode == "map-initial":
+        monkeypatch.setenv("SAMOVAR_MAG_PHASE", "build")
     monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.delenv("SAMOVAR_ASSEMBLY_EXTRA", raising=False)
     monkeypatch.setattr("samovar.assembly_profiling.which_tool", lambda *args: "/configured/flye")
@@ -666,7 +668,7 @@ def test_metaflye_no_assembly_continues_composite_pipeline(tmp_path, monkeypatch
         mag_taxonomy="identity", aligner="identity", mag_quantifier="identity", mag_mode=mode,
     )
     assert (tmp_path / "annotator" / "contigs.fa").read_bytes() == b""
-    feature = "MAP_MAG_ID" if mode == "map-initial" else "MAG_ID"
+    feature = "MAG_ID"
     assert output.read_text() == f"seq\ttaxID\t{feature}\n"
     assert not (tmp_path / "annotator" / "genes").exists()
 

@@ -236,6 +236,11 @@ def _retarget_init_config(
     out["r2_dir"] = str(trimmed)
     out["output_dir"] = str(dest / "initial_reports")
     out["annotation_dir"] = str(dest / "initial_annotations")
+    if cfg.get("mag_catalog_root"):
+        out["mag_catalog_root"] = str(dest / "MAG")
+        # New samples are queries against the trained run's frozen reference,
+        # even though their output folder is named initial_annotations.
+        out["mag_catalog_phase"] = "regenerated"
     out["cores"] = int(cores)
     out["mem_mb"] = int(mem_mb)
     from samovar.taxdump import require_metax_taxdump
@@ -430,6 +435,8 @@ def apply_pipeline(
     repro_cfg["mem_mb"] = limit
     _dump_yaml(dest / ".log" / "configs" / "config_reprofiling.yaml", repro_cfg)
 
+    if (state.root / "MAG").is_dir():
+        shutil.copytree(state.root / "MAG", dest / "MAG", dirs_exist_ok=True)
     init_cfg = _retarget_init_config(state.init_config, dest, cores, limit)
     reference = (
         Path(state.regenerated_annotations)

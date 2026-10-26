@@ -46,7 +46,7 @@ from pathlib import Path
 import pandas as pd
 root = Path("$output_dir")
 mode = "${SAMOVAR_MAG_MODE:-homology}".replace("_", "-")
-column = "MAP_MAG_ID" if mode == "map-initial" else "MAG_ID"
+column = "MAG_ID"
 init = next((root / "initial_annotations").glob("*.csv"))
 df = pd.read_csv(init, nrows=0)
 cols = [str(c) for c in df.columns]

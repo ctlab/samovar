@@ -1477,6 +1477,8 @@ class PipelineConfig:
 
         # Generate initial annotator config
         init_annotator_config = {
+            'mag_catalog_root': str(base_path / 'MAG'),
+            'mag_catalog_phase': 'initial',
             'r1_dir': init_trimmed,
             'r2_dir': init_trimmed,
             'output_dir': str(base_path / 'initial_reports'),
@@ -1639,6 +1641,8 @@ class PipelineConfig:
 
         # Generate reannotate config
         reannotate_config = {
+            'mag_catalog_root': str(base_path / 'MAG'),
+            'mag_catalog_phase': 'regenerated',
             'r1_dir': regen_trimmed,
             'r2_dir': regen_trimmed,
             'output_dir': str(base_path / 'regenerated_reports'),

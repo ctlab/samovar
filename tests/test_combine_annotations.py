@@ -819,3 +819,23 @@ def test_empty_annotator_output_skips_and_finalize_still_writes(tmp_path):
     finalize_annotations(ann)
     combined = pd.read_csv(ann / "combined_annotation_table.csv")
     assert int(combined.loc[0, [c for c in combined.columns if c.startswith("taxID_kaiju_")][0]]) == 9606
+
+
+def test_parallel_samples_have_private_native_workspaces(tmp_path, combiner):
+    from concurrent.futures import ThreadPoolExecutor
+    reports = tmp_path / 'reports'; reports.mkdir()
+    annotations = tmp_path / 'annotations'
+    paths = []
+    for sample in range(4):
+        path = reports / f's{sample}_kaiju.kaiju.out'
+        _write_kaiju(path, [(f'r{i}', 562 + sample) for i in range(3000)])
+        paths.append(path)
+    def ingest(path):
+        return ingest_annotator(path,annotations,path.with_suffix('.ingested'))
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        outputs = list(executor.map(ingest, paths))
+    for sample, output in enumerate(outputs):
+        frame = pd.read_csv(output)
+        assert len(frame) == 3000
+        assert set(frame['taxID_kaiju_0']) == {562 + sample}
+    assert not list(annotations.glob('.combine_*'))

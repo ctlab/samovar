@@ -187,7 +187,7 @@ def test_mapping_onto_initial_mags_on_toy_and_phage(tmp_path):
         {
             "seq": [f"q{i}" for i in range(n)],
             "taxid_dummy": noisy,
-            "feat_assembly_0_MAP_MAG_ID": mag,
+            "feat_assembly_0_MAG_ID": mag,
             "length": 80,
             "true": true,
         }
@@ -195,8 +195,8 @@ def test_mapping_onto_initial_mags_on_toy_and_phage(tmp_path):
     _model, _models, metrics, features = train_models(
         frame, test_size=0.25, random_state=0, methods="random_forest"
     )
-    assert "feat_assembly_0_MAP_MAG_ID" in features
-    bare = frame.drop(columns=["feat_assembly_0_MAP_MAG_ID"])
+    assert "feat_assembly_0_MAG_ID" in features
+    bare = frame.drop(columns=["feat_assembly_0_MAG_ID"])
     _model, _models, bare_metrics, _features = train_models(
         bare, test_size=0.25, random_state=0, methods="random_forest"
     )

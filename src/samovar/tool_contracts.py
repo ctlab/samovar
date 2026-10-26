@@ -153,9 +153,11 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "assemblies when the tetranucleotide profiles agree within the normal-model error.",
     },
     "mag_mapping": {
-        "in": "FASTQ -i/-I, initial MAG directory -r, optional taxonomy -x, TSV -o, -t threads.",
-        "out": "Headered TSV seq, taxID, MAP_MAG_ID. The id is the initial MAG that "
-        "contains the read, not a bin name from a new assembly.",
+        "in": "FASTQ -i/-I, initial MAG directory -r, frozen MAG taxonomy -x, TSV -o, -t threads. Optional --markers TSV (zero-based half-open GTDB marker coordinates).",
+        "out": "Headered TSV seq, taxID, MAG_ID, identical to initial annotation. "
+        "Unmapped/conflicting reads have taxID=0 and empty MAG_ID (shared taxon retained for tied MAGs). "
+        "Sidecars .candidates.sqlite and .mapping.json retain reported alignments and conflict counts. "
+        "No invented mappings or identity fallback.",
     },
     "feature_importance": {
         "in": "score_feature_importance(model, annotation, initial_abundance, "

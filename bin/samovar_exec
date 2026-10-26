@@ -90,6 +90,10 @@ _cleanup_tmp_if_requested() {
         "$PYTHON" -m samovar.exec_control cleanup "$OUTPUT_DIR" || true
 }
 
+# Old mapping features cannot be reused with the unified initial/regen schema.
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON" -c 'import sys; from samovar.MAG.mapping import validate_mapping_resume; validate_mapping_resume(sys.argv[1])' "$OUTPUT_DIR"
+
 if [ "${SAMOVAR_REDO:-0}" != "0" ]; then
     echo "Clearing pipeline checkpoints (--redo)"
     PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \

@@ -1,5 +1,6 @@
 import os
 import shlex
+import re
 
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
 from samovar.memory import annotator_mem_mb
@@ -175,10 +176,96 @@ rule custom_tool:
 # ==========================================
 # NATIVE TOOLS
 # ==========================================
+# One cohort job builds every initial MAG before any read assignment starts.
+from pathlib import Path
+from samovar.assembly_profiling import parse_slot_extra
+
+MAG_ROOT = str(config.get("mag_catalog_root") or Path(config["output_dir"]).parent / "MAG")
+MAG_PHASE = str(config.get("mag_catalog_phase") or "initial")
+MAP_RUNS = {
+    name for name, ann in ANNOTATORS.items()
+    if type(ann).__name__ == "AssemblyAnnotator" and
+    str(parse_slot_extra(ann.extra or "").get("mag_mode") or os.environ.get("SAMOVAR_MAG_MODE", "homology")).lower().replace("_", "-") == "map-initial"
+}
+
+
+def cohort_read_inputs(wildcards):
+    if wildcards.run_name not in MAP_RUNS:
+        return []
+    # Hybrid assembly reads the original libraries, not just the flattened
+    # classifier input. Track all cohort libraries before freezing a reference.
+    return [str(path) for sample in list_fastq_samples(config["r1_dir"], include_libraries=True)
+            for mate in ("R1", "R2")
+            if (path := find_fastq_mate(config["r1_dir"], sample, mate)) is not None]
+
+
+def catalog_dependency(wildcards):
+    if wildcards.run_name not in MAP_RUNS:
+        return []
+    root = Path(MAG_ROOT) / wildcards.run_name
+    manifest = root / "mapping.manifest.json"
+    if MAG_PHASE == "initial" and manifest.is_file():
+        from samovar.MAG.homology import validate_mapping_catalog
+        validate_mapping_catalog(root / "catalog.tsv", samples=SAMPLES)
+    return [str(manifest)]
+
+
+def mapping_environment(wildcards):
+    if wildcards.run_name not in MAP_RUNS:
+        return ""
+    catalog = str(Path(MAG_ROOT) / wildcards.run_name / "catalog.tsv")
+    return "export SAMOVAR_MAG_PHASE=map SAMOVAR_MAG_CATALOG=" + shlex.quote(catalog) + "; "
+
+
+if MAG_PHASE == "initial" and MAP_RUNS:
+    rule initial_mag_catalog:
+        input:
+            cohort_read_inputs
+        output:
+            manifest = MAG_ROOT + "/{run_name}/mapping.manifest.json"
+        wildcard_constraints:
+            run_name = "|".join(map(re.escape, sorted(MAP_RUNS)))
+        threads:
+            lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        resources:
+            mem_mb=rule_mem
+        run:
+            import subprocess
+            import shutil
+            from samovar.MAG.homology import finalize_mapping_catalog
+            ann = ANNOTATORS[wildcards.run_name]
+            root = Path(MAG_ROOT) / wildcards.run_name
+            if root.resolve() == Path(MAG_ROOT).resolve() or not root.resolve().is_relative_to(Path(MAG_ROOT).resolve()):
+                raise ValueError("Invalid assembly run name for MAG catalog")
+            # A rebuild is a complete cohort operation, never an extension of a
+            # potentially partial/obsolete reference. Existing run checkpoints
+            # determine whether this job executes.
+            if root.exists():
+                shutil.rmtree(root)
+            root.mkdir(parents=True)
+            catalog = root / "catalog.tsv"
+            env = os.environ.copy()
+            env["SAMOVAR_MAG_CATALOG"] = str(catalog)
+            env["SAMOVAR_MAG_PHASE"] = "build"
+            for sample in sorted(SAMPLES):
+                r1 = str(find_fastq_mate(config["r1_dir"], sample))
+                r2 = str(find_fastq_mate(config["r2_dir"], sample, "R2") or "")
+                dest = str(root / "build" / (sample + ".out"))
+                cmd = ann.get_snakemake_shell_cmd(r1, r2, [dest])
+                with (root / (sample + ".build.log")).open("w") as log:
+                    subprocess.run(cmd, shell=True, executable="/bin/bash", env=env,
+                                   stdout=log, stderr=subprocess.STDOUT, check=True)
+            slots = parse_slot_extra(ann.extra or "")
+            finalize_mapping_catalog(catalog, db=ann.db_path or "", threads=int(threads),
+                                     taxonomy_tool=slots.get("mag_taxonomy") or "gtdbtk", samples=SAMPLES)
+
+
 rule assembly:
     input:
         r1 = r1_input,
-        r2 = r2_input
+        r2 = r2_input,
+        catalog = catalog_dependency,
+        libraries = cohort_read_inputs
     output:
         out = marker_output("assembly.out")
     threads:
@@ -189,6 +276,7 @@ rule assembly:
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
     params:
+        environment = mapping_environment,
         written = lambda wildcards: disk_out(wildcards, "assembly.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "assembly.out"),
         cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
@@ -198,7 +286,7 @@ rule assembly:
         """
         mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
-        {params.cmd} 2> {log:q}
+        {params.environment}{params.cmd} 2> {log:q}
         {params.ingest}
         """
 

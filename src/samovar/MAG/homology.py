@@ -232,6 +232,7 @@ def stabilize_mags(
     *,
     threshold: float = DEFAULT_THRESHOLD,
     reference_dir: Optional[Path] = None,
+    preserve_contigs: bool = False,
 ) -> List[dict]:
     """Rewrite ``query_dir`` into ``fasta_out`` using catalog ids.
 
@@ -268,9 +269,19 @@ def stabilize_mags(
         stored = catalog_fasta_dir(catalog_path)
         stored.mkdir(parents=True, exist_ok=True)
         for mag_id, paths in grouped.items():
-            sequence = "".join(read_fasta_sequence(path) for path in paths)
-            wrapped = "\n".join(sequence[i : i + 80] for i in range(0, len(sequence), 80))
-            body = f">{mag_id}\n{wrapped}\n"
+            if preserve_contigs:
+                from samovar.seqio import iter_seqio_fasta
+                records = []
+                for source_i, path in enumerate(paths):
+                    for contig_i, record in enumerate(iter_seqio_fasta(path)):
+                        sequence = str(record.seq)
+                        wrapped = "\n".join(sequence[i:i+80] for i in range(0,len(sequence),80))
+                        records.append(f">{mag_id}_c{source_i}_{contig_i}\n{wrapped}\n")
+                body = "".join(records)
+            else:
+                sequence = "".join(read_fasta_sequence(path) for path in paths)
+                wrapped = "\n".join(sequence[i : i + 80] for i in range(0, len(sequence), 80))
+                body = f">{mag_id}\n{wrapped}\n"
             (fasta_out / f"{mag_id}.fa").write_text(body, encoding="utf-8")
             stored_fa = stored / f"{mag_id}.fa"
             if not stored_fa.is_file():
@@ -329,3 +340,139 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# A completed map-initial reference is immutable during read assignment.
+def mapping_manifest(catalog: Path) -> Path:
+    return Path(catalog).parent / 'mapping.manifest.json'
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def extract_gtdb_markers(work: Path, dest: Path) -> Path:
+    """Join identify marker summaries/top-hits to GTDB-Tk's own Prodigal genes.
+
+    Coordinates are zero-based half-open. Only HMMs in the GTDB marker
+    summaries qualify; a generic Pfam/TIGRFAM hit is not marker evidence.
+    """
+    import csv
+    from samovar.seqio import iter_seqio_fasta
+
+    allowed = {}
+    for summary in sorted(Path(work).rglob('*markers_summary.tsv')):
+        with summary.open() as handle:
+            for row in csv.DictReader(handle, delimiter='\t'):
+                mag = row['name']
+                allowed.setdefault(mag, set()).update(
+                    marker for key in ('list_unique_genes', 'list_multiple_genes',
+                                       'list_multiple_unique_genes')
+                    for marker in row.get(key, '').split(',') if marker)
+    rows = set()
+    for fasta in sorted(Path(work).rglob('*_protein.faa')):
+        mag = fasta.name[:-len('_protein.faa')]
+        genes = {}
+        for gene in iter_seqio_fasta(fasta):
+            fields = gene.description.split(' # ')
+            if len(fields) < 4:
+                raise ValueError(f'Missing GTDB gene coordinates: {gene.id}')
+            genes[gene.id] = (gene.id.rsplit('_', 1)[0], int(fields[1])-1, int(fields[2]))
+        for hits in sorted(fasta.parent.glob('*_tophit.tsv')):
+            with hits.open() as handle:
+                next(handle, None)
+                for line in handle:
+                    gene, matches = line.rstrip('\n').split('\t')
+                    for match in matches.split(';'):
+                        marker = match.split(',')[0]
+                        if marker not in allowed.get(mag, set()):
+                            continue
+                        if gene not in genes:
+                            raise ValueError(f'GTDB marker gene missing from protein FASTA: {gene}')
+                        contig, start, end = genes[gene]
+                        rows.add((mag,contig,start,end,gene,marker))
+    found = {row[0] for row in rows}
+    missing = [mag for mag, markers in allowed.items() if markers and mag not in found]
+    if missing:
+        raise ValueError(f'GTDB marker coordinates are missing for: {", ".join(sorted(missing))}')
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open('w') as handle:
+        handle.write('mag_id\tcontig\tstart\tend\tgene_id\tmarker_id\n')
+        for row in sorted(rows):
+            handle.write('\t'.join(map(str,row)) + '\n')
+    return dest
+
+
+def finalize_mapping_catalog(catalog: Path, *, db: str = '', threads: int = 1,
+                             taxonomy_tool: str = 'gtdbtk', samples=()) -> Path:
+    import json
+    from samovar.assembly_profiling import run_mag_taxonomy, _fasta_has_records, contig_to_mag_map
+
+    catalog = Path(catalog)
+    root = catalog.parent
+    root.mkdir(parents=True, exist_ok=True)
+    manifest = mapping_manifest(catalog)
+    manifest.unlink(missing_ok=True)
+    fastas = catalog_fasta_dir(catalog)
+    fastas.mkdir(exist_ok=True)
+    tax = root / 'taxonomy.tsv'
+    markers = root / 'markers.tsv'
+    if any(_fasta_has_records(p) for p in iter_mag_fastas(fastas)):
+        run_mag_taxonomy(str(fastas), str(tax), db=db, threads=threads, name=taxonomy_tool,
+                         require_markers=True)
+        if taxonomy_tool.lower() in {'gtdbtk', 'gtdb', 'mag_taxonomy', ''}:
+            extract_gtdb_markers(tax.with_suffix('.gtdbtk'), markers)
+        else:
+            # Custom taxonomy may supply this sidecar itself; never label
+            # arbitrary gene-caller output as GTDB marker evidence.
+            if not markers.is_file():
+                markers.write_text('mag_id\tcontig\tstart\tend\tgene_id\tmarker_id\n')
+    else:
+        tax.write_text('mag_id\ttaxid\tlineage\n')
+        markers.write_text('mag_id\tcontig\tstart\tend\tgene_id\tmarker_id\n')
+    contigs = root / 'contigs.tsv'
+    with contigs.open('w') as handle:
+        handle.write('contig\tmag_id\n')
+        for contig, mag in sorted(contig_to_mag_map(fastas).items()):
+            handle.write(f'{contig}\t{mag}\n')
+    files = [*iter_mag_fastas(fastas), tax, markers, contigs]
+    if catalog.is_file():
+        files.append(catalog)
+    payload = {'schema_version':1, 'samples':sorted(samples), 'files':{
+        str(path.relative_to(root)): _file_sha256(path) for path in files}}
+    pending = manifest.with_suffix('.pending')
+    pending.write_text(json.dumps(payload, indent=2) + '\n')
+    pending.replace(manifest)
+    return manifest
+
+
+def validate_mapping_catalog(catalog: Path, *, samples=None) -> dict:
+    import json
+
+    catalog = Path(catalog)
+    manifest = mapping_manifest(catalog)
+    if not manifest.is_file():
+        raise ValueError('Initial MAG catalog is incomplete or legacy; rerun initial annotation and downstream stages')
+    payload = json.loads(manifest.read_text())
+    if payload.get('schema_version') != 1:
+        raise ValueError('Unsupported initial MAG catalog format; rerun initial annotation')
+    if samples is not None and payload.get('samples') != sorted(samples):
+        raise ValueError('Initial MAG cohort changed; prepare a fresh run and rebuild initial annotation')
+    root = catalog.parent.resolve()
+    expected = payload.get('files', {})
+    for name in ('taxonomy.tsv', 'markers.tsv', 'contigs.tsv'):
+        if name not in expected:
+            raise ValueError(f'Incomplete initial MAG catalog: {name}')
+    for name, checksum in expected.items():
+        path = (root / name).resolve()
+        if not path.is_relative_to(root) or not path.is_file() or _file_sha256(path) != checksum:
+            raise ValueError(f'Initial MAG reference changed or is corrupt: {name}')
+    actual_fastas = {str(p.relative_to(root)) for p in iter_mag_fastas(root / 'fastas')}
+    if actual_fastas != {name for name in expected if name.startswith('fastas/')}:
+        raise ValueError('Initial MAG FASTA set changed; rerun initial annotation')
+    return payload

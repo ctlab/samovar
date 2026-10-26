@@ -12,4 +12,4 @@ The other feature variant maps reads onto the MAGs saved from the initial annota
 SAMOVAR_MAG_MODE=map-initial bash examples/mag_identity/pipeline.sh
 ```
 
-That column is `feat_*_MAP_MAG_ID`. RandomForest uses either feature column.
+Both modes use `feat_*_MAG_ID`, with the same column on initial and regenerated annotations. The `map-initial` mode requires minimap2 and samtools (`./install.sh minimap2`); the identity taxonomy in this example is a debugging baseline, not a GTDB gene check. Production GTDB mapping uses `--mag-taxonomy gtdbtk` and a configured GTDB database.

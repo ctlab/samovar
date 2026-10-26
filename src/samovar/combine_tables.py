@@ -235,10 +235,14 @@ def _append_annotator(
     ]
     if csv_path.is_file():
         cmd.extend(["--base", str(csv_path)])
-    with _truth_table_for_cpp(truth_table) as table_path:
-        if table_path:
-            cmd.extend(["--truth-table", table_path])
-        subprocess.check_call(cmd)
+    # Per-sample locks do not protect other samples sharing this directory.
+    # The native combiner already accepts a private sort/merge workspace.
+    with tempfile.TemporaryDirectory(prefix=".combine_", dir=csv_path.parent) as scratch:
+        cmd.extend(["--tmp", scratch])
+        with _truth_table_for_cpp(truth_table) as table_path:
+            if table_path:
+                cmd.extend(["--truth-table", table_path])
+            subprocess.check_call(cmd)
 
 
 def ingest_annotator(

@@ -365,6 +365,10 @@ def load_regenerated_table(path: Optional[PathLike]) -> pd.DataFrame:
     if not path:
         return pd.DataFrame()
     target = Path(path)
+    # Batch combine keeps per-sample tables, whereas incremental finalize
+    # materializes this aggregate. Both are valid regeneration outputs.
+    if not target.exists() and target.name == "combined_annotation_table.csv":
+        target = target.parent
     if target.is_file():
         return read_csv_memmap(target)
     if target.is_dir():
