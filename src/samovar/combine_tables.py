@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import csv
 import fcntl
+import gzip
 import os
 import re
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Iterator, Optional, Sequence
 
 from samovar.parse_annotators import (
     DEFAULT_TAX_RANK,
@@ -110,6 +113,33 @@ def apply_species_level_csv(path: str, level: str = DEFAULT_TAX_RANK) -> None:
     apply_rank_level_csv(path, level=level)
 
 
+@contextmanager
+def _truth_table_for_cpp(truth_table: Optional[str]) -> Iterator[Optional[str]]:
+    """Path the C++ combiner can read. Gzip is unpacked; the combiner does not."""
+    if not truth_table:
+        yield None
+        return
+    src = Path(truth_table)
+    if not is_gzip_file(src):
+        yield str(src)
+        return
+    tmp = tempfile.NamedTemporaryFile(prefix="samovar_truth_", suffix=".tsv", delete=False)
+    tmp.close()
+    path = Path(tmp.name)
+    try:
+        with gzip.open(src, "rt", encoding="utf-8", errors="replace") as inn, path.open(
+            "w", encoding="utf-8"
+        ) as out:
+            while True:
+                chunk = inn.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+        yield str(path)
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def combine_with_cpp(
     input_dir: str,
     output_dir: str,
@@ -117,9 +147,6 @@ def combine_with_cpp(
     chunk_rows: int = 500000,
     truth_table: Optional[str] = None,
 ) -> None:
-    import gzip
-    import tempfile
-
     binary = ensure_combine_binary()
     os.makedirs(output_dir, exist_ok=True)
     cmd = [
@@ -133,29 +160,10 @@ def combine_with_cpp(
         "--chunk-rows",
         str(chunk_rows),
     ]
-    tmp_truth = None
-    if truth_table:
-        src = Path(truth_table)
-        table_path = src
-        if is_gzip_file(src):
-            tmp_truth = tempfile.NamedTemporaryFile(
-                prefix="samovar_truth_", suffix=".tsv", delete=False
-            )
-            tmp_truth.close()
-            with gzip.open(src, "rt", encoding="utf-8", errors="replace") as inn, open(
-                tmp_truth.name, "w", encoding="utf-8"
-            ) as out:
-                out.write(inn.read())
-            table_path = Path(tmp_truth.name)
-        cmd.extend(["--truth-table", str(table_path)])
-    try:
+    with _truth_table_for_cpp(truth_table) as table_path:
+        if table_path:
+            cmd.extend(["--truth-table", table_path])
         subprocess.check_call(cmd)
-    finally:
-        if tmp_truth is not None:
-            try:
-                Path(tmp_truth.name).unlink()
-            except OSError:
-                pass
 
 
 def sample_name_from(filename: str, split_n: int = 1) -> str:
@@ -227,9 +235,10 @@ def _append_annotator(
     ]
     if csv_path.is_file():
         cmd.extend(["--base", str(csv_path)])
-    if truth_table:
-        cmd.extend(["--truth-table", str(truth_table)])
-    subprocess.check_call(cmd)
+    with _truth_table_for_cpp(truth_table) as table_path:
+        if table_path:
+            cmd.extend(["--truth-table", table_path])
+        subprocess.check_call(cmd)
 
 
 def ingest_annotator(
@@ -433,9 +442,10 @@ def _restore_sample_csv(csv_path: Path, sample: str) -> None:
 
 def retrue_annotation(csv_path: Path, truth_table: str) -> None:
     binary = ensure_combine_binary()
-    subprocess.check_call(
-        [str(binary), "--retrue", str(csv_path), "--truth-table", str(truth_table)]
-    )
+    with _truth_table_for_cpp(truth_table) as table_path:
+        subprocess.check_call(
+            [str(binary), "--retrue", str(csv_path), "--truth-table", str(table_path)]
+        )
 
 
 def finalize_annotations(
@@ -535,6 +545,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     final.add_argument("--keep-parts", action="store_true")
 
     args = parser.parse_args(argv)
+    if args.cmd == "ingest" and not str(args.annotations).strip():
+        parser.error("--annotations must be a directory")
     if args.cmd == "ingest":
         ingest_annotator(
             Path(args.out),

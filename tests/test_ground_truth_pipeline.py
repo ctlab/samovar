@@ -92,22 +92,23 @@ def test_cami_toy_initial_truth_table_parse_genome(tmp_path):
 
     _run([samovar, "exec", "--output_dir", str(out)], cwd=REPO, env=env, timeout=900)
 
-    tables = list((out / "initial_annotations").glob("*.annotation.csv"))
-    assert len(tables) >= 3
+    frame = _annotation_frame(out / "initial_annotations")
+    if "sample" in frame.columns:
+        assert frame["sample"].astype(str).nunique() >= 3
+    else:
+        assert len(list((out / "initial_annotations").glob("*.annotation.csv"))) >= 3
     truth = {}
     for seq, tax in iter_truth_pairs(mapping):
         truth[seq] = tax
         if "/" in seq:
             truth[seq.rsplit("/", 1)[0]] = tax
     matched = 0
-    for path in tables:
-        df = pd.read_csv(path)
-        assert "true" in df.columns
-        for seq, val in zip(df["seq"].astype(str), df["true"].astype(str)):
-            expect = truth.get(seq) or truth.get(f"{seq}/1")
-            if expect:
-                assert str(int(float(val))) == str(int(float(expect)))
-                matched += 1
+    assert "true" in frame.columns
+    for seq, val in zip(frame["seq"].astype(str), frame["true"].astype(str)):
+        expect = truth.get(seq) or truth.get(f"{seq}/1")
+        if expect:
+            assert str(int(float(val))) == str(int(float(expect)))
+            matched += 1
     assert matched >= 1000
 
 

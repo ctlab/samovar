@@ -356,6 +356,21 @@ def test_combine_with_cpp_accepts_gzipped_truth_table(tmp_path):
     assert str(int(df.loc[0, "true"])) == "818"
 
 
+def test_ingest_accepts_gzipped_truth_table(tmp_path):
+    import gzip as gzip_mod
+
+    out_file = tmp_path / "s_dummy.custom_dummy.out"
+    _write_custom(out_file, [("S0R0", "9606")])
+    truth_gz = tmp_path / "map.tsv.gz"
+    with gzip_mod.open(truth_gz, "wt", encoding="utf-8") as handle:
+        handle.write("#anonymous_read_id\tgenome_id\ttax_id\tread_id\nS0R0/1\tg\t818\tr/1\n")
+    ann = tmp_path / "ann"
+    ingest_annotator(out_file, ann, tmp_path / "s.ingested", truth_table=str(truth_gz))
+    df = pd.read_csv(ann / "s.annotation.csv")
+    assert str(int(df.loc[0, "true"])) == "818"
+    assert not list(Path(tmp_path).glob("*.annotation.lock"))
+
+
 def test_sample_name_keeps_underscores(tmp_path, combiner):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"

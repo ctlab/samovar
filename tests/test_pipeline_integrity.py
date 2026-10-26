@@ -154,9 +154,15 @@ def _assert_core_outputs(out: Path) -> Path:
     assert r1, f"ISS did not write reads under {initial}"
     reports = out / "initial_reports"
     assert reports.is_dir()
-    assert list(reports.glob("*.csv")) or list(reports.glob("*.out"))
-    tables = list((out / "initial_annotations").glob("*.annotation.csv"))
-    assert tables, f"no combined tables under {out / 'initial_annotations'}"
+    products = (
+        list(reports.glob("*.csv"))
+        + list(reports.glob("*.out"))
+        + list(reports.glob("*.ingested"))
+    )
+    assert products, f"no annotator output under {reports}"
+    ann = out / "initial_annotations"
+    tables = list(ann.glob("*.annotation.csv")) or list(ann.glob("combined_annotation_table*.csv"))
+    assert tables, f"no annotation table under {ann}"
     return tables[0]
 
 
