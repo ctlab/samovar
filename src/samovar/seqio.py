@@ -661,8 +661,24 @@ def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike, *, validate_only: b
     dst = as_path(dst_dir).resolve()
     sources = list_r1_files(src, include_libraries=True)
     list_fastq_samples(dst)
-    if src == dst:
-        return 0
+    # External hybrids use the same canonical classifier input as generated hybrids.
+    groups = {}
+    for path in sources:
+        sample = sample_name_from_r1(path)
+        tail = _CAMISIM_TECH_TAIL.search(sample)
+        if tail and tail.group(1).lower() not in {"sequence_type", "read_type"}:
+            base = sample[:tail.start()]
+            kind = "long" if tail.group(1).lower() in {"ont", "nanosim3"} else "short"
+            groups.setdefault(base, {"short": [], "long": []})[kind].append(sample)
+    hybrids = {}
+    for base, libraries in groups.items():
+        if not libraries["short"] or not libraries["long"]:
+            continue
+        if find_fastq_mate(src, base) or find_fastq_mate(src, base + "_full"):
+            continue
+        if any(len(names) != 1 for names in libraries.values()):
+            raise ValueError(f"Ambiguous hybrid libraries for sample {base!r}")
+        hybrids[base] = libraries["short"] + libraries["long"]
     import filecmp
 
     filecmp.clear_cache()  # Copies must be rechecked even if file timestamps did not change.
@@ -694,6 +710,16 @@ def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike, *, validate_only: b
             target.symlink_to(src_file.resolve())
         except OSError:
             shutil.copy2(src_file, target)
+        n += 1
+    for base, libraries in hybrids.items():
+        canonical = dst / f"{base}_full.fastq"
+        if find_fastq_mate(dst, base + "_full"):
+            continue
+        parts = [
+            path for sample in libraries for mate in ("R1", "R2")
+            if (path := find_fastq_mate(dst, sample, mate)) is not None
+        ]
+        concat_fastq_files(parts, canonical)
         n += 1
     return n
 

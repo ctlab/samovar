@@ -25,9 +25,13 @@ def _hybrid(directory):
     return directory / "1_full_R1.fastq"
 
 
-def test_hybrid_generation_staging_qc_and_assembly(tmp_path, monkeypatch):
+@pytest.mark.parametrize("external", [False, True])
+def test_hybrid_generation_staging_qc_and_assembly(tmp_path, monkeypatch, external):
     source = tmp_path / "source"
     _hybrid(source)
+    if external:
+        (source / "1_full_R1.fastq").unlink()
+        (source / "1_ont_R1.fastq").rename(source / "1_ont.fastq")
     initial = tmp_path / "run" / "initial"
     assert link_or_copy_reads(source, initial) == 4
     trimmed = initial.with_name("initial_trimmed")
