@@ -53,15 +53,34 @@ def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def contract_column_names(columns) -> list:
-    """taxID / feat columns that the reprofiler treats as one feature set."""
-    names = []
+_TAX_TOOL = re.compile(r"taxid[_./]*([a-z][a-z0-9]*)", re.I)
+_NOT_A_TOOL = {"samovar", "true", "length", "sample", "read", "feat"}
+
+
+def comparable_contract_names(columns) -> list:
+    """Fold ``taxID_<tool>_<n>`` and ``feat_*_<n>`` to the names training uses.
+
+    ``taxID_kaiju_0`` and ``taxid_kaiju`` are one column. Two different tools
+    stay two columns.
+    """
+    out = []
+    seen = set()
     for col in columns:
         name = str(col)
         low = name.lower()
-        if low.startswith("taxid_") or name.startswith("feat_"):
-            names.append(name)
-    return names
+        if low.startswith("feat_"):
+            key = re.sub(r"_[0-9]+(?=(_|$))", "", name, count=1)
+        elif low.startswith("taxid"):
+            match = _TAX_TOOL.match(low)
+            if not match or match.group(1) in _NOT_A_TOOL:
+                continue
+            key = "taxid_" + match.group(1)
+        else:
+            continue
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
 
 
 def align_contract_columns(*frames: pd.DataFrame) -> list:
@@ -77,7 +96,7 @@ def align_contract_columns(*frames: pd.DataFrame) -> list:
     for frame in frames:
         if not isinstance(frame, pd.DataFrame):
             continue
-        for name in contract_column_names(frame.columns):
+        for name in comparable_contract_names(frame.columns):
             if name not in seen:
                 seen.add(name)
                 ordered.append(name)
@@ -86,7 +105,8 @@ def align_contract_columns(*frames: pd.DataFrame) -> list:
         if not isinstance(frame, pd.DataFrame):
             aligned.append(frame)
             continue
-        missing = [name for name in ordered if name not in frame.columns]
+        have = set(comparable_contract_names(frame.columns))
+        missing = [name for name in ordered if name not in have]
         if not missing:
             aligned.append(frame)
             continue

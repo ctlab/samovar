@@ -224,3 +224,45 @@ def test_prepare_reprofiler_flags(tmp_path, monkeypatch):
     script_text = Path(config.generate_pipeline(str(tmp_path / "out"))).read_text()
     assert "--reprofiler linwrap" in script_text
     assert "--ground-truth" in script_text
+
+
+def test_reprofile_ignores_tax_column_suffix(tmp_path):
+    import warnings
+
+    from samovar.annotation_io import align_contract_columns
+    from samovar.reprofilers import _align_ml_tables
+
+    regen = pd.DataFrame({"seq": ["r"], "taxid_kaiju": [9606], "true": [9606]})
+    initial = tmp_path / "initial"
+    initial.mkdir()
+    table = initial / "combined_annotation_table.csv"
+    pd.DataFrame({"seq": ["a"], "taxID_kaiju_0": [9606], "true": [9606]}).to_csv(table, index=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out, _ = _align_ml_tables(regen, None, initial)
+    assert not any("missing from the regenerated" in str(item.message) for item in caught)
+    assert list(out.columns) == ["seq", "taxid_kaiju", "true"]
+
+    left = pd.DataFrame({"taxID_kaiju_0": [1]})
+    right = pd.DataFrame({"taxid_kaiju": [2]})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        aligned = align_contract_columns(left, right)
+    assert not caught
+    assert list(aligned[0].columns) == ["taxID_kaiju_0"]
+    assert list(aligned[1].columns) == ["taxid_kaiju"]
+
+    feat_a = pd.DataFrame({"feat_kaiju_0_AA": ["x"]})
+    feat_b = pd.DataFrame({"feat_kaiju_1_AA": ["y"]})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        aligned = align_contract_columns(feat_a, feat_b)
+    assert not caught
+    assert list(aligned[0].columns) == ["feat_kaiju_0_AA"]
+
+    pd.DataFrame({"seq": ["a"], "taxID_kraken2_0": [562], "true": [562]}).to_csv(table, index=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out, _ = _align_ml_tables(regen, None, initial)
+    assert any("taxid_kraken2" in str(item.message) for item in caught)
+    assert "taxid_kraken2" in out.columns

@@ -656,7 +656,7 @@ def _align_ml_tables(regenerated, initial, initial_dir):
     """Union tax/feature columns before train and apply."""
     import warnings
 
-    from samovar.annotation_io import align_contract_columns, contract_column_names
+    from samovar.annotation_io import align_contract_columns, comparable_contract_names
 
     frames = [regenerated if isinstance(regenerated, pd.DataFrame) else pd.DataFrame()]
     keys = []
@@ -669,7 +669,7 @@ def _align_ml_tables(regenerated, initial, initial_dir):
         root = Path(initial_dir)
         if root.is_dir():
             seen = []
-            known = set(contract_column_names(frames[0].columns))
+            known = set(comparable_contract_names(frames[0].columns))
             paths = list(iter_annotation_csvs(root))
             if not paths:
                 paths = sorted(root.glob("combined_annotation_table*.csv"))
@@ -678,7 +678,7 @@ def _align_ml_tables(regenerated, initial, initial_dir):
                     header = pd.read_csv(path, nrows=0)
                 except Exception:
                     continue
-                for name in contract_column_names(header.columns):
+                for name in comparable_contract_names(header.columns):
                     if name not in known:
                         known.add(name)
                         seen.append(name)
