@@ -1,4 +1,5 @@
-// External sort-merge of annotator *.out tables into per-sample CSVs.
+// External sort-merge of annotator *.out tables into per-sample CSVs,
+// plus streaming --restore and --finalize of the combined annotation table.
 // Streams seq/taxID/features only so Kraken k-mer LCA maps never sit in RAM.
 
 #include <algorithm>
@@ -9,14 +10,18 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <queue>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -358,6 +363,10 @@ struct Options {
     std::string base_csv;
     std::string out_csv;
     std::string retrue_csv;
+    std::string restore_csv;
+    std::string restore_sample;
+    std::string finalize_dir;
+    bool keep_parts = false;
 };
 
 std::vector<std::string> split_underscore(const std::string& s) {
@@ -1577,11 +1586,370 @@ int run_retrue(const Options& opt) {
     return 0;
 }
 
+void write_csv_fields(std::ostream& out, const std::vector<std::string>& fields) {
+    for (size_t i = 0; i < fields.size(); ++i) {
+        if (i) {
+            out.put(',');
+        }
+        const std::string& s = fields[i];
+        if (s.find_first_of(",\"\n\r") == std::string::npos) {
+            out.write(s.data(), static_cast<std::streamsize>(s.size()));
+            continue;
+        }
+        out.put('"');
+        for (char c : s) {
+            if (c == '"') {
+                out.put('"');
+            }
+            out.put(c);
+        }
+        out.put('"');
+    }
+    out.put('\n');
+}
+
+void arm_buffer(std::ios& stream, std::vector<char>& buf) {
+    buf.resize(kIoBuf);
+    stream.rdbuf()->pubsetbuf(buf.data(), buf.size());
+}
+
+int named_field(const std::vector<std::string>& header, const std::string& name) {
+    for (size_t i = 0; i < header.size(); ++i) {
+        if (header[i] == name) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+std::string field_at(const std::vector<std::string>& fields, int index) {
+    if (index < 0 || static_cast<size_t>(index) >= fields.size()) {
+        return "";
+    }
+    return fields[static_cast<size_t>(index)];
+}
+
+std::vector<std::string> read_csv_header(const fs::path& path) {
+    std::ifstream in(path);
+    std::string header;
+    if (!std::getline(in, header)) {
+        throw std::runtime_error("Empty annotation CSV: " + path.string());
+    }
+    header = trim_cr(header);
+    if (header.empty()) {
+        throw std::runtime_error("Empty annotation CSV: " + path.string());
+    }
+    return split_csv_line(header);
+}
+
+std::vector<SavedTool> tools_from_header(const std::vector<std::string>& header) {
+    static const std::regex column_re("^(taxID|feat)_(.+)_(\\d+)(?:_(.*))?$");
+    struct Spec {
+        std::vector<std::string> tax_ids;
+        std::vector<std::string> feat_ids;
+    };
+    std::map<std::pair<int, std::string>, Spec> groups;
+    for (const auto& name : header) {
+        if (name == "seq" || name == "sample" || name == "length" || name == "true" ||
+            name == "read_type") {
+            continue;
+        }
+        std::smatch match;
+        if (!std::regex_match(name, match, column_re)) {
+            continue;
+        }
+        auto& spec = groups[{std::stoi(match[3].str()), match[2].str()}];
+        std::string ident = match.size() > 4 && match[4].matched ? match[4].str() : "";
+        if (match[1].str() == "taxID") {
+            spec.tax_ids.push_back(ident);
+        } else {
+            spec.feat_ids.push_back(ident);
+        }
+    }
+    std::vector<SavedTool> tools;
+    size_t position = 0;
+    for (const auto& item : groups) {
+        SavedTool tool;
+        std::ostringstream filename;
+        filename << std::setw(6) << std::setfill('0') << position << "_" << item.first.second
+                 << ".out";
+        tool.filename = filename.str();
+        tool.tool = item.first.second;
+        tool.tax_ids = item.second.tax_ids;
+        tool.feat_ids = item.second.feat_ids;
+        tools.push_back(std::move(tool));
+        ++position;
+    }
+    return tools;
+}
+
+std::vector<std::string> restore_columns(const std::vector<SavedTool>& tools) {
+    std::vector<std::string> columns = {"seq"};
+    for (size_t index = 0; index < tools.size(); ++index) {
+        for (const auto& ident : tools[index].tax_ids) {
+            columns.push_back(combined_col("taxID", tools[index].tool, index, ident));
+        }
+        for (const auto& ident : tools[index].feat_ids) {
+            columns.push_back(combined_col("feat", tools[index].tool, index, ident));
+        }
+    }
+    columns.push_back("length");
+    columns.push_back("true");
+    columns.push_back("read_type");
+    return columns;
+}
+
+bool combined_has_sample(const fs::path& combined, const std::string& sample) {
+    std::ifstream in(combined);
+    std::string header;
+    if (!std::getline(in, header)) {
+        return false;
+    }
+    auto names = split_csv_line(trim_cr(header));
+    int sample_col = named_field(names, "sample");
+    if (sample_col < 0) {
+        return true;
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        line = trim_cr(line);
+        if (line.empty()) {
+            continue;
+        }
+        if (field_at(split_csv_line(line), sample_col) == sample) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int run_restore(const Options& opt) {
+    fs::path csv(opt.restore_csv);
+    if (fs::exists(csv)) {
+        return 0;
+    }
+    fs::path combined = csv.parent_path() / "combined_annotation_table.csv";
+    if (!fs::exists(combined)) {
+        return 0;
+    }
+    try {
+        auto header = read_csv_header(combined);
+        bool wrote_sidecar = false;
+        std::vector<SavedTool> tools = read_sidecar(csv);
+        if (tools.empty()) {
+            tools = tools_from_header(header);
+            if (tools.empty()) {
+                return combined_has_sample(combined, opt.restore_sample) ? 3 : 0;
+            }
+            write_sidecar(csv, tools);
+            wrote_sidecar = true;
+        }
+        auto columns = restore_columns(tools);
+        std::vector<int> indexes;
+        indexes.reserve(columns.size());
+        for (const auto& name : columns) {
+            indexes.push_back(named_field(header, name));
+        }
+        int sample_col = named_field(header, "sample");
+        fs::path tmp = fs::path(csv.string() + ".tmp");
+        std::vector<char> obuf;
+        std::ofstream out;
+        arm_buffer(out, obuf);
+        out.open(tmp, std::ios::trunc);
+        write_csv_fields(out, columns);
+        std::vector<char> ibuf;
+        std::ifstream in;
+        arm_buffer(in, ibuf);
+        in.open(combined);
+        std::string skip;
+        std::getline(in, skip);
+        std::string line;
+        size_t rows = 0;
+        while (std::getline(in, line)) {
+            line = trim_cr(line);
+            if (line.empty()) {
+                continue;
+            }
+            auto fields = split_csv_line(line);
+            if (sample_col >= 0) {
+                std::string value = field_at(fields, sample_col);
+                if (!value.empty() && value != opt.restore_sample) {
+                    continue;
+                }
+            }
+            std::vector<std::string> picked;
+            picked.reserve(indexes.size());
+            for (int index : indexes) {
+                picked.push_back(field_at(fields, index));
+            }
+            write_csv_fields(out, picked);
+            ++rows;
+        }
+        out.close();
+        if (!rows) {
+            fs::remove(tmp);
+            if (wrote_sidecar) {
+                fs::remove(tools_sidecar(csv));
+            }
+            return 0;
+        }
+        fs::rename(tmp, csv);
+    } catch (const std::exception& ex) {
+        std::cerr << "combine_annotations restore failed: " << ex.what() << "\n";
+        return 1;
+    }
+    return 0;
+}
+
+int run_finalize(const Options& opt) {
+    fs::path dir(opt.finalize_dir);
+    fs::path dest = dir / "combined_annotation_table.csv";
+    std::vector<fs::path> parts;
+    if (fs::exists(dir)) {
+        for (const auto& ent : fs::directory_iterator(dir)) {
+            if (!ent.is_regular_file()) {
+                continue;
+            }
+            std::string name = ent.path().filename().string();
+            const std::string suffix = ".annotation.csv";
+            if (name.size() >= suffix.size() &&
+                name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                parts.push_back(ent.path());
+            }
+        }
+    }
+    std::sort(parts.begin(), parts.end());
+    if (parts.empty()) {
+        if (fs::exists(dest)) {
+            return 0;
+        }
+        fs::create_directories(dir);
+        std::ofstream out(dest, std::ios::trunc);
+        out << "seq,length,true,read_type,sample\n";
+        return out ? 0 : 1;
+    }
+    try {
+        if (!opt.truth_table.empty()) {
+            for (const auto& path : parts) {
+                Options one = opt;
+                one.retrue_csv = path.string();
+                int rc = run_retrue(one);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+        }
+        std::vector<std::vector<std::string>> headers;
+        headers.reserve(parts.size());
+        for (const auto& path : parts) {
+            headers.push_back(read_csv_header(path));
+        }
+        std::vector<std::string> columns = {"seq"};
+        std::unordered_set<std::string> seen = {"seq", "sample"};
+        auto take = [&](const std::vector<std::string>& header) {
+            for (const auto& name : header) {
+                if (name == "sample" || seen.count(name)) {
+                    continue;
+                }
+                columns.push_back(name);
+                seen.insert(name);
+            }
+        };
+        for (const auto& header : headers) {
+            take(header);
+        }
+        std::unordered_set<std::string> fresh;
+        for (const auto& path : parts) {
+            std::string name = path.filename().string();
+            fresh.insert(name.substr(0, name.size() - std::string(".annotation.csv").size()));
+        }
+        if (fs::exists(dest)) {
+            take(read_csv_header(dest));
+        }
+        if (std::find(columns.begin(), columns.end(), "sample") == columns.end()) {
+            columns.push_back("sample");
+        }
+        fs::path tmp = fs::path(dest.string() + ".tmp");
+        std::vector<char> obuf;
+        std::ofstream out;
+        arm_buffer(out, obuf);
+        out.open(tmp, std::ios::trunc);
+        write_csv_fields(out, columns);
+        auto write_rows = [&](const fs::path& path, const std::vector<std::string>& header,
+                              const std::string& forced_sample, bool skip_fresh) {
+            std::vector<int> indexes;
+            indexes.reserve(columns.size());
+            for (const auto& name : columns) {
+                if (name == "sample" && !forced_sample.empty()) {
+                    indexes.push_back(-2);
+                } else {
+                    indexes.push_back(named_field(header, name));
+                }
+            }
+            int sample_col = named_field(header, "sample");
+            std::vector<char> ibuf;
+            std::ifstream in;
+            arm_buffer(in, ibuf);
+            in.open(path);
+            std::string skip;
+            std::getline(in, skip);
+            std::string line;
+            while (std::getline(in, line)) {
+                line = trim_cr(line);
+                if (line.empty()) {
+                    continue;
+                }
+                auto fields = split_csv_line(line);
+                if (skip_fresh && sample_col >= 0 && fresh.count(field_at(fields, sample_col))) {
+                    continue;
+                }
+                std::vector<std::string> picked;
+                picked.reserve(indexes.size());
+                for (int index : indexes) {
+                    if (index == -2) {
+                        picked.push_back(forced_sample);
+                    } else {
+                        picked.push_back(field_at(fields, index));
+                    }
+                }
+                write_csv_fields(out, picked);
+            }
+        };
+        for (size_t i = 0; i < parts.size(); ++i) {
+            std::string name = parts[i].filename().string();
+            std::string sample = name.substr(0, name.size() - std::string(".annotation.csv").size());
+            write_rows(parts[i], headers[i], sample, false);
+        }
+        if (fs::exists(dest)) {
+            write_rows(dest, read_csv_header(dest), "", true);
+        }
+        out.close();
+        if (!out) {
+            throw std::runtime_error("Cannot write " + tmp.string());
+        }
+        fs::rename(tmp, dest);
+        if (!opt.keep_parts) {
+            for (const auto& path : parts) {
+                fs::remove(path);
+                fs::path lock = path;
+                lock.replace_extension(".lock");
+                fs::remove(lock);
+            }
+        }
+    } catch (const std::exception& ex) {
+        std::cerr << "combine_annotations finalize failed: " << ex.what() << "\n";
+        return 1;
+    }
+    return 0;
+}
+
 void usage() {
     std::cerr
         << "Usage: samovar_combine_annotations -i DIR -o DIR [-s N] [--chunk-rows N] [--tmp DIR] [--truth-table FILE]\n"
         << "       samovar_combine_annotations --add FILE --name NAME --out CSV [--base CSV] [--truth-table FILE]\n"
         << "       samovar_combine_annotations --retrue CSV --truth-table FILE\n"
+        << "       samovar_combine_annotations --restore CSV --sample NAME\n"
+        << "       samovar_combine_annotations --finalize DIR [--truth-table FILE] [--keep-parts]\n"
         << "  --truth-table  CAMI-style or seq\\ttaxid map used for the true column (else parse genome headers)\n"
         << "  --add          Append one annotator output to a per-sample annotation CSV\n";
 }
@@ -1621,6 +1989,14 @@ bool parse_args(int argc, char** argv, Options* opt) {
             opt->out_csv = need(a.c_str());
         } else if (a == "--retrue") {
             opt->retrue_csv = need(a.c_str());
+        } else if (a == "--restore") {
+            opt->restore_csv = need(a.c_str());
+        } else if (a == "--sample") {
+            opt->restore_sample = need(a.c_str());
+        } else if (a == "--finalize") {
+            opt->finalize_dir = need(a.c_str());
+        } else if (a == "--keep-parts") {
+            opt->keep_parts = true;
         } else if (a == "--keep-tmp") {
             opt->keep_tmp = true;
         } else if (a == "-h" || a == "--help") {
@@ -1631,6 +2007,12 @@ bool parse_args(int argc, char** argv, Options* opt) {
             usage();
             return false;
         }
+    }
+    if (!opt->restore_csv.empty() || !opt->restore_sample.empty()) {
+        return !opt->restore_csv.empty() && !opt->restore_sample.empty();
+    }
+    if (!opt->finalize_dir.empty()) {
+        return true;
     }
     if (!opt->retrue_csv.empty()) {
         return !opt->truth_table.empty();
@@ -1648,6 +2030,12 @@ int main(int argc, char** argv) {
     if (!parse_args(argc, argv, &opt)) {
         usage();
         return 2;
+    }
+    if (!opt.restore_csv.empty()) {
+        return run_restore(opt);
+    }
+    if (!opt.finalize_dir.empty()) {
+        return run_finalize(opt);
     }
     if (!opt.retrue_csv.empty()) {
         return run_retrue(opt);
