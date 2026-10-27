@@ -142,15 +142,39 @@ def job_mem_mb(threads: int, cores: int, limit_mb: Optional[int] = None) -> int:
 def annotator_mem_mb(tool: str, threads: int, cores: int, limit_mb: Optional[int] = None) -> int:
     """Memory one annotator job may take.
 
-    Kraken2, KrakenUniq, and MetaX hold the database in RAM, so the job asks
-    for the whole ceiling and runs alone. Other tools keep a thread share and
-    can run side by side.
+    Kraken2, KrakenUniq, MetaX, and Flye take the whole ceiling and run alone.
+    Other tools keep a thread share and can run side by side.
     """
     from samovar.tool_spec import heavy_db_tool
 
     if heavy_db_tool(tool):
         return memory_limit_mb(limit_mb)
     return job_mem_mb(threads, cores, limit_mb)
+
+
+def translated_mem_flag(
+    name: str,
+    threads: int,
+    *,
+    cores: Optional[int] = None,
+    limit_mb: Optional[int] = None,
+    record=None,
+    existing: str = "",
+) -> str:
+    """Memory CLI token for ``name``, empty when the tool has no mapping or already set it."""
+    from samovar.tool_spec import mem_cli_token
+
+    width = int(cores or 0)
+    if width <= 0:
+        width = int(os.environ.get("SAMOVAR_CORES") or 0) or max(int(threads or 1), 1)
+    ceiling = None if limit_mb in (None, 0) else int(limit_mb)
+    token = mem_cli_token(name, annotator_mem_mb(name, threads, width, ceiling), record)
+    if not token:
+        return ""
+    dest = token.split()[0]
+    if dest and dest in str(existing or "").split():
+        return ""
+    return token
 
 
 def parallel_jobs(

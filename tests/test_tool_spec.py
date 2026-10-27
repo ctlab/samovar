@@ -8,6 +8,9 @@ from samovar.main_config import disk_payload, migrate_legacy, parse_tool_entry
 from samovar.tool_spec import (
     apply_translated_flags,
     check_external_flags,
+    heavy_db_tool,
+    mem_cli_token,
+    memory_tool_name,
     parse_flags_translate,
     parse_known_with_custom,
     parse_tool_record,
@@ -132,6 +135,21 @@ def test_check_external_flags_allows_missing_input(tmp_path):
 def test_check_external_flags_skips_missing_binary():
     check_external_flags("/no/such/samovar-tool", "--not-a-real-flag")
     check_external_flags("/path/to/kraken2", "--minK 2 --maxK 10")
+
+
+def test_mem_cli_token_converts_units_and_flye_is_heavy():
+    assert mem_cli_token("megahit", 16000) == f"-m {16000 * 1024 * 1024}"
+    assert mem_cli_token("spades", 16000) == "-m 16"
+    assert mem_cli_token("spades", 1) == "-m 1"
+    assert mem_cli_token("flye", 32000) == "--asm-coverage 40"
+    assert mem_cli_token("metaflye", 32000) == "--asm-coverage 40"
+    assert mem_cli_token("kaiju", 32000) == ""
+    assert mem_cli_token("megahit", 0) == ""
+    assert heavy_db_tool("flye")
+    assert heavy_db_tool("metaflye")
+    assert not heavy_db_tool("megahit")
+    assert memory_tool_name("assembly", "--assembler flye --binner anvio") == "flye"
+    assert memory_tool_name("assembly", "--assembler megahit") == "assembly"
 
 
 def test_installed_kraken2_rejects_unknown_flag():

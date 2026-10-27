@@ -88,6 +88,35 @@ def collect_bibtex_args(
     return inline, files
 
 
+def _flags_with_import_mem(
+    name: str,
+    flags: str,
+    mem_mb: Optional[int],
+    flags_translate: str = "",
+) -> str:
+    """Append the tool's memory flag when ``--mem`` was given at import.
+
+    The spelling comes from flags-translate (the default table or
+    ``--flags-translate``). A tool with no ``--mem_mb`` entry needs that map.
+    """
+    if mem_mb in (None, 0):
+        return flags
+    from samovar.tool_spec import mem_cli_token
+
+    record = {"flags-translate": flags_translate} if str(flags_translate or "").strip() else None
+    token = mem_cli_token(name, mem_mb, record)
+    if not token:
+        raise ValueError(
+            f"{name} has no --mem_mb translation. "
+            'Pass --flags-translate "--mem_mb:-m@mb" '
+            "(units: @bytes, @gb, @mb, or a constant such as --asm-coverage@40)."
+        )
+    dest = token.split()[0]
+    if dest in flags.split():
+        return flags
+    return f"{flags} {token}".strip()
+
+
 def import_tool(
     *,
     name: str,
@@ -99,6 +128,7 @@ def import_tool(
     inputs: str = "",
     lazy_install: str = "",
     flags_translate: str = "",
+    mem_mb: Optional[int] = None,
     version: str = "",
     also_repo_build: bool = True,
     bibtex: Optional[list] = None,
@@ -126,12 +156,15 @@ def import_tool(
 
         citation_refs = register_tool_citations(name, inline=inline, files=files)
     cfg = load_config()
+    stored_flags = _flags_with_import_mem(
+        name, str(flags or "").strip(), mem_mb, flags_translate
+    )
     kwargs = dict(
         path=path,
         env=env,
         workflow=workflow,
         group=group,
-        flags=str(flags or "").strip(),
+        flags=stored_flags,
         lazy_install=lazy or None,
         flags_translate=flags_translate or None,
         version=str(version or "").strip() or None,
@@ -373,6 +406,15 @@ def build_parser() -> argparse.ArgumentParser:
             "merged into the annotator's extra at prepare (e.g. --memory-mapping)."
         )
     )
+    from samovar.memory import add_mem_argument
+
+    add_mem_argument(parser)
+    parser._option_string_actions["--mem"].help = (
+        "Memory budget stored on this tool through flags-translate "
+        "(MEGAHIT -m bytes, SPAdes -m GB, Flye --asm-coverage 40). "
+        "A bare number is MiB; 16G is accepted. "
+        "Other tools need --flags-translate \"--mem_mb:<their flag>\"."
+    )
     parser.add_argument(
         "--flags-translate",
         dest="flags_translate",
@@ -484,7 +526,12 @@ def main(argv: Optional[list] = None) -> int:
                 name=args.name,
                 tool=str(getattr(args, "tool", "") or ""),
                 exec_path=args.exec_path,
-                flags=args.flags,
+                flags=_flags_with_import_mem(
+                    str(getattr(args, "tool", "") or args.name),
+                    args.flags,
+                    getattr(args, "mem_mb", None),
+                    str(getattr(args, "flags_translate", "") or ""),
+                ),
                 lazy_download=lazy,
                 version=args.version,
                 url=str(getattr(args, "url", "") or ""),
@@ -523,6 +570,7 @@ def main(argv: Optional[list] = None) -> int:
             exec_name=args.exec_name,
             exec_path=dest,
             flags=args.flags,
+            mem_mb=getattr(args, "mem_mb", None),
             inputs=args.inputs,
             lazy_install=lazy,
             flags_translate=args.flags_translate,

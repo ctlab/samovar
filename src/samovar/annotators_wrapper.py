@@ -625,6 +625,17 @@ class CustomAnnotator(BaseAnnotator):
 
         rec = lookup_tool_record(load_config(), self.tool_name)
         tflag = threads_cli_token(self.tool_name, self.threads, rec)
+        from samovar.memory import translated_mem_flag
+
+        raw_limit = self.config.get("mem_mb")
+        mflag = translated_mem_flag(
+            self.tool_name,
+            self.threads,
+            cores=int(self.config.get("cores") or 0) or None,
+            limit_mb=int(raw_limit) if raw_limit else None,
+            record=rec,
+            existing=extra,
+        )
         use_router = _cmd_is_custom_wrapper(self.cmd) or (
             str(self.tool_name).lower() in CUSTOM_SH_ROUTER_TOOLS
         )
@@ -638,6 +649,7 @@ class CustomAnnotator(BaseAnnotator):
                 f"-o {shlex.quote(str(out_file))} "
                 f"-p {self.tool_name} "
                 f"{tflag} "
+                f"{mflag} "
                 f"{extra}"
             )
         first = command_argv(self.cmd)[0]
@@ -653,6 +665,7 @@ class CustomAnnotator(BaseAnnotator):
                 f"-d {shlex.quote(str(self.db_path))} "
                 f"-o {shlex.quote(str(out_file))} "
                 f"{tflag} "
+                f"{mflag} "
                 f"{extra}"
             )
         cmd = self.default_cmd
@@ -664,6 +677,7 @@ class CustomAnnotator(BaseAnnotator):
             f"-o {shlex.quote(str(out_file))} "
             f"-p {self.tool_name} "
             f"{tflag} "
+            f"{mflag} "
             f"{extra}"
         )
 

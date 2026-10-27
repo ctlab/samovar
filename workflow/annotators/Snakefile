@@ -4,7 +4,7 @@ import re
 
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
 from samovar.memory import annotator_mem_mb
-from samovar.tool_spec import annotator_priority
+from samovar.tool_spec import annotator_priority, memory_tool_name
 from samovar.seqio import find_fastq_mate, list_fastq_samples
 
 try:
@@ -64,8 +64,13 @@ MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) o
 
 def rule_mem(wildcards):
     tool = TOOL_TYPES.get(wildcards.run_name, "")
+    ann = ANNOTATORS.get(wildcards.run_name)
+    extra = getattr(ann, "extra", "") or ""
     return annotator_mem_mb(
-        tool, THREADS.get(wildcards.run_name, 1), MACHINE_CORES, MEM_LIMIT
+        memory_tool_name(tool, extra),
+        THREADS.get(wildcards.run_name, 1),
+        MACHINE_CORES,
+        MEM_LIMIT,
     )
 
 

@@ -91,9 +91,10 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "custom": {"--threads": "-t", "--cores": "-t"},
     "assembly": {"--threads": "-t", "--cores": "-t"},
     "assembly_profiling": {"--threads": "-t", "--cores": "-t"},
-    "megahit": {"--threads": "-t", "--cores": "-t"},
-    "flye": {"--threads": "-t", "--cores": "-t"},
-    "metaflye": {"--threads": "-t", "--cores": "-t"},
+    "megahit": {"--threads": "-t", "--cores": "-t", "--mem_mb": "-m@bytes"},
+    "spades": {"--threads": "-t", "--cores": "-t", "--mem_mb": "-m@gb"},
+    "flye": {"--threads": "-t", "--cores": "-t", "--mem_mb": "--asm-coverage@40"},
+    "metaflye": {"--threads": "-t", "--cores": "-t", "--mem_mb": "--asm-coverage@40"},
     "fastp": {"--threads": "--thread", "--cores": "--thread"},
     "cutadapt": {"--threads": "--cores", "--cores": "--cores"},
     "trimmomatic": {"--threads": "-threads", "--cores": "-threads"},
@@ -127,7 +128,9 @@ DEFAULT_SCHEDULER_CAP = 8
 
 # RSS is the database. One of these jobs takes the whole memory ceiling, so
 # Kraken2 and MetaX cannot run beside each other.
-HEAVY_DB_TOOLS = frozenset({"kraken2", "kraken", "krakenuniq", "metax"})
+HEAVY_DB_TOOLS = frozenset({
+    "kraken2", "kraken", "krakenuniq", "metax", "flye", "metaflye",
+})
 
 # Higher runs first. Kaiju (including kaiju-multi) finishes the cohort before a
 # database-sized job occupies the machine. Heavy families then go one at a time.
@@ -148,6 +151,24 @@ def _tool_key(tool: str) -> str:
 
 def heavy_db_tool(tool: str) -> bool:
     return _tool_key(tool) in HEAVY_DB_TOOLS
+
+
+def memory_tool_name(tool: str, extra: str = "") -> str:
+    """Tool key used for the memory budget.
+
+    An assembly job that runs Flye takes Flye's ceiling. MEGAHIT and SPAdes
+    stay on the assembly thread share.
+    """
+    key = _tool_key(tool)
+    if key not in {"assembly", "assembly_profiling"}:
+        return key
+    parts = str(extra or "").split()
+    if "--assembler" not in parts:
+        return key
+    assembler = _tool_key(parts[parts.index("--assembler") + 1]) if parts.index("--assembler") + 1 < len(parts) else ""
+    if assembler in {"flye", "metaflye", "meta_flye"}:
+        return "flye"
+    return key
 
 
 def annotator_priority(tool: str) -> int:
@@ -456,20 +477,53 @@ def custom_flags_from_cfg(cfg: Optional[Mapping[str, Any]] = None) -> List[str]:
     return out
 
 
+def _scaled_flag_value(value: Any, unit: str) -> str:
+    """Turn a MiB budget into the unit stored after ``@`` in flags-translate."""
+    if unit.isdigit():
+        return unit
+    mb = max(0, int(float(value)))
+    if unit == "bytes":
+        return str(mb * 1024 * 1024)
+    if unit == "gb":
+        return str(max(1, (mb + 1023) // 1024))
+    if unit == "mb":
+        return str(max(1, mb))
+    return str(value)
+
+
 def translated_argv(canonical_flag: str, value: Any, mapping: Mapping[str, str]) -> str:
+    """One ``dest value`` token. ``-m@bytes`` / ``-m@gb`` convert MiB; ``--flag@40`` is constant."""
     dest = mapping.get(_norm_flag(canonical_flag)) or mapping.get(str(canonical_flag).strip())
     if not dest:
         return ""
+    unit = ""
+    if "@" in dest:
+        dest, unit = dest.rsplit("@", 1)
     if value is True or value in (None, ""):
         return str(dest)
     if value is False:
         return ""
+    if unit:
+        value = _scaled_flag_value(value, unit)
     return f"{dest} {value}".strip()
 
 
 def threads_cli_token(name: str, threads: Any, record: Optional[Mapping[str, Any]] = None) -> str:
     mapping = flags_translate_for(name, record)
     return translated_argv("--threads", threads, mapping)
+
+
+def mem_cli_token(name: str, mem_mb: Any, record: Optional[Mapping[str, Any]] = None) -> str:
+    """Memory flag for ``name`` from a MiB budget, or empty when unmapped or unset."""
+    if mem_mb in (None, "", False):
+        return ""
+    try:
+        if int(float(mem_mb)) <= 0:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    mapping = flags_translate_for(name, record)
+    return translated_argv("--mem_mb", mem_mb, mapping)
 
 
 def apply_translated_flags(

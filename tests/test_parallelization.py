@@ -18,6 +18,8 @@ def test_heavy_databases_take_the_whole_memory_ceiling():
     assert annotator_mem_mb("kraken2", 16, cores, limit) == limit
     assert annotator_mem_mb("krakenuniq", 16, cores, limit) == limit
     assert annotator_mem_mb("metax", 4, cores, limit) == limit
+    assert annotator_mem_mb("flye", 4, cores, limit) == limit
+    assert annotator_mem_mb("assembly", 16, cores, limit) < limit
     kaiju = annotator_mem_mb("kaiju", 8, cores, limit)
     assert kaiju == job_mem_mb(8, cores, limit)
     assert kaiju < limit
@@ -122,6 +124,46 @@ def test_megahit_command_uses_the_stage_cap(tmp_path, monkeypatch):
     run_megahit(str(r1), "", str(dest), threads=200)
     cmd = calls[0]
     assert cmd[cmd.index("-t") + 1] == "16"
+
+
+def test_assembler_memory_uses_the_job_budget(tmp_path, monkeypatch):
+    from samovar.assembly_profiling import run_megahit, run_metaflye, run_spades
+
+    monkeypatch.setenv("SAMOVAR_MEM_MB", "32000")
+    monkeypatch.setenv("SAMOVAR_CORES", "32")
+    cfg = tmp_path / "empty.json"
+    cfg.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    calls = []
+    monkeypatch.setattr(
+        "samovar.assembly_profiling.which_tool", lambda *args, **kwargs: args[0]
+    )
+    monkeypatch.setattr(
+        "samovar.assembly_profiling._run", lambda cmd, **kwargs: calls.append(list(cmd))
+    )
+    r1 = tmp_path / "sample_R1.fastq"
+    r1.write_text("@r0\nACGT\n+\nIIII\n", encoding="utf-8")
+    run_megahit(str(r1), "", str(tmp_path / "mh.fa"), threads=16)
+    run_spades(str(r1), "", "", str(tmp_path / "sp.fa"), threads=16)
+    run_metaflye(str(r1), "", str(tmp_path / "fl.fa"), threads=16, extra=["-m", "9"])
+    megahit, spades, flye = calls
+    assert megahit[megahit.index("-m") + 1] == str(16000 * 1024 * 1024)
+    assert spades[spades.index("-m") + 1] == "16"
+    assert flye[flye.index("--asm-coverage") + 1] == "40"
+    assert flye.count("-m") == 1
+    assert flye[flye.index("-m") + 1] == "9"
+    run_megahit(str(r1), "", str(tmp_path / "mh2.fa"), threads=16, extra=["-m", "5"])
+    kept = calls[-1]
+    assert kept.count("-m") == 1
+    assert kept[kept.index("-m") + 1] == "5"
+    cfg.write_text(
+        '{"tools":{"megahit":{"flags":"-m 9","type":"assembler","exec":{"path":"megahit"}}}}',
+        encoding="utf-8",
+    )
+    run_megahit(str(r1), "", str(tmp_path / "mh3.fa"), threads=16)
+    imported = calls[-1]
+    assert imported.count("-m") == 1
+    assert imported[imported.index("-m") + 1] == "9"
 
 
 def test_prodigal_runs_genomes_together(tmp_path, monkeypatch):

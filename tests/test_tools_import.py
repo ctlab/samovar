@@ -352,6 +352,53 @@ def test_import_flags_translate_and_lazy_install(tmp_path, monkeypatch):
     assert rec["type"] == "table_reads_generator"
 
 
+def test_import_mem_flag_uses_flags_translate(tmp_path, monkeypatch):
+    from samovar.tools_import import build_parser
+
+    binary = tmp_path / "megahit"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    other = tmp_path / "mytool"
+    other.write_text("#!/bin/sh\nexit 0\n")
+    other.chmod(0o755)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    parsed = build_parser().parse_args(
+        ["-n", "megahit", "-t", "assembler", "--exec-path", str(binary), "--mem", "16G"]
+    )
+    assert parsed.mem_mb == 16384
+    import_tool(
+        name="megahit",
+        tool_type="assembler",
+        exec_path=str(binary),
+        mem_mb=parsed.mem_mb,
+        also_repo_build=False,
+    )
+    rec = json.loads(cfg.read_text())["tools"]
+    stored = next(iter(rec.values()))
+    assert f"-m {16384 * 1024 * 1024}" in stored["flags"]
+    with pytest.raises(ValueError, match="no --mem_mb"):
+        import_tool(
+            name="mytool",
+            tool_type="annotator",
+            exec_path=str(other),
+            mem_mb=2048,
+            also_repo_build=False,
+        )
+    import_tool(
+        name="mytool",
+        tool_type="annotator",
+        exec_path=str(other),
+        mem_mb=2048,
+        flags_translate="--mem_mb:--memory@mb",
+        also_repo_build=False,
+    )
+    rec = json.loads(cfg.read_text())["tools"]
+    mytool = next(value for key, value in rec.items() if key.startswith("mytool"))
+    assert "--memory 2048" in mytool["flags"]
+
+
 def test_import_pytest_blocks_bad_table_tool(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))

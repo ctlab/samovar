@@ -387,6 +387,23 @@ def _job_threads(stage: str, threads: int) -> int:
     return assembly_stage_threads(stage, threads)
 
 
+def _mem_argv(name: str, threads: int, existing: Sequence[str]) -> List[str]:
+    """``-m`` / ``--asm-coverage`` from flags-translate, skipped when already set."""
+    from samovar.memory import translated_mem_flag
+
+    token = translated_mem_flag(
+        name, threads, existing=" ".join(str(x) for x in (existing or []))
+    )
+    return shlex.split(token) if token else []
+
+
+def _imported_tool_flags(name: str) -> List[str]:
+    """Flags stored by ``samovar tools import --flags`` / ``--mem``."""
+    from samovar.paths import load_config
+
+    return shlex.split(imported_flags_for_names(iter_tools(load_config()), name))
+
+
 def run_megahit(
     r1: str,
     r2: str = "",
@@ -402,11 +419,13 @@ def run_megahit(
     if work.exists():
         shutil.rmtree(work)
     cmd = [which_tool("megahit", exe), "-t", str(int(threads)), "-o", str(work), "-f"]
+    stage_flags = _imported_tool_flags("megahit") + [str(x) for x in (extra or [])]
+    cmd.extend(_mem_argv("megahit", threads, stage_flags))
     if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size > 0:
         cmd.extend(["-1", str(r1), "-2", str(r2)])
     else:
         cmd.extend(["-r", str(r1)])
-    cmd.extend(str(x) for x in (extra or []))
+    cmd.extend(stage_flags)
     _run(cmd)
     contigs = work / "final.contigs.fa"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -479,6 +498,7 @@ def run_metaflye(
     read_mode = next(iter(selected_modes), "--nano-raw")
     extra_args = [arg for arg in extra_args if arg not in read_modes]
     cmd = [which_tool("flye", exe), "--meta", "-o", str(work), "-t", str(int(threads))]
+    cmd.extend(_mem_argv("flye", threads, extra_args))
     cmd.extend(extra_args)
     # Flye's read-mode option takes the following filenames (nargs='+').
     cmd.append(read_mode)
@@ -520,13 +540,15 @@ def run_spades(r1, r2, ont, dest, threads=1, extra=None):
     if work.exists():
         shutil.rmtree(work)
     cmd = [which_tool("spades"), "--only-assembler", "-t", str(int(threads)), "-o", str(work)]
+    stage_flags = _imported_tool_flags("spades") + [str(x) for x in (extra or [])]
+    cmd.extend(_mem_argv("spades", threads, stage_flags))
     if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size:
         cmd.extend(["-1", r1, "-2", r2])
     else:
         cmd.extend(["-s", r1])
     if ont:
         cmd.extend(["--nanopore", ont])
-    cmd.extend(str(x) for x in (extra or []))
+    cmd.extend(stage_flags)
     try:
         _run(cmd)
     except subprocess.CalledProcessError:
