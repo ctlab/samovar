@@ -407,7 +407,12 @@ class SamovarRTableRegenerator(TableRegenerator):
     def run(self, annotation, metadata, config):
         from samovar.abundance import input_to_abundance_tables, load_table_input
         from samovar.regenerate import _write_abundance_tables, write_samovar_config_defaults
-        from samovar.table2iss import R_REGENERATE_DRIVER, _read_samovar_tables, _resolve_r_executable
+        from samovar.table2iss import (
+            R_REGENERATE_DRIVER,
+            _read_samovar_tables,
+            _resolve_r_executable,
+            require_compatible_samovar_r,
+        )
         import os
         import tempfile
         import yaml
@@ -434,6 +439,7 @@ class SamovarRTableRegenerator(TableRegenerator):
         if r_lib_path:
             env["R_LIBS"] = r_lib_path
             env["R_LIBS_USER"] = r_lib_path
+        require_compatible_samovar_r(r_path, env)
         # A previous CSV must not stand in for a missing result of this run.
         with tempfile.TemporaryDirectory(prefix=".samovar_r_", dir=out) as tmp:
             work = Path(tmp)

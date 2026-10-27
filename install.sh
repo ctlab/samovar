@@ -57,6 +57,8 @@
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
+#   SAMOVAR_R_VERSION          declared samovaR release; default 1.0.1
+#                              (1.0.0 is installed but breaks Kaiju generation)
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
 #   SAMOVAR_UPDATE_SHELL=0     shared/read-only: skip PATH and ~/.bashrc edits
 #   SAMOVAR_REBUILD_CITATIONS=0 same as --rebuild-citations 0
@@ -176,9 +178,26 @@ r_install_github_local() {
     return 0
 }
 
+# $1 installed version, $2 declared version. True when installed >= declared.
+samovar_r_version_at_least() {
+    local found="$1"
+    local required="$2"
+    case "$found" in
+        ""|MISSING) return 1 ;;
+    esac
+    [ "$(printf '%s\n%s\n' "$required" "$found" | sort -V | head -n1)" = "$required" ]
+}
+
+samovar_r_installed_version() {
+    local reported
+    reported="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) cat(as.character(packageVersion("samovaR"))) else cat("MISSING")' 2>/dev/null || true)"
+    printf '%s' "$reported" | tr -d '[:space:]'
+}
+
 install_samovar_r_package() {
     local repo="${SAMOVAR_R_REPO:-ctlab/samovar}"
     local branch="${SAMOVAR_R_BRANCH:-r-package}"
+    local required="${SAMOVAR_R_VERSION:-1.0.1}"
     local script_dest="$USER_CFG_DIR/annotation_regenerate.R"
 
     if ! command -v R >/dev/null 2>&1; then
@@ -187,16 +206,16 @@ install_samovar_r_package() {
         return 1
     fi
 
-    local info
-    local package_check='if (requireNamespace("samovaR", quietly=TRUE)) { cat(if (packageVersion("samovaR") >= "1.0.1") "INSTALLED" else "OUTDATED", as.character(packageVersion("samovaR")), find.package("samovaR")) } else cat("MISSING")'
-    info="$(R --vanilla -s -e "$package_check" 2>/dev/null || true)"
-    if echo "$info" | grep -q '^INSTALLED'; then
-        local ver lib
-        ver="$(echo "$info" | awk '{print $2}')"
-        lib="$(echo "$info" | awk '{print $3}')"
-        echo "samovaR is already installed (version ${ver:-unknown}${lib:+ at $lib}); minimum required version is 1.0.1."
+    local ver
+    ver="$(samovar_r_installed_version)"
+    if samovar_r_version_at_least "$ver" "$required"; then
+        echo "samovaR ${ver} satisfies declared version ${required}."
     else
-        echo "samovaR 1.0.1 or newer is required (${info:-unavailable}); installing from $repo@$branch."
+        if [ "$ver" = "MISSING" ] || [ -z "$ver" ]; then
+            echo "samovaR ${required} is required but the package is not installed; installing from $repo@$branch."
+        else
+            echo "samovaR ${ver} is incompatible; declared version is ${required}. Installing from $repo@$branch."
+        fi
         if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
             echo "Skipping samovaR install in offline mode."
             return 1
@@ -217,10 +236,10 @@ install_samovar_r_package() {
             fi
             rm -rf "$tmp"
         fi
-        info="$(R --vanilla -s -e "$package_check" 2>/dev/null || true)"
-        echo "samovaR: $info"
-        if ! echo "$info" | grep -q '^INSTALLED'; then
-            echo "samovaR 1.0.1 or newer could not be loaded after installation. Check its version and required R dependencies."
+        ver="$(samovar_r_installed_version)"
+        echo "samovaR: ${ver:-unavailable}"
+        if ! samovar_r_version_at_least "$ver" "$required"; then
+            echo "samovaR ${ver:-missing} is incompatible after installation; declared version is ${required}."
             return 1
         fi
     fi

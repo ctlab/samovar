@@ -553,6 +553,7 @@ def test_process_annotation_tables_samovar_mode_feeds_iss(
         return Result()
 
     with patch("samovar.table2iss._resolve_r_executable", return_value=("R", None)), \
+         patch("samovar.table2iss.require_compatible_samovar_r"), \
          patch("samovar.table2iss.subprocess.run", side_effect=fake_run):
         process_annotation_tables(
             table_paths=[str(p) for p in ann_files],

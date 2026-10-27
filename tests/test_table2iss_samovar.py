@@ -10,9 +10,14 @@ import pytest
 import yaml
 
 from samovar.table2iss import (
+    SAMOVAR_R_VERSION,
+    R_REGENERATE_DRIVER,
     _resolve_r_executable,
+    installed_samovar_r_version,
     process_abundance_table,
+    require_compatible_samovar_r,
     samovar_annotation_regenerate,
+    samovar_r_version_ok,
 )
 
 
@@ -25,34 +30,33 @@ def _r_script_from_branch() -> Optional[Path]:
     return dest
 
 
-def _r_with_samovar_available() -> bool:
-    """True when R can load samovaR and the regenerator script is locatable."""
+def _samovar_r_skip_reason() -> str:
+    """Skip integration when R or a compatible samovaR release is absent."""
     if _r_script_from_branch() is None:
-        return False
+        return "R with samovaR package is required for this integration test"
     try:
         r_path, r_lib_path = _resolve_r_executable()
     except FileNotFoundError:
-        return False
+        return "R with samovaR package is required for this integration test"
     env = os.environ.copy()
     if r_lib_path:
         env["R_LIBS"] = r_lib_path
         env["R_LIBS_USER"] = r_lib_path
-    try:
-        proc = subprocess.run(
-            [r_path, "--vanilla", "-s", "-e", "library(samovaR)"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=env,
+    found = installed_samovar_r_version(r_path, env)
+    if not found or found == "MISSING":
+        return "R with samovaR package is required for this integration test"
+    if not samovar_r_version_ok(found):
+        return (
+            f"samovaR {found} is incompatible; this SAMOVAR requires {SAMOVAR_R_VERSION} "
+            "or newer. Run ./install.sh R-package."
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
+    return ""
 
 
+_SAMOVAR_R_SKIP = _samovar_r_skip_reason()
 requires_r_samovar = pytest.mark.skipif(
-    not _r_with_samovar_available(),
-    reason="R with samovaR package is required for this integration test",
+    bool(_SAMOVAR_R_SKIP),
+    reason=_SAMOVAR_R_SKIP or "samovaR ready",
 )
 
 
@@ -174,6 +178,7 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypa
 
     try:
         with patch("samovar.table2iss._resolve_r_executable", return_value=("R", None)), \
+             patch("samovar.table2iss.require_compatible_samovar_r"), \
              patch("samovar.table2iss.subprocess.run", side_effect=fake_run):
             samovar_annotation_regenerate(
                 annotation_dir=str(annotation_dir),
@@ -254,6 +259,7 @@ def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config
 
     try:
         with patch("samovar.table2iss._resolve_r_executable", return_value=("R", None)), \
+             patch("samovar.table2iss.require_compatible_samovar_r"), \
              patch("samovar.table2iss.subprocess.run", side_effect=boom):
             with pytest.raises(RuntimeError, match="failed while running R"):
                 samovar_annotation_regenerate(
@@ -343,6 +349,24 @@ def test_samovar_annotation_regenerate_integration(
                 assert not result.empty
     finally:
         os.unlink(config_path)
+
+
+def test_declared_samovar_r_version_rejects_1_0_0():
+    assert samovar_r_version_ok("1.0.1")
+    assert samovar_r_version_ok("1.0.2")
+    assert not samovar_r_version_ok("1.0.0")
+    assert not samovar_r_version_ok("MISSING")
+    assert SAMOVAR_R_VERSION in R_REGENERATE_DRIVER
+    assert "@@SAMOVAR_R_VERSION@@" not in R_REGENERATE_DRIVER
+    with patch(
+        "samovar.table2iss.installed_samovar_r_version", return_value="1.0.0"
+    ):
+        with pytest.raises(RuntimeError, match="samovaR 1.0.0 is incompatible"):
+            require_compatible_samovar_r("R")
+    with patch(
+        "samovar.table2iss.installed_samovar_r_version", return_value="1.0.1"
+    ):
+        require_compatible_samovar_r("R")
 
 
 def test_process_abundance_table_after_mocked_regenerate(tmp_path, mock_config):

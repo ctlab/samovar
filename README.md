@@ -115,7 +115,7 @@ samovar exec --output_dir samovar_out
 
 ## R package
 
-The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://github.com/ctlab/samovar/tree/r-package)** branch and is **not** part of this tree. Install it with `./install.sh R-package` (requires R + remotes). That writes a small R driver into `~/.config/samovar/` that only calls exported `samovaR` functions. Then set `regeneration_mode: samovar`.
+The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://github.com/ctlab/samovar/tree/r-package)** branch and is **not** part of this tree. Install it with `./install.sh R-package` (requires R + remotes). That command requires the declared samovaR release, currently 1.0.1, and reinstalls an older package such as 1.0.0. It writes a small R driver into `~/.config/samovar/` that only calls exported `samovaR` functions. Generation with an older package stops and names the required version. Then set `regeneration_mode: samovar`.
 
 ## References
 

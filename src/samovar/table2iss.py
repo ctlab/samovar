@@ -39,7 +39,16 @@ from samovar.seqio import (
 
 # Thin R CLI used with the optional samovaR package (GitHub branch r-package).
 # Not an R package source; it only calls exported samovaR functions.
+# Keep in step with SAMOVAR_R_VERSION in install.sh. 1.0.0 breaks Kaiju generation.
+SAMOVAR_R_VERSION = "1.0.1"
+
 R_REGENERATE_DRIVER = r'''library(samovaR)
+if (utils::compareVersion(as.character(packageVersion("samovaR")), "@@SAMOVAR_R_VERSION@@") < 0) {
+  stop(paste0(
+    "samovaR ", packageVersion("samovaR"),
+    " is incompatible; this SAMOVAR requires @@SAMOVAR_R_VERSION@@ or newer. Run ./install.sh R-package"
+  ), call. = FALSE)
+}
 
 args <- commandArgs(trailingOnly = TRUE)
 annotation_dir <- NULL
@@ -153,7 +162,7 @@ for (i in seq_along(samovar_data_list)) {
     stop(paste0("samovaR generation failed for ", annotator, ": ", conditionMessage(e)), call. = FALSE)
   })
 }
-'''
+'''.replace("@@SAMOVAR_R_VERSION@@", SAMOVAR_R_VERSION)
 
 
 SKIP_TAXIDS = {
@@ -1550,6 +1559,64 @@ def generate_iss_from_abundance_table(
     return outputs
 
 
+def _version_tuple(text: str) -> Tuple[int, ...]:
+    parts = []
+    for piece in str(text).split("."):
+        digits = ""
+        for ch in piece:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        parts.append(int(digits or "0"))
+    return tuple(parts)
+
+
+def samovar_r_version_ok(found: str, required: str = SAMOVAR_R_VERSION) -> bool:
+    """True when an installed samovaR version meets the declared release."""
+    if not found or found == "MISSING":
+        return False
+    left, right = _version_tuple(found), _version_tuple(required)
+    width = max(len(left), len(right))
+    left = left + (0,) * (width - len(left))
+    right = right + (0,) * (width - len(right))
+    return left >= right
+
+
+def installed_samovar_r_version(r_path: str, env: Optional[dict] = None) -> Optional[str]:
+    """Return the loaded samovaR version, ``MISSING``, or None when R cannot answer."""
+    try:
+        proc = subprocess.run(
+            [
+                r_path,
+                "--vanilla",
+                "-s",
+                "-e",
+                'if (requireNamespace("samovaR", quietly=TRUE)) cat(as.character(packageVersion("samovaR"))) else cat("MISSING")',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").strip() or None
+
+
+def require_compatible_samovar_r(r_path: str, env: Optional[dict] = None) -> None:
+    """Refuse samovaR older than the declared release before generation starts."""
+    found = installed_samovar_r_version(r_path, env)
+    if not found or found == "MISSING" or samovar_r_version_ok(found):
+        return
+    raise RuntimeError(
+        f"samovaR {found} is incompatible; this SAMOVAR requires {SAMOVAR_R_VERSION} "
+        "or newer. Run ./install.sh R-package."
+    )
+
+
 def _resolve_r_executable() -> Tuple[str, Optional[str]]:
     """Resolve R binary and optional library path from user/repo config or PATH."""
     cfg = load_config()
@@ -1687,6 +1754,7 @@ def samovar_annotation_regenerate(
     if r_lib_path:
         env["R_LIBS"] = r_lib_path
         env["R_LIBS_USER"] = r_lib_path
+    require_compatible_samovar_r(r_path, env)
     expected = list(input_to_abundance_tables(load_table_input(annotation_dir)))
     if dir_looks_like_annotation(annotation_dir):
         expected = ["taxID_" + name for name in expected]
