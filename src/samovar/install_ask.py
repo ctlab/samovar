@@ -905,12 +905,40 @@ def ask_smoketest(
     return "passed" if code == 0 else "failed"
 
 
+def ask_samovar_database(ask: Callable[[str], str]) -> str:
+    """Prompt for the shared genome library and store it in the install config.
+
+    Enter keeps the path already in the config, or the directory next to the
+    config on a first install. ``install.sh full`` and ``samovar update --auto``
+    do not call this; they keep ``genomes.samovar_database``.
+    """
+    from samovar.genome_index import samovar_database_dir
+    from samovar.paths import update_config
+
+    current = samovar_database_dir()
+    reply = ask(f"Samovar database [{current}]: ").strip()
+    chosen = Path(reply).expanduser() if reply else Path(current)
+    chosen.mkdir(parents=True, exist_ok=True)
+    (chosen / "processed").mkdir(parents=True, exist_ok=True)
+    update_config({"samovar_database": str(chosen)})
+    print(f"Samovar database: {chosen}")
+    return str(chosen)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     full = ask_full_requested(args)
     check = launch_check_enabled(args, full=full)
     if not prompts_enabled():
         print("install.sh ask: not a terminal; skipping tool prompts.")
+        return 0
+    try:
+        ask_samovar_database(input)
+    except KeyboardInterrupt:
+        print("")
+        return 130
+    except EOFError:
+        print("")
         return 0
     tools = tools_for_ask(full=full)
     if full:

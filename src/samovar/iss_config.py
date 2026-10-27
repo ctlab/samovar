@@ -204,7 +204,8 @@ def _materialize_generate_accessions(args):
     accessions = list(getattr(args, "accessions", None) or [])
     if not accessions:
         return
-    reindex_mode = int(getattr(args, "reindex", 0) or 0)
+    raw_mode = getattr(args, "reindex", 1)
+    reindex_mode = 1 if raw_mode is None else int(raw_mode)
     keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
     paths = materialize_accessions(
         accessions,
@@ -401,9 +402,9 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument(
         '--reindex',
         type=int,
-        default=0,
+        default=1,
         choices=(0, 1, 2),
-        help='0: download to $out/.genomes (no index); 1: samovar_database + index; '
+        help='0: download to $out/.genomes (no index); 1 (default): samovar_database + index; '
              '2: $out/.genomes + index',
     )
     parser.add_argument(

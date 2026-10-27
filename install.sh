@@ -65,7 +65,9 @@
 #   SAMOVAR_CONFIG=/path/to/config.json
 #                              write main config to this file (dir holds env/)
 #   SAMOVAR_CONFIG_DIR=/dir    write $dir/config.json instead of ~/.config/samovar
-#   SAMOVAR_DATABASE=/path     processed genome library (default: $ROOT/genomes)
+#   SAMOVAR_DATABASE=/path     genome library (default: next to the install config,
+#                              <config dir>/genomes). full / update / --auto
+#                              keep genomes.samovar_database already in config.
 #   SAMOVAR_TAXDUMP=/path      NCBI taxdump dir (default: $SAMOVAR_DATABASE/taxdump)
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
 #   CI=true                    non-interactive; NCBI_EMAIL defaults to test@samovar.com
@@ -1180,9 +1182,12 @@ def _usable_dir(raw, *, allow_home: bool = False):
         return ""
     return str(path)
 
-samovar_database = _usable_dir(
-    os.environ.get("SAMOVAR_DATABASE", "").strip() or str(Path(root) / "genomes")
-) or str(Path(root) / "genomes")
+from samovar.main_config import resolve_install_database
+samovar_database = resolve_install_database(
+    previous_raw,
+    env=os.environ.get("SAMOVAR_DATABASE", ""),
+)
+samovar_database = _usable_dir(samovar_database, allow_home=True) or samovar_database
 _store_processed = _usable_dir(str(Path(samovar_database) / "processed")) or str(Path(samovar_database) / "processed")
 
 from samovar.main_config import genomes_block as _gb_existing
@@ -1349,7 +1354,9 @@ fi
 
 echo ""
 echo "Note: bulky genome caches should not live under \$HOME (quota)."
-echo "  Each \`samovar exec\` pins XDG_CACHE_HOME/SAMOVAR_GENOMES to \$out_dir/.cache."
+echo "  Genome downloads use genomes.samovar_database (default: the config directory /genomes)."
+echo "  Override with SAMOVAR_DATABASE, SAMOVAR_GENOMES, or SAMOVAR_PROCESSED_GENOMES."
+echo "  Each \`samovar exec\` pins XDG_CACHE_HOME to \$out_dir/.cache for non-genome caches."
 echo "  Shared library: SAMOVAR_DATABASE=/scratch/... ./install.sh"
 echo "  data/test_genomes is truncated (ISS/CI only), never an NCBI substitute."
 

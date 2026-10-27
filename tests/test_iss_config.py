@@ -196,6 +196,13 @@ def test_parse_args_reindex_and_raw_genomes():
     assert args.raw_genomes == 0
 
 
+def test_parse_args_reindex_defaults_to_database():
+    from samovar.iss_config import parse_args
+
+    args = parse_args(["--output_dir", "out"])
+    assert args.reindex == 1
+
+
 def test_parse_args_genome_skip_and_max_mb():
     from samovar.iss_config import parse_args
 

@@ -32,11 +32,8 @@ from samovar.main_config import (
     compiler_r,
     compiler_r_libs,
     disk_payload,
-    first_dir,
     iter_tools,
     ncbi_email_from_cfg,
-    processed_genome_dirs,
-    raw_genome_dirs,
     test_genome_dirs_from_cfg,
     tool_env_prefix as tool_entry_env_prefix,
     tool_path as tool_entry_path,
@@ -178,6 +175,12 @@ def user_config_dir() -> Path:
     return user_config_path().parent
 
 
+def default_samovar_database_dir(config_dir: Optional[Path] = None) -> Path:
+    """Genome library next to the install config (local samovar)."""
+    base = Path(config_dir).expanduser() if config_dir is not None else user_config_dir()
+    return base / "genomes"
+
+
 def repo_root() -> Path:
     env = os.environ.get("SAMOVAR_ROOT", "").strip()
     if env:
@@ -235,49 +238,43 @@ def user_cache_dir() -> Path:
     return Path.home() / ".cache" / "samovar"
 
 
-def genome_download_dir() -> Path:
-    """Directory where SamovaR stores NCBI-downloaded (full) assemblies.
+def configured_genome_store() -> Path:
+    """Genome library from ``SAMOVAR_DATABASE``, else ``genomes.samovar_database``.
 
-    Order: ``SAMOVAR_GENOMES`` → ``$SAMOVAR_RUN_DIR/.cache/samovar/genomes`` →
-    install config (ignored if under ``$HOME``) → ``user_cache_dir()/genomes``.
+    When neither is set, the library is ``default_samovar_database_dir()``
+    (next to the install config), not the git checkout and not the run cache.
     """
+    env = os.environ.get("SAMOVAR_DATABASE", "").strip()
+    if env:
+        return Path(env).expanduser()
+    cfg = load_config()
+    from samovar.main_config import genomes_block
+
+    block = genomes_block(cfg) if cfg else {}
+    raw = str(
+        (block.get("samovar_database") if isinstance(block, dict) else "")
+        or (cfg.get("samovar_database") if isinstance(cfg, dict) else "")
+        or ""
+    ).strip()
+    if raw:
+        return Path(raw).expanduser()
+    return default_samovar_database_dir()
+
+
+def genome_download_dir() -> Path:
+    """NCBI gzip cache: ``SAMOVAR_GENOMES``, else ``<samovar database>/raw``."""
     env = os.environ.get("SAMOVAR_GENOMES", "").strip()
     if env:
         return Path(env).expanduser()
-    run = _run_dir()
-    if run is not None:
-        return run / ".cache" / "samovar" / "genomes"
-    cfg = load_config()
-    val = first_dir(raw_genome_dirs(cfg))
-    if val:
-        path = Path(val).expanduser()
-        # Never silently dump multi-GB genomes into a home path from old configs.
-        try:
-            if not path.resolve().is_relative_to(Path.home().resolve()):
-                return path
-        except (OSError, ValueError):
-            return path
-    return user_cache_dir() / "genomes"
+    return configured_genome_store() / "raw"
 
 
 def processed_genomes_dir() -> Path:
-    """Directory for ``{taxid}-processed.fasta.gz`` files (defaults to genomes cache)."""
+    """Indexed FASTA: ``SAMOVAR_PROCESSED_GENOMES``, else ``<samovar database>/processed``."""
     env = os.environ.get("SAMOVAR_PROCESSED_GENOMES", "").strip()
     if env:
         return Path(env).expanduser()
-    run = _run_dir()
-    if run is not None:
-        return run / ".cache" / "samovar" / "genomes"
-    cfg = load_config()
-    val = first_dir(processed_genome_dirs(cfg))
-    if val:
-        path = Path(val).expanduser()
-        try:
-            if not path.resolve().is_relative_to(Path.home().resolve()):
-                return path
-        except (OSError, ValueError):
-            return path
-    return genome_download_dir()
+    return configured_genome_store() / "processed"
 
 
 def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict[str, Any]:

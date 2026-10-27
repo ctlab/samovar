@@ -31,6 +31,24 @@ from samovar.paths import load_config
 KAIJU = next(tool for tool in ASK_TOOLS if tool.name == "kaiju")
 
 
+def test_ask_samovar_database_records_path(tmp_path, monkeypatch):
+    from samovar.install_ask import ask_samovar_database
+    from samovar.main_config import genomes_block
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}\n")
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.delenv("SAMOVAR_DATABASE", raising=False)
+    chosen = tmp_path / "library"
+    recorded = ask_samovar_database(lambda _prompt: str(chosen))
+    assert recorded == str(chosen)
+    assert genomes_block(load_config())["samovar_database"] == str(chosen)
+    assert (chosen / "processed").is_dir()
+
+    kept = ask_samovar_database(lambda _prompt: "  ")
+    assert kept == str(chosen)
+
+
 def test_parse_env_answer_formats():
     assert parse_env_answer("n") == "no"
     assert parse_env_answer("N") == "no"

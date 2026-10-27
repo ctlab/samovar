@@ -393,7 +393,7 @@ def test_download_genomes_routes_accession_and_taxid(tmp_path, monkeypatch):
     assert [item[0] for item in calls] == ["acc", "tax"]
     assert calls[0][1] == "GCF_000819615.1"
     assert calls[1][1] == "562"
-    assert all(item[3] is False for item in calls)
+    assert all(item[3] is True for item in calls)
     assert len(paths) == 2
 
     code = download_cli(
@@ -402,6 +402,15 @@ def test_download_genomes_routes_accession_and_taxid(tmp_path, monkeypatch):
     assert code == 0
     assert calls[-1][0] == "tax" and calls[-1][1] == "9606" and calls[-1][3] is True
     assert calls[-2][0] == "acc" and calls[-2][3] is True
+
+    store = tmp_path / "library"
+    monkeypatch.setenv("SAMOVAR_DATABASE", str(store))
+    monkeypatch.delenv("SAMOVAR_PROCESSED_GENOMES", raising=False)
+    monkeypatch.delenv("SAMOVAR_GENOMES", raising=False)
+    code = download_cli(["562", "--no-index"])
+    assert code == 0
+    assert calls[-1][1] == "562" and calls[-1][3] is False
+    assert Path(calls[-1][2]) == store / "processed"
 
 
 def test_assembly_taxonomy_reads_ftp_report(monkeypatch):

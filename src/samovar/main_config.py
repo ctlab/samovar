@@ -1434,6 +1434,28 @@ def infer_tool_env(path: str, conda_prefix: str = "") -> Tuple[str, str]:
     return "", "bash"
 
 
+def resolve_install_database(
+    existing: Optional[Dict[str, Any]] = None,
+    *,
+    env: str = "",
+    config_dir: Optional[Path] = None,
+) -> str:
+    """Path written into ``genomes.samovar_database``.
+
+    ``SAMOVAR_DATABASE`` wins. Otherwise the path already in the install
+    config is kept (``install.sh full``, ``samovar update``, ``update --auto``).
+    A first install uses the directory next to the config.
+    """
+    chosen = str(env or "").strip()
+    if not chosen and isinstance(existing, dict):
+        chosen = str((genomes_block(existing) or {}).get("samovar_database") or "").strip()
+    if chosen:
+        return str(Path(chosen).expanduser())
+    from samovar.paths import default_samovar_database_dir
+
+    return str(default_samovar_database_dir(config_dir))
+
+
 def build_install_config(
     *,
     root: str,
@@ -1488,13 +1510,9 @@ def build_install_config(
     genomes["test"] = [test_root]
     db = str(samovar_database or genomes.get("samovar_database") or "").strip()
     if not db:
-        db = str(Path(root) / "genomes")
-    if db and not is_home_path(db):
-        genomes["samovar_database"] = db
-        proc_store = str(Path(db).expanduser() / "processed")
-    else:
-        genomes["samovar_database"] = str(Path(root) / "genomes")
-        proc_store = str(Path(root) / "genomes" / "processed")
+        db = resolve_install_database(existing, config_dir=None)
+    genomes["samovar_database"] = str(Path(db).expanduser())
+    proc_store = str(Path(genomes["samovar_database"]).expanduser() / "processed")
     dump = str(taxdump or genomes.get("taxdump") or "").strip()
     if not dump:
         dump = str(Path(genomes["samovar_database"]).expanduser() / "taxdump")

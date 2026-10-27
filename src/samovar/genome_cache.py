@@ -315,7 +315,8 @@ def ensure_genome_config() -> Dict[str, Any]:
     """Record non-home genome cache paths in the install config.
 
     Paths under ``$HOME`` are never persisted: HPC home quotas cannot hold
-    NCBI assemblies. Per-run caches live under ``$SAMOVAR_RUN_DIR/.cache``.
+    NCBI assemblies. The library is ``SAMOVAR_DATABASE`` (else the configured
+    ``genomes.samovar_database``); a run cache is only the fallback.
     """
     home = Path.home().resolve()
 

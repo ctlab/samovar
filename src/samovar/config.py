@@ -1880,11 +1880,11 @@ export SAMOVAR_RUN_DIR="$out_dir"
 export SAMOVAR_REGENERATED_METAGENOMES="{regen_mode}"
 export SAMOVAR_INJECT_TAXID="${{SAMOVAR_INJECT_TAXID:-{inject_taxid}}}"
 export SAMOVAR_RUN_GENOMES="$out_dir/genomes"
-# All bulky caches live under outdir — never default to ~/.cache (home quota).
+# Non-genome caches stay under the run dir. Genome downloads use the install
+# library (SAMOVAR_DATABASE / genomes.samovar_database) unless the caller
+# already exported SAMOVAR_GENOMES or SAMOVAR_PROCESSED_GENOMES.
 export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-$out_dir/.cache}}"
-export SAMOVAR_GENOMES="${{SAMOVAR_GENOMES:-$out_dir/.cache/samovar/genomes}}"
-export SAMOVAR_PROCESSED_GENOMES="${{SAMOVAR_PROCESSED_GENOMES:-$out_dir/.cache/samovar/genomes}}"
-mkdir -p "$XDG_CACHE_HOME/samovar/genomes" "$SAMOVAR_RUN_GENOMES"
+mkdir -p "$XDG_CACHE_HOME" "$SAMOVAR_RUN_GENOMES"
 """
 
         setup_reads = _checkpoint_block(

@@ -226,13 +226,13 @@ def _cfg():
 def samovar_database_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
     """Install processed-genome store (``genomes.samovar_database``)."""
     from samovar.main_config import genomes_block
-    from samovar.paths import repo_root
+    from samovar.paths import default_samovar_database_dir
 
     data = cfg if cfg is not None else _cfg()
     block = genomes_block(data) if data else {}
     raw = str(
         (block.get("samovar_database") if isinstance(block, dict) else "")
-        or data.get("samovar_database")
+        or (data.get("samovar_database") if isinstance(data, dict) else "")
         or ""
     ).strip()
     if raw:
@@ -240,7 +240,7 @@ def samovar_database_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
     env = os.environ.get("SAMOVAR_DATABASE", "").strip()
     if env:
         return Path(env).expanduser()
-    return repo_root() / "genomes"
+    return default_samovar_database_dir()
 
 
 def processed_storage_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:

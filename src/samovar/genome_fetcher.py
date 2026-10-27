@@ -1330,7 +1330,7 @@ def download_genomes(
     output_dir: str,
     email: str = "",
     *,
-    index: bool = False,
+    index: bool = True,
     silent: bool = False,
     max_genome_mb: Any = None,
     genome_skip_list: Any = None,
@@ -1393,8 +1393,8 @@ def download_cli(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--output-dir",
         "--output_dir",
-        default="genomes",
-        help="Directory for {accession}.fa.gz / processed taxid FASTA (default: genomes)",
+        default=None,
+        help="Directory for processed FASTA (default: samovar_database/processed)",
     )
     parser.add_argument(
         "--email",
@@ -1403,8 +1403,9 @@ def download_cli(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument(
         "--index",
-        action="store_true",
-        help="Register downloaded genomes in the install catalog",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Register downloaded genomes in the install catalog (default: on)",
     )
     parser.add_argument(
         "--max-genome-mb",
@@ -1420,7 +1421,7 @@ def download_cli(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     paths = download_genomes(
         args.tokens,
-        args.output_dir,
+        args.output_dir or str(cache_processed_dir()),
         args.email or default_entrez_email(),
         index=bool(args.index),
         max_genome_mb=args.max_genome_mb,
@@ -1448,7 +1449,7 @@ def main(argv: Optional[Sequence[str]] = None):
     parser.add_argument('--email', type=str, default=None,
                       help='Email for NCBI Entrez (default: NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL, else anonymous@example.com)')
     parser.add_argument('--output-dir', type=str, default='genomes',
-                      help='Output directory for genomes (default: genomes)')
+                      help='Run directory (default: genomes). Indexed FASTA goes to samovar_database unless --reindex 0 or 2')
     parser.add_argument(
         '--accessions',
         nargs='+',
@@ -1458,9 +1459,9 @@ def main(argv: Optional[Sequence[str]] = None):
     parser.add_argument(
         '--reindex',
         type=int,
-        default=0,
+        default=1,
         choices=(0, 1, 2),
-        help='With --accessions: 0 run .genomes only; 1 samovar_database+index; 2 run+index',
+        help='With --accessions: 0 run .genomes only; 1 (default) samovar_database+index; 2 run+index',
     )
     parser.add_argument('--silent', action='store_true',
                       help='Suppress logging output and show progress bars instead')
