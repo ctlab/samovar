@@ -1338,6 +1338,9 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
     """Materialize ``*_mqc.*`` custom content from plot folders and run options."""
     root = as_path(output_dir)
     write_overview_report(root)
+    from samovar.MAG.report import write_mag_mapping_plots
+
+    write_mag_mapping_plots(root)
     dest = multiqc_stage_dir(root)
     if dest.exists():
         shutil.rmtree(dest)
