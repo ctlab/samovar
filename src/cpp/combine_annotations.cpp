@@ -2,7 +2,9 @@
 // Streams seq/taxID/features only so Kraken k-mer LCA maps never sit in RAM.
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -17,6 +19,10 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 #if __cplusplus >= 201703L
 #include <filesystem>
@@ -1377,11 +1383,81 @@ fs::path explode_tool(const fs::path& csv, const SavedTool& tool, size_t col0, c
     return dest;
 }
 
+std::string safe_tmp_stem(std::string stem) {
+    if (stem.empty()) {
+        stem = "combine";
+    }
+    for (char& c : stem) {
+        unsigned char u = static_cast<unsigned char>(c);
+        if (!(std::isalnum(u) || c == '-' || c == '_' || c == '.')) {
+            c = '_';
+        }
+    }
+    return stem;
+}
+
+// One directory per operation. Parallel appends must not share ann_0/run_0.tsv.
+fs::path private_combine_tmp(const fs::path& root, const std::string& stem) {
+    fs::create_directories(root);
+    static std::atomic<uint64_t> seq{0};
+    auto tick = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    std::ostringstream name;
+    name << safe_tmp_stem(stem) << '.' << static_cast<long long>(::getpid()) << '.'
+         << std::hex << tick << '.' << seq.fetch_add(1);
+    fs::path dir = root / name.str();
+    fs::create_directories(dir);
+    return dir;
+}
+
+// Append replaces the CSV. Two writers of one file cannot both land unless
+// the second starts only after the first has published its sidecar.
+struct OutputLock {
+    explicit OutputLock(const fs::path& csv) {
+        fs::path lock_path(csv.string() + ".lock");
+        fd_ = ::open(lock_path.c_str(), O_RDWR | O_CREAT, 0644);
+        if (fd_ < 0 || ::flock(fd_, LOCK_EX) != 0) {
+            if (fd_ >= 0) {
+                ::close(fd_);
+            }
+            throw std::runtime_error("Cannot lock " + lock_path.string());
+        }
+    }
+    ~OutputLock() {
+        if (fd_ >= 0) {
+            ::flock(fd_, LOCK_UN);
+            ::close(fd_);
+        }
+    }
+    OutputLock(const OutputLock&) = delete;
+    OutputLock& operator=(const OutputLock&) = delete;
+
+    int fd_ = -1;
+};
+
+struct TmpGuard {
+    fs::path path;
+    bool keep = false;
+    ~TmpGuard() {
+        if (keep || path.empty()) {
+            return;
+        }
+        std::error_code ec;
+        fs::remove_all(path, ec);
+    }
+};
+
 int run_append(const Options& opt) {
     fs::path out_csv(opt.out_csv);
-    fs::path tmp = opt.tmp_dir.empty() ? (out_csv.parent_path() / ".combine_tmp") : fs::path(opt.tmp_dir);
     fs::create_directories(out_csv.parent_path());
-    fs::create_directories(tmp);
+    TmpGuard scratch;
+    scratch.keep = opt.keep_tmp;
+    if (opt.tmp_dir.empty()) {
+        scratch.path = private_combine_tmp(out_csv.parent_path() / ".combine_tmp", out_csv.stem().string());
+    } else {
+        scratch.path = fs::path(opt.tmp_dir);
+        fs::create_directories(scratch.path);
+    }
+    const fs::path& tmp = scratch.path;
     std::string tool_name = match_tool(opt.add_name);
     if (tool_name.empty()) {
         std::cerr << "Not an annotator output: " << opt.add_name << "\n";
@@ -1389,12 +1465,14 @@ int run_append(const Options& opt) {
     }
     int rc = 0;
     try {
+        OutputLock commit(out_csv);
         fs::path sorted_new = sort_annotator(opt.add_file, tool_kind(tool_name), tmp, opt.chunk_rows, 0);
         SavedTool added = tool_from_sorted(sorted_new, opt.add_name, tool_name);
         std::vector<SavedTool> tools;
         std::vector<fs::path> sorted;
-        if (!opt.base_csv.empty() && fs::exists(opt.base_csv)) {
-            auto original = read_sidecar(opt.base_csv);
+        fs::path base = opt.base_csv.empty() ? out_csv : fs::path(opt.base_csv);
+        if (!base.empty() && fs::exists(base)) {
+            auto original = read_sidecar(base);
             size_t col = 1;
             size_t index = 1;
             std::vector<std::pair<SavedTool, fs::path>> exploded;
@@ -1405,7 +1483,7 @@ int run_append(const Options& opt) {
                     continue;
                 }
                 fs::path part = tmp / ("base_" + std::to_string(index++) + ".tsv");
-                explode_tool(opt.base_csv, tool, col, part);
+                explode_tool(base, tool, col, part);
                 col += width;
                 exploded.push_back({tool, part});
             }
@@ -1441,10 +1519,6 @@ int run_append(const Options& opt) {
     } catch (const std::exception& ex) {
         std::cerr << "combine_annotations append failed: " << ex.what() << "\n";
         rc = 1;
-    }
-    if (!opt.keep_tmp) {
-        std::error_code ec;
-        fs::remove_all(tmp, ec);
     }
     return rc;
 }
@@ -1588,8 +1662,15 @@ int main(int argc, char** argv) {
     }
     fs::create_directories(out_dir);
 
-    fs::path tmp = opt.tmp_dir.empty() ? (out_dir / ".combine_tmp") : fs::path(opt.tmp_dir);
-    fs::create_directories(tmp);
+    TmpGuard scratch;
+    scratch.keep = opt.keep_tmp;
+    if (opt.tmp_dir.empty()) {
+        scratch.path = private_combine_tmp(out_dir / ".combine_tmp", "dir");
+    } else {
+        scratch.path = fs::path(opt.tmp_dir);
+        fs::create_directories(scratch.path);
+    }
+    const fs::path& tmp = scratch.path;
 
     struct FileInfo {
         fs::path path;
@@ -1664,9 +1745,5 @@ int main(int argc, char** argv) {
         rc = 1;
     }
 
-    if (!opt.keep_tmp) {
-        std::error_code ec;
-        fs::remove_all(tmp, ec);
-    }
     return rc;
 }

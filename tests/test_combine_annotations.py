@@ -839,3 +839,55 @@ def test_parallel_samples_have_private_native_workspaces(tmp_path, combiner):
         assert len(frame) == 3000
         assert set(frame['taxID_kaiju_0']) == {562 + sample}
     assert not list(annotations.glob('.combine_*'))
+
+
+def test_parallel_append_same_sample_keeps_both_tools(tmp_path, combiner):
+    """Two combines of one CSV run one after the other and both columns remain."""
+    parent = tmp_path / "ann"
+    parent.mkdir()
+    out = parent / "s1.annotation.csv"
+    kaiju = tmp_path / "s1_kaiju.kaiju.out"
+    kraken = tmp_path / "s1_k2.kraken2.out"
+    _write_kaiju(kaiju, [(f"r{i}", 562) for i in range(4000)])
+    _write_kraken2(kraken, [(f"r{i}", 9606, 40) for i in range(4000)])
+    procs = [
+        subprocess.Popen(
+            [str(combiner), "--add", str(src), "--name", src.name, "--out", str(out)]
+        )
+        for src in (kaiju, kraken)
+    ]
+    assert [proc.wait() for proc in procs] == [0, 0]
+    frame = pd.read_csv(out)
+    assert len(frame) == 4000
+    assert set(frame["taxID_kaiju_1"]) == {562}
+    assert set(frame["taxID_kraken2_0"]) == {9606}
+
+
+def test_parallel_append_without_shared_tmp(tmp_path, combiner):
+    """Two --add processes omit --tmp and must not share ann_0/run_0.tsv."""
+    parent = tmp_path / "ann"
+    parent.mkdir()
+    procs = []
+    for sample in (1, 2):
+        src = tmp_path / f"s{sample}_kaiju.kaiju.out"
+        _write_kaiju(src, [(f"r{i}", 562 + sample) for i in range(200)])
+        out = parent / f"s{sample}.annotation.csv"
+        procs.append(
+            subprocess.Popen(
+                [
+                    str(combiner),
+                    "--add",
+                    str(src),
+                    "--name",
+                    src.name,
+                    "--out",
+                    str(out),
+                ]
+            )
+        )
+    codes = [proc.wait() for proc in procs]
+    assert codes == [0, 0]
+    for sample in (1, 2):
+        frame = pd.read_csv(parent / f"s{sample}.annotation.csv")
+        assert len(frame) == 200
+        assert set(frame["taxID_kaiju_0"]) == {562 + sample}
