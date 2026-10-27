@@ -9,7 +9,7 @@ import csv
 import json
 import random
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 LOSS_KEYS = ("unmapped", "multi_hit", "unresolved", "unclassified")
 MAX_ROWS = 8000
@@ -75,42 +75,94 @@ def _column_label(name: str) -> str:
     return low
 
 
+def _mag_count_groups(
+    path: Path,
+    *,
+    max_rows: int = MAX_ROWS,
+    full_scan_bytes: int = FULL_SCAN_BYTES,
+) -> Tuple[List[str], Dict[Tuple[str, int], Dict[str, int]]]:
+    """MAG counts keyed by ``(sample, column)``. Sample is empty without that column."""
+    header, lines = subsample_lines(path, max_rows=max_rows, full_scan_bytes=full_scan_bytes)
+    if not header or not lines:
+        return [], {}
+    delimiter = _delimiter(header)
+    names = _cells(header, delimiter)
+    indexes = _mag_column_indexes(names)
+    if not indexes:
+        return names, {}
+    sample_index = next(
+        (i for i, name in enumerate(names) if name.strip().lower() == "sample"),
+        None,
+    )
+    counts: Dict[Tuple[str, int], Dict[str, int]] = {}
+    for line in lines:
+        if not line.strip():
+            continue
+        cells = _cells(line, delimiter)
+        sample = ""
+        if sample_index is not None and sample_index < len(cells):
+            sample = cells[sample_index].strip()
+        for index in indexes:
+            if index >= len(cells):
+                continue
+            mag = cells[index].strip() or "(unassigned)"
+            bucket = counts.setdefault((sample, index), {})
+            bucket[mag] = bucket.get(mag, 0) + 1
+    return names, counts
+
+
+def _shares_from_counts(bucket: Dict[str, int]) -> Dict[str, float]:
+    total = sum(bucket.values())
+    if not total:
+        return {}
+    return {mag: round(100.0 * n / total, 2) for mag, n in bucket.items()}
+
+
 def mag_id_shares(
     path: Path,
     *,
     max_rows: int = MAX_ROWS,
     full_scan_bytes: int = FULL_SCAN_BYTES,
 ) -> List[Tuple[str, Dict[str, float]]]:
-    """Percent of reads per MAG_ID. One entry per MAG column."""
-    header, lines = subsample_lines(path, max_rows=max_rows, full_scan_bytes=full_scan_bytes)
-    if not header or not lines:
+    """Percent of reads per MAG_ID. One entry per MAG column, samples pooled."""
+    names, counts = _mag_count_groups(
+        path, max_rows=max_rows, full_scan_bytes=full_scan_bytes
+    )
+    if not counts:
         return []
-    delimiter = _delimiter(header)
-    names = _cells(header, delimiter)
-    indexes = _mag_column_indexes(names)
-    if not indexes:
-        return []
-    counts = {index: {} for index in indexes}
-    seen = {index: 0 for index in indexes}
-    for line in lines:
-        if not line.strip():
-            continue
-        cells = _cells(line, delimiter)
-        for index in indexes:
-            if index >= len(cells):
-                continue
-            mag = cells[index].strip() or "(unassigned)"
-            bucket = counts[index]
-            bucket[mag] = bucket.get(mag, 0) + 1
-            seen[index] += 1
+    pooled: Dict[int, Dict[str, int]] = {}
+    order: List[int] = []
+    for (_sample, index), bucket in counts.items():
+        if index not in pooled:
+            order.append(index)
+            pooled[index] = {}
+        dest = pooled[index]
+        for mag, n in bucket.items():
+            dest[mag] = dest.get(mag, 0) + n
     shares = []
-    for index in indexes:
-        total = seen[index]
-        if not total:
-            continue
-        label = _column_label(names[index])
-        shares.append((label, {mag: round(100.0 * n / total, 2) for mag, n in counts[index].items()}))
+    for index in order:
+        percents = _shares_from_counts(pooled[index])
+        if percents:
+            shares.append((_column_label(names[index]), percents))
     return shares
+
+
+def mag_id_share_groups(
+    path: Path,
+    *,
+    max_rows: int = MAX_ROWS,
+    full_scan_bytes: int = FULL_SCAN_BYTES,
+) -> List[Tuple[str, str, Dict[str, float]]]:
+    """``(sample, column, percents)``. Sample is empty when the table has no sample column."""
+    names, counts = _mag_count_groups(
+        path, max_rows=max_rows, full_scan_bytes=full_scan_bytes
+    )
+    groups = []
+    for (sample, index), bucket in counts.items():
+        percents = _shares_from_counts(bucket)
+        if percents:
+            groups.append((sample, _column_label(names[index]), percents))
+    return groups
 
 
 def loss_fractions(payload: dict) -> Dict[str, float]:
@@ -124,18 +176,87 @@ def loss_fractions(payload: dict) -> Dict[str, float]:
     return out
 
 
+def _filename_sample(path: Path) -> str:
+    stem = path.name
+    for suffix in ("_reprofiled.csv", ".annotation.csv"):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return ""
+
+
+def _samples_in_table(path: Path) -> List[str]:
+    header, lines = subsample_lines(path)
+    if not header:
+        named = _filename_sample(path)
+        return [named] if named else []
+    delimiter = _delimiter(header)
+    names = _cells(header, delimiter)
+    sample_index = next(
+        (i for i, name in enumerate(names) if name.strip().lower() == "sample"),
+        None,
+    )
+    if sample_index is None:
+        named = _filename_sample(path)
+        return [named] if named else []
+    found: List[str] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        cells = _cells(line, delimiter)
+        if sample_index >= len(cells):
+            continue
+        sample = cells[sample_index].strip()
+        if sample and sample not in found:
+            found.append(sample)
+    if found:
+        return found
+    named = _filename_sample(path)
+    return [named] if named else []
+
+
+def _table_sources(folder: Path) -> List[Path]:
+    """Per-sample tables, or the combined / reprofiled table left after ingest."""
+    if not folder.is_dir():
+        return []
+    per_sample = sorted(path for path in folder.glob("*.annotation.csv") if path.is_file())
+    if per_sample:
+        return per_sample
+    combined = sorted(
+        path for path in folder.glob("combined_annotation_table*.csv") if path.is_file()
+    )
+    if combined:
+        return combined
+    return sorted(path for path in folder.glob("*_reprofiled.csv") if path.is_file())
+
+
+def _phase_sources(reports: Path, annotations: Path) -> List[Path]:
+    if reports.is_dir():
+        outs = sorted(path for path in reports.glob("*.assembly.out") if path.is_file())
+        if outs:
+            return outs
+    return _table_sources(annotations)
+
+
 def _known_samples(folder: Path) -> List[str]:
     if not folder.is_dir():
         return []
     suffix = ".annotation.csv"
-    return [path.name[: -len(suffix)] for path in folder.glob(f"*{suffix}") if path.is_file()]
+    names = [path.name[: -len(suffix)] for path in folder.glob(f"*{suffix}") if path.is_file()]
+    if names:
+        return names
+    found: List[str] = []
+    for path in _table_sources(folder):
+        for sample in _samples_in_table(path):
+            if sample not in found:
+                found.append(sample)
+    return found
 
 
 def _label(path: Path, samples: Sequence[str]) -> str:
     stem = path.name
     if stem.endswith(".mapping.json"):
         stem = stem[: -len(".mapping.json")]
-    for suffix in (".assembly.out", ".annotation.csv"):
+    for suffix in (".assembly.out", ".annotation.csv", "_reprofiled.csv"):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
             break
@@ -180,14 +301,10 @@ def write_mag_mapping_plots(root: Path) -> List[Path]:
                 if isinstance(payload, dict) and payload.get("total"):
                     losses[_label(path, samples)] = loss_fractions(payload)
         compositions: Dict[str, Dict[str, float]] = {}
-        sources: Iterable[Path] = []
-        if reports is not None and reports.is_dir():
-            sources = sorted(reports.glob("*.assembly.out"))
-        if not sources and annotations.is_dir():
-            sources = sorted(annotations.glob("*.annotation.csv"))
+        sources = _phase_sources(reports or Path(), annotations)
         for path in sources:
-            for column, shares in mag_id_shares(path):
-                label = _label(path, samples)
+            for sample, column, shares in mag_id_share_groups(path):
+                label = sample or _label(path, samples)
                 if column:
                     label = f"{label} {column}".strip()
                 compositions[label] = shares

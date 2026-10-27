@@ -18,6 +18,50 @@ def test_large_mag_table_is_subsampled(tmp_path):
     assert abs(sum(shares[0][1].values()) - 100) < 0.1
 
 
+def test_combined_and_reprofiled_tables_keep_mag_sections(tmp_path):
+    regen = tmp_path / "regenerated_annotations"
+    regen.mkdir()
+    (regen / "combined_annotation_table.csv").write_text(
+        "seq,sample,feat_assembly_0_MAG_ID\n"
+        "a,s1,M1\n"
+        "b,s1,\n"
+        "c,s2,M2\n"
+        "d,s2,M2\n",
+        encoding="utf-8",
+    )
+    repro = tmp_path / "reprofiled_annotations"
+    repro.mkdir()
+    (repro / "s1_reprofiled.csv").write_text(
+        "seq,feat_assembly_0_MAG_ID\na,M1\nb,\n",
+        encoding="utf-8",
+    )
+    written = write_mag_mapping_plots(tmp_path)
+    names = {path.name for path in written}
+    assert "mag_regenerated_ids_mqc.json" in names
+    assert "mag_reprofiled_ids_mqc.json" in names
+    assert "mag_reprofiled_losses_mqc.json" in names
+    regen_ids = json.loads(
+        (tmp_path / "regenerated_annotations_plots" / "mag_regenerated_ids_mqc.json").read_text()
+    )
+    assert regen_ids["data"]["s1 feat_assembly_0"]["M1"] == 50.0
+    assert regen_ids["data"]["s1 feat_assembly_0"]["(unassigned)"] == 50.0
+    assert regen_ids["data"]["s2 feat_assembly_0"]["M2"] == 100.0
+    repro_ids = json.loads(
+        (tmp_path / "reprofiled_annotations_plots" / "mag_reprofiled_ids_mqc.json").read_text()
+    )
+    assert repro_ids["data"]["s1 feat_assembly_0"]["(unassigned)"] == 50.0
+    losses = json.loads(
+        (tmp_path / "reprofiled_annotations_plots" / "mag_reprofiled_losses_mqc.json").read_text()
+    )
+    assert losses["data"]["s1 feat_assembly_0"]["unassigned"] == 50.0
+    from samovar.stage_report import bundle_multiqc
+
+    staged = bundle_multiqc(tmp_path)
+    bundled = "\n".join(path.read_text(encoding="utf-8") for path in staged.glob("*mag_*"))
+    assert "MAG_ID read shares" in bundled
+    assert "unassigned" in bundled
+
+
 def test_mapping_losses_and_reprofiled_mag_shares(tmp_path):
     reports = tmp_path / "initial_reports"
     reports.mkdir()
