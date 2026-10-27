@@ -468,10 +468,10 @@ def importance_table(
     y = None
     X = pd.DataFrame()
     try:
-        from samovar.reprofiling import preprocess_data
+        from samovar.reprofiling import IncompatiblePreprocessingError, preprocess_for_model
 
         if not frame.empty and "true" in frame.columns:
-            processed = preprocess_data(frame.copy())
+            processed = preprocess_for_model(frame, unwrap_estimator(model))
             y = processed["true"] if "true" in processed.columns else None
             cols = [
                 c
@@ -479,6 +479,8 @@ def importance_table(
                 if c in processed.columns and c not in {"seq", "true"}
             ]
             X = processed.reindex(columns=cols, fill_value=0)
+    except IncompatiblePreprocessingError:
+        raise
     except Exception:
         cols = [c for c in frame.columns if c not in {"seq", "true", "sample"}]
         X = frame.reindex(columns=cols, fill_value=0) if cols else pd.DataFrame()

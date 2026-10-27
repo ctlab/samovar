@@ -91,7 +91,19 @@ def standardize_taxid_columns(df):
         df[new_name] = coalesced
     return df
 
-def preprocess_data(df, drop_missing_true: bool = True):
+class IncompatiblePreprocessingError(ValueError):
+    """A saved model cannot safely encode the supplied features."""
+
+
+def _category_values(values, column):
+    values = values.astype("string").fillna("").astype(str)
+    if column == "MAG_ID" or column.endswith("_MAG_ID"):
+        # Contract alignment can fill an absent MAG feature with numeric zero.
+        values = values.replace({"0": "", "0.0": ""})
+    return values
+
+
+def preprocess_data(df, drop_missing_true: bool = True, *, preprocessing=None):
     """
     Preprocess the input dataframe for ML training.
 
@@ -99,6 +111,10 @@ def preprocess_data(df, drop_missing_true: bool = True):
         df (pd.DataFrame): Input dataframe with columns seq, taxID_*, length, true
         drop_missing_true: Drop rows with NaN in ``true`` (training only; inference
             on initial annotations keeps rows when ``true`` is unknown).
+        preprocessing: Fitted schema from ``model.samovar_preprocessing_``.
+            Without it, fit dictionaries and retain them in dataframe attrs for
+            ``train_models(preprocess_data(raw))`` callers. Missing and unseen
+            categories use -1; dictionaries are never extended during prediction.
 
     Returns:
         pd.DataFrame: Preprocessed dataframe ready for ML
@@ -132,21 +148,38 @@ def preprocess_data(df, drop_missing_true: bool = True):
         df['length'] = 0
     df['length'] = pd.to_numeric(df['length'], errors='coerce').fillna(0).astype(int)
 
-    if 'read_type' in df.columns:
-        codes, _uniques = pd.factorize(df['read_type'].fillna('').astype(str), sort=True)
-        df['read_type'] = pd.Series(codes, index=df.index).astype(int)
-
-    # Numeric features (kmer counts, length sidecars, …); categorical feat_* (MAG_ID) are factorized
-    skip = {"true", "length"}
-    for col in df.columns:
-        if col in skip or col.startswith("taxid_"):
-            continue
-        numeric = pd.to_numeric(df[col], errors="coerce")
-        if numeric.notna().all() or numeric.notna().sum() >= max(1, int(0.9 * len(df))):
-            df[col] = numeric.fillna(0)
-        else:
-            codes, _ = pd.factorize(df[col].fillna("").astype(str), sort=True)
-            df[col] = pd.Series(codes, index=df.index).astype(int)
+    encoded = df.attrs.get("samovar_preprocessing")
+    if encoded is not None and preprocessing is not None and encoded != preprocessing:
+        raise IncompatiblePreprocessingError("Features were encoded with a different model's dictionaries")
+    schema = preprocessing if preprocessing is not None else encoded
+    if schema is None:
+        features = {}
+        for col in df.columns:
+            if col == "true":
+                continue
+            numeric = pd.to_numeric(df[col], errors="coerce")
+            categorical = col == "read_type" or col == "MAG_ID" or col.endswith("_MAG_ID")
+            if not categorical and (
+                numeric.notna().all()
+                or numeric.notna().sum() >= max(1, int(0.9 * len(df)))
+            ):
+                features[col] = None
+            else:
+                values = _category_values(df[col], col)
+                features[col] = {value: i for i, value in enumerate(sorted(set(values) - {""}))}
+        schema = {"version": 1, "features": features}
+    if schema.get("version") != 1:
+        raise IncompatiblePreprocessingError("Unsupported model preprocessing version; retrain the reprofiler")
+    for col, categories in schema["features"].items():
+        if col not in df.columns:
+            df[col] = 0 if categories is None else -1
+        elif encoded is None:
+            if categories is None:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            else:
+                df[col] = _category_values(df[col], col).map(categories).fillna(-1).astype(int)
+    df = df[[*schema["features"], *(["true"] if "true" in df.columns else [])]]
+    df.attrs["samovar_preprocessing"] = schema
     
     # Convert true to numeric and handle NaN values
     if 'true' in df.columns:
@@ -156,6 +189,30 @@ def preprocess_data(df, drop_missing_true: bool = True):
             df['true'] = df['true'].astype(int)
     
     return df
+
+
+def preprocess_for_model(df, model, *, drop_missing_true=True):
+    """Transform with saved dictionaries; legacy taxid/length models remain usable."""
+    schema = getattr(model, "samovar_preprocessing_", None)
+    names = getattr(model, "feature_names_in_", None)
+    if schema is None:
+        df = standardize_taxid_columns(df.copy())
+        if names is not None:
+            df = df.reindex(columns=[*names, *(["true"] if "true" in df.columns else [])])
+    processed = preprocess_data(df, drop_missing_true, preprocessing=schema)
+    if schema is None and any(
+        col != "length" and not col.startswith("taxid_")
+        for col in processed.attrs["samovar_preprocessing"]["features"]
+    ):
+        # A numeric-only CSV chunk cannot prove a legacy feat_* was numeric at
+        # training time: it might be a subset of string categories like "001".
+        raise IncompatiblePreprocessingError(
+            "Legacy model has no preprocessing schema for auxiliary features. "
+            "Retrain the reprofiler from regenerated annotations before prediction."
+        )
+    if names is not None:
+        processed = processed.reindex(columns=[*names, *(["true"] if "true" in processed.columns else [])])
+    return processed
 
 
 def training_n_jobs(n_jobs=None, config=None) -> int:
@@ -532,6 +589,7 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
     
     for name, model in models.items():
         model.fit(X_train, y_train)
+        model.samovar_preprocessing_ = df_processed.attrs["samovar_preprocessing"]
         score = model.score(X_test, y_test)
         metrics[name] = score
         
@@ -683,21 +741,17 @@ def predict_taxid(df, model_path=None, feature_cols=None):
     # Create a copy to avoid modifying the original
     df = df.copy()
     
-    # Preprocess data (keep rows with unknown truth for inference)
-    df_processed = preprocess_data(df, drop_missing_true=False)
-    
-    # Use provided feature columns or get them from the dataframe
-    if feature_cols is None:
-        feature_cols = sorted([col for col in df_processed.columns 
-                             if col not in ['seq', 'true']])
-
     # Load or use provided model
-    if isinstance(model_path, str) and os.path.exists(model_path):
+    if isinstance(model_path, (str, os.PathLike)) and os.path.exists(model_path):
         model = joblib.load(model_path)
     elif model_path is not None:
         model = model_path
     else:
-        model, _, _, feature_cols = train_models(df_processed)
+        model, _, _, feature_cols = train_models(df)
+
+    df_processed = preprocess_for_model(df, model, drop_missing_true=False)
+    if feature_cols is None:
+        feature_cols = sorted(col for col in df_processed.columns if col != 'true')
 
     if hasattr(model, "feature_names_in_"):
         feature_cols = list(model.feature_names_in_)

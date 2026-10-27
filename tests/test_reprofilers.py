@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.config import PipelineConfig
 from samovar.paths import write_config
@@ -10,7 +11,13 @@ from samovar.reprofilers import (
     resolve_reprofiler,
     run_reprofiler,
 )
-from samovar.reprofiling import preprocess_data, train_models
+from samovar.reprofiling import (
+    IncompatiblePreprocessingError,
+    predict_taxid,
+    preprocess_data,
+    preprocess_for_model,
+    train_models,
+)
 from samovar.tools_import import import_tool
 
 TOOLS = Path(__file__).resolve().parent / "tools"
@@ -93,6 +100,108 @@ def test_train_models_single_method():
     assert "RandomForest" in metrics
     assert best is not None
     assert "length" in cols
+
+
+@pytest.mark.parametrize("method", ["rf", "ensemble", "linear"])
+def test_saved_categorical_dictionaries(method, tmp_path):
+    import joblib
+
+    regenerated = pd.DataFrame({
+        "seq": [f"r{i}" for i in range(90)],
+        "feat_assembly_0_MAG_ID": ["M0001", "M0002", "M0003"] * 30,
+        "feat_label": ["a", "b", "c"] * 30,
+        "feat_numeric": [1, 2, 3] * 30,
+        "read_type": ["illumina", "hybrid", "ont"] * 30,
+        "true": [562, 543, 9606] * 30,
+    })
+    subset = regenerated.iloc[[2, 0, 5]].drop(columns="true")
+    result = run_reprofiler(
+        method, regenerated=regenerated, initial={"sample": subset},
+        output_dir=tmp_path / method,
+        config={"feature_importance": "none", "cores": 2 if method == "linear" else 1},
+    )
+    model = joblib.load(tmp_path / method / "trained_model.joblib")
+    assert model.samovar_preprocessing_ == result.model.samovar_preprocessing_
+    assert model.samovar_preprocessing_["version"] == 1
+    processed = preprocess_for_model(subset, model)
+    assert processed["feat_assembly_0_MAG_ID"].tolist() == [2, 0, 2]
+    assert processed["read_type"].tolist() == [2, 1, 2]
+    assert processed["feat_label"].tolist() == [2, 0, 2]
+    assert processed["feat_numeric"].tolist() == [3, 1, 3]
+    # Numeric-looking values and missing entries never change a fitted feature's type.
+    unknown = subset.copy()
+    unknown["feat_assembly_0_MAG_ID"] = ["new", None, 0]
+    unknown["feat_label"] = [1, 2, 3]
+    unknown["read_type"] = ["new", None, ""]
+    before = joblib.hash(model.samovar_preprocessing_)
+    unknown = preprocess_for_model(unknown, model)
+    for column in ("feat_assembly_0_MAG_ID", "feat_label", "read_type"):
+        assert unknown[column].tolist() == [-1, -1, -1]
+        assert preprocess_for_model(subset.drop(columns=column), model)[column].tolist() == [-1] * 3
+    assert joblib.hash(model.samovar_preprocessing_) == before
+    assert predict_taxid(subset, model)["taxid_SAMOVAR"].tolist() == [9606, 562, 9606]
+    for other in result.models.values():
+        assert other.samovar_preprocessing_ == model.samovar_preprocessing_
+
+
+def test_categorical_streaming_matches_full_frame(tmp_path, monkeypatch):
+    import joblib
+    import samovar.reprofilers as module
+    from samovar.reprofilers import stream_profile_csv
+
+    train = pd.DataFrame({
+        "feat_assembly_0_MAG_ID": ["M0001", "M0002", "M0003"] * 30,
+        "read_type": ["illumina", "hybrid", "ont"] * 30,
+        "feat_label": ["001", "10", "other"] * 30,
+        "true": [562, 543, 9606] * 30,
+    })
+    # Also preserve dictionaries when the public preprocessing helper is called first.
+    model, _, _, _ = train_models(preprocess_data(train))
+    path = tmp_path / "model.joblib"
+    joblib.dump(model, path)
+    model = joblib.load(path)
+    raw = pd.DataFrame({
+        "seq": [f"r{i}" for i in range(20_003)],
+        "feat_assembly_0_MAG_ID": ["M0001"] * 20_000 + ["M0003"] * 3,
+        "read_type": ["illumina"] * 20_000 + ["ont"] * 3,
+        "feat_label": ["001"] * 20_000 + ["10", "001", None],
+    })
+    seen = []
+
+    def record(frame, model_path):
+        seen.extend(preprocess_for_model(frame, model_path)["feat_label"].tolist())
+        return predict_taxid(frame, model_path)
+
+    monkeypatch.setattr(module, "predict_taxid", record)
+    raw.to_csv(tmp_path / "sample.csv", index=False)
+    stream_profile_csv(tmp_path / "sample.csv", model, tmp_path / "result.csv")
+    streamed = pd.read_csv(tmp_path / "result.csv")
+    full = predict_taxid(raw, str(path))
+    assert streamed["taxid_SAMOVAR"].tolist() == full["taxid_SAMOVAR"].tolist()
+    assert streamed["taxid_SAMOVAR"].iloc[-3:].tolist() == [9606] * 3
+    assert seen == [0] * 20_000 + [1, 0, -1]
+
+
+def test_legacy_and_unsupported_preprocessing(tmp_path):
+    regenerated, _, initial = _tiny_tables()
+    model, _, _, _ = train_models(regenerated)
+    del model.samovar_preprocessing_
+    assert len(predict_taxid(initial["sample.annotation"], model)) == 3
+    regenerated["feat_assembly_0_MAG_ID"] = ["M0001", "M0002"] * 6
+    model, _, _, _ = train_models(regenerated)
+    del model.samovar_preprocessing_
+    with pytest.raises(IncompatiblePreprocessingError, match="Legacy model.*Retrain"):
+        predict_taxid(regenerated, model)
+    # An all-numeric chunk could still come from a categorical auxiliary feature.
+    regenerated = regenerated.rename(columns={"feat_assembly_0_MAG_ID": "feat_label"})
+    model, _, _, _ = train_models(regenerated)
+    del model.samovar_preprocessing_
+    regenerated["feat_label"] = 1
+    with pytest.raises(IncompatiblePreprocessingError, match="Legacy model.*Retrain"):
+        predict_taxid(regenerated, model)
+    model.samovar_preprocessing_ = {"version": 999, "features": {}}
+    with pytest.raises(IncompatiblePreprocessingError, match="Unsupported.*version"):
+        predict_taxid(regenerated, model)
 
 
 def test_run_builtin_random_forest(tmp_path):

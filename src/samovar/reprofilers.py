@@ -40,6 +40,7 @@ from samovar.reprofiling import (
     plot_roc_curves,
     predict_taxid,
     preprocess_data,
+    preprocess_for_model,
     save_model,
     train_models,
     training_n_jobs,
@@ -248,9 +249,6 @@ def iter_annotation_csvs(
 
 def _profile_frame(raw: pd.DataFrame, model, *, features_df, classify_unclassified: bool) -> pd.DataFrame:
     df = merge_read_features(raw, features_df)
-    fill_cols = [c for c in df.columns if c != "true"]
-    if fill_cols:
-        df[fill_cols] = df[fill_cols].fillna(0)
     result = predict_taxid(df, model_path=model)
     if not classify_unclassified:
         taxid_cols = annotator_taxid_columns(df)
@@ -274,7 +272,8 @@ def stream_profile_csv(
     dest.parent.mkdir(parents=True, exist_ok=True)
     first = True
     written = 0
-    for chunk in pd.read_csv(path, chunksize=20_000):
+    model, chunks = _profile_csv_reader(path, model)
+    for chunk in chunks:
         result = _profile_frame(
             chunk,
             model,
@@ -287,6 +286,18 @@ def stream_profile_csv(
     if first:
         pd.DataFrame().to_csv(dest, index=False)
     return written
+
+
+def _profile_csv_reader(path, model):
+    """Keep categorical strings (including leading zeros) across CSV chunks."""
+    if isinstance(model, (str, Path)):
+        import joblib
+
+        model = joblib.load(model)
+    schema = getattr(model, "samovar_preprocessing_", {})
+    dtype = {col: str for col, categories in schema.get("features", {}).items()
+             if categories is not None}
+    return model, pd.read_csv(path, chunksize=20_000, dtype=dtype)
 
 
 def stream_profile_dir(
@@ -337,7 +348,8 @@ def _stream_profile_combined(
     """Split one combined table by ``sample`` into ``{sample}_reprofiled.csv``."""
     seen = set()
     n = 0
-    for chunk in pd.read_csv(path, chunksize=20_000):
+    model, chunks = _profile_csv_reader(path, model)
+    for chunk in chunks:
         if "sample" not in chunk.columns:
             sample = path.stem.split(".")[0]
             groups = [(sample, chunk)]
@@ -578,6 +590,7 @@ def reprofile_linear(
         gpu=use_gpu(config=cfg),
         **kwargs,
     )
+    model.samovar_preprocessing_ = df.attrs["samovar_preprocessing"]
     tables, wrote = _emit_profiles(initial, model, cfg)
     save_model(model, str(output_dir / "trained_model.joblib"))
     return ReprofileResult(
@@ -611,9 +624,6 @@ def run_builtin_reprofiler(
         validation = validation.drop(columns=["seq"])
     if "true" in validation.columns:
         validation = validation.dropna(subset=["true"])
-    fill_cols = [c for c in validation.columns if c != "true"]
-    if fill_cols:
-        validation[fill_cols] = validation[fill_cols].fillna(0)
     output_dir = Path(cfg.get("output_dir") or ".")
     output_dir.mkdir(parents=True, exist_ok=True)
     if validation.empty or "true" not in validation.columns:
@@ -640,7 +650,7 @@ def run_builtin_reprofiler(
         )
         return ReprofileResult(tables=load_csv_tables(output_dir, skip_prefixes=()))
     tables, wrote = _emit_profiles(initial, best, cfg)
-    processed = preprocess_data(validation.copy())
+    processed = preprocess_for_model(validation, best)
     try:
         X = processed.reindex(columns=feature_cols, fill_value=0)
         plot_roc_curves(models, X, processed["true"], output_dir=str(output_dir))

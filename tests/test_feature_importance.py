@@ -85,6 +85,32 @@ def test_score_writes_multiqc_json(tmp_path):
     assert table["importance"].sum() > 0
 
 
+def test_permutation_uses_model_category_dictionary(monkeypatch):
+    from samovar.reprofiling import train_models
+    import samovar.feature_importance as module
+
+    annotation = pd.DataFrame({
+        "feat_assembly_0_MAG_ID": ["M0001", "M0002", "M0003"] * 20,
+        "read_type": ["illumina"] * 60,
+        "true": [562, 543, 9606] * 20,
+    })
+    model, _, _, columns = train_models(annotation)
+    seen = []
+    real = module.permutation_importance_scores
+
+    def record(model, X, y, **kwargs):
+        assert list(X.columns) == columns
+        seen.append(X["feat_assembly_0_MAG_ID"].tolist())
+        return real(model, X, y, **kwargs)
+
+    monkeypatch.setattr(module, "permutation_importance_scores", record)
+    subset = annotation.iloc[[2, 5, 8]]
+    importance_table(model=model, annotation=subset, initial_abundance={},
+                     regenerated_abundance={},
+                     config={"method": "permutation"})
+    assert seen == [[2, 2, 2]]
+
+
 def test_default_best_model_only():
     a = object()
     b = object()

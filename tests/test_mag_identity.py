@@ -65,6 +65,15 @@ def test_regenerated_bins_reuse_initial_ids(tmp_path):
     _write(initial, "bin3.fa", yeast)
     first = _ids_for(initial, catalog, tmp_path / "stable_initial")
     assert first["bin17"] != first["bin3"]
+    # Initial samples also share this catalog: local bin names are not MAG IDs.
+    other_initial = tmp_path / "other_initial"
+    _write(other_initial, "renamed_ecoli.fa", ecoli)
+    _write(other_initial, "renamed_yeast.fa", yeast)
+    before = catalog.read_bytes()
+    shared = _ids_for(other_initial, catalog, tmp_path / "stable_other_initial")
+    assert shared["renamed_ecoli"] == first["bin17"]
+    assert shared["renamed_yeast"] == first["bin3"]
+    assert catalog.read_bytes() == before
     _write(regen, "contig_zz.fa", _mutate(ecoli, seed=2))
     _write(regen, "contig_aa.fa", _mutate(yeast, seed=3))
     # The yeast-only reassembly must keep yeast's id, not become M0001 by recounting.
