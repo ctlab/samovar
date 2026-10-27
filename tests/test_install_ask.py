@@ -38,6 +38,7 @@ def test_ask_samovar_database_records_path(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     cfg.write_text("{}\n")
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
     monkeypatch.delenv("SAMOVAR_DATABASE", raising=False)
     chosen = tmp_path / "library"
     recorded = ask_samovar_database(lambda _prompt: str(chosen))
