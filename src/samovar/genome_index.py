@@ -10,7 +10,6 @@ the install config pointed at by ``build/config_path``.
 from __future__ import annotations
 
 import argparse
-import gzip
 import logging
 import os
 import re
@@ -19,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from samovar.seqio import is_fasta_name, is_gzip_path, sequence_stem
+from samovar.seqio import is_fasta_name, is_gzip_path, sequence_stem, publish_genome_file
 
 logger = logging.getLogger(__name__)
 
@@ -341,7 +340,8 @@ def resolve_indexed_path(ident: str, cfg: Optional[Dict[str, Any]] = None) -> Op
     candidates.append(processed_storage_dir(cfg) / name)
     for path in candidates:
         try:
-            if path.is_file():
+            from samovar.seqio import usable_genome_file
+            if usable_genome_file(path):
                 return path
         except OSError:
             continue
@@ -362,11 +362,9 @@ def ensure_gzip_fasta(path: Path) -> Path:
         return src
     if is_gzip_path(src):
         return src
-    dest = src.with_name(src.name + ".gz")
-    with src.open("rb") as fin, gzip.open(dest, "wb") as fout:
-        shutil.copyfileobj(fin, fout)
-    src.unlink()
-    return dest
+    from samovar.seqio import gzip_file
+
+    return gzip_file(src)
 
 
 def iter_processed_fastas(root: PathLike) -> List[Path]:
@@ -454,12 +452,7 @@ def stage_into_dir(src: PathLike, dest_dir: PathLike) -> Path:
         same = str(src_path) == str(target)
     if same:
         return target
-    if target.exists() or target.is_symlink():
-        target.unlink()
-    try:
-        os.link(src_path, target)
-    except OSError:
-        shutil.copy2(src_path, target)
+    publish_genome_file(src_path, target)
     return target
 
 
@@ -557,9 +550,7 @@ def index_processed_file(
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / processed_filename(acc)
     if src.resolve() != dest.resolve():
-        if dest.exists():
-            dest.unlink()
-        shutil.move(str(src), str(dest))
+        publish_genome_file(src, dest, move=True)
         src = dest
     elif src.name != dest.name:
         src = src.rename(dest)
@@ -656,15 +647,7 @@ def catalog_processed_genome(
             except OSError:
                 same = False
         if not same:
-            if target.exists() or target.is_symlink():
-                target.unlink()
-            if keep_src:
-                try:
-                    os.link(src, target)
-                except OSError:
-                    shutil.copy2(src, target)
-            else:
-                shutil.move(str(src), str(target))
+            publish_genome_file(src, target, move=not keep_src)
             src = target
     indexed = index_processed_file(
         src,

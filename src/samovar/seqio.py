@@ -6,6 +6,7 @@ builders, ISS, and annotator workflows can share the same lookup rules.
 
 from __future__ import annotations
 
+from functools import lru_cache
 import gzip
 import os
 import re
@@ -173,8 +174,9 @@ def gzip_file(path: PathLike, *, remove_source: bool = True) -> Path:
     if is_gzip_path(src):
         return src
     dest = Path(str(src) + ".gz")
-    with open(src, "rb") as fin, gzip.open(dest, "wb") as fout:
-        shutil.copyfileobj(fin, fout)
+    with atomic_genome_output(dest) as pending:
+        with open(src, "rb") as fin, gzip.open(pending, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
     if remove_source:
         try:
             src.unlink()
@@ -196,8 +198,9 @@ def gunzip_file(path: PathLike, dest: Optional[PathLike] = None, *, remove_sourc
     out.parent.mkdir(parents=True, exist_ok=True)
     same = src.resolve() == out.resolve()
     write_to = Path(str(out) + ".ungz.tmp") if same else out
-    with gzip.open(src, "rb") as fin, open(write_to, "wb") as fout:
-        shutil.copyfileobj(fin, fout)
+    with atomic_genome_output(write_to) as pending:
+        with gzip.open(src, "rb") as fin, open(pending, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
     if same:
         write_to.replace(out)
     elif remove_source:
@@ -242,7 +245,7 @@ def find_existing_processed_genome(genome_dir: PathLike, taxid: str) -> Optional
         for name in names:
             for ext in preferred:
                 candidate = folder / f"{name}{ext}"
-                if candidate.exists():
+                if usable_genome_file(candidate):
                     return candidate
     return None
 
@@ -853,3 +856,69 @@ def assembly_read_libraries(r1: PathLike, r2: PathLike = ""):
         else:
             # Pure short reads retain their original pairing.
             yield str(r1), str(r2 or ""), "", True
+
+
+@contextmanager
+def atomic_genome_output(destination):
+    """Serialize writers and publish only closed output; retain interrupted staging."""
+    import fcntl
+    import logging
+
+    dest = Path(destination)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pending = dest.with_name("." + dest.name + ".pending" + (".gz" if str(dest).endswith(".gz") else ""))
+    locks = dest.parent / ".locks"
+    locks.mkdir(exist_ok=True)
+    with (locks / dest.name).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if pending.exists():
+            logging.getLogger(__name__).warning("Retrying interrupted genome write: %s", dest)
+        yield pending
+        pending.replace(dest)
+
+
+def usable_genome_file(path):
+    """Validate cached FASTA/gzip once per file identity; never reuse broken data."""
+    import logging
+
+    path = Path(path)
+    try:
+        st = path.stat()
+        valid = _valid_genome_content(str(path), st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    except OSError:
+        return False
+    if not valid:
+        logging.getLogger(__name__).warning("Ignoring damaged/empty genome %s; will retry download", path)
+    return valid
+
+
+@lru_cache(maxsize=4096)
+def _valid_genome_content(path, inode, size, mtime, ctime):
+    import zlib
+
+    try:
+        with open_text(path) as handle:
+            first = next((line for line in handle if line.strip()), "")
+            if not first.startswith(">"):
+                return False
+            bases = False
+            for line in handle:
+                if line.strip() and not line.startswith(">"):
+                    bases = True
+            return bases
+    except (OSError, EOFError, UnicodeError, zlib.error):
+        return False
+
+
+def publish_genome_file(source, destination, *, move=False):
+    """Stage a complete hardlink/copy, including cross-filesystem moves."""
+    src, dest = Path(source), Path(destination)
+    with atomic_genome_output(dest) as pending:
+        pending.unlink(missing_ok=True)
+        try:
+            os.link(src, pending)
+        except OSError:
+            shutil.copy2(src, pending)
+    if move:
+        src.unlink()
+    return dest

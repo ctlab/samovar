@@ -290,7 +290,8 @@ def test_cached_ncbi_gzip_size_mismatch_warns(tmp_path, monkeypatch, caplog):
     raw = genome_download_dir() / "raw"
     raw.mkdir(parents=True, exist_ok=True)
     cached = raw / "1280.fna.gz"
-    cached.write_bytes(b"\x1f\x8b")
+    with gzip.open(cached, "wt") as handle:
+        handle.write(">x\nACGT\n")
 
     caplog.set_level(logging.WARNING)
     with patch(
@@ -481,3 +482,62 @@ def test_generate_random_taxids_invalid_group(test_output_dir):
     except Exception as exc:
         pytest.skip(f"NCBI unavailable: {exc}")
     assert len(taxids) == 0
+
+
+def test_interrupted_download_is_not_published_and_retry_recovers(tmp_path, monkeypatch, caplog):
+    import io
+    from samovar.genome_fetcher import _download_url
+    from samovar.seqio import usable_genome_file
+
+    class Response(io.BytesIO):
+        headers = {"Content-Length": "100000"}
+
+    payload = gzip.compress(b">genome\nACGTACGT\n")
+    dest = tmp_path / "562.fna.gz"
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: Response(payload[:10]))
+    with pytest.raises(OSError, match="Incomplete download"):
+        _download_url("https://example.invalid/genome", dest)
+    assert not dest.exists()
+    assert list(tmp_path.glob("*.pending.gz"))
+    Response.headers = {"Content-Length": str(len(payload))}
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: Response(payload))
+    _download_url("https://example.invalid/genome", dest)
+    assert usable_genome_file(dest)
+    assert not list(tmp_path.glob("*.pending.gz"))
+    assert "Retrying interrupted" in caplog.text
+    dest.write_bytes(payload[:-5])
+    assert not usable_genome_file(dest)
+    assert "damaged/empty" in caplog.text
+
+
+def test_atomic_fasta_reader_never_sees_partial_write(tmp_path):
+    import multiprocessing as mp
+    from samovar.seqio import atomic_genome_output, find_existing_processed_genome
+
+    context = mp.get_context("fork")
+    started, finish = context.Event(), context.Event()
+    dest = tmp_path / "562.fa"
+
+    def writer():
+        with atomic_genome_output(dest) as pending:
+            with pending.open("w") as handle:
+                handle.write(">genome\nAAAA\n")
+                handle.flush()
+                started.set()
+                assert finish.wait(10)
+                handle.write("CCCC\n")
+
+    process = context.Process(target=writer)
+    process.start()
+    try:
+        assert started.wait(10)
+        assert find_existing_processed_genome(tmp_path, "562") is None
+        finish.set()
+        process.join(10)
+        assert process.exitcode == 0
+        assert find_existing_processed_genome(tmp_path, "562") == dest
+        assert dest.read_text() == ">genome\nAAAA\nCCCC\n"
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join()

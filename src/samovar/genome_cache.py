@@ -147,7 +147,10 @@ def place_genome(
     if src_resolved.parent == dest_resolved and src_p.name == name:
         return src_p if src_p.exists() else target
     if target.exists() or target.is_symlink():
-        return target
+        from samovar.seqio import usable_genome_file
+        if usable_genome_file(target):
+            return target
+        target.unlink()
     try:
         target.symlink_to(src_resolved)
         logger.info("Linked genome %s -> %s", target, src_resolved)
@@ -159,7 +162,9 @@ def place_genome(
             target,
             exc,
         )
-        shutil.copy2(src_resolved, target)
+        from samovar.seqio import atomic_genome_output
+        with atomic_genome_output(target) as pending:
+            shutil.copy2(src_resolved, pending)
         return target
 
 
@@ -186,7 +191,8 @@ def _iter_taxid_files(directory: Path, taxid: str) -> List[Path]:
             key = str(path.resolve())
         except OSError:
             key = str(path)
-        if key in seen or not _path_is_file(path):
+        from samovar.seqio import usable_genome_file
+        if key in seen or not usable_genome_file(path):
             return
         seen.add(key)
         hits.append(path)

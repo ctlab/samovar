@@ -28,6 +28,8 @@ from samovar.genome_cache import (
     ensure_genome_config,
 )
 from samovar.seqio import (
+    atomic_genome_output,
+    usable_genome_file,
     find_existing_processed_genome,
     gunzip_file,
     gzip_file,
@@ -136,7 +138,8 @@ def _copy_bundled_genome(taxid: str | int, output_folder: str) -> Optional[str]:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{_normalize_taxid(taxid)}{''.join(bundled.suffixes)}"
     if not dest.exists():
-        shutil.copy2(bundled, dest)
+        with atomic_genome_output(dest) as pending:
+            shutil.copy2(bundled, pending)
     return str(dest)
 
 
@@ -145,20 +148,28 @@ def _download_url(url: str, dest: Path, timeout: int = 45) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url)
     expected: Optional[int] = None
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
-        cl = resp.headers.get("Content-Length")
-        if cl:
-            try:
-                expected = int(cl)
-            except (TypeError, ValueError):
-                expected = None
-        while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-    if expected is not None:
-        warn_gzip_size_vs_ncbi(dest, identity=dest.name, expected_bytes=expected)
+    with atomic_genome_output(dest) as pending:
+        with urllib.request.urlopen(req, timeout=timeout) as resp, open(pending, "wb") as out:
+            cl = resp.headers.get("Content-Length")
+            if cl:
+                try:
+                    expected = int(cl)
+                except (TypeError, ValueError):
+                    expected = None
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        if expected is not None and pending.stat().st_size != expected:
+            raise IOError(f"Incomplete download of {dest}: expected {expected} bytes")
+        if is_gzip_path(dest):
+            import gzip
+            with gzip.open(pending, "rb") as compressed:
+                while compressed.read(1024 * 1024):
+                    pass
+        if not pending.stat().st_size:
+            raise IOError(f"Empty download: {dest}")
 
 
 def _normalize_taxid(taxid: str | int) -> str:
@@ -600,6 +611,30 @@ def _repair_assembly_taxid(path: Path, taxid: str) -> None:
         temp.unlink(missing_ok=True)
 
 
+def _serialize_fetch(function):
+    from functools import wraps
+    import inspect
+    import fcntl
+
+    signature = inspect.signature(function)
+
+    @wraps(function)
+    def locked(*args, **kwargs):
+        arguments = signature.bind(*args, **kwargs).arguments
+        identity = str(arguments.get("taxid", arguments.get("accession", "")))
+        if identity.split(".")[0].isdigit():
+            identity = identity.split(".")[0]
+        import hashlib
+        key = hashlib.sha256(identity.encode()).hexdigest()
+        root = cache_processed_dir() / ".locks"
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / (function.__name__ + "-" + key)).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return function(*args, **kwargs)
+    return locked
+
+
+@_serialize_fetch
 def fetch_assembly_processed(
     accession: str,
     dest_dir: str,
@@ -621,13 +656,13 @@ def fetch_assembly_processed(
     taxid = numeric_taxid_for(accession)
     species = ""
     catalog_unresolved = not taxid.isdigit() or int(taxid) <= 0
-    if catalog_unresolved and existing.is_file():
+    if catalog_unresolved and usable_genome_file(existing):
         taxid = numeric_taxid_from_fasta(existing)
     if not taxid.isdigit() or int(taxid) <= 0:
         taxid, species = assembly_taxonomy(accession, email, silent=silent)
     if not taxid.isdigit() or int(taxid) <= 0:
         raise ValueError(f"Cannot resolve a numeric taxid for assembly {accession}; retry when NCBI is available")
-    if existing.is_file():
+    if usable_genome_file(existing):
         _repair_assembly_taxid(existing, taxid)
         if (index and indexed is None) or (indexed is not None and catalog_unresolved):
             existing = index_processed_file(
@@ -655,7 +690,7 @@ def fetch_assembly_processed(
     raw_parent = _raw_parent_for_dest(dest, raw_dir)
     raw_path = raw_parent / raw_filename(accession)
     try:
-        if raw_path.is_file():
+        if usable_genome_file(raw_path):
             warn_gzip_size_vs_ncbi(raw_path, identity=accession, ftp_path=ftp_path)
             if not silent:
                 logger.info("Reusing cached NCBI gzip %s", raw_path)
@@ -897,6 +932,7 @@ def fetch_gff(
     )
 
 
+@_serialize_fetch
 def fetch_genome_raw(
     taxid: str|int,
     output_folder: str,
@@ -922,7 +958,7 @@ def fetch_genome_raw(
     possible_exts = [".fa.gz", ".fna.gz", ".fasta.gz", ".fa", ".fna", ".fasta"]
     for ext in possible_exts:
         candidate = output_path / f"{taxid}{ext}"
-        if candidate.exists():
+        if usable_genome_file(candidate):
             _warn_existing_ncbi_gzip(candidate, taxid, email)
             if not silent:
                 logger.info(f"Genome for taxid {taxid} already exists at {candidate}")
@@ -955,7 +991,7 @@ def fetch_genome_raw(
     for folder in (raw_dir, cache):
         for ext in possible_exts:
             candidate = folder / f"{taxid}{ext}"
-            if candidate.exists():
+            if usable_genome_file(candidate):
                 existing_cache = candidate
                 break
         if existing_cache is not None:
@@ -1007,6 +1043,7 @@ def fetch_genome_raw(
     register_genome_dir(genome_path.parent)
     return str(genome_path)
 
+@_serialize_fetch
 def fetch_genome(
     taxid: str|int,
     output_folder: str,
@@ -1052,7 +1089,7 @@ def fetch_genome(
         return str(existing)
 
     indexed = resolve_indexed_path(str(taxid))
-    if indexed is not None:
+    if indexed is not None and usable_genome_file(indexed):
         if not silent:
             logger.info("Using indexed genome for %s: %s", taxid, indexed)
         return str(indexed)
