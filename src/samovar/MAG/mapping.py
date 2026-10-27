@@ -143,7 +143,19 @@ def alignment_candidate(line, markers):
             int(tags['AS']), matches, covered, marker_bases, int(p[4]))
 
 
-def assign_alignments(r1, r2, bam, taxonomy, dest, *, markers='', sample='', settings=None):
+def candidate_vector(ranks):
+    """Share of summed alignment score for each classified MAG, sorted by id."""
+    if not ranks:
+        return ''
+    total = sum(rank[0] for rank in ranks.values())
+    names = sorted(ranks)
+    if total <= 0:
+        share = 1.0 / len(names)
+        return ','.join(f'{mag}={share:.6f}' for mag in names)
+    return ','.join(f'{mag}={ranks[mag][0] / total:.6f}' for mag in names)
+
+
+def assign_alignments(r1, r2, bam, taxonomy, dest, *, markers='', sample='', settings=None, keep_vector=False):
     """Persist every reported candidate and emit one resolved row per read id.
 
     Within each MAG use the best alignment per mate: supplementary/secondary
@@ -190,7 +202,7 @@ def assign_alignments(r1, r2, bam, taxonomy, dest, *, markers='', sample='', set
                             db.execute('INSERT INTO candidates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)', hit)
             tmp_out = out.with_suffix(out.suffix + '.pending')
             with tmp_out.open('w') as handle:
-                handle.write('seq\ttaxID\tMAG_ID\n')
+                handle.write('seq\ttaxID\tMAG_ID' + ('\tMAG_vector\n' if keep_vector else '\n'))
                 for (seq,) in db.execute('SELECT seq FROM reads ORDER BY seq'):
                     best = {}
                     reported_mags = set()
@@ -217,7 +229,8 @@ def assign_alignments(r1, r2, bam, taxonomy, dest, *, markers='', sample='', set
                     db.execute('INSERT INTO assignments VALUES (?,?,?,?)', (seq,tid,mag,status))
                     if mag:
                         db.execute('UPDATE candidates SET selected=1 WHERE seq=? AND mag_id=?', (seq,mag))
-                    handle.write(f'{seq}\t{tid}\t{mag}\n')
+                    vector = '\t' + candidate_vector(ranks) if keep_vector else ''
+                    handle.write(f'{seq}\t{tid}\t{mag}{vector}\n')
             db.commit()
         pending.replace(database)
         tmp_out.replace(out)
@@ -231,7 +244,7 @@ def assign_alignments(r1, r2, bam, taxonomy, dest, *, markers='', sample='', set
     return out
 
 
-def write_mapping_table(r1, r2, mag_dir, taxonomy, dest, *, feature='MAG_ID', threads=1, markers='', aligner='minimap2'):
+def write_mapping_table(r1, r2, mag_dir, taxonomy, dest, *, feature='MAG_ID', threads=1, markers='', aligner='minimap2', keep_vector=False):
     from samovar.assembly_profiling import run_minimap2, _fasta_has_records
 
     if feature != 'MAG_ID':
@@ -263,10 +276,12 @@ def write_mapping_table(r1, r2, mag_dir, taxonomy, dest, *, feature='MAG_ID', th
         else:
             run_minimap2(r1, r2, mag_dir, bam, threads=threads, extra=flags)
     return assign_alignments(r1, r2, bam, taxonomy, dest, markers=markers, sample=Path(dest).stem,
+                             keep_vector=keep_vector,
                              settings={'aligner':aligner, 'secondary':True, 'threads':threads,
                                        'presets_by_library':{'short':'sr','ont':'map-ont'}, 'flags':flags,
                                        'candidate_limit':'aligner defaults plus imported flags',
-                                       'selection':'AS,matches,covered,marker_bases,MAPQ; best per mate/MAG'})
+                                       'selection':'AS,matches,covered,marker_bases,MAPQ; best per mate/MAG',
+                                       'candidate_vector': 'AS share across classified MAGs' if keep_vector else ''})
 
 
 def validate_mapping_resume(output_dir):
@@ -294,8 +309,10 @@ def main(argv=None):
     parser.add_argument('--markers', default='')
     parser.add_argument('--aligner', choices=('exact','minimap2'), default='exact',
                         help='Exact-match contract baseline; production uses minimap2')
+    parser.add_argument('--keep-candidate-vector', action='store_true')
     args = parser.parse_args(argv)
-    write_mapping_table(args.i,args.r2,args.r,args.x,args.o,threads=args.t,markers=args.markers,aligner=args.aligner)
+    write_mapping_table(args.i,args.r2,args.r,args.x,args.o,threads=args.t,markers=args.markers,
+                        aligner=args.aligner, keep_vector=args.keep_candidate_vector)
     return 0
 
 

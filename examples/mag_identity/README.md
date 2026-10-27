@@ -13,3 +13,5 @@ SAMOVAR_MAG_MODE=map-initial bash examples/mag_identity/pipeline.sh
 ```
 
 Both modes use `feat_*_MAG_ID`, with the same column on initial and regenerated annotations. The `map-initial` mode requires minimap2 and samtools (`./install.sh minimap2`); the identity taxonomy in this example is a debugging baseline, not a GTDB gene check. Production GTDB mapping uses `--mag-taxonomy gtdbtk` and a configured GTDB database.
+
+`--keep-candidate-vector` in the assembly slot extra adds `MAG_vector`: each classified MAG's share of the alignment score. The resolved `MAG_ID` stays a single winner. In this identity toy the MAG is the concatenated initial reads, not the source genomes, so regenerated reads map only where that sequence is present. A phage genome stored in full maps; new reads from the uncovered part of a long genome stay unmapped.

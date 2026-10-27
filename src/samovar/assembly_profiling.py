@@ -247,6 +247,10 @@ def parse_slot_extra(extra: str) -> Dict[str, Any]:
             out["mag_mode"] = nxt
             i += 2
             continue
+        if tok in {"--keep-candidate-vector", "--keep_candidate_vector"}:
+            out["keep_candidate_vector"] = True
+            i += 1
+            continue
         i += 1
     return out
 
@@ -1740,6 +1744,7 @@ def run_assembly_annotator(
     mag_quantifier: str = "coverm",
     work_dir: str = "",
     mag_mode: str = "",
+    keep_candidate_vector: bool = False,
 ) -> Path:
     """Full nested pipeline; writes headered seq/taxID/MAG_ID TSV at dest."""
     out = as_path(dest)
@@ -1780,7 +1785,8 @@ def run_assembly_annotator(
         validate_mapping_catalog(catalog_early)
         return write_mapping_table(r1, r2, str(_catalog_fasta_dir(catalog_early)),
                                    str(catalog_early.parent / "taxonomy.tsv"), str(out),
-                                   threads=threads, markers=str(catalog_early.parent / "markers.tsv"))
+                                   threads=threads, markers=str(catalog_early.parent / "markers.tsv"),
+                                   keep_vector=bool(keep_candidate_vector or slots.get("keep_candidate_vector")))
     selected = work / "bins_selected"
     run_assembler(r1, r2, str(contigs), threads=threads, name=assembler)
     if not _fasta_has_records(contigs):
@@ -1893,6 +1899,7 @@ def _stage_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aligner", default="minimap2")
     parser.add_argument("--mag-quantifier", dest="mag_quantifier", default="coverm")
     parser.add_argument("--mag-mode", dest="mag_mode", default="")
+    parser.add_argument("--keep-candidate-vector", dest="keep_candidate_vector", action="store_true")
     parser.add_argument("--work-dir", dest="work_dir", default="")
     return parser
 
@@ -1945,6 +1952,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             mag_quantifier=args.mag_quantifier,
             work_dir=args.work_dir,
             mag_mode=args.mag_mode,
+            keep_candidate_vector=args.keep_candidate_vector,
         )
     return 0
 

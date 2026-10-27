@@ -108,6 +108,21 @@ def test_combine_assembly_mag_id_feature(tmp_path, combiner):
     assert set(df[tax[0]].astype(str)) == {"562"}
 
 
+def test_combine_keeps_mag_candidate_vector(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_features(
+        reports / "s1_assembly-test.assembly.out",
+        ["seq", "taxID", "MAG_ID", "MAG_vector"],
+        [("readA|taxid:562|", "562", "M1", "M1=0.666667,M2=0.333333")],
+    )
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv")
+    column = next(c for c in df.columns if "MAG_vector" in c)
+    assert df.loc[0, column] == "M1=0.666667,M2=0.333333"
+
+
 def test_combine_tool_with_tax_and_features(tmp_path, combiner):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"

@@ -31,6 +31,71 @@ def resolve(tmp_path, sam, taxa=('562','9606'), markers=''):
     return pd.read_table(out, keep_default_na=False).set_index('seq'), out
 
 
+def test_candidate_vector_is_optional_and_sums_to_one(tmp_path):
+    from samovar.MAG.mapping import assign_alignments
+    from samovar.assembly_profiling import parse_slot_extra
+
+    assert parse_slot_extra('--mag-mode map-initial --keep-candidate-vector')['keep_candidate_vector'] is True
+    reads = fastq(tmp_path / 'reads.fastq', ['unique', 'tie', 'miss'])
+    tax = tmp_path / 'tax.tsv'
+    tax.write_text('mag_id\ttaxid\tlineage\nM1\t562\t\nM2\t9606\t\n')
+    sam = tmp_path / 'reads.sam'
+    sam.write_text(alignment('unique', 'M1', score=20) + alignment('unique', 'M2', score=10) +
+                   alignment('tie', 'M1', score=8) + alignment('tie', 'M2', score=8))
+    out = tmp_path / 'mapped.tsv'
+    assign_alignments(reads, '', str(sam), str(tax), str(out), keep_vector=True)
+    table = pd.read_table(out, keep_default_na=False).set_index('seq')
+    assert table.loc['unique', 'MAG_ID'] == 'M1'
+    assert table.loc['unique', 'MAG_vector'] == 'M1=0.666667,M2=0.333333'
+    assert table.loc['tie', 'MAG_ID'] == ''
+    assert table.loc['tie', 'MAG_vector'] == 'M1=0.500000,M2=0.500000'
+    assert table.loc['miss', 'MAG_vector'] == ''
+    plain = tmp_path / 'plain.tsv'
+    assign_alignments(reads, '', str(sam), str(tax), str(plain))
+    assert plain.read_text().splitlines()[0] == 'seq\ttaxID\tMAG_ID'
+
+
+def test_covered_phage_maps_and_sparse_genome_does_not(tmp_path):
+    """Regenerated reads map only where the initial MAG actually contains sequence.
+
+    The toy identity MAG is the concatenated initial reads, not the source
+    genomes. A short phage that is fully stored maps; new reads from the
+    uncovered part of a long genome stay unmapped. That is why a toy
+    map-initial run can leave most regenerated reads unmapped while mapping
+    every initial read.
+    """
+    from samovar.MAG.mapping import write_mapping_table
+    from samovar.MAG.tetra import read_fasta_sequence
+
+    root = Path(__file__).resolve().parents[1]
+    phage = read_fasta_sequence(root / 'data/test_genomes/meta/2886930.fna')
+    coli = read_fasta_sequence(root / 'data/test_genomes/meta/562.fna')
+    mags = tmp_path / 'mags'
+    mags.mkdir()
+    (mags / 'phage.fa').write_text(f'>phi\n{phage}\n')
+    (mags / 'coli.fa').write_text(f'>slice\n{coli[:120]}\n')
+    tax = tmp_path / 'tax.tsv'
+    tax.write_text('mag_id\ttaxid\tlineage\nphage\t2886930\td__Viruses\ncoli\t562\td__Bacteria\n')
+    records = [(f'phage{i}', phage[start:start + 80]) for i, start in enumerate(range(0, len(phage) - 80, 400))]
+    records += [(f'coli{i}', coli[start:start + 80]) for i, start in enumerate(range(200, 4000, 400))]
+    records.append(('coli_seen', coli[:80]))
+    lines = []
+    for name, sequence in records:
+        lines.extend([f'@{name}', sequence, '+', 'I' * len(sequence)])
+    (tmp_path / 'regen.fastq').write_text('\n'.join(lines) + '\n')
+    out = tmp_path / 'mapped.tsv'
+    write_mapping_table(str(tmp_path / 'regen.fastq'), '', str(mags), str(tax), str(out), aligner='exact')
+    table = pd.read_table(out, keep_default_na=False).set_index('seq')
+    phage_ids = [name for name, _ in records if name.startswith('phage')]
+    missed = [name for name, _ in records if name.startswith('coli') and name != 'coli_seen']
+    assert (table.loc[phage_ids, 'MAG_ID'] == 'phage').all()
+    assert (table.loc[missed, 'MAG_ID'] == '').all()
+    assert table.loc['coli_seen', 'MAG_ID'] == 'coli'
+    report = json.loads(Path(str(out) + '.mapping.json').read_text())
+    assert report['unmapped'] == len(missed)
+    assert report['unmapped'] > 0
+
+
 def test_conflicts_candidates_and_zero_rows(tmp_path):
     table, out = resolve(tmp_path, alignment('unique','M1',score=20) + alignment('unique','M2') +
                          alignment('tie','M2',flag=256) + alignment('tie','M1'))

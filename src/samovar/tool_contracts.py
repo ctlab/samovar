@@ -157,6 +157,8 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "Headered TSV seq, taxID, MAG_ID, identical to initial annotation. "
         "Unmapped/conflicting reads have taxID=0 and empty MAG_ID (shared taxon retained for tied MAGs). "
         "Sidecars .candidates.sqlite and .mapping.json retain reported alignments and conflict counts. "
+        "Optional --keep-candidate-vector adds MAG_vector, the share of alignment score "
+        "across classified MAG candidates (empty when none compete). "
         "No invented mappings or identity fallback.",
     },
     "feature_importance": {

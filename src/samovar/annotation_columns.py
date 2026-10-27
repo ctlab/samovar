@@ -32,7 +32,9 @@ _FEAT_PREFIX = re.compile(r"^feat([_.].+)?$", re.I)
 _CONF = re.compile(r"confidence|_conf$", re.I)
 _KMER_ID = re.compile(r"^[ACGT]{1,8}$", re.I)
 _LATENT_ID = re.compile(r"^z[0-9]+$", re.I)
-_FEATURE_NAMES = frozenset({"length", "gc", "gc_content", "mag_id", "map_mag_id"})
+_FEATURE_NAMES = frozenset(
+    {"length", "gc", "gc_content", "mag_id", "map_mag_id", "mag_vector"}
+)
 
 
 def _name(col) -> str:

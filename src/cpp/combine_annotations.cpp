@@ -135,7 +135,8 @@ bool is_allowed_feature_header(const std::string& h) {
     if (l == "feat" || l.rfind("feat_", 0) == 0 || l.rfind("feat.", 0) == 0) {
         return true;
     }
-    if (l == "length" || l == "gc" || l == "gc_content" || l == "mag_id" || l == "map_mag_id") {
+    if (l == "length" || l == "gc" || l == "gc_content" || l == "mag_id" || l == "map_mag_id" ||
+        l == "mag_vector") {
         return true;
     }
     return is_acgt_kmer_id(h) || is_latent_id(h);
