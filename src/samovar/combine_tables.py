@@ -244,6 +244,19 @@ def _append_annotator(
             subprocess.check_call(cmd)
 
 
+def _annotator_log_tail(out_file: Path, limit: int = 40) -> str:
+    """Last lines of the Snakemake rule log next to a missing annotator file."""
+    log = out_file.parent / "logs" / f"{out_file.stem}.log"
+    if not log.is_file():
+        return ""
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    tail = [line for line in lines[-limit:] if line.strip()]
+    return "\n".join(tail)
+
+
 def ingest_annotator(
     out_file: Path,
     annotation_dir: Path,
@@ -272,7 +285,11 @@ def ingest_annotator(
             if _tool_already_ingested(csv_path, out_file.name):
                 sentinel.write_text("ok\n", encoding="utf-8")
                 return csv_path
-            raise FileNotFoundError(f"Annotator output is missing: {out_file}")
+            message = f"Annotator output is missing: {out_file}"
+            tail = _annotator_log_tail(out_file)
+            if tail:
+                message = f"{message}\n{tail}"
+            raise FileNotFoundError(message)
         if not _has_data_lines(out_file):
             sentinel.write_text("empty\n", encoding="utf-8")
             return csv_path

@@ -757,5 +757,49 @@ def test_import_status_lists_tools_and_databases(tmp_path, monkeypatch, capsys):
     assert "--memory-mapping" in listed
     assert "https://example.test/db.tar.gz" in listed
     assert listed.rstrip().endswith("\tyes")
+
+
+def _help_binary(path: Path, text: str) -> None:
+    path.write_text(f"#!/bin/sh\nprintf '%s\\n' {text!r}\nexit 0\n")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+
+def test_import_warns_when_help_lacks_samovar_flags(tmp_path, monkeypatch, capsys):
+    binary = tmp_path / "k2alt"
+    _help_binary(binary, "usage: --db NAME --output FILE")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="k2alt",
+        tool_type="a",
+        env="",
+        exec_name="k2alt",
+        exec_path=str(binary),
+        also_repo_build=False,
+    )
+    err = capsys.readouterr().err
+    assert "does not list -i and -o" in err
+    assert "--flags-translate" in err
+
+
+def test_import_flags_translate_skips_help_warning(tmp_path, monkeypatch, capsys):
+    binary = tmp_path / "k2alt"
+    _help_binary(binary, "usage: --db NAME --output FILE")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="k2alt",
+        tool_type="a",
+        env="",
+        exec_name="k2alt",
+        exec_path=str(binary),
+        flags_translate="--output:-o",
+        also_repo_build=False,
+    )
+    assert "does not list" not in capsys.readouterr().err
     assert "(none)" in format_import_status({})
 

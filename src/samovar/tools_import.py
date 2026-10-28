@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -117,6 +119,43 @@ def _flags_with_import_mem(
     return f"{flags} {token}".strip()
 
 
+_SHORT_OPTION = re.compile(r"(?<![\w-])-([A-Za-z])\b")
+
+
+def warn_direct_samovar_flags(path: str, *, name: str, flags_translate: str) -> None:
+    """Warn when a custom annotator binary's ``--help`` has no ``-i`` and ``-o``.
+
+    SamovaR launches that binary with ``-i/-I/-d/-o``. A tool that only documents
+    its own flags (kraken2's ``--output``) still imports; the warning says to pass
+    ``--flags-translate`` or check it with ``--pytest``.
+    """
+    if str(flags_translate or "").strip():
+        return
+    exe = Path(path).expanduser()
+    if not (exe.is_file() and os.access(exe, os.X_OK)):
+        return
+    try:
+        proc = subprocess.run(
+            [str(exe), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    blob = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    shorts = set(_SHORT_OPTION.findall(blob))
+    if "i" in shorts and "o" in shorts:
+        return
+    print(
+        f"[WARNING] {name}: {exe.name} --help does not list -i and -o. "
+        "A custom annotator is launched with -i/-I/-d/-o. "
+        "Pass --flags-translate, or check the tool with --pytest.",
+        file=sys.stderr,
+    )
+
+
 def import_tool(
     *,
     name: str,
@@ -142,6 +181,8 @@ def import_tool(
     env = str(env or "").strip()
     exe = str(exec_name or "").strip() or name
     path = resolve_import_path(name=name, exec_name=exe, exec_path=exec_path, env=env)
+    if group == "annotator":
+        warn_direct_samovar_flags(path, name=name, flags_translate=flags_translate)
     workflow = env if env else "bash"
     glob = str(inputs or "").strip()
     if group == "scoring" and not glob:

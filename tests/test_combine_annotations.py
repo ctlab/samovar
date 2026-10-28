@@ -906,3 +906,15 @@ def test_parallel_append_without_shared_tmp(tmp_path, combiner):
         frame = pd.read_csv(parent / f"s{sample}.annotation.csv")
         assert len(frame) == 200
         assert set(frame["taxID_kaiju_0"]) == {562 + sample}
+
+
+def test_missing_annotator_output_includes_rule_log(tmp_path):
+    out = tmp_path / "2_full.custom_k2alt.out"
+    log = tmp_path / "logs" / "2_full.custom_k2alt.log"
+    log.parent.mkdir()
+    log.write_text("Unknown option: i\nOption o is ambiguous\n")
+    with pytest.raises(FileNotFoundError, match="Unknown option: i") as caught:
+        ingest_annotator(out, tmp_path, tmp_path / "s.ingested")
+    text = str(caught.value)
+    assert "Annotator output is missing" in text
+    assert "Option o is ambiguous" in text

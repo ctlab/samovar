@@ -494,3 +494,17 @@ def test_custom_sh_metax_uses_configured_taxdump(tmp_path, separator):
     assert '--min-read-len' in tokens and '80' in tokens
     assert tokens.count('--sequencer') == 1 and 'Nanopore' in tokens and 'Illumina' not in tokens
     assert tokens[-2:] == ['--native-label', 'literal $(no eval)']
+
+
+def test_custom_binary_without_thread_flag_omits_threads(tmp_path, monkeypatch):
+    exe = tmp_path / "k2alt"
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    (tmp_path / "config.json").write_text('{"tools": {}}\n')
+    inst = _custom("k2alt", cmd=str(exe), db_path=str(tmp_path / "db"))
+    cmd = inst.get_snakemake_shell_cmd("r1.fq", "r2.fq", [str(tmp_path / "s.out")])
+    assert "-t " not in cmd
+    assert "--threads" not in cmd
+    assert "-i " in cmd
