@@ -4,9 +4,9 @@ import argparse
 from samovar.build_database import build_database_from_config
 
 def main():
-    parser = argparse.ArgumentParser(description='Build Kaiju, Kraken2, Kraken, or KrakenUniq database from config file')
-    parser.add_argument('--type', choices=['kaiju', 'kraken2', 'kraken', 'krakenunique'], required=True,
-                      help='Type of database to build (kaiju, kraken2, kraken, or krakenunique)')
+    parser = argparse.ArgumentParser(description='Build Kaiju, Kraken2, Kraken, KrakenUniq, or Centrifuge database from config file')
+    parser.add_argument('--type', choices=['kaiju', 'kraken2', 'kraken', 'krakenunique', 'centrifuge'], required=True,
+                      help='Type of database to build (kaiju, kraken2, kraken, krakenunique, or centrifuge)')
     parser.add_argument('--config_path', required=True,
                       help='Path to config YAML file')
     parser.add_argument('--db_path', required=True,
@@ -35,7 +35,7 @@ def main():
         '--threads',
         type=int,
         default=1,
-        help='Workers for kaiju-mkbwt -n and kraken2-build --threads (samovar prepare --cores)',
+        help='Workers for kaiju-mkbwt -n, kraken2-build --threads, and centrifuge-build -p (samovar prepare --cores)',
     )
 
     args = parser.parse_args()

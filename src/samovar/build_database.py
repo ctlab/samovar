@@ -236,6 +236,65 @@ def build_database_kraken2(
     
     logger.info(f"Database successfully built at {db_path}")
 
+
+_NUCLEOTIDE_SUFFIXES = (
+    ".fna", ".fa", ".fasta", ".fsa", ".ffn",
+    ".fna.gz", ".fa.gz", ".fasta.gz", ".fsa.gz", ".ffn.gz",
+)
+
+
+def _is_nucleotide_genome(path: str) -> bool:
+    return str(path).lower().endswith(_NUCLEOTIDE_SUFFIXES)
+
+
+def write_centrifuge_inputs(
+    pairs: List[Tuple[str, str]],
+    library_fa: str,
+    conversion_table: str,
+) -> int:
+    """Concatenate nucleotide FASTA and write a seqid-to-taxid table.
+
+    ``centrifuge-build`` reads the conversion table as ``seqid<TAB>taxid``.
+    Sequence ids are the sanitized FASTA ids, made unique across genomes.
+    """
+    written = 0
+    seen = set()
+    with open(library_fa, "w", encoding="utf-8") as fasta, open(
+        conversion_table, "w", encoding="utf-8"
+    ) as table:
+        for path, taxid in pairs:
+            tax = str(taxid).split(".")[0]
+            for record in iter_seqio_fasta(path):
+                base = _sanitize_seqid(record.id) or f"seq{written}"
+                seqid = base
+                suffix = 2
+                while seqid in seen:
+                    seqid = f"{base}_{suffix}"
+                    suffix += 1
+                seen.add(seqid)
+                fasta.write(f">{seqid}\n{record.seq}\n")
+                table.write(f"{seqid}\t{tax}\n")
+                written += 1
+    return written
+
+
+def build_database_centrifuge(db_path: str = "centrifuge_db", threads: int = 1) -> None:
+    """Build a Centrifuge index from ``library.fna`` and ``taxonomy/*.dmp``."""
+    threads = max(1, int(threads))
+    tax_dir = os.path.join(db_path, "taxonomy")
+    cmd = [
+        "centrifuge-build",
+        "-p", str(threads),
+        "--conversion-table", os.path.join(db_path, "seqid2taxid.map"),
+        "--taxonomy-tree", os.path.join(tax_dir, "nodes.dmp"),
+        "--name-table", os.path.join(tax_dir, "names.dmp"),
+        os.path.join(db_path, "library.fna"),
+        os.path.join(db_path, "centrifuge"),
+    ]
+    run_command(cmd)
+    logger.info(f"Centrifuge database successfully built at {db_path}")
+
+
 def _sanitize_seqid(seq_id: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in seq_id)[:80]
 
@@ -775,13 +834,13 @@ def build_database_from_config(
     
     Args:
         config_path: Path to config YAML file
-        db_type: Type of database to build ("kaiju", "kraken2", or "krakenunique")
+        db_type: Type of database to build ("kaiju", "kraken2", "krakenunique", or "centrifuge")
         db_path: Path to store the database
         example_omit: If True, apply toy-only taxon gaps (Escherichia off Kraken2,
             Phage Phi X off Kaiju). If None, honour SAMOVAR_EXAMPLE_OMIT or
             auto-detect ``test_genomes`` input directories.
-        threads: Workers for ``kaiju-mkbwt -n`` and ``kraken2-build --threads``.
-            Same count as ``samovar prepare --cores``.
+        threads: Workers for ``kaiju-mkbwt -n``, ``kraken2-build --threads``,
+            and ``centrifuge-build -p``. Same count as ``samovar prepare --cores``.
         minimizer_len: Optional KrakenUniq minimizer length; default scales with the library.
     """
     threads = max(1, int(threads))
@@ -914,6 +973,24 @@ def build_database_from_config(
         # Dumps belong in taxonomy/, not next to the FASTA. Reuse the configured taxdump.
         get_taxonomy_db(db_path=os.path.join(db_path, "taxonomy"))
         build_database_krakenunique(db_path=db_path, threads=threads, minimizer_len=minimizer_len)
+    elif db_type == "centrifuge":
+        os.makedirs(db_path, exist_ok=True)
+        nucleotide = [
+            (path, taxid)
+            for path, taxid in zip(input_files, taxids)
+            if _is_nucleotide_genome(path)
+        ]
+        if not nucleotide:
+            raise ValueError("No nucleotide genomes left to index for centrifuge.")
+        written = write_centrifuge_inputs(
+            nucleotide,
+            os.path.join(db_path, "library.fna"),
+            os.path.join(db_path, "seqid2taxid.map"),
+        )
+        if written == 0:
+            raise ValueError("No nucleotide sequences left to index for centrifuge.")
+        get_taxonomy_db(db_path=os.path.join(db_path, "taxonomy"))
+        build_database_centrifuge(db_path=db_path, threads=threads)
     elif db_type in {"kmer_encoder", "metauto", "kmerenc"}:
         from samovar.kmer_encoder import train_encoder
 

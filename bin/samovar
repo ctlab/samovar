@@ -69,7 +69,7 @@ show_usage() {
     echo ""
     echo "Commands:"
     echo "  prepare     Generate main pipeline configuration (alias: preprocess)"
-    echo "  build       Build Kaiju or Kraken2 database from config (alias: build_database)"
+    echo "  build       Build Kaiju, Kraken2, KrakenUniq, or Centrifuge database from config (alias: build_database)"
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "              Optional --startpoint / --endpoint slice the run (same names as prepare)"
     echo "  checkup     Verify outdir has inputs for --start-point (does not run the pipeline)"

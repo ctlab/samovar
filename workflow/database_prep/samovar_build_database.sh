@@ -11,12 +11,12 @@ show_usage() {
     echo "Usage: samovar build_database [options]"
     echo ""
     echo "Options:"
-    echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique)"
+    echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique, centrifuge)"
     echo "  --config_path PATH Path to config YAML file"
     echo "  --db_path PATH    Path to store the database"
     echo "  --index NAME      Record this database in the install config"
     echo "  --flags FLAGS     Extra CLI flags stored with --index"
-    echo "  --threads N       Workers (kaiju-mkbwt -n, kraken2-build --threads). Same as prepare --cores"
+    echo "  --threads N       Workers (kaiju-mkbwt -n, kraken2-build --threads, centrifuge-build -p). Same as prepare --cores"
     echo "  --minimizer-len N Kraken/KrakenUniq override (default: 12–15 based on library size)"
     echo "  --example-omit    TEST/TOY ONLY: drop Escherichia from Kraken2 and Phage Phi X from Kaiju"
     echo "  --no-example-omit Keep every taxon even when building from data/test_genomes"
@@ -89,8 +89,8 @@ if [ -z "$type" ] || [ -z "$config_path" ] || [ -z "$db_path" ]; then
 fi
 
 # Validate database type
-if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ] && [ "$type" != "krakenunique" ]; then
-    echo "Error: --type must be either 'kaiju', 'kraken2', 'kraken', or 'krakenunique'"
+if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ] && [ "$type" != "krakenunique" ] && [ "$type" != "centrifuge" ]; then
+    echo "Error: --type must be 'kaiju', 'kraken2', 'kraken', 'krakenunique', or 'centrifuge'"
     show_usage
     exit 1
 fi
