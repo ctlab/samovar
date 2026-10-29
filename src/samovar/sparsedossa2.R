@@ -164,6 +164,46 @@ patch_future_seed <- function(seed) {
   invisible(NULL)
 }
 
+# A taxon seen twice with the same count has sigma 0. The EM integral then
+# compares a missing value and aborts on iteration 1. A handful of taxa also
+# makes ks::Hscv's covariance singular after EM. Floor sigma and, only if
+# that bandwidth fit still fails, use a diagonal covariance.
+patch_degenerate_fit <- function() {
+  if (!requireNamespace("SparseDOSSA2", quietly = TRUE)) return(invisible(NULL))
+  if (isTRUE(getOption("samovar.degenerate_fit"))) return(invisible(NULL))
+  ns <- asNamespace("SparseDOSSA2")
+  orig_fp <- get("fit_featureParam", envir = ns)
+  guarded_fp <- function(data) {
+    fp <- orig_fp(data)
+    sig <- fp[, "sigma"]
+    bad <- !is.finite(sig) | sig <= 0
+    if (any(bad)) {
+      repl <- suppressWarnings(stats::median(sig[!bad]))
+      if (!is.finite(repl) || repl <= 0) repl <- 0.5
+      fp[bad, "sigma"] <- repl
+    }
+    fp
+  }
+  orig_F <- get("fit_F", envir = ns)
+  guarded_F <- function(feature_param) {
+    tryCatch(orig_F(feature_param), error = function(e) {
+      if (!grepl("leading minor", conditionMessage(e), fixed = TRUE)) stop(e)
+      x <- feature_param
+      pi <- x[, "pi0"]
+      pi[!is.finite(pi) | pi <= 0] <- 1e-6
+      pi[pi >= 1] <- 1 - 1e-6
+      x[, "pi0"] <- log(pi) - log(1 - pi)
+      v <- apply(x, 2, stats::var)
+      v[!is.finite(v) | v <= 0] <- 1e-4
+      list(p0_sigma = 0, K_nonzero = diag(v, nrow = length(v)), K_zero = NULL)
+    })
+  }
+  assignInNamespace("fit_featureParam", guarded_fp, ns = "SparseDOSSA2")
+  assignInNamespace("fit_F", guarded_F, ns = "SparseDOSSA2")
+  options(samovar.degenerate_fit = TRUE)
+  invisible(NULL)
+}
+
 require_fit_size <- function(mat) {
   n_feature <- sum(rowSums(mat) > 0)
   n_sample <- sum(colSums(mat) > 0)
@@ -179,9 +219,17 @@ fit_or_stop <- function(expr) {
     error = function(e) {
       msg <- conditionMessage(e)
       stop_sd2_cluster()
-      if (grepl("missing value where TRUE/FALSE needed", msg, fixed = TRUE) ||
-          grepl("leading minor", msg, fixed = TRUE)) {
-        stop("too few features/samples for SparseDOSSA2 fit", call. = FALSE)
+      if (grepl("missing value where TRUE/FALSE needed", msg, fixed = TRUE)) {
+        stop(
+          "SparseDOSSA2 EM failed: numeric integration returned a missing value",
+          call. = FALSE
+        )
+      }
+      if (grepl("leading minor", msg, fixed = TRUE)) {
+        stop(
+          "SparseDOSSA2 fit failed: covariance is singular",
+          call. = FALSE
+        )
       }
       stop(e)
     }
@@ -191,6 +239,7 @@ fit_or_stop <- function(expr) {
 setup_parallel <- function(workers, cv = FALSE, seed = TRUE) {
   patch_future_seed(seed)
   patch_slope_guard()
+  patch_degenerate_fit()
   workers <- as.integer(workers %||% 1L)
   if (!requireNamespace("future", quietly = TRUE)) {
     return(invisible(NULL))
