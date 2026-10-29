@@ -807,6 +807,8 @@ def regenerate_annotation_tables(
         _write_abundance_tables(out, mixed)
         selected = next(mode for mode in modes if tables_by_mode.get(mode))
         payload = {"winner": selected, "generate_errors": generate_errors}
+        if generate_errors:
+            payload["failed"] = list(generate_errors)
         write_table_selection(out / "table_selection.json", payload)
         write_table_selection(candidates_root / "table_selection.json", payload)
         return mixed
@@ -835,6 +837,8 @@ def regenerate_annotation_tables(
         }
     for mode, err in generate_errors.items():
         ranked.setdefault("generate_errors", {})[mode] = err
+    if generate_errors:
+        ranked["failed"] = list(generate_errors)
     mixed = ranked.get("tables") or {}
     if not mixed:
         for mode in modes:

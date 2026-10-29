@@ -1075,4 +1075,36 @@ def test_concat_only_keeps_single_table(toy_annotation_dir, tmp_path):
     assert not (out / "kaiju.csv").is_file()
 
 
+def test_failed_generator_is_recorded_in_table_selection(toy_annotation_dir, tmp_path, monkeypatch):
+    import json
+
+    import samovar.regenerate as reg
+
+    real = reg._regenerate_one_mode
+
+    def wrapped(annotation_dir, output_dir, cfg, data):
+        if cfg.get("table_reads_generator") == "bootstrap":
+            raise RuntimeError("bootstrap boom")
+        return real(annotation_dir, output_dir, cfg, data)
+
+    monkeypatch.setattr(reg, "_regenerate_one_mode", wrapped)
+    out = tmp_path / "failed_gen"
+    tables = regenerate_annotation_tables(
+        toy_annotation_dir,
+        out,
+        {
+            "table_reads_generators": ["direct", "bootstrap"],
+            "table_score": "shannon_ks",
+            "N": 2,
+            "N_reads": 50,
+            "seed": 1,
+        },
+    )
+    assert tables
+    selection = json.loads((out / "table_selection.json").read_text())
+    assert selection["winner"] == "direct"
+    assert selection["failed"] == ["bootstrap"]
+    assert "bootstrap boom" in selection["generate_errors"]["bootstrap"]
+
+
 

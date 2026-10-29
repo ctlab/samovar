@@ -907,6 +907,9 @@ def collect_run_options(output_dir: PathLike) -> List[tuple]:
             payload = {}
         if payload.get("winner"):
             _add("Selected table generator", payload.get("winner"))
+        failed = payload.get("failed") or list(payload.get("generate_errors") or {})
+        if failed:
+            _add("Failed table generators", failed)
     _add("Regenerated reads", regen_cfg.get("N_reads"))
     _add("Coverage", regen_cfg.get("coverage"))
     _add("Max genomes", regen_cfg.get("max_genomes"))
