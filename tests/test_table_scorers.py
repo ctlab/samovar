@@ -246,6 +246,7 @@ def test_globalpatterns_three_generators_three_scorers(tmp_path, monkeypatch):
     assert custom["winner_by_annotator"][annotator] == bray["winner_by_annotator"][annotator]
 
 
+@pytest.mark.optional
 def test_table_score_heatmap_png_keeps_grid_and_opaque_background(tmp_path):
     import matplotlib.pyplot as plt
 

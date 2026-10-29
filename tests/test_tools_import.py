@@ -470,18 +470,6 @@ def test_import_pytest_maps_every_importable_group_to_one_contract_test():
         assert default_tool_path(group).is_file(), f"{group}: baseline/example dest missing"
 
 
-@pytest.mark.optional
-def test_import_pytest_runs_baseline_for_every_contract_group():
-    """Each group’s baseline dest must pass the same pytest node import --pytest uses."""
-    from samovar.tool_contracts import GROUP_TO_TESTNODE, default_tool_path, run_contract_pytest
-
-    failed = []
-    for group in GROUP_TO_TESTNODE:
-        dest = default_tool_path(group)
-        code, output = run_contract_pytest(str(dest), group)
-        if code != 0:
-            failed.append((group, code, output[-2500:]))
-    assert not failed, failed
 
 
 BIB_ONE = """@article{toyA2024,

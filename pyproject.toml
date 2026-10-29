@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "samovar"
-version = "0.12.138"
+version = "0.12.139"
 description = "Automated re-profiling and benchmarking with SAMOVAR"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
@@ -57,7 +57,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --durations=20"
 markers = [
-    "mandatory: core install integrity for Kraken2 and Kaiju; GitHub Actions runs this marker only",
-    "optional: Kraken, KrakenUniq, MetaPhlAn, apply, merge, viz, MAG, and other extended or slow checks",
+    "mandatory: offline pipeline behavior, stage contracts and core integration; default CI suite",
+    "optional: native optional tools, network downloads, detailed rendering and extended checks",
 ]
  

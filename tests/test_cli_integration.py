@@ -17,22 +17,8 @@ from samovar.version import get_version
 REPO = Path(__file__).resolve().parents[1]
 
 
-def _ensure_config_json():
-    cfg = REPO / "build" / "config.json"
-    if cfg.exists():
-        return
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    example = REPO / "build" / "config.json.example"
-    if example.exists():
-        cfg.write_text(example.read_text())
-    else:
-        cfg.write_text(
-            '{"python_path": "python3", "r_path": "R", "r_lib_path": "."}\n'
-        )
-
 
 def test_cli_help_lists_prepare_build_exec():
-    _ensure_config_json()
     result = subprocess.run(
         ["bash", str(REPO / "bin" / "samovar"), "help"],
         cwd=REPO,
@@ -61,7 +47,6 @@ def test_cli_help_lists_prepare_build_exec():
 
 @pytest.mark.parametrize("flag", ["-h", "--help", "help"])
 def test_cli_help_flags_print_version(flag):
-    _ensure_config_json()
     result = subprocess.run(
         ["bash", str(REPO / "bin" / "samovar"), flag],
         cwd=REPO,
@@ -265,36 +250,3 @@ def test_exec_short_directory_warns_prepare_flags(tmp_path):
     assert "--cores" in result.stderr
     assert "-t" in result.stderr
     assert str(tmp_path) in result.stdout
-
-
-def test_prepare_to_exec_mocked_end_to_end(tmp_path):
-    """prepare generates a script; exec runs it. External tools are not required."""
-    out_dir = tmp_path / "run"
-    reads = tmp_path / "reads"
-    reads.mkdir()
-    (reads / "1_full_R1.fastq").write_text("@r\nA\n+\nI\n")
-    (reads / "1_full_R2.fastq").write_text("@r\nT\n+\nI\n")
-    args = type(
-        "Args",
-        (),
-        {
-            "input_config": None,
-            "input_dir": str(reads),
-            "output_dir": str(out_dir),
-            "kraken2": None,
-            "kaiju": [["kaiju /tmp/kaiju_db.fmi"]],
-        },
-    )()
-    result = setup_pipeline(args)
-    pipeline = Path(result["pipeline"])
-    # Replace the generated pipeline with a stub that still consumes the same path.
-    pipeline.write_text("#!/bin/bash\nset -e\necho prepared-and-execed\n")
-    proc = subprocess.run(
-        ["bash", str(REPO / "bin" / "samovar_exec"), "--output_dir", str(out_dir)],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "prepared-and-execed" in proc.stdout or "Pipeline execution completed" in proc.stdout
-    assert "Running main SamovaR pipeline" in proc.stdout

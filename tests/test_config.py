@@ -1,18 +1,12 @@
 import os
-import shutil
 import pytest
 import argparse
 from pathlib import Path
 from src.samovar.config import PipelineConfig, setup_pipeline, AnnotatorConfig
 import yaml
 
-def clean_dir(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-
-def test_pipeline_config_from_args_file():
-    test_output_dir = 'tests_outs/test_pipeline_config_from_args_file'
-    clean_dir(test_output_dir)
+def test_pipeline_config_from_args_file(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config_path = Path(test_output_dir) / "test_config.yaml"
     config_content = """
@@ -58,9 +52,8 @@ def test_pipeline_config_from_args_file():
     assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
 
-def test_pipeline_config_uses_yaml_output_dir_when_cli_unset():
-    test_output_dir = "tests_outs/test_pipeline_config_yaml_output_dir"
-    clean_dir(test_output_dir)
+def test_pipeline_config_uses_yaml_output_dir_when_cli_unset(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config_path = Path(test_output_dir) / "test_config.yaml"
     config_path.write_text(
@@ -92,9 +85,8 @@ def test_pipeline_config_default_output_dir():
     config = PipelineConfig.from_args(args)
     assert config.output_dir == str((Path.cwd() / "samovar_out").resolve())
 
-def test_pipeline_config_from_args_cli():
-    test_output_dir = 'tests_outs/test_pipeline_config_from_args_cli'
-    clean_dir(test_output_dir)
+def test_pipeline_config_from_args_cli(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     args = argparse.Namespace(
         input_config=None,
@@ -146,9 +138,8 @@ def test_prepare_rejects_collision_with_existing_run(tmp_path, monkeypatch):
     assert not (out / ".log").exists()
 
 
-def test_generate_configs():
-    test_output_dir = 'tests_outs/test_generate_configs'
-    clean_dir(test_output_dir)
+def test_generate_configs(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config = PipelineConfig(
         input_dir="/path/to/input",
@@ -198,9 +189,8 @@ def test_generate_configs():
         assert iss_config['genome_skip_list'] == []
 
 
-def test_pipeline_config_n_reads_cli_overrides_default():
-    test_output_dir = "tests_outs/test_n_reads_cli"
-    clean_dir(test_output_dir)
+def test_pipeline_config_n_reads_cli_overrides_default(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     args = argparse.Namespace(
         input_config=None,
         input_dir="/path/to/input",
@@ -258,9 +248,8 @@ def test_pipeline_config_genome_skip_and_max_mb_cli(tmp_path):
     assert "9606" in iss_config["genome_skip_list"]
 
 
-def test_generate_pipeline():
-    test_output_dir = 'tests_outs/test_generate_pipeline'
-    clean_dir(test_output_dir)
+def test_generate_pipeline(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config = PipelineConfig(
         input_dir="/path/to/input",
@@ -362,9 +351,8 @@ def test_generate_pipeline():
             assert f"ckpt_finish {step}" in pipeline_content
 
 
-def test_generate_pipeline_multiqc_flags():
-    test_output_dir = "tests_outs/test_generate_pipeline_multiqc_flags"
-    clean_dir(test_output_dir)
+def test_generate_pipeline_multiqc_flags(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     annotators = [
         AnnotatorConfig(
@@ -393,9 +381,8 @@ def test_generate_pipeline_multiqc_flags():
     assert "stage_report multiqc" in on_text
 
 
-def test_setup_pipeline():
-    test_output_dir = 'tests_outs/test_setup_pipeline'
-    clean_dir(test_output_dir)
+def test_setup_pipeline(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(

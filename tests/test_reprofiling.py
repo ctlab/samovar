@@ -11,6 +11,8 @@ from src.samovar.reprofiling import (
     annotator_taxid_columns,
 )
 
+import pytest
+
 class TestReprofiling(unittest.TestCase):
     def setUp(self):
         """Set up test data"""
@@ -27,7 +29,9 @@ class TestReprofiling(unittest.TestCase):
         })
         
         # Create test output directory
-        os.makedirs('tests_outs', exist_ok=True)
+        import tempfile
+        self.output_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.output_dir.cleanup)
 
     def test_preprocess_data(self):
         """Test data preprocessing"""
@@ -108,7 +112,7 @@ class TestReprofiling(unittest.TestCase):
         best_model, _, _, feature_cols = train_models(processed_df, test_size=0.25)  # Adjusted test size
         
         # Save model
-        model_path = 'tests_outs/test_model.joblib'
+        model_path = os.path.join(self.output_dir.name, 'test_model.joblib')
         save_model(best_model, model_path)
         
         # Load model and make predictions
@@ -157,6 +161,7 @@ class TestReprofiling(unittest.TestCase):
         self.assertNotIn('taxid_kaiju...2', processed.columns)
         self.assertEqual(list(processed['taxid_kaiju']), [9606, 9606, 562])
 
+    @pytest.mark.optional
     def test_roc_curves(self):
         """Test ROC curve generation"""
         processed_df = preprocess_data(self.test_data.copy())
@@ -165,8 +170,8 @@ class TestReprofiling(unittest.TestCase):
         X_test = processed_df[feature_cols]
         y_test = processed_df['true']
 
-        plot_roc_curves(models, X_test, y_test)
-        self.assertTrue(os.path.exists('tests_outs/roc_comparison.png'))
+        plot_roc_curves(models, X_test, y_test, output_dir=self.output_dir.name)
+        self.assertTrue(os.path.exists(os.path.join(self.output_dir.name, 'roc_comparison.png')))
 
     def test_train_models_with_singleton_class(self):
         df = self.test_data.copy()
@@ -193,6 +198,7 @@ class TestReprofiling(unittest.TestCase):
             out = pd.read_csv(dst / "sample_reprofiled.csv")
             self.assertEqual(list(out["taxid_SAMOVAR"]), [562, 562])
 
+    @pytest.mark.optional
     def test_fit_uses_prepare_cores(self):
         """RandomForest and AdaBoost training call Parallel with prepare's core count."""
         import sklearn.ensemble._forest as forest
@@ -260,6 +266,7 @@ class TestReprofiling(unittest.TestCase):
         self.assertIn(3, calls)
         self.assertGreaterEqual(calls.count(3), 2)
 
+    @pytest.mark.optional
     def test_gpu_mode_checks_each_model(self):
         import sys
         import types

@@ -1,18 +1,12 @@
 import os
-import shutil
 import pytest
 import argparse
 from pathlib import Path
 from src.samovar.iss_config import ISSTestConfig, setup_iss_test
 import yaml
 
-def clean_dir(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-
-def test_iss_config_from_args():
-    test_output_dir = 'tests_outs/test_iss_config_from_args'
-    clean_dir(test_output_dir)
+def test_iss_config_from_args(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(
@@ -36,9 +30,8 @@ def test_iss_config_from_args():
     assert config.seed == 123
     assert config.model == "novaseq"
 
-def test_iss_config_defaults():
-    test_output_dir = 'tests_outs/test_iss_config_defaults'
-    clean_dir(test_output_dir)
+def test_iss_config_defaults(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(
@@ -62,9 +55,8 @@ def test_iss_config_defaults():
     assert config.seed == 42  # default
     assert config.model == "hiseq"  # default
 
-def test_generate_config():
-    test_output_dir = 'tests_outs/test_generate_config'
-    clean_dir(test_output_dir)
+def test_generate_config(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     config = ISSTestConfig(
@@ -94,9 +86,8 @@ def test_generate_config():
         assert config_content['genomes'] == []
         assert config_content['max_genomes'] == 100.0
 
-def test_generate_pipeline():
-    test_output_dir = 'tests_outs/test_generate_pipeline'
-    clean_dir(test_output_dir)
+def test_generate_pipeline(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     config = ISSTestConfig(
@@ -119,9 +110,8 @@ def test_generate_pipeline():
         assert "samovar/env" in pipeline_content
         assert "_runtime-env" in pipeline_content
 
-def test_setup_iss_test():
-    test_output_dir = 'tests_outs/test_setup_iss_test'
-    clean_dir(test_output_dir)
+def test_setup_iss_test(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(

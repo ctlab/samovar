@@ -16,6 +16,9 @@ from samovar.build_database import (
     build_database_krakenunique,
 )
 
+# KrakenUniq-specific library and builder behavior.
+pytestmark = pytest.mark.optional
+
 
 def _nucleotide(path: Path, seq: str = "ATGCATGCATGC") -> None:
     path.write_text(f">seq\n{seq}\n", encoding="utf-8")

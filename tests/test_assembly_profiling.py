@@ -32,6 +32,9 @@ from samovar.assembly_profiling import (
 )
 from samovar.parse_annotators import Annotation, match_annotation
 
+# Extended assembly adapters and native programs; generic stage contracts stay mandatory.
+pytestmark = pytest.mark.optional
+
 REPO = Path(__file__).resolve().parents[1]
 READS_R1 = REPO / "tests" / "data" / "reads" / "1_full_R1.fastq"
 READS_R2 = REPO / "tests" / "data" / "reads" / "1_full_R2.fastq"

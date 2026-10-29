@@ -74,15 +74,6 @@ def test_custom_single_end_omits_mate_flag():
     assert "-i a_R1.fastq" in cmd
 
 
-def test_wrapper_scripts_forward_to_custom_sh():
-    for name in CUSTOM_WRAPPER_SCRIPTS:
-        if name == "custom.sh":
-            continue
-        path = ANNOTATORS / name
-        assert path.is_file()
-        text = path.read_text()
-        assert "custom.sh" in text
-        assert "-p " in text
 
 
 def test_custom_annotator_uses_wrapper_path_when_given():
@@ -244,6 +235,7 @@ def test_custom_sh_empty_fastq_and_unknown_tool(tmp_path):
     assert "Unknown tool" in bad.stdout + bad.stderr
 
 
+@pytest.mark.optional
 def test_custom_sh_centrifuge_with_mock_binary(tmp_path):
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
@@ -364,6 +356,7 @@ def test_prepare_custom_test_alias(tmp_path):
     assert any(r["type"] == "metauto" and r["run_name"] == "metauto" for r in runs)
 
 
+@pytest.mark.optional
 def test_taxonomy_engine_lineage(tmp_path):
     nodes = tmp_path / "nodes.dmp"
     nodes.write_text(
@@ -415,6 +408,7 @@ def test_fastq_annotator_and_feature_merge(tmp_path):
     assert merged.loc[merged["seq"] == "r0", "gc"].notna().all()
 
 
+@pytest.mark.optional
 @pytest.mark.parametrize("separator", [[], ["--"]])
 def test_custom_sh_metax_uses_configured_taxdump(tmp_path, separator):
     dump = tmp_path / "taxdump"
@@ -456,6 +450,7 @@ def test_custom_sh_metax_uses_configured_taxdump(tmp_path, separator):
     env["SAMOVAR_CONFIG"] = str(cfg)
     env["PYTHONPATH"] = f"{REPO / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
     env.pop("METAX_DMP_DIR", None)
+    env.pop("SAMOVAR_TAXDUMP", None)
     proc = subprocess.run(
         [
             "bash",

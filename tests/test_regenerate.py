@@ -242,6 +242,7 @@ def test_bootstrap_mimics_real_samples_with_error(test_data_dir):
     assert similar
 
 
+@pytest.mark.optional
 def test_vae_produces_n_synthetic_columns(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     tables = regenerate_vae(data, n_samples=3, n_reads=150, seed=2, latent_dim=2)
@@ -261,6 +262,7 @@ def test_glm_python_changes_profile_vs_direct(toy_annotation_dir):
     assert not _n_matrix(direct).equals(_n_matrix(glm))
 
 
+@pytest.mark.optional
 def test_glm_uses_cluster_walk_not_copy(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     glm = regenerate_glm_python(
@@ -603,6 +605,7 @@ def test_bootstrap_seed_reproducible_but_not_constant():
     assert len(profiles) > 1
 
 
+@pytest.mark.optional
 def test_generative_modes_differ_from_each_other_and_direct(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     tables = {

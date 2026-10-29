@@ -3,6 +3,11 @@ import json
 
 from samovar.MAG.report import mag_id_shares, subsample_lines, write_mag_mapping_plots
 
+import pytest
+
+# Detailed MAG report layout.
+pytestmark = pytest.mark.optional
+
 
 def test_large_mag_table_is_subsampled(tmp_path):
     path = tmp_path / "reads.tsv"

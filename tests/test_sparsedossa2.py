@@ -15,6 +15,9 @@ from samovar.sparsedossa2 import (
 from samovar.table_regenerators import apply_extra_flags, get_table_regenerator
 from samovar.table_scorers import canonicalize_table_scorer, score_generated_tables
 
+# SparseDOSSA2-specific fitting/CV adapter, not the default regenerator.
+pytestmark = pytest.mark.optional
+
 
 def test_sparsedossa2_mode_aliases():
     assert resolve_regeneration_mode("sd2") == ("builtin", "sparsedossa2-fit")

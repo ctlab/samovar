@@ -53,11 +53,11 @@ def _samovar_r_skip_reason() -> str:
     return ""
 
 
-_SAMOVAR_R_SKIP = _samovar_r_skip_reason()
-requires_r_samovar = pytest.mark.skipif(
-    bool(_SAMOVAR_R_SKIP),
-    reason=_SAMOVAR_R_SKIP or "samovaR ready",
-)
+@pytest.fixture
+def requires_r_samovar():
+    reason = _samovar_r_skip_reason()
+    if reason:
+        pytest.skip(reason)
 
 
 @pytest.fixture
@@ -272,9 +272,8 @@ def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config
 
 
 @pytest.mark.optional
-@requires_r_samovar
 def test_samovar_annotation_regenerate_basic(
-    test_data_dir, test_output_dir, mock_config, r_regenerator_script
+    test_data_dir, test_output_dir, mock_config, r_regenerator_script, requires_r_samovar
 ):
     """Integration: real R + samovaR regeneration produces abundance CSVs."""
     assert test_data_dir.exists(), f"Missing fixture annotations at {test_data_dir}"
@@ -308,9 +307,8 @@ def test_samovar_annotation_regenerate_basic(
 
 
 @pytest.mark.optional
-@requires_r_samovar
 def test_samovar_annotation_regenerate_integration(
-    test_data_dir, test_output_dir, mock_config, r_regenerator_script
+    test_data_dir, test_output_dir, mock_config, r_regenerator_script, requires_r_samovar
 ):
     """Integration: regenerated tables feed process_abundance_table."""
     config_path = _write_config(

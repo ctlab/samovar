@@ -11,6 +11,11 @@ from samovar.citations import (
 )
 from samovar.main_config import TOOL_GROUP_BY_NAME
 
+import pytest
+
+# Bibliography registries and citation export.
+pytestmark = pytest.mark.optional
+
 
 def test_every_builtin_tool_is_in_the_map():
     mapping = mapping_for_tools()

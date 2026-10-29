@@ -1,4 +1,4 @@
-"""C++ dinucleotide profiler (optional: needs a C++ compiler)."""
+"""Native k-mer cases are optional; shared feature/scoring contracts are core."""
 
 import pandas as pd
 import pytest
@@ -15,7 +15,6 @@ from samovar.parse_annotators import Annotation
 from samovar.reprofiling import preprocess_data, train_models
 from samovar.scores import score_annotators
 
-pytestmark = pytest.mark.optional
 
 
 def _fastq(records):
@@ -25,6 +24,7 @@ def _fastq(records):
     return "".join(chunks)
 
 
+@pytest.mark.optional
 def test_kmer_counts_dinucleotides(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r1.write_text(_fastq([("r0", "AAAT")]))
@@ -39,6 +39,7 @@ def test_kmer_counts_dinucleotides(tmp_path):
     assert sum(int(row[c]) for c in frame.columns) == 3
 
 
+@pytest.mark.optional
 def test_kmer_skips_non_acgt(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r1.write_text(_fastq([("r0", "ANAA")]))
@@ -49,6 +50,7 @@ def test_kmer_skips_non_acgt(tmp_path):
     assert sum(int(row[c]) for c in row.index) == 1
 
 
+@pytest.mark.optional
 def test_kmer_cli_and_parse_output(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r2 = tmp_path / "s_R2.fastq"
@@ -72,6 +74,7 @@ def test_kmer_cli_and_parse_output(tmp_path):
     assert not any(is_tax_column(c) for c in labeled.columns)
 
 
+@pytest.mark.optional
 def test_kmer_factory_and_annotation_class(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r1.write_text("@readA|taxid:562|\nATGC\n+\nIIII\n")
@@ -87,6 +90,7 @@ def test_kmer_factory_and_annotation_class(tmp_path):
     assert all(c.startswith("feat_") for c in ann.ft().columns)
 
 
+@pytest.mark.optional
 def test_kmer_max_keeps_highest_variance(tmp_path):
     """Top k-mers by across-read variance, capped by the real k-mer count."""
     r1 = tmp_path / "s_R1.fastq"
@@ -109,6 +113,7 @@ def test_kmer_max_keeps_highest_variance(tmp_path):
     assert len([c for c in wide.columns if c != "seq"]) == 16
 
 
+@pytest.mark.optional
 def test_kmer_threads_and_duplicates_match(tmp_path):
     records = [("r%03d" % i, "ACGT" * (3 + (i % 5)) + ("N" if i % 7 == 0 else "")) for i in range(40)]
     records.append(("r000", "TTTT"))

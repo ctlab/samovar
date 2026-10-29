@@ -145,9 +145,6 @@ def test_combine_tool_with_tax_and_features(tmp_path, combiner):
     assert int(df.loc[0, "length"]) in {120, 80}
 
 
-def test_ensure_combine_binary(combiner):
-    assert combiner.exists()
-    assert os.access(combiner, os.X_OK)
 
 
 def test_sort_merge_outer_join(tmp_path, combiner):

@@ -5,12 +5,6 @@ import pytest
 from samovar import sidecar
 
 
-def test_nanosim_sidecar_pins_profile_compatible_runtime():
-    spec = sidecar.SIDECARS["nanosim"]
-    assert spec["python"] == "3.8"
-    assert "numpy=1.23.5" in spec["packages"]
-    assert "scikit-learn=0.23.2" in spec["packages"]
-    assert "htseq" in spec["packages"]
 
 
 @pytest.mark.parametrize("name", ["nanosim", "kraken2", "kaiju"])

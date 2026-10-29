@@ -54,6 +54,7 @@ def test_factory_and_match_annotation(tmp_path):
     assert all(str(c).startswith("feat_") for c in ann.ft().columns)
 
 
+@pytest.mark.optional
 def test_train_and_latent_features(tmp_path):
     pytest.importorskip("torch")
     genomes = tmp_path / "genomes"

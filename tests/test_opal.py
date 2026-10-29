@@ -64,6 +64,7 @@ def test_write_cami_profile_keeps_phage_without_genus(tmp_path):
     assert "\t0\t" not in text
 
 
+@pytest.mark.optional
 def test_opal_rank_range_includes_species():
     assert opal_rank_range("genus") == "genus,species"
     assert opal_rank_range("species") == "genus,species"
@@ -74,11 +75,9 @@ def test_series_to_counts_skips_unclassified():
     assert counts == {"562": 2.0}
 
 
-def test_opal_executable_optional():
-    exe = opal_executable()
-    assert exe is None or Path(exe).exists()
 
 
+@pytest.mark.optional
 def test_opal_command_uses_python_for_script(tmp_path, monkeypatch):
     script = tmp_path / "opal.py"
     script.write_text("#!/usr/bin/env python3\n")
@@ -106,6 +105,7 @@ def test_score_table_includes_opal_and_tn(tmp_path):
     assert plain["accuracy"].tolist() == table["accuracy"].tolist()
 
 
+@pytest.mark.optional
 def test_viz_writes_opal_scores_plot(tmp_path):
     df = pd.DataFrame(
         {
@@ -133,6 +133,7 @@ def test_viz_writes_opal_scores_plot(tmp_path):
     assert (out / "opal_scores.png").is_file()
 
 
+@pytest.mark.optional
 def test_empty_profile_still_writes_opal_html(tmp_path):
     if opal_executable() is None:
         pytest.skip("OPAL is not installed")

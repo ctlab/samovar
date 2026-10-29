@@ -223,6 +223,7 @@ def test_launch_check_follows_full_ask_flag():
     assert not launch_check_enabled(["--full"], full=False)
 
 
+@pytest.mark.optional
 def test_metax_probe_is_profile_help(tmp_path):
     exe = tmp_path / "metax"
     exe.write_text(
@@ -393,6 +394,7 @@ def test_companion_no_skips_helper(tmp_path):
     assert recorded == ["kraken2"]
 
 
+@pytest.mark.optional
 def test_metaphlan_is_not_installed_into_samovar():
     called = []
     spec = next(tool for tool in ASK_TOOLS if tool.name == "metaphlan")
@@ -407,6 +409,7 @@ def test_metaphlan_is_not_installed_into_samovar():
     assert called == []
 
 
+@pytest.mark.optional
 def test_assembly_tools_resolve_from_conda_prefix(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
@@ -435,6 +438,7 @@ def test_assembly_tools_resolve_from_conda_prefix(tmp_path, monkeypatch):
         assert str(exe.parent) in collect_runtime_path_dirs()
 
 
+@pytest.mark.optional
 def test_full_install_discovers_anvio_and_dastool_lookup_names(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
@@ -498,7 +502,7 @@ def _scripted_ask(*replies: str):
     return ask
 
 
-@pytest.mark.mandatory
+@pytest.mark.optional
 def test_smoketest_threads_default_is_three_quarters():
     assert default_smoketest_threads(1) == 1
     assert default_smoketest_threads(4) == 3

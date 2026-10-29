@@ -201,10 +201,6 @@ def _source_pipeline(tmp_path: Path, monkeypatch, *, with_model: bool = True) ->
 
 
 def test_cli_help_lists_apply():
-    cfg = REPO / "build" / "config.json"
-    if not cfg.exists():
-        cfg.parent.mkdir(parents=True, exist_ok=True)
-        cfg.write_text('{"python_path": "python3", "r_path": "R", "r_lib_path": "."}\n')
     result = subprocess.run(
         ["bash", str(REPO / "bin" / "samovar"), "help"],
         cwd=REPO,

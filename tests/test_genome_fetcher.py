@@ -11,9 +11,9 @@ from samovar.genome_fetcher import bundled_test_genome, fetch_genome
 
 
 @pytest.fixture
-def test_output_dir():
+def test_output_dir(tmp_path):
     """Create and return test output directory"""
-    output_dir = Path("tests_outs/test_genome_fetcher")
+    output_dir = tmp_path / "genomes"
     output_dir.mkdir(parents=True, exist_ok=True)
     return str(output_dir)
 
@@ -39,12 +39,6 @@ def test_bundled_test_genome_has_shipped_taxids():
     assert bundled_test_genome("999999999") is None
 
 
-def test_fetch_genome_reuses_gzipped_processed(tmp_path):
-    dest = tmp_path / "562-processed.fasta.gz"
-    with gzip.open(dest, "wt") as handle:
-        handle.write(">x\nACGT\n")
-    result = fetch_genome("562", str(tmp_path), "test@example.com")
-    assert result == str(dest)
 
 
 def test_fetch_genome_reuses_library_not_bundled(tmp_path, monkeypatch):
@@ -175,6 +169,7 @@ def test_fetch_genome_skip_list_allows_existing(tmp_path, monkeypatch):
 def test_fetch_genome_max_mb_blocks_new_download(tmp_path, monkeypatch):
     from unittest.mock import patch
 
+    monkeypatch.setattr("samovar.genome_fetcher._assembly_doc_for_taxid", lambda *a, **kw: None)
     monkeypatch.delenv("SAMOVAR_MAX_GENOME_MB", raising=False)
     monkeypatch.delenv("SAMOVAR_GENOME_SKIP_LIST", raising=False)
     monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
@@ -246,11 +241,13 @@ def test_fetch_genome_downloads_into_raw(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_REUSE_GENOMES", "0")
     monkeypatch.delenv("SAMOVAR_ALLOW_TEST_GENOMES", raising=False)
 
+    monkeypatch.setattr("samovar.genome_fetcher._remote_fasta_size_mb", lambda *_: 1.0)
     dests = []
 
     def fake_download(url, dest, timeout=45):
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"\x1f\x8b")
+        with gzip.open(dest, "wt") as handle:
+            handle.write(">genome\nACGTACGT\n")
         dests.append(Path(dest))
 
     with patch(
@@ -262,15 +259,13 @@ def test_fetch_genome_downloads_into_raw(tmp_path, monkeypatch):
                 "samovar.genome_fetcher._assembly_doc_for_taxid",
                 return_value=None,
             ):
-                with patch(
-                    "samovar.genome_fetcher.preprocess_fasta",
-                    side_effect=lambda **kw: Path(kw["output_file"]).write_text(">x\nACGT\n"),
-                ):
-                    fetch_genome("1280", str(tmp_path / "run"), "test@example.com")
+                result = fetch_genome("1280", str(tmp_path / "run"), "test@example.com", index=False)
     assert dests
     assert dests[0].parent.name == "raw"
     assert dests[0].name == "1280.fna.gz"
 
+    with gzip.open(result, "rt") as handle:
+        assert "ACGTACGT" in handle.read()
 
 def test_cached_ncbi_gzip_size_mismatch_warns(tmp_path, monkeypatch, caplog):
     import logging
@@ -303,14 +298,12 @@ def test_cached_ncbi_gzip_size_mismatch_warns(tmp_path, monkeypatch, caplog):
             return_value=5_000_000,
         ):
             with patch("samovar.genome_fetcher._download_url") as download:
-                with patch(
-                    "samovar.genome_fetcher.preprocess_fasta",
-                    side_effect=lambda **kw: Path(kw["output_file"]).write_text(">x\nACGT\n"),
-                ):
-                    fetch_genome("1280", str(tmp_path / "run"), "test@example.com")
+                result = fetch_genome("1280", str(tmp_path / "run"), "test@example.com", index=False)
     download.assert_not_called()
     assert "NCBI reports 5000000 bytes" in caplog.text
 
+    with gzip.open(result, "rt") as handle:
+        assert "ACGT" in handle.read()
 
 def test_gzip_sizes_disagree_tolerance():
     from samovar.genome_fetcher import gzip_sizes_disagree

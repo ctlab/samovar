@@ -56,6 +56,10 @@ pytest
 
 Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (built-in baselines and small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
 
+Choose the suite by the behavior protected, not by whether a test is a unit test or was written for an old bug. Keep sample/read identity, ground truth, ML train/predict compatibility, failed-stage handling, tool import contracts, and prepare/exec wiring mandatory. Keep useful detailed adapter options, rendering, resource tuning, and native ecosystem checks as optional. Remove redundant source/constant assertions only when retained behavior tests cover their purpose.
+
+Mandatory tests receive a private install config/cache, real configured core executable paths, and the small taxonomy fixture in `tests/data/taxdump`. They must not fetch a real taxdump or call NCBI/other external services. Mock the transport with a small response when testing download handling; keep the real service integration optional. Optional dependencies are checked when their test runs, not during collection. Use `tmp_path` (or a temporary directory in unittest cases), never fixed shared run directories. See [tests/README.md](tests/README.md) for suite selection and validation.
+
 Installation is validated through `install.sh` (the same procedure GitHub Actions uses before pytest). Do not add a second install path for tests.
 
 Test data may come from repository `data/` / `tests/` fixtures or stable public Internet sources. Test code may use `src/`, `tests/`, and installed package APIs. Tests must never import executable code from `examples/`; examples demonstrate the public interface and are not test infrastructure.

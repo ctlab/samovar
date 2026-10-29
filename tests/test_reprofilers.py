@@ -78,6 +78,7 @@ def test_prepare_cores_are_training_threads(tmp_path):
     assert result.model.n_jobs == 6
 
 
+@pytest.mark.optional
 def test_prepare_gpu_flag_reaches_ml(tmp_path):
     import yaml
 

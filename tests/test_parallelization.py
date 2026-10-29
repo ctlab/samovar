@@ -11,7 +11,10 @@ from samovar.config import AnnotatorConfig, PipelineConfig, _apply_translated_cl
 from samovar.memory import annotator_mem_mb, job_mem_mb
 from samovar.tool_spec import annotator_priority, scheduler_threads
 
+import pytest
 
+
+@pytest.mark.optional
 def test_heavy_databases_take_the_whole_memory_ceiling():
     limit = 32_000
     cores = 32
@@ -28,6 +31,7 @@ def test_heavy_databases_take_the_whole_memory_ceiling():
     assert annotator_priority("metax") > annotator_priority("gc")
 
 
+@pytest.mark.optional
 def test_scheduler_reserves_only_what_the_program_uses():
     assert scheduler_threads("gc", 200) == 1
     assert scheduler_threads("kmer_encoder", 200) == 8
@@ -41,6 +45,7 @@ def test_scheduler_reserves_only_what_the_program_uses():
     assert scheduler_threads("kraken2", 4) == 4
 
 
+@pytest.mark.optional
 def test_assembly_stages_do_not_share_the_machine():
     assert assembly_stage_threads("megahit", 200) == 16
     assert assembly_stage_threads("flye", 200) == 16
@@ -91,6 +96,7 @@ def test_kaiju_multi_script_is_one_process():
     assert "touch /o/empty.out" in script
 
 
+@pytest.mark.optional
 def test_metax_extra_does_not_repeat_threads():
     cfg = PipelineConfig(
         cores=200,
@@ -110,6 +116,7 @@ def test_metax_extra_does_not_repeat_threads():
     assert "200" not in extra
 
 
+@pytest.mark.optional
 def test_megahit_command_uses_the_stage_cap(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -126,6 +133,7 @@ def test_megahit_command_uses_the_stage_cap(tmp_path, monkeypatch):
     assert cmd[cmd.index("-t") + 1] == "16"
 
 
+@pytest.mark.optional
 def test_assembler_memory_uses_the_job_budget(tmp_path, monkeypatch):
     from samovar.assembly_profiling import run_megahit, run_metaflye, run_spades
 
@@ -166,6 +174,7 @@ def test_assembler_memory_uses_the_job_budget(tmp_path, monkeypatch):
     assert imported[imported.index("-m") + 1] == "9"
 
 
+@pytest.mark.optional
 def test_prodigal_runs_genomes_together(tmp_path, monkeypatch):
     depth = {"now": 0, "max": 0}
     lock = threading.Lock()

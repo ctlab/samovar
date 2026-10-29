@@ -138,6 +138,13 @@ def _prepare_exec(
             "dummy",
             "--N_reads",
             "40",
+            "--N",
+            "2",
+            "--autoimport",
+            "0",
+            "--no-feature-importance",
+            "--endpoint",
+            "reprofile",
             "--scoring",
             "none",
             "--no-multiqc",
@@ -197,6 +204,8 @@ def test_integrity_known_ground_truth_after_generate(tmp_path):
     filled = _true_tokens(df["true"])
     assert (filled != "").mean() > 0.9
     assert set(filled[filled != ""]) <= KNOWN_TRUE_TAXIDS
+    assert (out / "reprofiled_annotations" / "trained_model.joblib").is_file()
+    assert list((out / "regenerated_annotations").glob("*.csv"))
     json_dir = out / ".log" / "multiqc"
     assert (json_dir / "setup_reads.samovar.json").is_file()
 

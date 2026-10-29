@@ -17,6 +17,8 @@ from samovar.memory import (
 from samovar.qc import gc_fraction
 from samovar.reprofiling import predict_taxid, train_models, preprocess_data
 
+import pytest
+
 
 def test_parse_mem_matches_slurm():
     assert parse_mem("16000") == 16000
@@ -119,6 +121,7 @@ def test_gc_streams_paired_reads(tmp_path):
     assert abs(float(text[1].split("\t")[1]) - gc_fraction("AAAAGGGG")) < 1e-6
 
 
+@pytest.mark.optional
 def test_numeric_csv_uses_memmap(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_MEMMAP_MIN_BYTES", "0")
     src = tmp_path / "ann.csv"

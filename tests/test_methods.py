@@ -22,6 +22,9 @@ from samovar.methods import (
 )
 from samovar.tool_contracts import CONTRACTS
 
+# Methods/citation rendering, beyond the pipeline data contracts.
+pytestmark = pytest.mark.optional
+
 
 def _dump_yaml(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

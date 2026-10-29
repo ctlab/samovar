@@ -11,6 +11,9 @@ from samovar.MAG.homology import (
     extract_gtdb_markers, finalize_mapping_catalog, validate_mapping_catalog,
 )
 
+# Frozen MAG reference, candidate resolution and mapping integration; general ML encodings remain mandatory.
+pytestmark = pytest.mark.optional
+
 
 def fastq(path, names):
     path.write_text(''.join(f'@{name}\nACGTACGTACGT\n+\nIIIIIIIIIIII\n' for name in names))

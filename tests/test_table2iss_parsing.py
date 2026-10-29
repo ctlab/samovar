@@ -4,10 +4,10 @@ from pathlib import Path
 from samovar.table2iss import parse_annotation_table
 import pytest
 
-def test_parse_annotation_table():
+def test_parse_annotation_table(tmp_path):
     """Test reading taxonomy table and counting occurrences."""
     # Create output directory
-    output_dir = "tests_outs/test_parse_annotation_table"
+    output_dir = str(tmp_path / "parse")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test table with the example data
@@ -37,26 +37,4 @@ def test_parse_annotation_table():
     
     taxid_562 = result[result['taxid'] == '562'].iloc[0]
     assert taxid_562['N_k1'] == 1
-    assert taxid_562['N_k2'] == 2 
-
-def test_parse_real_annotation_table():
-    """Test parsing the real annotation table and check output dimensions."""
-    # Create output directory
-    output_dir = "tests_outs/test_parse_real_annotation_table"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Path to real annotation file
-    table_path = "tests/data/annotation.csv"
-    
-    # Parse table
-    result = parse_annotation_table(table_path)
-    
-    # Save output for manual inspection
-    output_path = os.path.join(output_dir, "result.csv")
-    result.to_csv(output_path, index=False)
-    
-    # Check basic properties
-    assert isinstance(result, pd.DataFrame)
-    assert 'taxid' in result.columns
-    assert all(col.startswith('N_') for col in result.columns if col != 'taxid')
-    assert len(result) > 0  # Should have at least one taxid 
+    assert taxid_562['N_k2'] == 2

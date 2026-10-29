@@ -61,6 +61,7 @@ def test_annotation_to_abundance_counts(tmp_path):
     assert int(out["N_1"].sum()) == 100
 
 
+@pytest.mark.optional
 def test_clip_taxon_label():
     assert _clip_taxon_label("Escherichia") == "Escherichia"
     long = "Candidatus Blochmanniella extra"
@@ -69,6 +70,7 @@ def test_clip_taxon_label():
     assert clipped.endswith("…")
 
 
+@pytest.mark.optional
 def test_fpc_taxon_order_stable():
     freq = pd.DataFrame(
         {"x": ["1", "2", "1"], "y": ["1", "2", "2"], "Freq": [10, 5, 1]}

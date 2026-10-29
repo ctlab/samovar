@@ -7,6 +7,11 @@ import yaml
 
 from samovar.build_database import build_database_from_config
 
+import pytest
+
+# Centrifuge-specific database adapter.
+pytestmark = pytest.mark.optional
+
 
 def test_centrifuge_build_writes_library_and_calls_centrifuge_build(tmp_path):
     genomes = tmp_path / "genomes"

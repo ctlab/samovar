@@ -168,6 +168,7 @@ def test_lazy_download_known_url():
     assert "k2_viral_20251015" in viral
 
 
+@pytest.mark.optional
 def test_lazy_download_plain_tar_and_versioned_qiime():
     mpa = lazy_download_for("metaphlan", "jan25", "2025jan")
     assert "mpa_vJan25" in mpa
