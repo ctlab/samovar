@@ -67,6 +67,19 @@ def tiny_fastq(tmp_path):
     return r1, r2
 
 
+def _annotator_db(request) -> Path | None:
+    """Real classifier database. An empty pytest tmp dir is not a database."""
+    import os
+
+    raw = request.config.getoption("--db-path") or ""
+    if not str(raw).strip():
+        raw = os.environ.get("SAMOVAR_CONTRACT_DB") or ""
+    text = str(raw).strip()
+    if not text:
+        return None
+    return Path(text).expanduser()
+
+
 def test_annotator_contract(request, tmp_path, tiny_fastq):
     _skip_if_other_type(request, "annotator")
     path = _tool_path(request, "annotator")
@@ -90,13 +103,16 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
         import subprocess
 
+        db = _annotator_db(request)
+        if db is None:
+            pytest.skip("contract needs a DB (pass --db-path or SAMOVAR_CONTRACT_DB)")
         subprocess.check_call(
-            [str(path), "-i", str(r1), "-I", str(r2), "-d", str(tmp_path), "-o", str(out), "-t", "1"]
+            [str(path), "-i", str(r1), "-I", str(r2), "-d", str(db), "-o", str(out), "-t", "1"]
         )
         from samovar.annotators_wrapper import CustomAnnotator
 
         inst = CustomAnnotator(
-            {"run_name": "clf", "type": "clf", "cmd": str(path), "db_path": str(tmp_path), "threads": 1},
+            {"run_name": "clf", "type": "clf", "cmd": str(path), "db_path": str(db), "threads": 1},
             {},
             "clf",
         )
@@ -684,5 +700,69 @@ def test_feature_importance_contract(request, tmp_path):
     mqc = list(dest.glob("*_mqc.json"))
     assert mqc, f"{path} must write MultiQC JSON under dest"
     assert payload is None or isinstance(payload, dict)
+
+
+def _db_stub(tmp_path: Path) -> tuple:
+    stub = tmp_path / "dbstub.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        'I=""; D=""; O=""\n'
+        'while [[ $# -gt 0 ]]; do\n'
+        '  case "$1" in\n'
+        '    -i) I=$2; shift 2;;\n'
+        '    -d) D=$2; shift 2;;\n'
+        '    -o) O=$2; shift 2;;\n'
+        "    *) shift 2;;\n"
+        "  esac\n"
+        "done\n"
+        '[[ -f "$D/db.marker" ]] || { echo "ERROR: database not found in -d \'$D\'" >&2; exit 2; }\n'
+        "{ printf 'seq\\ttaxID\\n'; awk 'NR%4==1{sub(/^@/,\"\");print $1\"\\t562\"}' \"$I\"; } > \"$O\"\n"
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    db = tmp_path / "stubdb"
+    db.mkdir()
+    (db / "db.marker").write_text("ok\n")
+    return stub, db
+
+
+def test_annotator_shell_contract_needs_a_real_db(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    stub, db = _db_stub(tmp_path)
+    node = str(Path(__file__).resolve()) + "::test_annotator_contract"
+    env = os.environ.copy()
+    env.pop("SAMOVAR_CONTRACT_DB", None)
+    env.pop("SAMOVAR_CONTRACT_TOOL", None)
+    base = [
+        sys.executable,
+        "-m",
+        "pytest",
+        node,
+        "-q",
+        "-rs",
+        "--tb=line",
+        "--tool",
+        str(stub),
+        "--tool-type",
+        "annotator",
+    ]
+    skipped = subprocess.run(base, cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True)
+    skipped_text = skipped.stdout + skipped.stderr
+    assert skipped.returncode == 0, skipped_text
+    assert "skipped" in skipped_text.lower()
+    assert "contract needs a DB" in skipped_text
+    passed = subprocess.run(
+        [*base, "--db-path", str(db)],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    passed_text = passed.stdout + passed.stderr
+    assert passed.returncode == 0, passed_text
+    assert "passed" in passed_text.lower()
 
 

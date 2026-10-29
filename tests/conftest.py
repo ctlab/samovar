@@ -47,3 +47,9 @@ def pytest_addoption(parser):
         default=None,
         help="Import group: annotator, table_reads_generator, table_scoring, sample_scoring, export, ...",
     )
+    parser.addoption(
+        "--db-path",
+        action="store",
+        default=None,
+        help="Database directory for an annotator contract (else SAMOVAR_CONTRACT_DB)",
+    )

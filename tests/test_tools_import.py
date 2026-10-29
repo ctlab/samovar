@@ -803,3 +803,55 @@ def test_import_flags_translate_skips_help_warning(tmp_path, monkeypatch, capsys
     assert "does not list" not in capsys.readouterr().err
     assert "(none)" in format_import_status({})
 
+
+def test_import_pytest_annotator_uses_db_path(tmp_path, monkeypatch, capsys):
+    stub = tmp_path / "dbstub.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        'I=""; D=""; O=""\n'
+        'while [[ $# -gt 0 ]]; do\n'
+        '  case "$1" in\n'
+        '    -i) I=$2; shift 2;;\n'
+        '    -d) D=$2; shift 2;;\n'
+        '    -o) O=$2; shift 2;;\n'
+        "    *) if [[ $# -ge 2 ]]; then shift 2; else shift; fi;;\n"
+        "  esac\n"
+        "done\n"
+        '[[ -f "$D/db.marker" ]] || { echo "ERROR: database not found in -d \'$D\'" >&2; exit 2; }\n'
+        "{ printf 'seq\\ttaxID\\n'; awk 'NR%4==1{sub(/^@/,\"\");print $1\"\\t562\"}' \"$I\"; } > \"$O\"\n"
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    db = tmp_path / "stubdb"
+    db.mkdir()
+    (db / "db.marker").write_text("ok\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    monkeypatch.delenv("SAMOVAR_CONTRACT_DB", raising=False)
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    blocked = import_main(
+        ["-n", "dbstub", "-t", "annotator", "--exec-path", str(stub), "--pytest"]
+    )
+    assert blocked == 1
+    assert "contract needs a DB" in capsys.readouterr().err
+    ok = import_main(
+        [
+            "-n",
+            "dbstub",
+            "-t",
+            "annotator",
+            "--exec-path",
+            str(stub),
+            "--db-path",
+            str(db),
+            "--pytest",
+        ]
+    )
+    text = capsys.readouterr()
+    assert ok == 0, text.err + text.out
+    stored = json.loads(cfg.read_text())
+    assert "dbstub" in stored["tools"] or any(
+        str(key).startswith("dbstub") for key in stored["tools"]
+    )
+

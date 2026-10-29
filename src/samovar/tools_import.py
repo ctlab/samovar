@@ -517,6 +517,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--db-path",
+        "--database",
+        dest="db_path",
+        default="",
+        help=(
+            "Database directory for an annotator contract (--pytest). "
+            "Falls back to SAMOVAR_CONTRACT_DB, then a database already "
+            "imported for this tool name."
+        ),
+    )
+    parser.add_argument(
         "--bibtex",
         "--citation",
         action="append",
@@ -537,6 +548,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Link a .bib/.txt file into the citation registry (repeatable).",
     )
     return parser
+
+
+def _imported_database_path(name: str) -> str:
+    """A database already stored for this annotator name, if the path exists."""
+    from samovar.db_spec import iter_database_records
+    from samovar.paths import load_config
+
+    grouped = iter_database_records(load_config()).get(str(name or "").strip()) or {}
+    for rec in grouped.values():
+        raw = str((rec or {}).get("path") or "").strip()
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if path.exists():
+            return str(path)
+    return ""
+
+
+def _contract_skipped(output: str) -> bool:
+    text = str(output or "")
+    return "skipped" in text.lower() and "passed" not in text.lower()
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -588,15 +620,27 @@ def main(argv: Optional[list] = None) -> int:
         group = normalize_tool_group(args.type)
         if args.pytest:
             print(f"Running contract pytest for {group} on {dest} …")
+            db = str(getattr(args, "db_path", "") or "").strip()
+            if not db:
+                db = os.environ.get("SAMOVAR_CONTRACT_DB", "").strip()
+            if not db and group == "annotator":
+                db = _imported_database_path(args.name)
             try:
-                code, output = run_contract_pytest(dest, group)
+                code, output = run_contract_pytest(dest, group, db_path=db)
             except ValueError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 print(format_contract(group), file=sys.stderr)
                 return 1
-            if code != 0:
+            if code != 0 or _contract_skipped(output):
                 print(output, file=sys.stderr)
-                print("Import blocked: contract pytest failed.", file=sys.stderr)
+                if _contract_skipped(output):
+                    print(
+                        "Import blocked: contract needs a DB. "
+                        "Pass --db-path or SAMOVAR_CONTRACT_DB.",
+                        file=sys.stderr,
+                    )
+                else:
+                    print("Import blocked: contract pytest failed.", file=sys.stderr)
                 print(format_contract(group), file=sys.stderr)
                 return 1
             print(output.rstrip() or "contract pytest passed")

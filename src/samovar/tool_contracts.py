@@ -238,6 +238,7 @@ def run_contract_pytest(
     tool_type: str,
     *,
     extra_args: Optional[list] = None,
+    db_path: str = "",
 ) -> Tuple[int, str]:
     """Run the matching contract test. Return (returncode, combined output)."""
     group = normalize_tool_group(tool_type)
@@ -261,18 +262,24 @@ def run_contract_pytest(
     env["PYTHONPATH"] = src + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["SAMOVAR_CONTRACT_TOOL"] = str(Path(tool_path).resolve())
     env["SAMOVAR_CONTRACT_TYPE"] = group
+    db = str(db_path or "").strip()
+    if db:
+        env["SAMOVAR_CONTRACT_DB"] = db
     cmd = [
         sys.executable,
         "-m",
         "pytest",
         pytest_node,
         "-q",
+        "-rs",
         "--tb=short",
         "--tool",
         str(Path(tool_path).resolve()),
         "--tool-type",
         group,
     ]
+    if db:
+        cmd.extend(["--db-path", db])
     if extra_args:
         cmd.extend(extra_args)
     proc = subprocess.run(
