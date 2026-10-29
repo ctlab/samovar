@@ -60,7 +60,7 @@ python - <<PY
 from pathlib import Path
 import pandas as pd
 root = Path("$output_dir")
-init = next((root / "initial_annotations").glob("*.annotation.csv"))
+init = next((root / "initial_annotations").glob("*.annotation.csv"), root / "initial_annotations" / "combined_annotation_table.csv")
 df = pd.read_csv(init, nrows=0)
 cols = list(df.columns)
 assert any(str(c).startswith("feat_") and "MAG_ID" in str(c) for c in cols), cols
