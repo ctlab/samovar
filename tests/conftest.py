@@ -2,6 +2,23 @@ from pathlib import Path
 
 import pytest
 
+_CHECKOUT_POINTER = Path(__file__).resolve().parents[1] / "build" / "config_path"
+
+
+@pytest.fixture(autouse=True)
+def checkout_config_pointer_unchanged():
+    """A test must not retarget the checkout install pointer."""
+    before = _CHECKOUT_POINTER.read_text(encoding="utf-8") if _CHECKOUT_POINTER.is_file() else None
+    yield
+    after = _CHECKOUT_POINTER.read_text(encoding="utf-8") if _CHECKOUT_POINTER.is_file() else None
+    if after == before:
+        return
+    if before is None:
+        _CHECKOUT_POINTER.unlink(missing_ok=True)
+    else:
+        _CHECKOUT_POINTER.write_text(before, encoding="utf-8")
+    raise AssertionError("test changed build/config_path")
+
 
 def pytest_collection_modifyitems(config, items):
     """Unmarked tests are mandatory. CI runs ``pytest -m mandatory``.

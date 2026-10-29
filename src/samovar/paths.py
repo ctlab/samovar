@@ -142,18 +142,27 @@ def recorded_config_path() -> Optional[Path]:
 
 
 def write_install_config_pointer(config_file: Path, root: Optional[Path] = None) -> Optional[Path]:
-    """Record ``config_file`` in ``build/config_path`` next to the install."""
+    """Record ``config_file`` in ``build/config_path`` next to the install.
+
+    Parallel writers queue on the pointer lock. The line is published with
+    tmp+rename; the tmp is removed when the rename finishes.
+    """
     try:
         dest = Path(config_file).expanduser().resolve()
     except OSError:
         dest = Path(config_file).expanduser()
     pointer = install_config_pointer_file(root)
+    tmp = pointer.with_name(f".{pointer.name}.{os.getpid()}.tmp")
     try:
         pointer.parent.mkdir(parents=True, exist_ok=True)
-        pointer.write_text(str(dest) + "\n", encoding="utf-8")
+        with _exclusive_config(pointer):
+            tmp.write_text(str(dest) + "\n", encoding="utf-8")
+            os.replace(tmp, pointer)
         return pointer
     except OSError:
         return None
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def user_config_path() -> Path:
@@ -650,9 +659,17 @@ def _companion_siblings(name: str, tools_map: Dict[str, Any]) -> List[str]:
 
 
 def _exclusive_config(dest: Path):
-    """Process-wide lock for one config file. Reenters in the thread that holds it."""
+    """Queue writers of one file. The same thread may re-enter that file."""
     local = _exclusive_config.local
-    if getattr(local, "held", False):
+    held = getattr(local, "held", None)
+    if held is None:
+        held = set()
+        local.held = held
+    try:
+        key = str(Path(dest).expanduser().resolve())
+    except OSError:
+        key = str(Path(dest).expanduser())
+    if key in held:
         yield
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -660,11 +677,11 @@ def _exclusive_config(dest: Path):
     handle = lock_path.open("a+")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        local.held = True
+        held.add(key)
         try:
             yield
         finally:
-            local.held = False
+            held.discard(key)
     finally:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
@@ -674,30 +691,73 @@ _exclusive_config = contextmanager(_exclusive_config)
 _exclusive_config.local = threading.local()
 
 
+def _same_config_file(left: Path, right: Path) -> bool:
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except OSError:
+        return str(left.expanduser()) == str(right.expanduser())
+
+
+def _writing_install_config(dest: Path) -> bool:
+    """True when ``dest`` is the recorded user config, not a SAMOVAR_CONFIG override."""
+    override = os.environ.get("SAMOVAR_CONFIG", "").strip()
+    if not override:
+        return True
+    recorded = recorded_config_path()
+    return recorded is not None and _same_config_file(Path(override), recorded)
+
+
+def _merge_existing_config(dest: Path, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold ``data`` into the user config already on disk.
+
+    That file is the install the user already has. A parallel writer adds its
+    keys; it does not replace the file with a new document.
+    """
+    existing = _read_json(dest)
+    if not existing:
+        return data
+    from samovar.main_config import apply_legacy_updates
+
+    return apply_legacy_updates(dict(existing), data)
+
+
+def _publish_text(dest: Path, text: str) -> None:
+    """Queue is the caller. Publish through a checkpoint and a pid tmp, then remove both."""
+    checkpoint = dest.with_name(f".{dest.name}.checkpoint")
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    try:
+        checkpoint.write_text(f"{os.getpid()}\n", encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+        checkpoint.unlink(missing_ok=True)
+
+
 def _write_config_unlocked(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
+    dest = user_config_path()
+    # SAMOVAR_CONFIG names a private file. The shared user config is merged.
+    if _writing_install_config(dest):
+        data = _merge_existing_config(dest, data)
     payload = disk_payload(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
-    dest = user_config_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=2) + "\n"
-    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, dest)
-    if also_repo_build:
+    _publish_text(dest, text)
+    # An override must not retarget build/config_path for every other process.
+    if also_repo_build and _writing_install_config(dest):
         write_install_config_pointer(dest, root=repo_root())
         try:
             build = repo_root() / "build"
             build.mkdir(parents=True, exist_ok=True)
             mirror = build / "config.json"
             try:
-                same = mirror.resolve() == dest.expanduser().resolve()
+                same = _same_config_file(mirror, dest)
             except OSError:
                 same = False
             if not same:
-                mirror_tmp = mirror.with_name(f".{mirror.name}.{os.getpid()}.tmp")
-                mirror_tmp.write_text(text, encoding="utf-8")
-                os.replace(mirror_tmp, mirror)
+                _publish_text(mirror, text)
         except OSError:
             pass
     return dest

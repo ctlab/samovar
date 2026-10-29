@@ -64,20 +64,105 @@ def test_samovar_config_env_overrides_pointer(tmp_path, monkeypatch):
     assert load_config().get("python_path") == "/from/env"
 
 
-def test_write_config_records_pointer(tmp_path, monkeypatch):
+def test_samovar_config_override_keeps_user_pointer(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
-    dest = tmp_path / "etc" / "config.json"
-    monkeypatch.setenv("SAMOVAR_CONFIG", str(dest))
+    user = tmp_path / "user" / "config.json"
+    user.parent.mkdir()
+    user.write_text(
+        json.dumps({"root": str(tmp_path), "compilers": {"python": "/usr/bin/python3"}})
+        + "\n"
+    )
+    write_install_config_pointer(user, root=tmp_path)
+    pointer = tmp_path / "build" / "config_path"
+    before_pointer = pointer.read_text()
+    before_user = user.read_text()
+    override = tmp_path / "x" / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(override))
+    write_config({})
+    assert pointer.read_text() == before_pointer
+    assert user.read_text() == before_user
+    assert override.is_file()
+    assert not list(override.parent.glob(".config.json.*.tmp"))
+    assert not (override.parent / ".config.json.checkpoint").is_file()
+
+
+def test_write_config_appends_to_existing_user_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_CONFIG", raising=False)
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "root": str(tmp_path),
+                "compilers": {"python": "/usr/bin/python3"},
+                "tools": {
+                    "keep:1": {
+                        "type": "annotator",
+                        "exec": {"env": "", "parser": "bash", "path": "/bin/true"},
+                    }
+                },
+            }
+        )
+        + "\n"
+    )
+    write_install_config_pointer(cfg, root=tmp_path)
     write_config(
         {
-            "version": get_version(),
-            "root": str(tmp_path),
-            "compilers": {"python": "/usr/bin/python3"},
+            "tools": {
+                "added": {
+                    "type": "annotator",
+                    "exec": {"env": "", "parser": "bash", "path": "/bin/true"},
+                }
+            }
         }
     )
-    assert dest.is_file()
-    assert (tmp_path / "build" / "config_path").read_text().strip() == str(dest.resolve())
-    assert (tmp_path / "build" / "config.json").is_file()
+    data = json.loads(cfg.read_text())
+    assert data["compilers"]["python"] == "/usr/bin/python3"
+    names = set(data["tools"])
+    assert any(name.startswith("keep") for name in names)
+    assert any(name.startswith("added") for name in names)
+    assert (tmp_path / "build" / "config_path").read_text().strip() == str(cfg.resolve())
+    assert not (cfg.parent / ".config.json.checkpoint").is_file()
+    assert not list(cfg.parent.glob(".config.json.*.tmp"))
+
+
+def test_parallel_write_config_appends_every_tool(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.delenv("SAMOVAR_CONFIG", raising=False)
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "root": str(tmp_path),
+                "compilers": {"python": "/usr/bin/python3"},
+                "tools": {},
+            }
+        )
+        + "\n"
+    )
+    write_install_config_pointer(cfg, root=tmp_path)
+
+    def one(index: int) -> None:
+        write_config(
+            {
+                "tools": {
+                    f"race_{index}": {
+                        "type": "annotator",
+                        "exec": {"env": "", "parser": "bash", "path": "/bin/true"},
+                    }
+                }
+            }
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(one, range(8)))
+    data = json.loads(cfg.read_text())
+    assert data["compilers"]["python"] == "/usr/bin/python3"
+    kept = [name for name in data["tools"] if str(name).startswith("race_")]
+    assert len(kept) == 8
+    assert (tmp_path / "build" / "config_path").read_text().strip() == str(cfg.resolve())
 
 
 def test_parallel_update_config_keeps_every_tool(tmp_path, monkeypatch):
