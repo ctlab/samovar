@@ -55,3 +55,4 @@ dependencies:
   - r-rmpfr
   - pip:
       - cnsplots>=0.6.0
+      - kaleido>=1

@@ -47,7 +47,7 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "metax": "conda install -y -c zldeng metax=0.9.23=beta_0",
     "iss": "pip install 'insilicoseq>2.0.0'",
     "snakemake": "pip install snakemake",
-    "multiqc": "pip install 'multiqc>=1.21'",
+    "multiqc": "pip install 'multiqc>=1.21' && pip install 'kaleido>=1'",
     "nextflow": "conda install -y 'bioconda::nextflow>=25.04.2,<26'",
     "wgsim": "conda install -y bioconda::wgsim",
     "art_illumina": "conda install -y bioconda::art",

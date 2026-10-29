@@ -409,6 +409,27 @@ print("Updated config opal_path:", cfg.get("opal_path"))
 PY
 }
 
+ensure_kaleido() {
+    # plotly 6+ refuses kaleido 0.2. MultiQC --export needs kaleido>=1 and its Chrome.
+    if "$PYTHON_PATH" -c 'import importlib.metadata; raise SystemExit(0 if int(importlib.metadata.version("kaleido").split(".")[0]) >= 1 else 1)' 2>/dev/null; then
+        echo "kaleido>=1 already present."
+    elif [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Warning: kaleido>=1 is required for MultiQC PNG/SVG/PDF export."
+        return 1
+    else
+        echo "Installing kaleido>=1 for MultiQC static plot export ..."
+        if ! "$PYTHON_PATH" -m pip install "kaleido>=1" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
+            echo "Warning: pip install kaleido failed. MultiQC PNG/SVG/PDF export will be skipped."
+            echo "Install later with: $PYTHON_PATH -m pip install 'kaleido>=1'"
+            return 1
+        fi
+    fi
+    if ! "$PYTHON_PATH" -c 'import kaleido; kaleido.get_chrome_sync()'; then
+        echo "Warning: kaleido Chrome was not fetched. Static MultiQC export may still fail."
+        echo "Retry with: $PYTHON_PATH -c \"import kaleido; kaleido.get_chrome_sync()\""
+    fi
+}
+
 install_multiqc() {
     if "$PYTHON_PATH" -c "from samovar.paths import discover_multiqc; import shutil; raise SystemExit(0 if (discover_multiqc() or shutil.which('multiqc')) else 1)" 2>/dev/null; then
         echo "MultiQC already present; recording it in the install config."
@@ -424,6 +445,7 @@ install_multiqc() {
         fi
         hash -r 2>/dev/null || true
     fi
+    ensure_kaleido || echo "Warning: kaleido>=1 was not installed. MultiQC static plot export needs it."
     export PY_BIN
     "$PYTHON_PATH" - <<'PY'
 import os, shutil, sys
