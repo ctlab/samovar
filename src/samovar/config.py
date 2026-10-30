@@ -328,6 +328,20 @@ def _absolute_db_path(db_path: str) -> str:
         return db_path or "."
     return absolute_path(db_path)
 
+
+def _flag_database_label(token: str) -> str:
+    """Database token as the user typed it in the annotator flag.
+
+    A filesystem path contributes its final component. An indexed name such as
+    ``standard_8GB`` is kept as written, even after it is resolved to a directory.
+    """
+    text = (token or "").strip()
+    if not text or text == ".":
+        return ""
+    if "/" in text or text.startswith("~"):
+        return Path(text.rstrip("/")).name
+    return text
+
 @dataclass
 class AnnotatorConfig:
     run_name: str
@@ -335,6 +349,7 @@ class AnnotatorConfig:
     db_path: str
     cmd: str
     db_name: Optional[str] = None
+    db_label: Optional[str] = None
     extra: Optional[str] = None
 
 @dataclass
@@ -802,7 +817,12 @@ class PipelineConfig:
                         if payload.get("cmd"):
                             payload["cmd"] = _portable_annotator_cmd(payload["cmd"])
                         if "db_path" in payload:
-                            payload["db_path"] = _absolute_db_path(str(payload["db_path"]))
+                            raw_db = str(payload["db_path"])
+                            if not payload.get("db_label"):
+                                label = _flag_database_label(raw_db)
+                                if label:
+                                    payload["db_label"] = label
+                            payload["db_path"] = _absolute_db_path(raw_db)
                         config.annotators.append(AnnotatorConfig(**payload))
         elif args.input_dir:
             config.input_dir = args.input_dir
@@ -834,6 +854,7 @@ class PipelineConfig:
                     cmd = parts[0]
                     # Second part is the database path or indexed name
                     db_path = parts[1] if len(parts) > 1 else "."
+                    db_label = _flag_database_label(db_path)
                     extra = shlex.join(parts[2:]) if len(parts) > 2 else None
                     db_path, extra = _expand_indexed_database(cmd, db_path, extra)
                     
@@ -901,6 +922,7 @@ class PipelineConfig:
                         type=type_name,
                         cmd=_portable_annotator_cmd(cmd),
                         db_path=_absolute_db_path(db_path),
+                        db_label=db_label or None,
                         extra=extra
                     ))
 
@@ -917,6 +939,7 @@ class PipelineConfig:
                     cmd = parts[0]
                     # Second part is the database path or indexed name
                     db_path = parts[1] if len(parts) > 1 else "."
+                    db_label = _flag_database_label(db_path)
                     extra = shlex.join(parts[2:]) if len(parts) > 2 else None
                     db_path, extra = _expand_indexed_database(cmd, db_path, extra)
                     
@@ -939,6 +962,7 @@ class PipelineConfig:
                         type=type_name,
                         cmd=_portable_annotator_cmd(cmd),
                         db_path=_absolute_db_path(db_path),
+                        db_label=db_label or None,
                         extra=extra
                     ))
 
@@ -1496,6 +1520,7 @@ class PipelineConfig:
                     'db_path': ann.db_path,
                     'threads': scheduler_threads(ann.type or ann.run_name, self.cores),
                     **({'db_name': ann.db_name} if ann.db_name else {}),
+                    **({'db_label': ann.db_label} if ann.db_label else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }
                 for ann in self.annotators
@@ -1660,6 +1685,7 @@ class PipelineConfig:
                     'db_path': ann.db_path,
                     'threads': scheduler_threads(ann.type or ann.run_name, self.cores),
                     **({'db_name': ann.db_name} if ann.db_name else {}),
+                    **({'db_label': ann.db_label} if ann.db_label else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }
                 for ann in self.annotators

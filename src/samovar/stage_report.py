@@ -575,6 +575,190 @@ def _heatmap_pconfig(
     return cfg
 
 
+_NATIVE_OUTPUT_SUFFIX = {
+    "kraken2": "kraken2.out",
+    "kaiju": "kaiju.out",
+    "metaphlan": "metaphlan4.out",
+    "metaphlan4": "metaphlan4.out",
+    "mpa": "metaphlan4.out",
+    "mp4": "metaphlan4.out",
+    "kraken": "kraken.out",
+    "kraken1": "kraken.out",
+    "krakenuniq": "krakenuniq.out",
+    "krakenu": "krakenuniq.out",
+    "krakenunique": "krakenuniq.out",
+    "assembly": "assembly.out",
+    "assembly_profiling": "assembly.out",
+    "gc": "gc.out",
+    "gc_content": "gc.out",
+    "gc-content": "gc.out",
+    "gcfrac": "gc.out",
+    "gc_fraction": "gc.out",
+    "length": "length.out",
+    "read_length": "length.out",
+    "readlen": "length.out",
+    "read-length": "length.out",
+    "kmer2": "kmer2.out",
+    "kmer_counter": "kmer2.out",
+    "dinuc": "kmer2.out",
+    "dinucleotide": "kmer2.out",
+    "kmer_encoder": "kmer_encoder.out",
+    "kmer-encoder": "kmer_encoder.out",
+    "kmerenc": "kmer_encoder.out",
+    "encoder": "kmer_encoder.out",
+    "kmerencoder": "kmer_encoder.out",
+}
+
+_MQC_ID_KEYS = {"id", "section_id", "parent_id"}
+_LABEL_CACHE: Dict[str, Any] = {}
+
+
+def _annotator_output_suffix(tool_type: str) -> str:
+    tool = (tool_type or "").lower()
+    if tool in _NATIVE_OUTPUT_SUFFIX:
+        return _NATIVE_OUTPUT_SUFFIX[tool]
+    return f"custom_{tool_type}.out"
+
+
+def _combine_tool_name(filename: str) -> str:
+    """Same tool token the combiner writes into ``taxID_<tool>_<index>``."""
+    if not filename.endswith(".out"):
+        return ""
+    last = filename.rfind(".")
+    prev = filename.rfind(".", 0, last)
+    if prev < 0:
+        return ""
+    arg = filename[prev + 1:last]
+    if arg.startswith("custom_"):
+        return arg[7:]
+    if arg == "kraken1":
+        return "kraken1"
+    if arg in {"krakenuniq", "krakenu", "krakenunique"}:
+        return "krakenuniq"
+    if arg in {"metaphlan", "metaphlan4", "mpa", "mp4"}:
+        return "metaphlan"
+    return arg
+
+
+def _clean_db_label(label: str) -> str:
+    text = " ".join(str(label).split())
+    if not text or text == ".":
+        return ""
+    if "/" in text or text.startswith("~"):
+        text = Path(text.rstrip("/")).name
+    return text.replace(" ", "_")
+
+
+def database_column_labels(run_config: Sequence[Any]) -> Any:
+    """Map combiner ``(tool, index)`` onto the database token from the flag.
+
+    The combiner numbers annotators in output-filename order, not config order.
+    A tool with one database also maps the unsuffixed name (``taxid_kraken2``).
+    """
+    from samovar.methods import db_label
+
+    rows = []
+    for item in run_config or []:
+        if not isinstance(item, dict):
+            continue
+        run_name = str(item.get("run_name") or item.get("type") or "annotator")
+        tool_type = str(item.get("type") or run_name)
+        filename = f"S_{run_name}.{_annotator_output_suffix(tool_type)}"
+        label = str(item.get("db_label") or "").strip()
+        if not label:
+            label = db_label(item.get("db_path"), item.get("db_name"))
+        rows.append((filename, _combine_tool_name(filename).lower(), label))
+    rows.sort(key=lambda row: row[0])
+    pairs: Dict[tuple, str] = {}
+    per_tool: Dict[str, List[str]] = {}
+    for index, (_filename, tool, label) in enumerate(rows):
+        if not tool:
+            continue
+        per_tool.setdefault(tool, []).append(label)
+        cleaned = _clean_db_label(label)
+        if cleaned:
+            pairs[(tool, str(index))] = cleaned
+    singles = {
+        tool: _clean_db_label(labels[0])
+        for tool, labels in per_tool.items()
+        if len(labels) == 1 and _clean_db_label(labels[0])
+    }
+    return pairs, singles
+
+
+def apply_database_labels(text: str, pairs: Dict[tuple, str], singles: Dict[str, str]) -> str:
+    """Swap a run index for the database token inside one MultiQC string."""
+    if not text or (not pairs and not singles):
+        return text
+    indexed = sorted(pairs, key=lambda key: len(key[0]), reverse=True)
+    if indexed:
+        pattern = re.compile(
+            r"(?i)(?<![A-Za-z0-9])("
+            + "|".join(rf"{re.escape(tool)}_{idx}" for tool, idx in indexed)
+            + r")(?!\d)"
+        )
+
+        def _swap_index(match: re.Match) -> str:
+            tool, idx = match.group(1).rsplit("_", 1)
+            name = pairs.get((tool.lower(), idx))
+            if not name:
+                return match.group(0)
+            return f"{tool}_{name}"
+
+        text = pattern.sub(_swap_index, text)
+    for tool, name in sorted(singles.items(), key=lambda item: len(item[0]), reverse=True):
+        text = re.sub(
+            rf"(?i)(?<![A-Za-z0-9])({re.escape(tool)})(?![A-Za-z0-9_])",
+            lambda match, name=name: f"{match.group(1)}_{name}",
+            text,
+        )
+    return text
+
+
+def _labels_for(path: Path) -> Any:
+    for parent in (path, *path.parents):
+        cfg = parent / ".log" / "configs" / "config_init.yaml"
+        if not cfg.is_file():
+            continue
+        key = str(cfg.resolve())
+        if key not in _LABEL_CACHE:
+            _LABEL_CACHE[key] = database_column_labels(
+                (_load_yaml(cfg).get("run_config") or [])
+            )
+        return _LABEL_CACHE[key]
+    return {}, {}
+
+
+def _label_mqc_payload(payload: Dict[str, Any], dest: Path) -> Dict[str, Any]:
+    pairs, singles = _labels_for(dest)
+    if not pairs and not singles:
+        return payload
+
+    def _walk(value: Any, key: Optional[str] = None) -> Any:
+        if isinstance(value, str):
+            if key in _MQC_ID_KEYS:
+                return value
+            return apply_database_labels(value, pairs, singles)
+        if isinstance(value, dict):
+            out = {}
+            for item_key, item_value in value.items():
+                new_key = item_key if item_key in _MQC_ID_KEYS else apply_database_labels(
+                    str(item_key), pairs, singles
+                )
+                out[new_key] = _walk(item_value, item_key)
+            return out
+        if isinstance(value, list):
+            return [_walk(item, key) for item in value]
+        return value
+
+    return _walk(payload)
+
+
+def _emit_mqc(payload: Dict[str, Any], dest: Path) -> None:
+    labeled = _label_mqc_payload(payload, dest)
+    dest.write_text(json.dumps(_safe_json(labeled), indent=2) + "\n", encoding="utf-8")
+
+
 def write_table_mqc(
     rows: Sequence[Dict[str, Any]],
     path: PathLike,
@@ -628,7 +812,7 @@ def write_table_mqc(
         "headers": headers,
         "data": data,
     }
-    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    _emit_mqc(payload, dest)
     return dest
 
 
@@ -687,7 +871,7 @@ def write_bargraph_mqc(
         "pconfig": pconfig,
         "data": series,
     }
-    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    _emit_mqc(payload, dest)
     return dest
 
 
@@ -737,7 +921,7 @@ def write_heatmap_mqc(
         ),
         "data": values,
     }
-    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    _emit_mqc(payload, dest)
     return dest
 
 
@@ -783,7 +967,7 @@ def write_scatter_mqc(
         },
         "data": data,
     }
-    dest.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+    _emit_mqc(payload, dest)
     return dest
 
 
@@ -892,7 +1076,14 @@ def collect_run_options(output_dir: PathLike) -> List[tuple]:
         for item in annotators:
             if not isinstance(item, dict):
                 continue
-            names.append(str(item.get("type") or item.get("run_name") or "annotator"))
+            tool = str(item.get("type") or item.get("run_name") or "annotator")
+            label = str(item.get("db_label") or "").strip()
+            if not label:
+                from samovar.methods import db_label
+
+                label = db_label(item.get("db_path"), item.get("db_name"))
+            label = _clean_db_label(label)
+            names.append(f"{tool}_{label}" if label else tool)
         _add("Annotators", names)
     _add("Regeneration mode", regen_cfg.get("regeneration_mode"))
     modes = regen_cfg.get("table_reads_generators")
@@ -1052,7 +1243,7 @@ def _write_score_plots(
             "data": data,
         }
         out = dest / f"{prefix}_quality_scores_mqc.json"
-        out.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+        _emit_mqc(payload, out)
         written.append(out)
     bars, cats = _bars_by_metric(rows)
     if bars:
@@ -1079,7 +1270,7 @@ def _write_score_plots(
             "data": bars,
         }
         out = dest / f"{prefix}_score_bars_mqc.json"
-        out.write_text(json.dumps(_safe_json(bar_payload), indent=2) + "\n", encoding="utf-8")
+        _emit_mqc(bar_payload, out)
         written.append(out)
     return written
 
@@ -1123,7 +1314,7 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
         )
         prefix = f"{order:02d}_{_slug(parent_name)}"
         out = dest / f"{prefix}_{src.name}"
-        out.write_text(json.dumps(_safe_json(payload), indent=2) + "\n", encoding="utf-8")
+        _emit_mqc(payload, out)
         written.append(out)
     scores = _read_scores_table(plots)
     types = ["all"] + _available_read_types(scores)

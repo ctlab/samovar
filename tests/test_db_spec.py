@@ -94,6 +94,7 @@ def test_prepare_from_args_expands_indexed_db(tmp_path, monkeypatch):
     config = PipelineConfig.from_args(args)
     k2 = next(a for a in config.annotators if a.type == "kraken2")
     assert k2.db_path == str(db.resolve()) or k2.db_path == str(db)
+    assert k2.db_label == "standard_8GB"
     assert "--memory-mapping" in (k2.extra or "")
 
 

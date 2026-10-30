@@ -270,7 +270,9 @@ def _annotators(init: Mapping[str, Any]) -> List[Dict[str, str]]:
         rows.append(
             {
                 "tool": tool,
-                "database": db_label(item.get("db_path"), item.get("db_name")),
+                "database": db_label(
+                    item.get("db_path"), item.get("db_label") or item.get("db_name")
+                ),
                 "cmd": str(item.get("cmd") or ""),
                 "extra": str(item.get("extra") or ""),
             }
