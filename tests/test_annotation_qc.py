@@ -21,6 +21,7 @@ def test_filter_drops_unclassified_keeps_classified(tmp_path):
         kept = filter_classified_abundance_tables(tables, fatal_if_none=True)
     assert "kraken2" in kept
     assert "kaiju" not in kept
+    assert list(kept["kraken2"]["taxid"].astype(str)) == ["562"]
 
 
 def test_filter_all_unclassified_is_error():

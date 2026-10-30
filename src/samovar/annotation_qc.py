@@ -68,6 +68,25 @@ def is_unclassified_taxid(value: Any) -> bool:
     return token in UNCLASSIFIED or token in {"<na>", "null"}
 
 
+def drop_unclassified_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Remove unclassified taxids. They have no genome to regenerate."""
+    if frame is None or getattr(frame, "empty", True) or "taxid" not in getattr(frame, "columns", []):
+        return frame
+    work = frame.copy()
+    keep = ~work["taxid"].map(is_unclassified_taxid)
+    return work.loc[keep].reset_index(drop=True)
+
+
+def drop_unclassified_abundance_tables(
+    tables: Dict[str, pd.DataFrame],
+) -> Dict[str, pd.DataFrame]:
+    return {
+        str(name): drop_unclassified_rows(frame)
+        for name, frame in (tables or {}).items()
+        if frame is not None
+    }
+
+
 def _n_sample_columns(frame: pd.DataFrame) -> List[str]:
     return [c for c in frame.columns if str(c).startswith("N_")]
 
@@ -212,7 +231,7 @@ def filter_classified_abundance_tables(
     dropped: List[Tuple[str, str]] = []
     for name, frame in (tables or {}).items():
         if abundance_has_classified_taxa(frame):
-            kept[str(name)] = frame
+            kept[str(name)] = drop_unclassified_rows(frame)
             continue
         diagnosis = diagnose_annotator(str(name), frame, reports_dir=reports_dir)
         dropped.append((str(name), diagnosis))

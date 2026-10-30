@@ -688,6 +688,18 @@ def _write_abundance_tables(
         table.to_csv(out / f"{safe}.csv", index=False)
 
 
+def _without_unclassified(data: Any) -> Any:
+    """Abundance view of ``data`` with unclassified taxids removed."""
+    from samovar.abundance import input_to_abundance_tables
+    from samovar.annotation_qc import drop_unclassified_abundance_tables
+    from samovar.parse_annotators import Annotation
+
+    tables = input_to_abundance_tables(data)
+    if not tables:
+        return data
+    return Annotation.from_abundance_tables(drop_unclassified_abundance_tables(tables))
+
+
 def _regenerate_one_mode(
     annotation_dir: Union[str, Path],
     output_dir: Union[str, Path],
@@ -701,7 +713,7 @@ def _regenerate_one_mode(
         load_samples_metadata,
     )
 
-    source = load_table_input(annotation_dir, data)
+    source = _without_unclassified(load_table_input(annotation_dir, data))
     mode = cfg.get("table_reads_generator") or cfg.get("regeneration_mode", "direct")
     local = dict(cfg)
     local["annotation_dir"] = str(annotation_dir)
@@ -713,6 +725,9 @@ def _regenerate_one_mode(
         load_samples_metadata(local),
         local,
     )
+    from samovar.annotation_qc import drop_unclassified_abundance_tables
+
+    tables = drop_unclassified_abundance_tables(tables)
     tables = cap_abundance_tables(tables, max_genomes_from_config(local))
     _write_abundance_tables(output_dir, tables)
     return tables
@@ -748,6 +763,7 @@ def regenerate_annotation_tables(
         from samovar.abundance import load_table_input
 
         data = load_table_input(annotation_dir)
+    data = _without_unclassified(data)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
