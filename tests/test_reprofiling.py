@@ -161,6 +161,24 @@ class TestReprofiling(unittest.TestCase):
         self.assertNotIn('taxid_kaiju...2', processed.columns)
         self.assertEqual(list(processed['taxid_kaiju']), [9606, 9606, 562])
 
+    def test_standardize_keeps_kraken2_databases_apart(self):
+        data = pd.DataFrame({
+            'taxID_kraken2_0': [562, 9606, 0],
+            'taxID_kraken2_1': [9606, 562, 562],
+            'feat_assembly_0_MAG_ID': ['m1', 'm2', 'm1'],
+            'feat_assembly_1_MAG_ID': ['a', 'b', 'a'],
+            'length': [10, 10, 10],
+            'true': [562, 9606, 562],
+        })
+        processed = preprocess_data(data)
+        self.assertIn('taxid_kraken2_0', processed.columns)
+        self.assertIn('taxid_kraken2_1', processed.columns)
+        self.assertNotIn('taxid_kraken2', processed.columns)
+        self.assertIn('feat_assembly_0_MAG_ID', processed.columns)
+        self.assertIn('feat_assembly_1_MAG_ID', processed.columns)
+        self.assertEqual(list(processed['taxid_kraken2_0']), [562, 9606, 0])
+        self.assertEqual(list(processed['taxid_kraken2_1']), [9606, 562, 562])
+
     @pytest.mark.optional
     def test_roc_curves(self):
         """Test ROC curve generation"""

@@ -23,17 +23,36 @@ from samovar.memory import parallel_jobs, predict_threads, proba_chunk_rows, rea
 
 def _tool_name_from_column(col: str) -> Optional[str]:
     """Extract annotator name from taxid/taxID column labels, never from feat_."""
+    parts = _tax_column_parts(col)
+    return parts[0] if parts else None
+
+
+_MANGLED_COLUMN_SUFFIX = re.compile(r"(?:\.{2,}|\.)\d+$")
+
+
+def _tax_column_parts(col: str) -> Optional[tuple]:
+    """``(tool, discriminator)`` for a tax column.
+
+    ``feat_`` stays untouched, so assembly MAG columns are not merged.
+    A pandas duplicate tail (``taxID_kaiju...2``) is not a second database.
+    ``taxID_kraken2_0`` and ``taxID_kraken2_1`` stay different discriminators.
+    """
     name = str(col)
     low = name.lower()
     if low.startswith("feat_") or "confidence" in low:
         return None
-    match = re.match(r"taxid[_./]*([a-z][a-z0-9]*)", low)
+    match = re.match(r"taxid[_./]*(.+)$", low)
     if not match:
         return None
-    tool = match.group(1)
+    rest = _MANGLED_COLUMN_SUFFIX.sub("", match.group(1))
+    rest = re.sub(r"[^a-z0-9_]+", "_", rest).strip("_")
+    tool_match = re.match(r"([a-z][a-z0-9]*)(?:_(.+))?$", rest)
+    if not tool_match:
+        return None
+    tool = tool_match.group(1)
     if tool in {"samovar", "true", "length", "sample", "read", "feat"}:
         return None
-    return tool
+    return tool, tool_match.group(2) or ""
 
 
 def merge_read_features(df: pd.DataFrame, features_df: pd.DataFrame) -> pd.DataFrame:
@@ -67,28 +86,57 @@ def annotator_taxid_columns(df: pd.DataFrame) -> list:
     return [col for col in df.columns if _tool_name_from_column(col) is not None]
 
 
-def standardize_taxid_columns(df):
-    """
-    Standardize taxID column names to format taxid_[toolname].
-    Example: taxID_kaiju_1 -> taxid_kaiju
-    Duplicate columns for the same tool (taxID_kaiju...2) are coalesced.
+def _legacy_short_tax_name(tool: str, discs, legacy_names) -> bool:
+    """Old models stored one ``taxid_<tool>`` column for every database of that tool."""
+    if not legacy_names:
+        return False
+    short = f"taxid_{tool}"
+    if short not in legacy_names:
+        return False
+    return not any(disc and f"taxid_{tool}_{disc}" in legacy_names for disc in discs)
+
+
+def _tax_output_groups(tool: str, items, legacy_names) -> dict:
+    discs = {disc for _, disc in items}
+    if _legacy_short_tax_name(tool, discs, legacy_names):
+        return {f"taxid_{tool}": [col for col, _ in items]}
+    if len(discs) == 1:
+        disc = next(iter(discs))
+        if disc == "" or disc.isdigit():
+            return {f"taxid_{tool}": [col for col, _ in items]}
+        return {f"taxid_{tool}_{disc}": [col for col, _ in items]}
+    groups = {}
+    for col, disc in items:
+        name = f"taxid_{tool}" if not disc else f"taxid_{tool}_{disc}"
+        groups.setdefault(name, []).append(col)
+    return groups
+
+
+def standardize_taxid_columns(df, legacy_names=None):
+    """Standardize tax columns without merging different databases.
+
+    One Kraken2 run (``taxID_kraken2_0``) stays ``taxid_kraken2``.
+    Two runs (``taxID_kraken2_0`` and ``taxID_kraken2_1``) stay two features.
+    Pandas duplicate tails (``taxID_kaiju...2``) still coalesce.
+    A model trained on the old short name still receives that one column.
+    ``feat_`` columns, including assembly MAG ids, are left as they are.
     """
     df = df.copy()
     grouped = {}
     for col in list(df.columns):
-        tool = _tool_name_from_column(col)
-        if tool is None:
+        parts = _tax_column_parts(col)
+        if parts is None:
             continue
-        grouped.setdefault(tool, []).append(col)
+        grouped.setdefault(parts[0], []).append((col, parts[1]))
 
-    for tool, cols in grouped.items():
-        new_name = f"taxid_{tool}"
-        numeric = df[cols].apply(pd.to_numeric, errors="coerce")
-        coalesced = numeric.bfill(axis=1).iloc[:, 0]
-        drop_cols = [c for c in cols if c != new_name]
-        if drop_cols:
-            df = df.drop(columns=drop_cols)
-        df[new_name] = coalesced
+    for tool, items in grouped.items():
+        for new_name, cols in _tax_output_groups(tool, items, legacy_names).items():
+            numeric = df[cols].apply(pd.to_numeric, errors="coerce")
+            coalesced = numeric.bfill(axis=1).iloc[:, 0]
+            drop_cols = [c for c in cols if c != new_name]
+            if drop_cols:
+                df = df.drop(columns=drop_cols)
+            df[new_name] = coalesced
     return df
 
 class IncompatiblePreprocessingError(ValueError):
@@ -121,9 +169,15 @@ def preprocess_data(df, drop_missing_true: bool = True, *, preprocessing=None):
     """
     # Create a copy to avoid modifying the original
     df = df.copy()
-    
-    # Standardize taxID column names
-    df = standardize_taxid_columns(df)
+    encoded = df.attrs.get("samovar_preprocessing")
+    if encoded is not None and preprocessing is not None and encoded != preprocessing:
+        raise IncompatiblePreprocessingError("Features were encoded with a different model's dictionaries")
+    schema = preprocessing if preprocessing is not None else encoded
+    legacy = set(schema["features"]) if isinstance(schema, dict) and schema.get("features") else None
+
+    # Standardize taxID column names. Distinct database runs stay distinct
+    # unless this model was trained on the old single ``taxid_<tool>`` column.
+    df = standardize_taxid_columns(df, legacy_names=legacy)
     
     # Remove seq column as it's not needed for prediction
     if 'seq' in df.columns:
