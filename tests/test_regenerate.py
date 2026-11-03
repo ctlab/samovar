@@ -676,11 +676,19 @@ def test_missing_custom_table_regenerator_errors(tmp_path, monkeypatch, toy_anno
         )
 
 
-def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_dir):
+@pytest.mark.parametrize("input_style", ["directory", "dataframe", "annotation"])
+def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_dir, input_style):
     from samovar.parse_annotators import Annotation
     from samovar.paths import write_config
     from samovar.tools_import import import_tool
 
+    source = toy_annotation_dir / "1.annotation.csv"
+    frame = pd.read_csv(source)
+    unclassified = pd.DataFrame({
+        "seq": ["unclassified_read"], "taxID_kaiju_0": [0],
+        "taxID_kraken2_0": [0], "true": [0],
+    })
+    pd.concat([frame, unclassified], ignore_index=True).to_csv(source, index=False)
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
@@ -690,7 +698,11 @@ def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_d
         "\n"
         "def regenerate(annotation, metadata, config):\n"
         "    assert metadata is None\n"
-        "    assert annotation.DataFrame is not None\n"
+        "    assert not annotation.DataFrame.empty\n"
+        "    assert len(annotation.true_annotation) == len(annotation.DataFrame)\n"
+        "    assert '562' in {str(x) for x in annotation.annotation_list}\n"
+        "    assert (annotation.DataFrame['taxID_kaiju'].astype(str) == '0').any()\n"
+        "    assert all('0' not in set(t.taxid.astype(str)) for t in annotation.abundance_tables.values())\n"
         "    return regenerate_preserve(annotation.DataFrame)\n"
     )
     import_tool(
@@ -706,9 +718,16 @@ def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_d
         toy_annotation_dir,
         tmp_path / "out",
         {"regeneration_mode": "myboil"},
+        data={"directory": None, "dataframe": data, "annotation": wrapped}[input_style],
     )
     assert "kaiju" in tables
     assert "taxid" in tables["kaiju"].columns
+    assert wrapped.abundance_tables is None
+    pd.testing.assert_frame_equal(wrapped.DataFrame, data)
+    assert set(tables) == {"kaiju", "kraken2"}
+    for table in tables.values():
+        assert set(table["taxid"].astype(str)) == {"562", "9606"}
+        assert sum(table[c].sum() for c in table if c.startswith("N_")) == 5
 
 
 def test_prepare_rejects_unimported_table_generator(tmp_path, monkeypatch):

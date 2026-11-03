@@ -33,6 +33,7 @@ import math
 import os
 import re
 import zlib
+from copy import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -697,6 +698,11 @@ def _without_unclassified(data: Any) -> Any:
     tables = input_to_abundance_tables(data)
     if not tables:
         return data
+    if isinstance(data, Annotation):
+        # Preserve read-level data and metadata for custom Python regenerators.
+        out = copy(data)
+        out.abundance_tables = drop_unclassified_abundance_tables(tables)
+        return out
     return Annotation.from_abundance_tables(drop_unclassified_abundance_tables(tables))
 
 
@@ -759,11 +765,9 @@ def regenerate_annotation_tables(
     )
 
     cfg = dict(config or {})
-    if data is None:
-        from samovar.abundance import load_table_input
+    from samovar.abundance import load_table_input
 
-        data = load_table_input(annotation_dir)
-    data = _without_unclassified(data)
+    data = _without_unclassified(load_table_input(annotation_dir, data))
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
