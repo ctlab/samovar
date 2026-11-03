@@ -329,7 +329,25 @@ suppressPackageStartupMessages(library(SparseDOSSA2))
 if (opts$command %in% c("fitcv", "cv", "score")) {
   if (is.null(opts$input)) stop("--input is required for fitcv")
   mat <- read_feature_matrix(opts$input)
-  require_fit_size(mat)
+  # fitCV also fits a three-dimensional parameter density (pi0, mu, sigma).
+  # Its all-zero filter drops taxa observed fewer than twice. A handful of
+  # surviving taxa cannot identify that density; namespace numeric patches
+  # must not turn such a table into a seemingly valid model comparison.
+  supported <- rowSums(mat > 0) >= 2L
+  n_supported <- sum(supported)
+  n_supported_samples <- sum(colSums(mat[supported, , drop = FALSE]) > 0)
+  if (n_supported < 4L || n_supported_samples < 4L) {
+    write_json(opts$output, list(
+      cv_goodness_of_fit = NA_real_,
+      status = "unsupported",
+      error = paste0("SparseDOSSA2 CV unavailable: need at least 4 taxa observed ",
+                     "in at least 2 samples and at least 4 nonempty samples; got ",
+                     n_supported, " taxa and ", n_supported_samples, " samples"),
+      n_feature = nrow(mat),
+      n_sample = ncol(mat)
+    ))
+    quit(save = "no", status = 0)
+  }
   n_samp <- ncol(mat)
   k <- max(2L, min(as.integer(opts$cv_folds %||% 5L), n_samp))
   setup_parallel(opts$workers, cv = TRUE, seed = opts$seed)
