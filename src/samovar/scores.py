@@ -124,18 +124,35 @@ def _f1_accuracy(true: pd.Series, pred: pd.Series) -> float:
     n = len(t)
     if n == 0:
         return 0.0
-    tp = float((t == p).sum())
+    tp = float((t.to_numpy() == p.to_numpy()).sum())
     return float(tp / n)
+
+
+def _classification_counts(true: Iterable, pred: Iterable) -> tuple:
+    """Shared linear-size confusion marginals for PRF and OPAL rates."""
+    y = normalize_series(true)
+    p = normalize_series(pred)
+    if len(y) != len(p):
+        raise ValueError("true and pred must have the same number of rows")
+    if isinstance(y.dtype, pd.CategoricalDtype) and isinstance(p.dtype, pd.CategoricalDtype):
+        uniq = y.cat.categories.union(p.cat.categories, sort=False)
+        yc = uniq.get_indexer(y.cat.categories)[y.cat.codes.to_numpy()]
+        pc = uniq.get_indexer(p.cat.categories)[p.cat.codes.to_numpy()]
+    else:
+        codes, uniq = pd.factorize(np.concatenate([y.to_numpy(), p.to_numpy()]))
+        yc, pc = codes[:len(y)], codes[len(y):]
+    support = np.bincount(yc, minlength=len(uniq)).astype(float)
+    predicted = np.bincount(pc, minlength=len(uniq)).astype(float)
+    tp = np.bincount(yc[yc == pc], minlength=len(uniq)).astype(float)
+    used = (support + predicted) > 0
+    return uniq[used], support[used], predicted[used], tp[used]
 
 
 def standard_classification_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
     """sklearn-style single-label scores (macro / weighted / micro / accuracy)."""
-    from sklearn.metrics import precision_recall_fscore_support
-
-    _, normalize_taxon_token = _taxon_helpers()
-    y = normalize_series(true).astype(str)
-    p = normalize_series(pred).astype(str)
-    if y.empty:
+    labels, support, predicted, tp = _classification_counts(true, pred)
+    n = support.sum()
+    if not n:
         return {
             "accuracy": 0.0,
             "precision_macro": 0.0,
@@ -144,23 +161,18 @@ def standard_classification_metrics(true: Iterable, pred: Iterable) -> Dict[str,
             "f1_macro": 0.0,
             "f1_weighted": 0.0,
         }
-    # Integer codes in sorted-label order. sklearn on ints matches the string scores.
-    codes, uniq = pd.factorize(np.concatenate([y.to_numpy(), p.to_numpy()]))
-    order = np.argsort(np.asarray(uniq, dtype=str), kind="stable")
-    rank = np.empty(len(order), dtype=np.int64)
-    rank[order] = np.arange(len(order))
-    yc, pc = rank[codes[: len(y)]], rank[codes[len(y) :]]
-    kwargs = {"labels": np.arange(len(uniq)), "zero_division": 0}
-    pm, rm, fm, _ = precision_recall_fscore_support(yc, pc, average="macro", **kwargs)
-    _, _, fmi, _ = precision_recall_fscore_support(yc, pc, average="micro", **kwargs)
-    _, _, fw, _ = precision_recall_fscore_support(yc, pc, average="weighted", **kwargs)
+    # Marginals and true positives suffice for PRF; avoid a quadratic K×K matrix.
+    precision = np.divide(tp, predicted, out=np.zeros_like(tp), where=predicted > 0)
+    recall = np.divide(tp, support, out=np.zeros_like(tp), where=support > 0)
+    f1 = np.divide(2 * tp, support + predicted, out=np.zeros_like(tp), where=support + predicted > 0)
+    accuracy = float(tp.sum() / n)
     return {
-        "accuracy": float((yc == pc).mean()),
-        "precision_macro": float(pm),
-        "recall_macro": float(rm),
-        "f1_micro": float(fmi),
-        "f1_macro": float(fm),
-        "f1_weighted": float(fw),
+        "accuracy": accuracy,
+        "precision_macro": float(precision.mean()),
+        "recall_macro": float(recall.mean()),
+        "f1_micro": accuracy,
+        "f1_macro": float(f1.mean()),
+        "f1_weighted": float(np.dot(f1, support) / n),
     }
 
 
@@ -170,6 +182,8 @@ def _r2_abundance(true: pd.Series, pred: pd.Series) -> float:
     p = normalize_series(pred)
     true_n = t.value_counts()
     pred_n = p.value_counts()
+    true_n = true_n[true_n > 0]
+    pred_n = pred_n[pred_n > 0]
     taxa = sorted(set(true_n.index) | set(pred_n.index))
     if not taxa:
         return float("nan")
@@ -281,20 +295,23 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
     return float(np.dot(table["f1"].to_numpy(dtype=float), weights) / denom)
 
 
-def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = False) -> Dict[str, float]:
+def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = False,
+                      include_classification: bool = True) -> Dict[str, float]:
     true_s = pd.Series(list(true) if not isinstance(true, pd.Series) else true.reset_index(drop=True))
     pred_s = pd.Series(list(pred) if not isinstance(pred, pd.Series) else pred.reset_index(drop=True))
     n = len(true_s)
     table = purity_by_taxon(true_s, pred_s)
+    weight = float(table["n_true"].sum()) if not table.empty else 0.0
     stats = {
         "n_reads": float(n),
         "n_taxa": float(len(table)),
-        "accuracy_purity": accuracy_purity(true_s, pred_s),
-        "f1_purity": f1_purity(true_s, pred_s),
-        "f1": _f1_accuracy(true_s, pred_s),
-        "r2": _r2_abundance(true_s, pred_s),
+        "accuracy_purity": float(table["n_majority"].sum() / weight) if weight else 0.0,
+        "f1_purity": float(np.dot(table["f1"], table["n_true"]) / weight) if weight else 0.0,
     }
-    stats.update(standard_classification_metrics(true_s, pred_s))
+    if include_classification:
+        stats["f1"] = _f1_accuracy(true_s, pred_s)
+        stats["r2"] = _r2_abundance(true_s, pred_s)
+        stats.update(standard_classification_metrics(true_s, pred_s))
     if include_opal:
         from samovar.opal import opal_style_metrics
 
@@ -330,7 +347,7 @@ def has_usable_truth(work: pd.DataFrame, true_col: str = "true") -> bool:
     if work is None or work.empty or true_col not in work.columns:
         return False
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    for val in work[true_col]:
+    for val in pd.unique(work[true_col]):
         if not is_special_taxon(normalize_taxon_token(val)):
             return True
     return False
@@ -415,12 +432,20 @@ def score_annotators(
         n_sampled = int(metrics_sample)
     elif frame is not None:
         n_sampled = int(len(frame))
+    if frame is not None:
+        # Normalize categories once; aggregate and per-platform scores reuse codes.
+        frame = frame.copy(deep=False)
+        for col in [*names, *([true_col] if true_col in frame else [])]:
+            if col in frame:
+                frame[col] = normalize_series(frame[col].astype("category"))
     scored = rows_with_usable_truth(frame, true_col) if frame is not None else None
     true = scored[true_col] if scored is not None else None
     wanted = None if metrics is None else {str(name) for name in metrics}
     rows = []
 
     def _add(name: str, pred: pd.Series) -> None:
+        if not isinstance(pred.dtype, pd.CategoricalDtype):
+            pred = normalize_series(pred.astype("category"))
         label = canonical_annotator_name(name)
         if scored is None or true is None:
             n_reads, n_taxa = _pred_counts(pred)
@@ -432,13 +457,21 @@ def score_annotators(
 
         aligned = pred.reindex(scored.index)
         collapsed = _collapse_other(aligned, true)
-        stats = annotation_scores(true, aligned, include_opal=False)
-        stats["f1"] = _f1_accuracy(true, collapsed)
-        stats["r2"] = _r2_abundance(true, collapsed)
-        stats.update(standard_classification_metrics(true, collapsed))
+        if wanted is None or wanted & {"accuracy_purity", "f1_purity"}:
+            stats = annotation_scores(true, aligned, include_classification=False)
+        else:
+            n_reads, n_taxa = _pred_counts(true)
+            stats = {"n_reads": n_reads, "n_taxa": n_taxa}
+        if wanted is None or "f1" in wanted:
+            stats["f1"] = _f1_accuracy(true, collapsed)
+        if wanted is None or "r2" in wanted:
+            stats["r2"] = _r2_abundance(true, collapsed)
+        if wanted is None or wanted & {"accuracy", "precision_macro", "recall_macro", "f1_micro", "f1_macro", "f1_weighted"}:
+            stats.update(standard_classification_metrics(true, collapsed))
         if opal and (wanted is None or wanted & {
             "completeness", "opal_purity", "opal_f1", "jaccard", "l1_norm", "bray_curtis",
             "opal_tp", "opal_fp", "opal_fn",
+            "tpr", "tnr", "fpr", "fnr", "tp_pct", "tn_pct", "fp_pct", "fn_pct",
         }):
             from samovar.opal import opal_style_metrics
 

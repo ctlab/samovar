@@ -602,3 +602,43 @@ def test_prepare_inherits_camisim_ont_mode(tmp_path, monkeypatch, field, legacy)
     saved.write_text(yaml.safe_dump(payload))
     args = argparse.Namespace(input_config=None, input_dir=str(tmp_path / "initial"), output_dir=str(tmp_path))
     assert getattr(PipelineConfig.from_args(args), field) == "nanosim"
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_viz_settings_yaml_cli_and_all_pipeline_stages(tmp_path, override):
+    import shlex
+    from samovar.repro import _argv_from_args
+
+    source = tmp_path / "viz.yaml"
+    source.write_text(yaml.safe_dump({"input_dir": "/path/to/reads", "viz": {
+        "full": True, "opal": True, "metrics_sample": 50000, "metrics": ["accuracy", "tnr"],
+    }}))
+    args = argparse.Namespace(input_config=str(source), input_dir=None, output_dir=str(tmp_path / "run with spaces"),
+                              cores=2, viz_full=False if override else None,
+                              viz_opal=False if override else None,
+                              viz_metrics_sample=0 if override else None,
+                              viz_metrics=["accuracy,f1"] if override else None)
+    config = PipelineConfig.from_args(args)
+    assert config.viz == {"full": not override, "opal": not override,
+                          "metrics_sample": 0 if override else 50000,
+                          "metrics": ["accuracy", "f1"] if override else ["accuracy", "tnr"]}
+    configs = config.generate_configs(config.output_dir)
+    saved = yaml.safe_load(Path(configs["scoring"]).read_text())
+    assert saved["viz"] == config.viz
+    assert saved["cores"] == 2 and saved["seed"] == 42
+    script = Path(config.generate_pipeline(config.output_dir)).read_text()
+    calls = [line for line in script.splitlines() if "--show_top 0 --config" in line]
+    assert len(calls) == 3
+    assert all(shlex.split(line)[-1] == configs["scoring"] for line in calls)
+    if override:
+        argv = _argv_from_args("prepare", vars(args))
+        assert "--no-viz-full" in argv and "--no-viz-opal" in argv
+        assert argv[argv.index("--viz-metrics-sample") + 1] == "0"
+        assert argv[argv.index("--viz-metrics") + 1] == "accuracy,f1"
+
+
+@pytest.mark.parametrize("viz", [{"metrics_sample": -1}, {"metrics_sample": 1.5},
+                                 {"opal": "false"}, {"metrics": "typo"}, {"typo": True}])
+def test_viz_settings_reject_invalid_values(viz):
+    with pytest.raises(ValueError):
+        PipelineConfig(viz=viz)

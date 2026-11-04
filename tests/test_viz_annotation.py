@@ -327,3 +327,27 @@ def test_compare_annotations_cli_integrity(tmp_path):
     # Combined table on disk is not rewritten by viz
     orig = pd.read_csv(src / "1.annotation.csv")
     assert "taxID_kraken2_0" in orig.columns or "taxID_kraken2" in list(map(str, orig.columns))
+
+
+def test_compare_cli_viz_config_and_overrides(tmp_path, monkeypatch):
+    import importlib.util
+    import yaml
+    from samovar.paths import repo_root
+    script = repo_root() / "workflow" / "compare_annotations.py"
+    spec = importlib.util.spec_from_file_location("compare_cli", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    monkeypatch.setattr(module, "compare_annotations", lambda **kwargs: calls.append(kwargs))
+    cfg = tmp_path / "viz.yaml"
+    cfg.write_text(yaml.safe_dump({"viz": {"full": True, "opal": True, "metrics_sample": 50000},
+                                   "cores": 3, "seed": 17}))
+    module.main(["--annotation_dir", str(tmp_path), "--config", str(cfg)])
+    assert calls[-1]["opal"] and "f1" in calls[-1]["types"]
+    assert calls[-1]["metrics_sample"] == 50000
+    assert calls[-1]["threads"] == 3 and calls[-1]["seed"] == 17
+    module.main(["--annotation_dir", str(tmp_path), "--config", str(cfg), "--no-full", "--no-opal",
+                 "--viz-metrics-sample", "0", "--viz-metrics", "accuracy,tnr", "--threads", "2", "--seed", "9"])
+    assert calls[-1]["types"] == ("scores",) and not calls[-1]["opal"]
+    assert calls[-1]["metrics"] == ["accuracy", "tnr"] and calls[-1]["metrics_sample"] == 0
+    assert calls[-1]["threads"] == 2 and calls[-1]["seed"] == 9

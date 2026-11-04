@@ -164,7 +164,10 @@ def test_score_annotators_without_ground_truth():
     assert (table["n_reads"] == 4).all()
 
 
-def test_viz_annotation_writes_scores_barplot(tmp_path):
+@pytest.mark.parametrize("opal", [False, True])
+def test_viz_annotation_writes_scores_barplot(tmp_path, monkeypatch, opal):
+    calls = []
+    monkeypatch.setattr("samovar.opal.maybe_run_opal", lambda *args, **kwargs: calls.append(kwargs))
     df = pd.DataFrame(
         {
             "seq": [f"r{i}" for i in range(20)],
@@ -183,7 +186,7 @@ def test_viz_annotation_writes_scores_barplot(tmp_path):
         plot=False,
         rank="none",
         use_names=False,
-        opal=True,
+        opal=opal,
     )
     assert "scores" in results
     assert not results["scores"].empty
@@ -197,10 +200,13 @@ def test_viz_annotation_writes_scores_barplot(tmp_path):
     assert "f1_macro" in csv.columns
     assert "tnr" in csv.columns
     assert "completeness" in csv.columns
-    assert (out / "opal_scores.png").is_file()
+    assert (out / "opal_scores.png").is_file() == opal
+    assert (out / "opal_scores.html").is_file() == opal
+    assert bool(calls) == opal
+    assert csv["completeness"].notna().all() if opal else csv["completeness"].isna().all()
     import matplotlib.image as mpimg
 
-    for name in ("scores.png", "opal_scores.png"):
+    for name in (("scores.png", "opal_scores.png") if opal else ("scores.png",)):
         arr = mpimg.imread(out / name)
         assert arr.shape[1] >= 1400, f"{name} width {arr.shape[1]} is too low-res"
         assert arr.shape[0] >= 700, f"{name} height {arr.shape[0]} is too low-res"
@@ -208,3 +214,49 @@ def test_viz_annotation_writes_scores_barplot(tmp_path):
     assert "r2" in csv.columns
     assert "SAMOVAR" in set(csv["annotator"].astype(str))
     assert "consensus" not in set(csv["annotator"].astype(str))
+
+
+def test_classification_marginals_match_sklearn_and_opal_reference():
+    import numpy as np
+    from sklearn.metrics import precision_recall_fscore_support, multilabel_confusion_matrix
+    from samovar.scores import standard_classification_metrics
+    from samovar.opal import confusion_rates
+
+    rng = np.random.default_rng(42)
+    y = rng.choice(["A", "B", "C", "0"], 1003)
+    p = rng.choice(["A", "B", "D", "0"], 1003)
+    result = standard_classification_metrics(y, p)
+    for average, keys in [("macro", ("precision_macro", "recall_macro", "f1_macro")),
+                          ("micro", (None, None, "f1_micro")),
+                          ("weighted", (None, None, "f1_weighted"))]:
+        values = precision_recall_fscore_support(y, p, average=average, zero_division=0)
+        for key, value in zip(keys, values):
+            if key:
+                assert result[key] == pytest.approx(value, abs=1e-12)
+    assert result["accuracy"] == pytest.approx(float((y == p).mean()), abs=1e-12)
+    categories = ["A", "B", "C", "D", "0", "unused"]
+    categorical = standard_classification_metrics(
+        pd.Series(pd.Categorical(y, categories=categories)),
+        pd.Series(pd.Categorical(p, categories=categories)),
+    )
+    assert categorical == pytest.approx(result, abs=1e-12)
+    matrices = multilabel_confusion_matrix(y, p, labels=["A", "B", "C"])
+    tn, fp, fn, tp = (matrices[:, i, j] for i, j in [(0, 0), (0, 1), (1, 0), (1, 1)])
+    rates = confusion_rates(y, p)
+    for key, a, b in [("tnr", tn, tn + fp), ("tpr", tp, tp + fn),
+                       ("fpr", fp, fp + tn), ("fnr", fn, fn + tp)]:
+        expected = np.divide(a, b, out=np.zeros_like(a, dtype=float), where=b > 0).mean()
+        assert rates[key] == pytest.approx(expected, abs=1e-12)
+
+
+def test_selected_metrics_skip_unused_computations(monkeypatch):
+    import samovar.scores as scores
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled metric was computed")
+    monkeypatch.setattr(scores, "annotation_scores", forbidden)
+    monkeypatch.setattr(scores, "_r2_abundance", forbidden)
+    frame = pd.DataFrame({"kaiju": ["562", "0"], "true": ["562", "562"]})
+    result = scores.score_annotators(frame, ["kaiju"], metrics=["accuracy"])
+    assert result.loc[0, "accuracy"] == 0.5
+    assert result["r2"].isna().all() and result["f1_purity"].isna().all()
+    assert result.loc[0, "n_reads"] == 2

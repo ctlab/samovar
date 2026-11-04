@@ -359,12 +359,21 @@ def _viz_and_score(
     combined: Optional[Path] = None,
 ) -> None:
     try:
+        from samovar.viz_annotation import normalize_viz_config
+
+        viz = normalize_viz_config(scoring_cfg.get("viz"))
         compare_annotations(
             annotation_dir=str(annotation_dir),
             output_dir=str(plots_dir),
             csv_file=str(combined) if combined else None,
             show_top=0,
             rank="none",
+            types=("f1", "R2", "cv", "scores") if viz["full"] else ("scores",),
+            opal=viz["opal"],
+            metrics_sample=viz["metrics_sample"],
+            metrics=viz["metrics"],
+            seed=int(scoring_cfg.get("seed", 42)),
+            threads=int(scoring_cfg.get("cores", 1)),
         )
     except Exception as exc:
         print(f"[apply] visualization skipped ({stage}): {exc}", file=sys.stderr)

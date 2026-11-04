@@ -446,3 +446,16 @@ def test_apply_full_then_merge_initial_and_regenerated(tmp_path, monkeypatch):
     assert (tmp_path / "merged_regenerated" / "regenerated_annotations").is_dir()
     assert initial["next_step"] == "viz_initial"
     assert regenerated["next_step"] == "viz_regenerated"
+
+
+def test_apply_inherits_viz_settings(tmp_path, monkeypatch):
+    import samovar.apply as apply_module
+    calls = []
+    monkeypatch.setattr(apply_module, "compare_annotations", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(apply_module, "run_custom_scorers", lambda *args, **kwargs: None)
+    config = {"viz": {"full": True, "opal": True, "metrics_sample": 50000, "metrics": ["accuracy"]},
+              "cores": 3, "seed": 17}
+    apply_module._viz_and_score(tmp_path, tmp_path / "annotations", tmp_path / "plots", config, "viz_initial")
+    assert calls[0]["opal"] and "f1" in calls[0]["types"]
+    assert calls[0]["metrics_sample"] == 50000 and calls[0]["metrics"] == ["accuracy"]
+    assert calls[0]["threads"] == 3 and calls[0]["seed"] == 17

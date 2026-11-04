@@ -10,6 +10,11 @@ stages: []
 generate: {}
 prepare: {}
 exec: {}
+viz:
+  full: false
+  opal: false
+  metrics_sample: 0
+  metrics: null
 
 env: {}
 tools: {}

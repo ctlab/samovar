@@ -146,10 +146,12 @@ def series_to_counts(values: Iterable) -> Dict[str, float]:
 
 def confusion_rates(true: Iterable, pred: Iterable) -> Dict[str, float]:
     """Macro one-vs-rest rates, including true-negative and false-negative %."""
-    is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    y = normalize_series(true)
-    p = normalize_series(pred)
-    classes = [t for t in pd.unique(y) if not is_special_taxon(t)]
+    from samovar.scores import _classification_counts
+
+    is_special_taxon, _ = _taxon_helpers()
+    labels, support, predicted, tp = _classification_counts(true, pred)
+    n = support.sum()
+    keep = (support > 0) & np.array([not is_special_taxon(t) for t in labels], dtype=bool)
     empty = {
         "tpr": 0.0,
         "tnr": 0.0,
@@ -160,24 +162,16 @@ def confusion_rates(true: Iterable, pred: Iterable) -> Dict[str, float]:
         "fp_pct": 0.0,
         "tp_pct": 0.0,
     }
-    if y.empty or not classes:
+    if not n or not keep.any():
         return empty
-    tprs, tnrs, fprs, fnrs = [], [], [], []
-    for cls in classes:
-        yt = y.eq(cls).to_numpy()
-        yp = p.eq(cls).to_numpy()
-        tp = float(np.logical_and(yt, yp).sum())
-        fn = float(np.logical_and(yt, np.logical_not(yp)).sum())
-        fp = float(np.logical_and(np.logical_not(yt), yp).sum())
-        tn = float(np.logical_and(np.logical_not(yt), np.logical_not(yp)).sum())
-        tprs.append(tp / (tp + fn) if (tp + fn) else 0.0)
-        tnrs.append(tn / (tn + fp) if (tn + fp) else 0.0)
-        fprs.append(fp / (fp + tn) if (fp + tn) else 0.0)
-        fnrs.append(fn / (tp + fn) if (tp + fn) else 0.0)
-    tpr = float(np.mean(tprs))
-    tnr = float(np.mean(tnrs))
-    fpr = float(np.mean(fprs))
-    fnr = float(np.mean(fnrs))
+    support, predicted, tp = support[keep], predicted[keep], tp[keep]
+    negative = n - support
+    fp = predicted - tp
+    tn = negative - fp
+    tpr = float(np.mean(tp / support))
+    fnr = float(np.mean((support - tp) / support))
+    tnr = float(np.mean(np.divide(tn, negative, out=np.zeros_like(tp), where=negative > 0)))
+    fpr = float(np.mean(np.divide(fp, negative, out=np.zeros_like(tp), where=negative > 0)))
     return {
         "tpr": tpr,
         "tnr": tnr,

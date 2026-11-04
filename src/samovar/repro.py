@@ -621,9 +621,18 @@ def _reproduce_code_root() -> Path:
 def _argv_from_args(stage: str, args: Mapping[str, Any]) -> List[str]:
     out: List[str] = []
     for key, value in args.items():
+        if stage == "prepare" and key in {"viz_full", "viz_opal"} and isinstance(value, bool):
+            flag = key.replace("_", "-")
+            out.append(f"--{flag}" if value else f"--no-{flag}")
+            continue
+        if stage == "prepare" and key == "viz_metrics_sample" and value is not None:
+            out.extend(["--viz-metrics-sample", str(value)])
+            continue
         if value in (None, "", False, [], {}) or key in {"custom_cli_flags", "tool_flags"}:
             continue
         flag = f"--{key}" if not str(key).startswith("-") else str(key)
+        if stage == "prepare" and key == "viz_metrics":
+            flag = "--viz-metrics"
         if value is True:
             out.append(flag)
             continue

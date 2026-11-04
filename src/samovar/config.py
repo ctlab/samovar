@@ -406,6 +406,7 @@ class PipelineConfig:
     scoring_flags: Optional[str] = None
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
+    viz: Optional[Dict] = None
     reprofiler: str = "random_forest"
     gpu: bool = False
     reprofiler_flags: Optional[str] = None
@@ -430,6 +431,9 @@ class PipelineConfig:
     export_tool_flags: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
+        from samovar.viz_annotation import normalize_viz_config
+
+        self.viz = normalize_viz_config(self.viz)
         if self.annotators is None:
             self.annotators = []
         if self.genome_dirs is None:
@@ -1397,6 +1401,18 @@ class PipelineConfig:
         config.export_flags = merge_flag_strings(*eflag_parts) or None
         config.export_tool_flags = named_eflags or {}
 
+        from samovar.viz_annotation import normalize_viz_config
+
+        viz = input_config.get("viz", {})
+        if not isinstance(viz, dict):
+            raise ValueError("viz must be a mapping")
+        viz = dict(viz)
+        for key in ("full", "opal", "metrics_sample", "metrics"):
+            value = getattr(args, f"viz_{key}", None)
+            if value is not None:
+                viz[key] = value
+        config.viz = normalize_viz_config(viz)
+
         cli_start = getattr(args, "startpoint", None)
         if cli_start:
             config.startpoint = str(cli_start)
@@ -1600,6 +1616,9 @@ class PipelineConfig:
 
         scoring_config = {
             'output_dir': str(base_path),
+            'viz': self.viz,
+            'seed': self.regeneration_seed,
+            'cores': int(self.cores),
             'scoring_flags': self.scoring_flags or "",
             'scoring_tool_flags': self.scoring_tool_flags or {},
         }
@@ -1962,7 +1981,7 @@ fi
             f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
     --annotation_dir "$out_dir/initial_annotations" \\
     --output_dir "$out_dir/initial_annotations_plots" \\
-    --show_top 0
+    --show_top 0 --config {configs['scoring']}
 "$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_initial \\
     --config {configs['scoring']}""",
         )
@@ -2088,7 +2107,7 @@ fi
     --annotation_dir "$out_dir/regenerated_annotations" \\
     --output_dir "$out_dir/regenerated_annotations_plots" \\
     --csv "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
-    --show_top 0
+    --show_top 0 --config {configs['scoring']}
 "$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_regenerated \\
     --config {configs['scoring']}""",
         )
@@ -2123,7 +2142,7 @@ fi
     --annotation_dir "$out_dir/reprofiled_annotations" \\
     --output_dir "$out_dir/reprofiled_annotations_plots" \\
     --csv "$out_dir/reprofiled_annotations/combined_annotation_table.csv" \\
-    --show_top 0
+    --show_top 0 --config {configs['scoring']}
 "$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_reprofiled \\
     --config {configs['scoring']}""",
         )
@@ -2291,6 +2310,7 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             config.output_dir,
             args=args,
             argv=record_argv,
+            extra={"viz": config.viz},
         )
     except Exception as exc:
         print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)

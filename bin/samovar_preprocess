@@ -215,6 +215,14 @@ def main():
             '`none` disables them. Import with `samovar tools import --type scoring`.'
         ),
     )
+    parser.add_argument('--viz-full', action=argparse.BooleanOptionalAction, default=None,
+                        help='Add F1/R2/correlation plots (default: scores only)')
+    parser.add_argument('--viz-opal', action=argparse.BooleanOptionalAction, default=None,
+                        help='Calculate OPAL metrics and enable optional OPAL reports (default: off)')
+    parser.add_argument('--viz-metrics-sample', type=int, default=None,
+                        help='Seeded subset for score metrics; 0 scores all rows (default)')
+    parser.add_argument('--viz-metrics', action='append', default=None,
+                        help='Score column names, comma-separated or repeated; all (default) or none')
     parser.add_argument(
         '--qc',
         dest='qc',
@@ -623,6 +631,7 @@ def main():
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
         "to", "to-mpa", "to-cami", "to-kraken2", "to-kreport", "to-abundance",
         "taxdump", "taxonomy",
+        "viz-full", "no-viz-full", "viz-opal", "no-viz-opal", "viz-metrics", "viz-metrics-sample",
     }
     from samovar.tool_spec import load_custom_flags, _norm_flag
 
