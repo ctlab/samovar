@@ -473,9 +473,9 @@ def test_prepare_to_flags_embed_convert(tmp_path):
     assert "--to cami" in text
     assert "--to kraken2_mpa" in text
     assert "--to kraken2" in text
-    assert "exports/initial" in text
-    assert "exports/regenerated" in text
-    assert "exports/reprofiled" in text
+    assert text.count('"$out_dir/exports/initial"') == 1
+    assert text.count('"$out_dir/exports/regenerated"') == 1
+    assert text.count('"$out_dir/exports/reprofiled"') == 1
     assert "--taxdump /tmp/taxdump" in text
     assert "--taxonomy gtdb" in text
     cfg = PipelineConfig.from_args(args)

@@ -1854,8 +1854,6 @@ class PipelineConfig:
         )
         combine_regen_body = combine_regen_body + self._annotation_export_bash(
             "regenerated_annotations", "regenerated"
-        ) + self._annotation_export_bash(
-            "initial_annotations", "initial"
         )
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
