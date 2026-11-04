@@ -141,7 +141,7 @@ def test_process_annotation_tables_generates_once_then_splits(tmp_path):
     s1_k1 = (reads / "s1_k1_R1.fastq").read_text()
     s2_k1 = (reads / "s2_k1_R1.fastq").read_text()
     assert "taxid:562" in (s1_k1 + s2_k1)
-    assert not (reads / ".iss_full").exists()
+    assert not (reads / ".tmp" / "iss").exists()
 
 
 def test_generate_iss_test_samples_two_iss_calls(tmp_path):
@@ -178,7 +178,7 @@ def test_generate_iss_test_samples_two_iss_calls(tmp_path):
         assert r1.exists()
         assert r2.exists()
         assert _count_fastq_records(r1) == _count_fastq_records(r2)
-    assert not (out / ".iss_full").exists()
+    assert not (out / ".tmp" / "iss").exists()
 
 
 @pytest.mark.parametrize("total_reads", [1, 20])
@@ -252,6 +252,9 @@ def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
     genomes = [_write_fasta(tmp_path / "genomes" / "562.fa", "orig562")]
 
     def fail(cmd, **kwargs):
+        prefix = Path(cmd[cmd.index("--output") + 1])
+        Path(str(prefix) + ".iss.tmp.0").write_text("incomplete")
+        Path(str(prefix) + "_R1.fastq").write_text("incomplete")
         class Result:
             returncode = 1
 
@@ -267,6 +270,10 @@ def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
                 annotator_name="k1",
                 genome_ids=["562"],
             )
+
+    assert not list((tmp_path / "reads").glob("*.fastq"))
+    assert not list((tmp_path / "reads").rglob("*.iss.tmp.*"))
+    assert not list((tmp_path / "reads" / ".tmp").glob("iss_*"))
 
 
 def test_nonzero_abundance_without_genomes_fails(tmp_path, monkeypatch):

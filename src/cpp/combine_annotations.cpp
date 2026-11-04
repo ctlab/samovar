@@ -1329,9 +1329,16 @@ std::vector<SavedTool> read_sidecar(const fs::path& csv) {
     return tools;
 }
 
+// Keep staging on the output filesystem so publication remains an atomic rename.
+fs::path staging_path(const fs::path& dest) {
+    fs::path root = dest.parent_path() / ".tmp" / "staging";
+    fs::create_directories(root);
+    return root / (dest.filename().string() + ".tmp");
+}
+
 void write_sidecar(const fs::path& csv, const std::vector<SavedTool>& tools) {
     fs::path dest = tools_sidecar(csv);
-    fs::path tmp = fs::path(dest.string() + ".tmp");
+    fs::path tmp = staging_path(dest);
     std::ofstream out(tmp, std::ios::trunc);
     for (const auto& tool : tools) {
         out << tool.filename << '\t' << tool.tool << '\t' << tool.tax_ids.size() << '\t'
@@ -1423,7 +1430,10 @@ fs::path private_combine_tmp(const fs::path& root, const std::string& stem) {
 // the second starts only after the first has published its sidecar.
 struct OutputLock {
     explicit OutputLock(const fs::path& csv) {
-        fs::path lock_path(csv.string() + ".lock");
+        fs::path lock_dir = csv.parent_path() / ".tmp" / "locks";
+        fs::create_directories(lock_dir);
+        // Unlinking a lock while another writer waits would split the lock inode.
+        fs::path lock_path = lock_dir / (csv.filename().string() + ".lock");
         fd_ = ::open(lock_path.c_str(), O_RDWR | O_CREAT, 0644);
         if (fd_ < 0 || ::flock(fd_, LOCK_EX) != 0) {
             if (fd_ >= 0) {
@@ -1462,7 +1472,7 @@ int run_append(const Options& opt) {
     TmpGuard scratch;
     scratch.keep = opt.keep_tmp;
     if (opt.tmp_dir.empty()) {
-        scratch.path = private_combine_tmp(out_csv.parent_path() / ".combine_tmp", out_csv.stem().string());
+        scratch.path = private_combine_tmp(out_csv.parent_path() / ".tmp" / "combine", out_csv.stem().string());
     } else {
         scratch.path = fs::path(opt.tmp_dir);
         fs::create_directories(scratch.path);
@@ -1522,7 +1532,7 @@ int run_append(const Options& opt) {
             }
             truth_ptr = &truth;
         }
-        fs::path tmp_csv = fs::path(out_csv.string() + ".tmp");
+        fs::path tmp_csv = staging_path(out_csv);
         merge_sample(sorted, names, tmp_csv, truth_ptr);
         fs::rename(tmp_csv, out_csv);
         write_sidecar(out_csv, tools);
@@ -1558,7 +1568,7 @@ int run_retrue(const Options& opt) {
         std::cerr << "Annotation CSV has no true column: " << csv << "\n";
         return 1;
     }
-    fs::path tmp = fs::path(csv.string() + ".tmp");
+    fs::path tmp = staging_path(csv);
     std::ofstream out(tmp, std::ios::trunc);
     out << header << '\n';
     std::string line;
@@ -1751,7 +1761,7 @@ int run_restore(const Options& opt) {
             indexes.push_back(named_field(header, name));
         }
         int sample_col = named_field(header, "sample");
-        fs::path tmp = fs::path(csv.string() + ".tmp");
+        fs::path tmp = staging_path(csv);
         std::vector<char> obuf;
         std::ofstream out;
         arm_buffer(out, obuf);
@@ -1869,7 +1879,7 @@ int run_finalize(const Options& opt) {
         if (std::find(columns.begin(), columns.end(), "sample") == columns.end()) {
             columns.push_back("sample");
         }
-        fs::path tmp = fs::path(dest.string() + ".tmp");
+        fs::path tmp = staging_path(dest);
         std::vector<char> obuf;
         std::ofstream out;
         arm_buffer(out, obuf);
@@ -1931,9 +1941,6 @@ int run_finalize(const Options& opt) {
         if (!opt.keep_parts) {
             for (const auto& path : parts) {
                 fs::remove(path);
-                fs::path lock = path;
-                lock.replace_extension(".lock");
-                fs::remove(lock);
             }
         }
     } catch (const std::exception& ex) {
@@ -2054,7 +2061,7 @@ int main(int argc, char** argv) {
     TmpGuard scratch;
     scratch.keep = opt.keep_tmp;
     if (opt.tmp_dir.empty()) {
-        scratch.path = private_combine_tmp(out_dir / ".combine_tmp", "dir");
+        scratch.path = private_combine_tmp(out_dir / ".tmp" / "combine", "dir");
     } else {
         scratch.path = fs::path(opt.tmp_dir);
         fs::create_directories(scratch.path);

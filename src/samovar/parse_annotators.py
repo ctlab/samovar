@@ -272,7 +272,9 @@ def write_taxid_rank_table(path, mapping: Dict[str, str], rank: str) -> None:
         if dest == "0":
             continue
         rows[src] = dest
-    tmp = table.with_suffix(table.suffix + ".tmp")
+    scratch = table.parent / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = scratch / (table.name + ".tmp")
     with tmp.open("w", encoding="utf-8") as handle:
         handle.write(f"taxid|{col}\n")
         for src in sorted(rows, key=lambda x: (len(x), x)):
@@ -443,7 +445,9 @@ def _write_taxid_name_table(path, mapping: Dict[str, str]) -> None:
         if src == "0" or not value:
             continue
         rows[src] = str(value).replace("|", "/")
-    tmp = table.with_suffix(table.suffix + ".tmp")
+    scratch = table.parent / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = scratch / (table.name + ".tmp")
     with tmp.open("w", encoding="utf-8") as handle:
         handle.write("taxid|name\n")
         for src in sorted(rows, key=lambda x: (len(x), x)):

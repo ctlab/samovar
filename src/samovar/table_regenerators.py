@@ -441,7 +441,9 @@ class SamovarRTableRegenerator(TableRegenerator):
             env["R_LIBS_USER"] = r_lib_path
         require_compatible_samovar_r(r_path, env)
         # A previous CSV must not stand in for a missing result of this run.
-        with tempfile.TemporaryDirectory(prefix=".samovar_r_", dir=out) as tmp:
+        scratch = Path(out) / ".tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="samovar_r_", dir=scratch) as tmp:
             work = Path(tmp)
             staging = work / "input"
             generated = work / "output"
@@ -571,7 +573,7 @@ def _run_cli_regenerator(
     if annotation_dir and dir_looks_like_annotation(annotation_dir):
         input_path = str(annotation_dir)
     else:
-        staging = out / ".input_abundance"
+        staging = out / ".tmp" / "input_abundance"
         tables = input_to_abundance_tables(annotation)
         if not tables:
             raise ValueError(

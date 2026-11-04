@@ -93,7 +93,9 @@ def apply_rank_level_csv(path: str, level: str = DEFAULT_TAX_RANK, cache_path: s
 
     taxid_map = ensure_taxid_rank_map(unique, level, cache_path)
 
-    tmp = src.with_suffix(src.suffix + ".tmp")
+    scratch = src.parent / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = scratch / (src.name + ".tmp")
     with src.open(newline="") as fin, tmp.open("w", newline="") as fout:
         reader = csv.DictReader(fin)
         writer = csv.DictWriter(fout, fieldnames=fieldnames, lineterminator="\n")
@@ -236,7 +238,9 @@ def _append_annotator(
         cmd.extend(["--base", str(csv_path)])
     # Per-sample locks do not protect other samples sharing this directory.
     # The native combiner already accepts a private sort/merge workspace.
-    with tempfile.TemporaryDirectory(prefix=".combine_", dir=csv_path.parent) as scratch:
+    scratch_root = csv_path.parent / ".tmp"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="combine_", dir=scratch_root) as scratch:
         cmd.extend(["--tmp", scratch])
         with _truth_table_for_cpp(truth_table) as table_path:
             if table_path:
@@ -278,7 +282,10 @@ def ingest_annotator(
     csv_path = annotation_csv_path(annotation_dir, sample)
     annotation_dir.mkdir(parents=True, exist_ok=True)
     sentinel.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = annotation_dir / f"{sample}.annotation.lock"
+    lock_dir = annotation_dir / ".tmp" / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    # Keep the inode stable for waiting writers; cleanup runs after the stage.
+    lock_path = lock_dir / f"{sample}.annotation.lock"
     with lock_path.open("a+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         if not out_file.is_file():

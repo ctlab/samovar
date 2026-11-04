@@ -739,7 +739,7 @@ def simulate_from_sample_tables(
         return
 
     os_makedirs(output_dir, exist_ok=True)
-    pool_dir = os_path.join(output_dir, ".iss_full")
+    pool_dir = os_path.join(output_dir, ".tmp", "iss")
     if canon == "iss":
         os_makedirs(pool_dir, exist_ok=True)
     read_type = _READ_TYPE_FOR.get(canon, "") if kind == "builtin" else ""

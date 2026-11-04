@@ -1715,7 +1715,11 @@ def tag_fastq_file(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     same_file = src.resolve() == dest.resolve()
-    write_to = dest.with_name(dest.name + ".tagging.tmp") if same_file else dest
+    write_to = dest
+    if same_file:
+        scratch = dest.parent / ".tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        write_to = scratch / (dest.name + ".tagging.tmp")
 
     def chunks() -> Iterable[str]:
         for header, seq, plus, qual in iter_fastq_records(src):

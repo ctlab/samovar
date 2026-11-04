@@ -237,11 +237,26 @@ def _iss_worker_count(cpus: int, n_reads: int) -> int:
 
 
 def _run_iss(cmd: Sequence[str]) -> None:
-    result = subprocess.run(list(cmd), check=False)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ISS command failed (exit {result.returncode}): {' '.join(cmd)}"
-        )
+    argv = list(cmd)
+    output_index = argv.index("--output") + 1
+    dest = Path(argv[output_index])
+    scratch = dest.parent / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    # ISS writes worker fragments and model files beside its output prefix.
+    # Publish only the final pair, including when ISS fails midway through.
+    with tempfile.TemporaryDirectory(prefix="iss_", dir=scratch) as tmp:
+        prefix = str(Path(tmp) / dest.name)
+        argv[output_index] = prefix
+        result = subprocess.run(argv, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ISS command failed (exit {result.returncode}): {' '.join(argv)}"
+            )
+        pair = ensure_uncompressed_iss_pair(prefix)
+        if not all(os.path.isfile(path) for path in pair):
+            raise RuntimeError(f"ISS did not produce reads for {dest}")
+        for source, mate in zip(pair, ("R1", "R2")):
+            os.replace(source, f"{dest}_{mate}.fastq")
 
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
@@ -412,22 +427,6 @@ def ensure_uncompressed_iss_pair(prefix: str) -> Tuple[str, str]:
             shutil.copy2(found, dest)
         outs.append(dest)
     return outs[0], outs[1]
-
-
-def _cleanup_iss_tmp(prefix: str) -> None:
-    directory = os.path.dirname(prefix) or "."
-    base = os.path.basename(prefix)
-    for path in glob.glob(os.path.join(directory, f"{base}*")):
-        name = os.path.basename(path)
-        if name.endswith("_R1.fastq") or name.endswith("_R2.fastq"):
-            continue
-        if name.endswith("_R1.fastq.gz") or name.endswith("_R2.fastq.gz"):
-            continue
-        if os.path.isfile(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
 
 
 def _iss_record_id(genome_id: str) -> str:
@@ -673,7 +672,6 @@ def generate_reads_genome(
             if seed is not None:
                 cmd.extend(["--seed", str(seed)])
             _run_iss(cmd)
-        _cleanup_iss_tmp(output_file)
         ensure_uncompressed_iss_pair(output_file)
         if amount > 0 and not _fastq_has_records(r1):
             raise RuntimeError(f"ISS did not produce reads for {output_file}")
@@ -727,7 +725,7 @@ def generate_reads_metagenome(
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
         return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 
-    work_dir = os.path.join(output_dir, ".iss_full")
+    work_dir = os.path.join(output_dir, ".tmp", "iss")
     os.makedirs(work_dir, exist_ok=True)
     combined_fasta = os.path.join(work_dir, f"{sample_name}_{annotator_name}.genomes.fasta")
     readcount_path = os.path.join(work_dir, f"{sample_name}_{annotator_name}.readcount.txt")
@@ -768,7 +766,6 @@ def generate_reads_metagenome(
     if seed is not None:
         cmd.extend(["--seed", str(seed)])
     _run_iss(cmd)
-    _cleanup_iss_tmp(output_prefix)
     ensure_uncompressed_iss_pair(output_prefix)
     if os.path.exists(combined_fasta):
         try:
@@ -1329,7 +1326,7 @@ def generate_iss_test_samples(
 
     genome_files = cap_sequence(genome_files, max_genomes)
 
-    pool_dir = os.path.join(output_dir, ".iss_full")
+    pool_dir = os.path.join(output_dir, ".tmp", "iss")
     os.makedirs(pool_dir, exist_ok=True)
 
     with iss_cli_extra_flags(extra_flags):
@@ -1474,7 +1471,7 @@ def generate_iss_from_abundance_table(
             max_genomes=finite_max_genomes(max_genomes),
         )
     outputs: List[str] = []
-    pool_dir = os.path.join(output_dir, ".iss_full")
+    pool_dir = os.path.join(output_dir, ".tmp", "iss")
     os.makedirs(pool_dir, exist_ok=True)
     sample_source_counts: Dict[str, Dict[str, int]] = {}
     total_by_taxid: Dict[str, int] = {}
@@ -1759,7 +1756,9 @@ def samovar_annotation_regenerate(
     if dir_looks_like_annotation(annotation_dir):
         expected = ["taxID_" + name for name in expected]
     n_samples = int(config_samovar_dict.get("N", config_samovar_dict.get(False, 1)) or 1)
-    with tempfile.TemporaryDirectory(prefix=".samovar_r_", dir=output_dir) as tmp:
+    scratch = Path(output_dir) / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="samovar_r_", dir=scratch) as tmp:
         work = Path(tmp)
         generated = work / "output"
         generated.mkdir()

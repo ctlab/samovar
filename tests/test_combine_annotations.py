@@ -380,7 +380,9 @@ def test_ingest_accepts_gzipped_truth_table(tmp_path):
     ingest_annotator(out_file, ann, tmp_path / "s.ingested", truth_table=str(truth_gz))
     df = pd.read_csv(ann / "s.annotation.csv")
     assert str(int(df.loc[0, "true"])) == "818"
-    assert not list(Path(tmp_path).glob("*.annotation.lock"))
+    assert not list(ann.glob("*.lock"))
+    assert (ann / ".tmp" / "locks" / "s.annotation.lock").is_file()
+    assert (ann / ".tmp" / "locks" / "s.annotation.csv.lock").is_file()
 
 
 def test_sample_name_keeps_underscores(tmp_path, combiner):
