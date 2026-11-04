@@ -843,3 +843,16 @@ def test_import_pytest_annotator_uses_db_path(tmp_path, monkeypatch, capsys):
         str(key).startswith("dbstub") for key in stored["tools"]
     )
 
+
+
+def test_import_camisim_checkout(tmp_path, monkeypatch):
+    from samovar.tools_import import import_tool
+    from samovar.main_config import iter_tools, tool_path
+    from samovar.paths import load_config
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    checkout = tmp_path / "CAMISIM"
+    checkout.mkdir()
+    (checkout / "main.nf").write_text("workflow {}\n")
+    import_tool(name="camisim", tool_type="metagenome_generator", exec_path=str(checkout))
+    assert tool_path(iter_tools(load_config())["camisim"], "camisim") == str(checkout)

@@ -13,6 +13,7 @@ One row in :data:`ASK_TOOLS` is one prompt. Columns:
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -93,6 +94,8 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool("nanofilt", ("NanoFilt",), "qc", "conda:nanofilt"),
     AskTool("opal", ("opal.py",), "scoring", "optional:opal"),
     AskTool("multiqc", ("multiqc",), "scoring", "optional:multiqc"),
+    AskTool("iss", ("iss",), "reads_generator", "conda:insilicoseq"),
+    AskTool("snakemake", ("snakemake",), "workflow", "conda:snakemake-minimal"),
     AskTool("camisim", ("camisim",), "metagenome_generator", "optional:camisim"),
     AskTool("nanosim", ("simulator.py",), "metagenome_generator", "optional:nanosim"),
     AskTool("art", ("art_illumina",), "reads_generator", "optional:art"),
@@ -152,8 +155,17 @@ def launch_check_enabled(argv: Optional[Sequence[str]] = None, *, full: bool) ->
 
 
 def parse_env_answer(text: str) -> Optional[EnvAnswer]:
-    """``conda ENV EXEC``, ``base EXEC``, or ``n``/``no``. Anything else is invalid."""
-    parts = str(text or "").split()
+    """An existing path, ``conda ENV EXEC``, ``base EXEC``, or ``n``/``no``."""
+    raw = str(text or "").strip()
+    try:
+        if raw and Path(raw).expanduser().is_file():
+            return ("base", "", str(Path(raw).expanduser()))
+    except OSError:
+        return None
+    try:
+        parts = shlex.split(raw)
+    except ValueError:
+        return None
     if not parts:
         return None
     head = parts[0].lower()
@@ -272,7 +284,7 @@ def env_prompt_short(spec: AskTool, default: str = "") -> str:
     exe = _exe_name(spec)
     if default:
         return f"Import {spec.name}? [{default}] "
-    return f"Import {spec.name}? conda ENV {exe} | base {exe} | no\n> "
+    return f"Import {spec.name}? PATH | conda ENV {exe} | base {exe} | no\n> "
 
 
 def env_prompt(spec: AskTool, default: str = "") -> str:
@@ -285,6 +297,8 @@ def env_prompt(spec: AskTool, default: str = "") -> str:
         "Reply with one line:\n"
         f"  conda {env} {exe}\n"
         f"      conda environment `{env}`, executable `{exe}`\n"
+        "  /path/to/program\n"
+        "      existing executable to import (paths with spaces are accepted)\n"
         f"  base {exe}\n"
         f"      the active environment, executable `{exe}`\n"
         f"  no\n"
@@ -333,10 +347,15 @@ def program_launches(
     notes: List[str] = []
     conda = conda_executable() if conda_env else ""
     for args in attempts:
+        launch = [path]
+        if Path(path).suffix.lower() == ".py" and not os.access(path, os.X_OK):
+            from samovar.paths import python_path
+
+            launch = [python_path(), path]
         if conda_env and conda:
-            cmd = [conda, "run", "-n", conda_env, path, *args]
+            cmd = [conda, "run", "-n", conda_env, *launch, *args]
         else:
-            cmd = [path, *args]
+            cmd = [*launch, *args]
         label = " ".join(args) if args else "(no args)"
         try:
             proc = subprocess.run(
@@ -460,7 +479,7 @@ def locate_installed(spec: AskTool) -> Tuple[str, str]:
     kind, _, arg = spec.install.partition(":")
     if kind == "optional" and arg:
         installed = configured_import(spec.name, spec.which)
-        if installed is not None and Path(installed.path).is_file():
+        if installed is not None and Path(installed.path).exists():
             return installed.path, installed.prefix
         prefix = sidecar_envs_dir() / arg
         for name in spec.which:
@@ -633,6 +652,11 @@ def ask_tool(
     """Prompt for one tool. Returns ``imported-which``, ``imported-env``, ``installed``, or ``skipped``."""
 
     def _launch(path: str, conda_env: str = "") -> Tuple[bool, str]:
+        if spec.name == "camisim" and Path(path).is_dir():
+            from samovar.camisim import _camisim_kind
+
+            kind = _camisim_kind(Path(path))
+            return bool(kind), f"CAMISIM {kind or 'pipeline not found'}"
         if launch_fn is program_launches:
             return program_launches(path, conda_env=conda_env, probes=spec.probes)
         return launch_fn(path, conda_env=conda_env)

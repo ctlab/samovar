@@ -429,6 +429,11 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
                        help='Random seed for reproducibility')
     parser.add_argument('--model', default="hiseq",
                        help='Sequencing model to use')
+    parser.add_argument(
+        '--autoimport', type=int, choices=(0, 1), default=None,
+        help='Omit to ask about importing or installing required tools; '
+             '1: autoimport available tools, ask about the rest; 0: import nothing',
+    )
     parser.add_argument('--cores', '-t', type=int, default=1,
                        help='Number of cores for snakemake')
     parser.add_argument(
@@ -568,12 +573,15 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         write_custom_generate_script,
     )
 
+    from samovar.prepare_import import offer_prepare_imports
+
     meta_raw = getattr(args, "metagenome_generator", None)
     if meta_raw:
         mkind, mcanon = resolve_metagenome_generator(meta_raw)
+        args.metagenome_generator = mcanon
+        offer_prepare_imports(args)
         if mkind == "custom":
             require_known_metagenome_generator(mcanon)
-        args.metagenome_generator = mcanon
         flag_parts = [getattr(args, "extra_flags", None)]
         for item in getattr(args, "tool_flags", None) or []:
             if not item or len(item) < 2:
@@ -630,9 +638,10 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         else:
             raw_name = "iss"
     kind, canon = resolve_reads_generator(raw_name)
+    args.reads_generator = canon
+    offer_prepare_imports(args)
     if kind == "custom":
         require_known_reads_generator(canon)
-    args.reads_generator = canon
 
     flag_parts = [getattr(args, "extra_flags", None)]
     for item in getattr(args, "tool_flags", None) or []:

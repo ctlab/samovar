@@ -512,6 +512,12 @@ class PipelineConfig:
         if args.input_config:
             with open(args.input_config, 'r') as f:
                 input_config = yaml.safe_load(f)
+                if getattr(args, "_offer_imports", False):
+                    from samovar.prepare_import import offer_prepare_imports
+
+                    refs = dict(input_config)
+                    refs.update({key: value for key, value in vars(args).items() if value is not None})
+                    offer_prepare_imports(argparse.Namespace(**refs))
                 config.input_dir = input_config.get('input_dir')
                 cli_out = getattr(args, "output_dir", None)
                 config.output_dir = cli_out or input_config.get("output_dir") or DEFAULT_OUTPUT_DIR
@@ -2274,6 +2280,13 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         remember_prepare_genome_paths(extra_dirs=config.genome_dirs)
     except OSError as exc:
         print(f"Warning: could not update genome cache config: {exc}", file=sys.stderr)
+    if getattr(args, "_offer_imports", False):
+        from samovar.prepare_import import offer_prepare_imports
+
+        refs = dict(vars(config), autoimport=getattr(args, "autoimport", None),
+                    _offered_tools=getattr(args, "_offered_tools", set()),
+                    table_reads_generator=config.regeneration_modes, workflow="snakemake")
+        offer_prepare_imports(argparse.Namespace(**refs))
     configs = config.generate_configs(config.output_dir)
     pipeline_path = config.generate_pipeline(config.output_dir, script_name=script_name)
     if added:

@@ -642,3 +642,34 @@ def test_viz_settings_yaml_cli_and_all_pipeline_stages(tmp_path, override):
 def test_viz_settings_reject_invalid_values(viz):
     with pytest.raises(ValueError):
         PipelineConfig(viz=viz)
+
+
+def test_prepare_offers_yaml_tool_before_validation(tmp_path, monkeypatch):
+    import src.samovar.config as module
+    import samovar.prepare_import as preflight
+
+    conf = tmp_path / "input.yaml"
+    conf.write_text("qc: custom_qc\nannotators: []\n")
+    offered = []
+    monkeypatch.setattr(preflight, "offer_prepare_imports", lambda ns: offered.append(ns.qc))
+
+    def validate(name):
+        assert name in offered
+        return name
+
+    monkeypatch.setattr(module, "require_known_qc", validate)
+    args = argparse.Namespace(input_config=str(conf), input_dir=None,
+                              output_dir=str(tmp_path / "out"), _offer_imports=True)
+    assert PipelineConfig.from_args(args).qc == "custom_qc"
+
+
+def test_prepare_offers_resolved_default_generator(tmp_path, monkeypatch):
+    import samovar.prepare_import as preflight
+
+    offered = []
+    monkeypatch.setattr(preflight, "offer_prepare_imports", lambda ns: offered.append(ns))
+    args = argparse.Namespace(input_config=None, input_dir=None,
+                              output_dir=str(tmp_path / "out"), _offer_imports=True)
+    setup_pipeline(args)
+    assert offered[-1].reads_generator == "iss"
+    assert offered[-1].workflow == "snakemake"

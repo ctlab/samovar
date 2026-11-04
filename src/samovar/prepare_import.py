@@ -1,4 +1,4 @@
-"""Import programs and databases named on ``samovar prepare``.
+"""Import programs and databases selected by ``prepare`` / ``generate``.
 
 * no flag: the same dialogue as ``./install.sh ask``
 * ``--autoimport 1``: record whatever can be resolved, then ask about the rest
@@ -102,7 +102,8 @@ def offer_prepare_imports(
         configured_fn = configured_import
     if db_known_fn is None:
         db_known_fn = _database_known
-    seen = set()
+    seen = getattr(args, "_offered_tools", set())
+    args._offered_tools = seen
     for program, database in iter_prepare_refs(args):
         if program is not None and program[0] not in seen:
             seen.add(program[0])
@@ -146,16 +147,57 @@ def iter_prepare_refs(
             program, database = _annotator_ref(attr, str(text or ""))
             if program or database:
                 rows.append((program, database))
+    for entry in getattr(args, "annotators", None) or []:
+        if isinstance(entry, dict):
+            command = str(entry.get("cmd") or "")
+            rows.append(_annotator_ref(str(entry.get("type") or "annotator"), command))
     for name, group in _named_programs(args):
-        if _should_offer(name, group):
-            rows.append(((name, group, ""), None))
+        for required, required_group in _generator_programs(name, group, args):
+            if _should_offer(required, required_group):
+                rows.append(((required, required_group, ""), None))
     return rows
+
+
+def _generator_programs(name: str, group: str, args: argparse.Namespace) -> List[Tuple[str, str]]:
+    """Use the simulator's own mode selection for its runtime programs."""
+    if group in {"table_reads_generator", "table_scoring"}:
+        if group == "table_reads_generator":
+            kind, canon = resolve_regeneration_mode(name)
+            builtin = kind == "builtin"
+        else:
+            canon = str(name).lower().replace("-", "_")
+            builtin = canon in BUILTIN_TABLE_SCORERS
+        if builtin and canon.startswith("sparsedossa2"):
+            return [("sparsedossa2", "table_reads_generator")]
+    if group not in {"reads_generator", "metagenome_generator"}:
+        return [(name, group)]
+    resolver = resolve_reads_generator if group == "reads_generator" else resolve_metagenome_generator
+    kind, canon = resolver(name)
+    if kind != "builtin":
+        return [(canon, group)]
+    from samovar.reads_generators import camisim_mode_for_reads_generator
+    from samovar.camisim import _camisim_kind, discover_camisim, normalize_camisim_mode, types_for_mode
+
+    mode = camisim_mode_for_reads_generator(canon, getattr(args, "camisim_mode", None))
+    if mode is None:
+        return [(canon, group), ("snakemake", "workflow")]
+    mode = normalize_camisim_mode(mode)
+    if mode == "table":
+        return [("iss", "reads_generator"), ("snakemake", "workflow")]
+    programs = [("camisim", "metagenome_generator")]
+    root = discover_camisim()
+    if not root or _camisim_kind(Path(root)) == "nextflow":
+        programs.append(("nextflow", "workflow"))
+    programs.extend((resolve_reads_generator(tool)[1], "reads_generator") for tool in types_for_mode(mode))
+    return programs
 
 
 def _annotator_ref(
     attr: str, text: str
 ) -> Tuple[Optional[Tuple[str, str, str]], Optional[Tuple[str, str]]]:
-    parts = text.split()
+    from samovar.paths import command_argv
+
+    parts = command_argv(text)
     if not parts:
         return None, None
     if "samovar." in text and (
@@ -191,6 +233,7 @@ def _named_programs(args: argparse.Namespace) -> List[Tuple[str, str]]:
             if name:
                 found.append((name, group))
 
+    add(getattr(args, "workflow", None), "workflow")
     add(getattr(args, "reads_generator", None), "reads_generator")
     add(getattr(args, "metagenome_generator", None), "metagenome_generator")
     add(getattr(args, "table_reads_generator", None), "table_reads_generator")
@@ -199,6 +242,14 @@ def _named_programs(args: argparse.Namespace) -> List[Tuple[str, str]]:
     add(getattr(args, "feature_importance", None), "feature_importance")
     add(getattr(args, "table_score", None), "table_scoring")
     add(getattr(args, "scoring", None), "scoring")
+    opal = getattr(args, "viz_opal", None)
+    viz = getattr(args, "viz", None)
+    if opal is None and isinstance(viz, dict):
+        opal = viz.get("opal", False)
+    if opal:
+        found.append(("opal", "scoring"))
+    if getattr(args, "run_multiqc", None) is True:
+        found.append(("multiqc", "scoring"))
     for attr in ("qc", "qc_initial", "qc_generated"):
         add(getattr(args, attr, None), "qc")
     for tool in parse_qc_postfix(getattr(args, "qc_postfix", None)).values():
@@ -267,8 +318,15 @@ def _offer_program(
 ) -> None:
     name, group, explicit = program
     spec = _ask_spec(name) or AskTool(name, (name,), group, "")
-    if configured_fn(spec.name, spec.which):
-        return
+    current = configured_fn(spec.name, spec.which)
+    if current is not None:
+        if Path(current.path).is_file():
+            return
+        if spec.name == "camisim" and Path(current.path).is_dir():
+            from samovar.camisim import _camisim_kind
+
+            if _camisim_kind(Path(current.path)):
+                return
     if mode == "auto":
         found = _auto_program_path(spec, explicit, which_fn, resolve_conda_fn)
         if found:
@@ -294,7 +352,7 @@ def _offer_program(
                 sibling_fn=sibling_fn,
             )
             return
-    ask_tool_fn(spec, ask=ask, prefer_config=False, check=False)
+    ask_tool_fn(spec, ask=ask, prefer_config=False, check=True)
 
 
 def _auto_program_path(

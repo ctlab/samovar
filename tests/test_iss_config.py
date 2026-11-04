@@ -264,4 +264,33 @@ def test_parse_args_threads_maps_to_iss_cpus():
         ]
     )
     assert args.cores == 8
-    assert "- - c" not in (args.extra_flags or "") 
+    assert "- - c" not in (args.extra_flags or "")
+
+@pytest.mark.parametrize("field", ["reads_generator", "metagenome_generator"])
+def test_generate_preflight_runs_before_custom_tool_validation(tmp_path, monkeypatch, field):
+    from samovar.iss_config import parse_args
+    import samovar.prepare_import as preflight
+    import samovar.reads_generators as reads
+    import samovar.metagenome_generators as meta
+
+    args = parse_args(["--output_dir", str(tmp_path / "out"),
+                       "--genome_dir", str(tmp_path), "--" + field, "custom_new"])
+    calls = []
+    monkeypatch.setattr(preflight, "offer_prepare_imports", lambda ns: calls.append(("offer", getattr(ns, field))))
+
+    def validate(name):
+        calls.append(("validate", name))
+        raise ValueError("stop after preflight")
+
+    module = reads if field == "reads_generator" else meta
+    monkeypatch.setattr(module, "require_known_" + field, validate)
+    with pytest.raises(ValueError, match="stop after preflight"):
+        setup_iss_test(args)
+    assert calls == [("offer", "custom_new"), ("validate", "custom_new")]
+
+
+def test_generate_autoimport_flag():
+    from samovar.iss_config import parse_args
+
+    assert parse_args(["--output_dir", "out", "--autoimport", "0"]).autoimport == 0
+    assert parse_args(["--output_dir", "out", "--autoimport", "1"]).autoimport == 1

@@ -646,3 +646,19 @@ def test_full_ask_decline_keeps_env_as_default(tmp_path):
     assert status == "imported-env"
     assert any("[conda kaiju kaiju]" in prompt for prompt in prompts)
     assert recorded == [("conda", "kaiju")]
+
+
+def test_import_absolute_path_with_spaces(tmp_path):
+    binary = tmp_path / "my tools" / "fastp"
+    binary.parent.mkdir()
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    assert parse_env_answer(str(binary)) == ("base", "", str(binary))
+    assert parse_env_answer(f'base "{binary}"') == ("base", "", str(binary))
+
+
+def test_launch_check_accepts_python_script_without_execute_bit(tmp_path):
+    script = tmp_path / "custom.py"
+    script.write_text("print('custom help')\n")
+    ok, detail = program_launches(str(script))
+    assert ok and "custom help" in detail

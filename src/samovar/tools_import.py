@@ -39,6 +39,11 @@ def resolve_import_path(
         if candidate.is_file():
             return str(candidate.resolve())
         if candidate.is_dir():
+            if name.lower() == "camisim":
+                from samovar.camisim import _camisim_kind
+
+                if _camisim_kind(candidate):
+                    return str(candidate.resolve())
             for nested in (candidate / "bin" / exe, candidate / exe):
                 try:
                     if nested.is_file():

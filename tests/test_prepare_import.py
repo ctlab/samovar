@@ -150,3 +150,88 @@ def test_prepare_help_documents_autoimport():
         text=True,
     )
     assert rejected.returncode != 0
+
+
+def test_missing_configured_executable_is_offered_again(tmp_path):
+    from types import SimpleNamespace
+
+    _recorded, asked, _db = _offer(
+        argparse.Namespace(qc="fastp"),
+        configured_fn=lambda *_a: SimpleNamespace(path=str(tmp_path / "gone")),
+    )
+    assert asked == ["fastp"]
+
+
+def test_hybrid_offers_the_selected_runtime_programs():
+    _recorded, asked, _db = _offer(argparse.Namespace(reads_generator="hybrid"))
+    assert set(asked) == {"camisim", "nextflow", "art", "nanosim"}
+
+
+def test_preflight_install_checks_and_records_tool(tmp_path, monkeypatch):
+    from samovar.install_ask import ask_tool
+    from samovar.main_config import iter_tools, tool_path
+    from samovar.paths import load_config
+
+    config = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(config))
+    binary = tmp_path / "installed tools" / "fastp"
+    calls = []
+
+    def install(spec):
+        calls.append(spec.name)
+        binary.parent.mkdir()
+        binary.write_text("#!/bin/sh\necho 'fastp fixture help'\n")
+        binary.chmod(0o755)
+
+    def dialogue(spec, **kwargs):
+        return ask_tool(spec, which_fn=lambda _names: [], install=install,
+                        locate=lambda _spec: (str(binary), ""), **kwargs)
+
+    answers = iter(["no", "yes"])
+    offer_prepare_imports(
+        argparse.Namespace(qc="fastp"), interactive=True,
+        ask=lambda _prompt: next(answers), ask_tool_fn=dialogue,
+    )
+    assert calls == ["fastp"]
+    assert tool_path(iter_tools(load_config())["fastp"], "fastp") == str(binary)
+
+
+def test_preflight_failed_install_can_be_declined(tmp_path, monkeypatch, capsys):
+    from samovar.install_ask import ask_tool
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    records = []
+
+    def install(_spec):
+        raise subprocess.CalledProcessError(1, ["installer"])
+
+    def dialogue(spec, **kwargs):
+        return ask_tool(spec, which_fn=lambda _names: [], install=install,
+                        record=lambda *a, **k: records.append(a), **kwargs)
+
+    answers = iter(["no", "yes", "no"])
+    offer_prepare_imports(argparse.Namespace(qc="fastp"), interactive=True,
+                          ask=lambda _prompt: next(answers), ask_tool_fn=dialogue)
+    assert not records
+    assert "install failed" in capsys.readouterr().out
+
+
+def test_repeated_preflight_does_not_repeat_declined_tool():
+    args = argparse.Namespace(qc="fastp")
+    assert _offer(args)[1] == ["fastp"]
+    assert _offer(args)[1] == []
+
+
+def test_selected_sparsedossa_variant_uses_existing_installer():
+    _recorded, asked, _db = _offer(argparse.Namespace(table_reads_generator=["sd2-stool"]))
+    assert asked == ["sparsedossa2"]
+
+
+def test_explicit_no_opal_does_not_offer_yaml_opal():
+    _recorded, asked, _db = _offer(argparse.Namespace(viz_opal=False, viz={"opal": True}))
+    assert asked == []
+
+
+def test_unknown_sparsedossa_named_custom_tool_keeps_its_import_name():
+    _recorded, asked, _db = _offer(argparse.Namespace(table_reads_generator=["sparsedossa2_custom"]))
+    assert asked == ["sparsedossa2_custom"]
