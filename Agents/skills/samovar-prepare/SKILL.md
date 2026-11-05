@@ -16,12 +16,13 @@ annotators, database indexes and available resources. If real versus generated
 inputs or catalog entries are ambiguous, ask before preparing; do not infer an
 unmentioned generation step or choose an arbitrary database.
 
-Check input ownership before execution: current setup can symlink supplied
-FASTQ into the run, and `sort_reads` rewrites FASTQ in place through those links.
-Warn before using original/read-only inputs and arrange an owned working copy
-when they must remain unchanged. For large data, explain the disk/copy cost and
-resolve that choice with the user rather than copying blindly. Do not promise
-unchanged file hashes/mtimes when a first sorting stage is still pending.
+Check input ownership before execution. In SAMOVAR 0.13.2+, `sort_reads` writes
+an owned sorted file atomically over the run's link, preserving external FASTQ
+targets (including hardlinks and read-only sources). Older installations can
+rewrite inputs through symlinks: warn and arrange an owned working copy there
+when originals must remain unchanged. For large data, explain disk/copy costs
+before copying blindly. Sorting still needs writable space inside the run, and
+the first sorting stage can change hashes/mtimes of its owned output files.
 
 Reuse registered tools and databases. If something required is missing, explain
 what it is and use the existing installation/import dialogue only with the user's

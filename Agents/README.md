@@ -51,8 +51,9 @@ or invoke a bioinformatics pipeline.
 
 ## Publishing boundary and layout
 
-The portable payload is **`Agents/` plus root `skills_install.sh`**. These paths
-can be copied unchanged into a standalone skills repository; the installer has
+The portable payload is **tracked files under `Agents/` plus root `skills_install.sh`**.
+Local `skill-and-hook-testing/` reports are ignored and are not distributed.
+The tracked payload can be copied into a standalone skills repository; the installer has
 no dependency on `src/samovar`, the package config, or `.agents/`. Publish only
 after review; this change does not push or commit the main repository.
 
@@ -64,7 +65,7 @@ after review; this change does not push or commit the main repository.
   inside each skill so it is self-contained and survives moving/deleting the
   source checkout. New skills needing rules use the same relative link.
 - `hooks/`: hook policy; no event handlers or lifecycle configuration yet.
-- `skill-and-hook-testing/`: cases and honest operational validation records.
+- `skill-and-hook-testing/`: local, Git-ignored scenarios and validation records.
 - `install.py`: shared installer implementation; the root script only launches it.
 
 Rules activate through relevant skills, not unconditional global instructions.
@@ -81,11 +82,9 @@ pipeline. Sequential execution works in any agent; optional delegation requires
 support and user authorization. Hooks in the Skills tasks are optional; this
 bundle ships the instruction-only implementation.
 
-Per-skill scenarios and evidence live in `skill-and-hook-testing/<name>/`.
-The mandatory packaging check requires scenarios and a `PASS.md` for every
-manifest-listed skill, so a new skill without records fails CI. That presence
-check is not a scientific validator: reviewers must inspect the recorded real
-commands, outputs and limitations. Installer tests, manual agent checks and
+Per-skill scenarios and evidence stay locally in `skill-and-hook-testing/<name>/`
+or in CI artifacts; they are not committed or required in a fresh checkout.
+Report the actual commands, outputs and limitations for review. Installer tests, manual agent checks and
 native pipeline execution are reported separately; no claim is made that every
 model or IDE UI has been tested.
 

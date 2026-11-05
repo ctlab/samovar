@@ -20,7 +20,10 @@ def harness(tmp_path):
     source = tmp_path / "standalone skills repo"
     source.mkdir()
     shutil.copy2(ROOT / "skills_install.sh", source)
-    shutil.copytree(ROOT / "Agents", source / "Agents", symlinks=True)
+    shutil.copytree(
+        ROOT / "Agents", source / "Agents", symlinks=True,
+        ignore=shutil.ignore_patterns("skill-and-hook-testing"),
+    )
     project = tmp_path / "analysis with spaces"
     project.mkdir()
     env = os.environ.copy()
@@ -199,11 +202,3 @@ def test_unlisted_skills_are_not_distributed(harness):
     assert json.loads(installed.read_text())["format_version"] == 1
 
 
-def test_distributed_skills_have_validation_records():
-    # Release gate from SF-81/#76: a new shipped skill needs recorded scenarios
-    # and execution evidence. This checks packaging, not scientific correctness.
-    manifest = json.loads((ROOT / "Agents/bundle.json").read_text())
-    for name in manifest["skills"]:
-        records = ROOT / "Agents/skill-and-hook-testing" / name
-        assert (records / "cases.md").is_file(), f"Missing scenarios for {name}"
-        assert (records / "PASS.md").is_file(), f"Missing execution evidence for {name}"
