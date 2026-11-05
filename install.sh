@@ -10,6 +10,7 @@
 #                                and ask for a thread count (default 3/4 of the CPUs)
 #   ./install.sh full ask        core, then ask about every supported program
 #   ./install.sh full ask --no-check   same, without launching each imported program
+#   ./skills_install.sh --ide auto    install portable SAMOVAR skills in this project
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
 #   ./install.sh Kraken2        Kraken2 + build helpers in a separate conda env
 #   ./install.sh Kaiju          Kaiju + build helpers in a separate conda env
@@ -42,6 +43,9 @@
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
 #   SAMOVAR_INSTALL_FULL=1     same as ./install.sh full
 #   SAMOVAR_INSTALL_ASK=1      same as ./install.sh ask
+#   SAMOVAR_INSTALL_HARNESS=0  skip IDE skills (full detects IDE; ask prompts)
+#   SAMOVAR_IDE=codex          override harness detection: codex / cursor / claude / generic
+#   SAMOVAR_HARNESS_PROJECT=/path  target project (default: caller's working directory)
 #   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
 #   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
 #   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
@@ -75,6 +79,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_CALLER_DIR="$PWD"
 export SAMOVAR_ROOT="${SAMOVAR_ROOT:-$ROOT}"
 cd "$ROOT"
 
@@ -806,6 +811,20 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_SPADES=1
 }
 
+install_agent_harness() {
+    [ "${SAMOVAR_INSTALL_HARNESS:-auto}" != "0" ] || return 0
+    local mode
+    if [ "$INSTALL_ASK" = "1" ]; then
+        mode=ask
+    elif [ "$INSTALL_FULL" = "1" ]; then
+        mode=full
+    else
+        return 0
+    fi
+    SAMOVAR_HARNESS_PYTHON="$PYTHON_PATH" bash "$ROOT/skills_install.sh" \
+        --mode "$mode" --project "${SAMOVAR_HARNESS_PROJECT:-$INSTALL_CALLER_DIR}"
+}
+
 INSTALL_FULL=0
 INSTALL_ASK=0
 if [ "${SAMOVAR_INSTALL_FULL:-0}" != "0" ]; then
@@ -1460,6 +1479,10 @@ fi
 rebuild_citations
 
 print_install_status
+
+if ! install_agent_harness; then
+    echo "Warning: IDE harness was not installed. Preserve any local edits, then retry ./skills_install.sh --ide NAME."
+fi
 
 if [ "$INSTALL_ASK" = "1" ] && [ "$ASK_STATUS" != "0" ]; then
     echo "Ask smoketest did not pass. See the examples/smoketest report above."

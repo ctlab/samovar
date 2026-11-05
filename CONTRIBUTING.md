@@ -121,3 +121,14 @@ Before considering a change complete:
 * update documentation/examples when required.
 
 Prefer extending the existing architecture over introducing special cases for a single workflow.
+
+## 8. Distributable agent skills
+
+New user-facing SAMOVAR skills live in `Agents/`, not the local `.agents/`
+maintenance harness. Follow [the portable layout rule](Agents/rules/agents-portable-layout.md)
+and [skill/hook validation rule](Agents/rules/create-new-skill-testing.md) when
+changing that bundle. Every rule is conditional on its stated SAMOVAR task;
+skills ship the rules they reference. IDE discovery belongs in the common
+`skills_install.sh` installer, and real skill runs must be recorded separately
+from installer tests. See [Agents/README.md](Agents/README.md) for the publishing
+boundary and work remaining in the Skills epic.
