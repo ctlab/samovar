@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -53,6 +54,13 @@ def test_self_contained_bundle_and_repeat_install(harness, ide, directory):
     assert references.is_dir() and not references.is_symlink()
     for rule in (source / "Agents/rules").glob("*.md"):
         assert (references / rule.name).read_bytes() == rule.read_bytes()
+    manifest = json.loads((source / "Agents/bundle.json").read_text())
+    for name in manifest["skills"]:
+        installed = project / directory / name
+        assert (installed / "SKILL.md").is_file()
+        for target in re.findall(r"\]\(([^)]+)\)", (installed / "SKILL.md").read_text()):
+            if "://" not in target:
+                assert (installed / target).is_file(), (name, target)
     assert (skill / "SKILL.md").is_file()
     before = {str(path.relative_to(project)): path.read_bytes() for path in project.rglob("*") if path.is_file()}
     assert run_install(harness, "--ide", ide).returncode == 0
@@ -189,3 +197,13 @@ def test_unlisted_skills_are_not_distributed(harness):
     assert not (project / "samovar-harness/skills/private").exists()
     installed = project / "samovar-harness/skills/samovar/.samovar-harness.json"
     assert json.loads(installed.read_text())["format_version"] == 1
+
+
+def test_distributed_skills_have_validation_records():
+    # Release gate from SF-81/#76: a new shipped skill needs recorded scenarios
+    # and execution evidence. This checks packaging, not scientific correctness.
+    manifest = json.loads((ROOT / "Agents/bundle.json").read_text())
+    for name in manifest["skills"]:
+        records = ROOT / "Agents/skill-and-hook-testing" / name
+        assert (records / "cases.md").is_file(), f"Missing scenarios for {name}"
+        assert (records / "PASS.md").is_file(), f"Missing execution evidence for {name}"

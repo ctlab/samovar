@@ -1,4 +1,4 @@
 {
   "format_version": 1,
-  "skills": ["samovar"]
+  "skills": ["samovar", "samovar-generate", "samovar-build-database", "samovar-prepare", "samovar-exec"]
 }

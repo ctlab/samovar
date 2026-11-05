@@ -26,12 +26,24 @@ before installing or importing anything. If `samovar` is unavailable, report
 that dependency and offer the repository's documented installation procedure.
 Do not substitute inline Python or a private pipeline for a missing CLI stage.
 
-Route an authorized run through the existing commands: `generate` only for
-requested synthetic inputs, `build` only if a required database is missing,
-then `prepare` and `exec`. A prepared run's directory must be known before
-execution. For an existing run, inspect its configuration, checkpoints and
-`checkup` report before resuming; do not delete checkpoints or request `--redo`
-to hide a failure. Check current help for each command's directory/stage flags.
+Audit the supplied data and the request first, recording both in `audit.md` in
+the agreed output directory. Route an authorized run through the installed
+stage skills (they ship in the same bundle):
+
+1. [Generate](../samovar-generate/SKILL.md) only for requested synthetic inputs;
+   skip it when the user supplies reads.
+2. [Build database](../samovar-build-database/SKILL.md) only if a suitable
+   registered database is missing; otherwise record its reuse.
+3. [Prepare](../samovar-prepare/SKILL.md) using the chosen data and tools.
+4. [Exec](../samovar-exec/SKILL.md) through the requested endpoint, including
+   checkup and checkpoint inspection before resume.
+
+Follow these stage procedures in order; if the environment offers delegation
+and the user authorizes it, they can be delegated with the same paths, choices
+and audit. No IDE-specific subagent API is required. A prepared run's directory
+must be known before execution. Do not delete checkpoints or request `--redo`
+to hide a failure. If the request is ambiguous, ask a focused question and do
+not create a run until the missing scientific choice is resolved.
 
 Explain material parameter choices and record commands and decisions with the
 run (an `audit.md` in its output directory is suitable). Execute only the work

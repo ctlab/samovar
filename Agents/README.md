@@ -56,7 +56,8 @@ can be copied unchanged into a standalone skills repository; the installer has
 no dependency on `src/samovar`, the package config, or `.agents/`. Publish only
 after review; this change does not push or commit the main repository.
 
-- `bundle.json`: explicit list of installable skills; currently only `samovar`.
+- `bundle.json`: explicit list of installable skills: `samovar`,
+  `samovar-generate`, `samovar-build-database`, `samovar-prepare`, `samovar-exec`.
 - `skills/<name>/SKILL.md`: standard skill format, without IDE-specific APIs.
 - `rules/*.md`: canonical conditional SAMOVAR policies. The source skills'
   `references/rules` link points here. Installation materializes regular files
@@ -72,13 +73,25 @@ with an explicit SAMOVAR condition is the portable contract. Do not install
 these files into an IDE's always-loaded rules directory. Any future native
 adapter must preserve the same condition (e.g. Cursor `alwaysApply: false`).
 
-## Further Skills work
+## Operational scope and validation
 
-The current `samovar` skill is a basic CLI entry point, not the completed #120
-umbrella workflow. Epic #122 remains open. Dedicated generate (#133), database
-build (#115), prepare (#138), exec (#132), and their real agent-run validation
-remain subsequent tasks. Hooks in those tasks are optional, not a prerequisite
-for this instruction-only bootstrap. No operational task is closed by this setup.
+`samovar` audits the inputs/request and routes to the four stage skills. They
+use the installed CLI/help and registered tools rather than embedding a second
+pipeline. Sequential execution works in any agent; optional delegation requires
+support and user authorization. Hooks in the Skills tasks are optional; this
+bundle ships the instruction-only implementation.
+
+Per-skill scenarios and evidence live in `skill-and-hook-testing/<name>/`.
+The mandatory packaging check requires scenarios and a `PASS.md` for every
+manifest-listed skill, so a new skill without records fails CI. That presence
+check is not a scientific validator: reviewers must inspect the recorded real
+commands, outputs and limitations. Installer tests, manual agent checks and
+native pipeline execution are reported separately; no claim is made that every
+model or IDE UI has been tested.
+
+The current ISS CLI has a known sample-label limitation for supplied abundance
+tables (follow-up #886). The generate skill explains when to stop and warn;
+it does not silently rename samples or treat a failed run as successful.
 
 When extending this bundle, read the conditional
 [layout](rules/agents-portable-layout.md) and
