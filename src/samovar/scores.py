@@ -8,7 +8,6 @@ assigned to the same majority label.
 
 from __future__ import annotations
 
-from collections import Counter
 import re
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -19,9 +18,21 @@ from samovar.annotation_columns import is_feat_column, select_scoring_annotators
 
 
 def _taxon_helpers():
-    from samovar.viz_annotation import is_special_taxon, normalize_taxon_token
+    from samovar.viz_annotation import is_special_taxon, normalize_taxon_token  # noqa: F401
 
     return is_special_taxon, normalize_taxon_token
+
+
+def normalize_series(values):
+    from samovar.viz_annotation import normalize_series as _f
+
+    return _f(values)
+
+
+def special_mask(values):
+    from samovar.viz_annotation import special_mask as _f
+
+    return _f(values)
 
 ENSEMBLE_NAME = "SAMOVAR"
 COMBINATION_ANNOTATORS = frozenset({"samovar", "consensus"})
@@ -70,33 +81,34 @@ def majority_vote(frame: pd.DataFrame, annotators: Sequence[str]) -> pd.Series:
     cols = [c for c in annotators if c in frame.columns]
     if not cols:
         return pd.Series(dtype=str)
+    if len(frame) == 0:
+        return pd.Series(dtype=object)
 
-    def _row_vote(row) -> str:
-        tokens = [normalize_taxon_token(row[c]) for c in cols]
-        classified = [t for t in tokens if not is_special_taxon(t)]
-        pool = classified or tokens
-        counts = Counter(pool)
-        top = counts.most_common()
-        if not top:
-            return "0"
-        best_n = top[0][1]
-        tied = [lab for lab, n in top if n == best_n]
-        if len(tied) == 1:
-            return tied[0]
-        for token in tokens:
-            if token in tied:
-                return token
-        return tied[0]
-
-    return frame[cols].apply(_row_vote, axis=1)
+    # Same tie-break as the row walk: the first column among the tied labels.
+    k = len(cols)
+    toks = np.empty((len(frame), k), dtype=object)
+    for j, c in enumerate(cols):
+        toks[:, j] = normalize_series(frame[c])
+    codes, uniq = pd.factorize(toks.ravel(), use_na_sentinel=False)
+    codes = codes.reshape(len(frame), k)
+    special = np.array([is_special_taxon(u) for u in uniq], dtype=bool)[codes]
+    valid = ~special
+    no_classified = ~valid.any(axis=1)
+    valid[no_classified] = True
+    counts = np.zeros((len(frame), k), dtype=np.int32)
+    for j in range(k):
+        counts[:, j] = ((codes == codes[:, [j]]) & valid).sum(axis=1)
+    counts[~valid] = -1
+    best = codes[np.arange(len(frame)), counts.argmax(axis=1)]
+    return pd.Series(np.asarray(uniq, dtype=object)[best], index=frame.index)
 
 
 def _confusion(true: Iterable, pred: Iterable) -> pd.DataFrame:
     _, normalize_taxon_token = _taxon_helpers()
     tmp = pd.DataFrame(
         {
-            "true": pd.Series(true, dtype=object).map(normalize_taxon_token),
-            "pred": pd.Series(pred, dtype=object).map(normalize_taxon_token),
+            "true": normalize_series(true),
+            "pred": normalize_series(pred),
         }
     )
     if tmp.empty:
@@ -107,32 +119,40 @@ def _confusion(true: Iterable, pred: Iterable) -> pd.DataFrame:
 def _f1_accuracy(true: pd.Series, pred: pd.Series) -> float:
     """Current heatmap F1: P = R = TP/N, so F1 equals per-read accuracy."""
     _, normalize_taxon_token = _taxon_helpers()
-    t = true.map(normalize_taxon_token)
-    p = pred.map(normalize_taxon_token)
+    t = normalize_series(true)
+    p = normalize_series(pred)
     n = len(t)
     if n == 0:
         return 0.0
-    tp = float((t == p).sum())
+    tp = float((t.to_numpy() == p.to_numpy()).sum())
     return float(tp / n)
+
+
+def _classification_counts(true: Iterable, pred: Iterable) -> tuple:
+    """Shared linear-size confusion marginals for PRF and OPAL rates."""
+    y = normalize_series(true)
+    p = normalize_series(pred)
+    if len(y) != len(p):
+        raise ValueError("true and pred must have the same number of rows")
+    if isinstance(y.dtype, pd.CategoricalDtype) and isinstance(p.dtype, pd.CategoricalDtype):
+        uniq = y.cat.categories.union(p.cat.categories, sort=False)
+        yc = uniq.get_indexer(y.cat.categories)[y.cat.codes.to_numpy()]
+        pc = uniq.get_indexer(p.cat.categories)[p.cat.codes.to_numpy()]
+    else:
+        codes, uniq = pd.factorize(np.concatenate([y.to_numpy(), p.to_numpy()]))
+        yc, pc = codes[:len(y)], codes[len(y):]
+    support = np.bincount(yc, minlength=len(uniq)).astype(float)
+    predicted = np.bincount(pc, minlength=len(uniq)).astype(float)
+    tp = np.bincount(yc[yc == pc], minlength=len(uniq)).astype(float)
+    used = (support + predicted) > 0
+    return uniq[used], support[used], predicted[used], tp[used]
 
 
 def standard_classification_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
     """sklearn-style single-label scores (macro / weighted / micro / accuracy)."""
-    from sklearn.metrics import (
-        accuracy_score,
-        f1_score,
-        precision_score,
-        recall_score,
-    )
-
-    _, normalize_taxon_token = _taxon_helpers()
-    y = pd.Series(list(true) if not isinstance(true, pd.Series) else true).map(
-        normalize_taxon_token
-    ).astype(str)
-    p = pd.Series(list(pred) if not isinstance(pred, pd.Series) else pred).map(
-        normalize_taxon_token
-    ).astype(str)
-    if y.empty:
+    labels, support, predicted, tp = _classification_counts(true, pred)
+    n = support.sum()
+    if not n:
         return {
             "accuracy": 0.0,
             "precision_macro": 0.0,
@@ -141,24 +161,29 @@ def standard_classification_metrics(true: Iterable, pred: Iterable) -> Dict[str,
             "f1_macro": 0.0,
             "f1_weighted": 0.0,
         }
-    labels = sorted(set(y) | set(p))
-    kwargs = {"labels": labels, "zero_division": 0}
+    # Marginals and true positives suffice for PRF; avoid a quadratic K×K matrix.
+    precision = np.divide(tp, predicted, out=np.zeros_like(tp), where=predicted > 0)
+    recall = np.divide(tp, support, out=np.zeros_like(tp), where=support > 0)
+    f1 = np.divide(2 * tp, support + predicted, out=np.zeros_like(tp), where=support + predicted > 0)
+    accuracy = float(tp.sum() / n)
     return {
-        "accuracy": float(accuracy_score(y, p)),
-        "precision_macro": float(precision_score(y, p, average="macro", **kwargs)),
-        "recall_macro": float(recall_score(y, p, average="macro", **kwargs)),
-        "f1_micro": float(f1_score(y, p, average="micro", **kwargs)),
-        "f1_macro": float(f1_score(y, p, average="macro", **kwargs)),
-        "f1_weighted": float(f1_score(y, p, average="weighted", **kwargs)),
+        "accuracy": accuracy,
+        "precision_macro": float(precision.mean()),
+        "recall_macro": float(recall.mean()),
+        "f1_micro": accuracy,
+        "f1_macro": float(f1.mean()),
+        "f1_weighted": float(np.dot(f1, support) / n),
     }
 
 
 def _r2_abundance(true: pd.Series, pred: pd.Series) -> float:
     _, normalize_taxon_token = _taxon_helpers()
-    t = true.map(normalize_taxon_token)
-    p = pred.map(normalize_taxon_token)
+    t = normalize_series(true)
+    p = normalize_series(pred)
     true_n = t.value_counts()
     pred_n = p.value_counts()
+    true_n = true_n[true_n > 0]
+    pred_n = pred_n[pred_n > 0]
     taxa = sorted(set(true_n.index) | set(pred_n.index))
     if not taxa:
         return float("nan")
@@ -270,23 +295,27 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
     return float(np.dot(table["f1"].to_numpy(dtype=float), weights) / denom)
 
 
-def annotation_scores(true: Iterable, pred: Iterable) -> Dict[str, float]:
+def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = False,
+                      include_classification: bool = True) -> Dict[str, float]:
     true_s = pd.Series(list(true) if not isinstance(true, pd.Series) else true.reset_index(drop=True))
     pred_s = pd.Series(list(pred) if not isinstance(pred, pd.Series) else pred.reset_index(drop=True))
     n = len(true_s)
     table = purity_by_taxon(true_s, pred_s)
+    weight = float(table["n_true"].sum()) if not table.empty else 0.0
     stats = {
         "n_reads": float(n),
         "n_taxa": float(len(table)),
-        "accuracy_purity": accuracy_purity(true_s, pred_s),
-        "f1_purity": f1_purity(true_s, pred_s),
-        "f1": _f1_accuracy(true_s, pred_s),
-        "r2": _r2_abundance(true_s, pred_s),
+        "accuracy_purity": float(table["n_majority"].sum() / weight) if weight else 0.0,
+        "f1_purity": float(np.dot(table["f1"], table["n_true"]) / weight) if weight else 0.0,
     }
-    stats.update(standard_classification_metrics(true_s, pred_s))
-    from samovar.opal import opal_style_metrics
+    if include_classification:
+        stats["f1"] = _f1_accuracy(true_s, pred_s)
+        stats["r2"] = _r2_abundance(true_s, pred_s)
+        stats.update(standard_classification_metrics(true_s, pred_s))
+    if include_opal:
+        from samovar.opal import opal_style_metrics
 
-    stats.update(opal_style_metrics(true_s, pred_s))
+        stats.update(opal_style_metrics(true_s, pred_s))
     return stats
 
 
@@ -318,7 +347,7 @@ def has_usable_truth(work: pd.DataFrame, true_col: str = "true") -> bool:
     if work is None or work.empty or true_col not in work.columns:
         return False
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    for val in work[true_col]:
+    for val in pd.unique(work[true_col]):
         if not is_special_taxon(normalize_taxon_token(val)):
             return True
     return False
@@ -328,7 +357,7 @@ def rows_with_usable_truth(work: pd.DataFrame, true_col: str = "true") -> Option
     if not has_usable_truth(work, true_col):
         return None
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    mask = work[true_col].map(lambda v: not is_special_taxon(normalize_taxon_token(v)))
+    mask = ~special_mask(normalize_series(work[true_col]))
     return work.loc[mask].copy()
 
 
@@ -362,8 +391,8 @@ def _empty_score_row(name: str, n_reads: float, n_taxa: float) -> Dict[str, floa
 
 def _pred_counts(pred: pd.Series) -> tuple:
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    tokens = pred.map(normalize_taxon_token)
-    classified = {t for t in tokens if not is_special_taxon(t)}
+    tokens = normalize_series(pred)
+    classified = {t for t in pd.unique(tokens) if not is_special_taxon(t)}
     return float(len(tokens)), float(len(classified))
 
 
@@ -372,51 +401,100 @@ def score_annotators(
     annotators: Sequence[str],
     true_col: str = "true",
     include_consensus: bool = True,
+    opal: bool = False,
+    metrics: Optional[Sequence[str]] = None,
+    metrics_sample: int = 0,
+    seed: int = 0,
+    _split_read_types: bool = True,
 ) -> pd.DataFrame:
     """Score each annotator plus optional majority-vote SAMOVAR ensemble.
 
     When ``SAMOVAR`` is already a column (re-profiled tables), majority vote is
     not added again. When ground truth is missing or all-unclassified, F1 / R²
     and related metrics are left as NaN; ``n_reads`` / ``n_taxa`` are still filled.
+
+    ``opal=False`` leaves OPAL profile columns NaN. ``metrics`` limits which
+    score columns are filled. ``metrics_sample`` above 0 draws a seeded subset
+    and records ``n_sampled``; 0 scores every row.
     """
     names = [n for n in annotators if str(n).lower() != "read_type" and not is_feat_column(n)]
     names = select_scoring_annotators(work, names)
     tools = tool_annotators(names)
-    scored = rows_with_usable_truth(work, true_col) if work is not None else None
+    frame = work
+    n_sampled = 0
+    if (
+        frame is not None
+        and metrics_sample
+        and int(metrics_sample) > 0
+        and len(frame) > int(metrics_sample)
+    ):
+        frame = frame.sample(n=int(metrics_sample), random_state=int(seed))
+        n_sampled = int(metrics_sample)
+    elif frame is not None:
+        n_sampled = int(len(frame))
+    if frame is not None:
+        # Normalize categories once; aggregate and per-platform scores reuse codes.
+        frame = frame.copy(deep=False)
+        for col in [*names, *([true_col] if true_col in frame else [])]:
+            if col in frame:
+                frame[col] = normalize_series(frame[col].astype("category"))
+    scored = rows_with_usable_truth(frame, true_col) if frame is not None else None
     true = scored[true_col] if scored is not None else None
+    wanted = None if metrics is None else {str(name) for name in metrics}
     rows = []
 
     def _add(name: str, pred: pd.Series) -> None:
+        if not isinstance(pred.dtype, pd.CategoricalDtype):
+            pred = normalize_series(pred.astype("category"))
         label = canonical_annotator_name(name)
         if scored is None or true is None:
             n_reads, n_taxa = _pred_counts(pred)
-            rows.append(_empty_score_row(label, n_reads, n_taxa))
+            row = _empty_score_row(label, n_reads, n_taxa)
+            row["n_sampled"] = float(n_sampled)
+            rows.append(row)
             return
         from samovar.viz_annotation import _collapse_other
 
         aligned = pred.reindex(scored.index)
         collapsed = _collapse_other(aligned, true)
-        stats = annotation_scores(true, aligned)
-        stats["f1"] = _f1_accuracy(true, collapsed)
-        stats["r2"] = _r2_abundance(true, collapsed)
-        stats.update(standard_classification_metrics(true, collapsed))
-        from samovar.opal import opal_style_metrics
+        if wanted is None or wanted & {"accuracy_purity", "f1_purity"}:
+            stats = annotation_scores(true, aligned, include_classification=False)
+        else:
+            n_reads, n_taxa = _pred_counts(true)
+            stats = {"n_reads": n_reads, "n_taxa": n_taxa}
+        if wanted is None or "f1" in wanted:
+            stats["f1"] = _f1_accuracy(true, collapsed)
+        if wanted is None or "r2" in wanted:
+            stats["r2"] = _r2_abundance(true, collapsed)
+        if wanted is None or wanted & {"accuracy", "precision_macro", "recall_macro", "f1_micro", "f1_macro", "f1_weighted"}:
+            stats.update(standard_classification_metrics(true, collapsed))
+        if opal and (wanted is None or wanted & {
+            "completeness", "opal_purity", "opal_f1", "jaccard", "l1_norm", "bray_curtis",
+            "opal_tp", "opal_fp", "opal_fn",
+            "tpr", "tnr", "fpr", "fnr", "tp_pct", "tn_pct", "fp_pct", "fn_pct",
+        }):
+            from samovar.opal import opal_style_metrics
 
-        stats.update(opal_style_metrics(true, collapsed))
+            stats.update(opal_style_metrics(true, collapsed))
+        if wanted is not None:
+            for key in list(stats):
+                if key not in wanted and key not in {"n_reads", "n_taxa"}:
+                    stats[key] = np.nan
+        stats["n_sampled"] = float(len(scored) if scored is not None else n_sampled)
         rows.append({"annotator": label, **stats})
 
     have_ensemble_col = any(
-        _is_combination(n) and n in work.columns for n in names
-    ) if work is not None else False
+        _is_combination(n) and n in frame.columns for n in names
+    ) if frame is not None else False
     seen_labels = set()
     for name in names:
-        if work is None or name not in work.columns:
+        if frame is None or name not in frame.columns:
             continue
         label = canonical_annotator_name(name)
         if label.lower() in seen_labels:
             continue
         seen_labels.add(label.lower())
-        _add(name, work[name])
+        _add(name, frame[name])
 
     have = {str(r["annotator"]).lower() for r in rows}
     if (
@@ -424,38 +502,43 @@ def score_annotators(
         and len(tools) >= 2
         and ENSEMBLE_NAME.lower() not in have
         and not have_ensemble_col
-        and work is not None
+        and frame is not None
     ):
-        _add(ENSEMBLE_NAME, majority_vote(work, tools))
+        _add(ENSEMBLE_NAME, majority_vote(frame, tools))
 
     table = pd.DataFrame(rows)
     if table.empty:
-        empty = pd.DataFrame(columns=list(SCORE_COLUMNS))
+        empty = pd.DataFrame(columns=list(SCORE_COLUMNS) + ["n_sampled"])
         return empty
-    for col in SCORE_COLUMNS:
+    for col in list(SCORE_COLUMNS) + ["n_sampled"]:
         if col not in table.columns:
             table[col] = np.nan
-    table = table[list(SCORE_COLUMNS)]
+    table = table[list(SCORE_COLUMNS) + ["n_sampled"]]
     ordered = order_annotators(list(table["annotator"]))
     table["annotator"] = pd.Categorical(table["annotator"], categories=ordered, ordered=True)
     table = table.sort_values("annotator").reset_index(drop=True)
 
-    type_col = "read_type" if work is not None and "read_type" in work.columns else None
-    if type_col:
-        grouped = work.copy()
-        grouped["_rt"] = grouped[type_col].astype(str).str.strip().str.lower()
-        types = sorted({rt for rt in grouped["_rt"] if is_platform_read_type(rt)})
+    type_col = "read_type" if frame is not None and "read_type" in frame.columns else None
+    if _split_read_types and type_col:
+        labels = frame[type_col].astype(str).str.strip().str.lower()
+        types = sorted({rt for rt in labels.unique() if is_platform_read_type(rt)})
         if len(types) >= 2:
             table["read_type"] = "all"
             parts = [table]
-            for rt, sub in grouped.groupby("_rt"):
-                if not is_platform_read_type(rt) or sub.empty:
+            for rt in types:
+                sub = frame.loc[labels == rt]
+                if sub.empty:
                     continue
                 sub_tab = score_annotators(
-                    sub.drop(columns=["read_type", "_rt"], errors="ignore"),
+                    sub,
                     names,
                     true_col=true_col,
                     include_consensus=include_consensus,
+                    opal=opal,
+                    metrics=metrics,
+                    metrics_sample=0,
+                    seed=seed,
+                    _split_read_types=False,
                 )
                 if sub_tab.empty:
                     continue

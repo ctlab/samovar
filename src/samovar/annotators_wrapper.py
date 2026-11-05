@@ -1,3 +1,4 @@
+import glob
 import os
 import re
 import shlex
@@ -9,6 +10,7 @@ from typing import Dict, List, Optional, Sequence
 import pandas as pd
 
 from samovar.baselines import CONSTANT_TAXID_NAMES
+from samovar.paths import command_argv, python_path
 
 DUMMY_TAXID = "9606"
 DUMMY_TOOL_NAMES = CONSTANT_TAXID_NAMES
@@ -39,7 +41,7 @@ def skip_empty_reads_cmd(input_r1: str, outputs: Sequence[str], run_cmd: str) ->
     """
     r1 = shlex.quote(str(input_r1))
     outs = " ".join(shlex.quote(str(path)) for path in outputs)
-    py = shlex.quote(sys.executable)
+    py = shlex.quote(python_path())
     src_root = str(Path(__file__).resolve().parent.parent)
     code = (
         "from samovar.seqio import fastq_has_reads; import sys; "
@@ -52,6 +54,17 @@ def skip_empty_reads_cmd(input_r1: str, outputs: Sequence[str], run_cmd: str) ->
     return f"if ! {probe}; then touch {outs}; else {run_cmd.strip()}; fi"
 
 
+def _has_r2(input_r2: str) -> bool:
+    return bool(str(input_r2 or "").strip())
+
+
+def _r2_flag(flag: str, input_r2: str) -> str:
+    """``-I path`` when paired; nothing when the Snakefile marked the sample single-end."""
+    if not _has_r2(input_r2):
+        return ""
+    return f"{flag} {shlex.quote(str(input_r2))} "
+
+
 def single_or_paired_reads_cmd(
     input_r1: str,
     input_r2: str,
@@ -60,11 +73,16 @@ def single_or_paired_reads_cmd(
     single_cmd: str,
     paired_cmd: str,
 ) -> str:
-    """Run a classifier in paired mode only when R2 contains reads."""
+    """Run a classifier in paired mode only when R2 contains reads.
+
+    An empty ``input_r2`` is single-end: the paired command is not emitted.
+    """
+    if not _has_r2(input_r2):
+        return skip_empty_reads_cmd(input_r1, outputs, single_cmd)
     r1 = shlex.quote(str(input_r1))
     r2 = shlex.quote(str(input_r2))
     outs = " ".join(shlex.quote(str(path)) for path in outputs)
-    py = shlex.quote(sys.executable)
+    py = shlex.quote(python_path())
     src_root = str(Path(__file__).resolve().parent.parent)
     code = (
         "from samovar.seqio import fastq_has_reads; import sys; "
@@ -127,8 +145,12 @@ class BaseAnnotator:
         from samovar.paths import resolve_executable
 
         raw_cmd = run_config.get("cmd") or self.default_cmd
-        first = str(raw_cmd).split()[0] if raw_cmd else ""
-        self.cmd = resolve_executable(raw_cmd, tool_key=Path(first).name if first else None)
+        parts = command_argv(raw_cmd)
+        # Prepared runs may retain the interpreter from an older installation.
+        if len(parts) >= 3 and parts[1] == "-m" and parts[2].startswith("samovar."):
+            raw_cmd = shlex.join([python_path(), *parts[1:]])
+        first = command_argv(raw_cmd)[0] if raw_cmd else ""
+        self.cmd = shlex.join(command_argv(resolve_executable(raw_cmd, tool_key=Path(first).name if first else None)))
 
     @property
     def default_cmd(self) -> str:
@@ -172,21 +194,24 @@ class Kraken2Annotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         report_file, out_file = outputs
+        extra = str(self.extra or "")
+        mapping = "" if "--memory-mapping" in extra else "--memory-mapping "
         common = (
             f"{self.cmd} "
             f"--use-names "
-            f"--db {self.db_path} "
+            f"{mapping}"
+            f"--db {shlex.quote(str(self.db_path))} "
             f"--threads {self.threads} "
-            f"--report {report_file} "
-            f"--output {out_file} "
-            f"{self.extra}"
+            f"--report {shlex.quote(str(report_file))} "
+            f"--output {shlex.quote(str(out_file))} "
+            f"{extra}"
         )
         return single_or_paired_reads_cmd(
             input_r1,
             input_r2,
             outputs,
-            single_cmd=f"{common} {input_r1}",
-            paired_cmd=f"{common} --paired {input_r1} {input_r2}",
+            single_cmd=f"{common} {shlex.quote(str(input_r1))}",
+            paired_cmd=f"{common} --paired {shlex.quote(str(input_r1))} {shlex.quote(str(input_r2))}",
         )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
@@ -208,6 +233,80 @@ class Kraken2Annotator(BaseAnnotator):
         return df[["seq", "taxID"]]
 
 
+# One kaiju-multi process once a cohort is larger than a single sample.
+KAIJU_MULTI_MIN_SAMPLES = 2
+
+
+def use_kaiju_multi(n_samples: int) -> bool:
+    return int(n_samples or 0) >= KAIJU_MULTI_MIN_SAMPLES
+
+
+def _comma_paths(paths: Sequence[str]) -> str:
+    return ",".join(shlex.quote(str(path)) for path in paths)
+
+
+def _expand_index(path: str) -> str:
+    """Turn ``dir/*.fmi`` into the one index file the shell used to expand."""
+    text = str(path)
+    if "*" not in text and "?" not in text:
+        return text
+    hits = sorted(glob.glob(text))
+    if len(hits) == 1:
+        return hits[0]
+    return text
+
+
+def kaiju_multi_script(
+    *,
+    binary: str,
+    nodes: str,
+    database: str,
+    r1: Sequence[str],
+    r2: Sequence[str],
+    outputs: Sequence[str],
+    threads: int,
+    extra: str = "",
+    empty: Optional[Sequence[str]] = None,
+) -> str:
+    """Shell for one ``kaiju-multi`` run. Empty FASTQs are touched and left out."""
+    lines = ["set -euo pipefail"]
+    for path in outputs:
+        parent = str(path).rsplit("/", 1)[0] if "/" in str(path) else "."
+        lines.append(f"mkdir -p {shlex.quote(parent)}")
+    for path in empty or []:
+        lines.append(f"touch {shlex.quote(str(path))}")
+    if not r1:
+        return "\n".join(lines)
+    paired = [str(path) for path in r2 if str(path or "").strip()]
+    if paired and len(paired) != len(r1):
+        raise ValueError("kaiju-multi needs every sample paired, or none of them")
+    cmd = [
+        shlex.quote(binary),
+        "-t",
+        shlex.quote(nodes),
+        "-f",
+        shlex.quote(_expand_index(database)),
+        "-i",
+        _comma_paths(r1),
+        "-o",
+        _comma_paths(outputs),
+        "-z",
+        str(max(1, int(threads))),
+    ]
+    if paired:
+        cmd.extend(["-j", _comma_paths(paired)])
+    tail = str(extra or "").strip()
+    if tail:
+        cmd.append(tail)
+    lines.append(" ".join(cmd))
+    return "\n".join(lines)
+
+
+def wrap_shell(script: str) -> str:
+    """One argv so Snakemake's ``2> log`` covers the whole script."""
+    return "bash -euo pipefail -c " + shlex.quote(script)
+
+
 class KaijuAnnotator(BaseAnnotator):
     """Annotator class for Kaiju taxonomic classifier."""
 
@@ -219,23 +318,30 @@ class KaijuAnnotator(BaseAnnotator):
         out_file = os.path.join(output_dir, f"{sample}_{self.run_name}.kaiju.out")
         return [out_file]
 
-    def get_snakemake_shell_cmd(
-        self, input_r1: str, input_r2: str, outputs: List[str]
-    ) -> str:
-        out_file = outputs[0]
+    def _database_and_nodes(self) -> tuple:
         if self.run_config.get("db_name"):
             db_file_path = os.path.join(self.db_path, self.run_config["db_name"])
-        elif self.db_path.endswith(".fmi"):
+        elif str(self.db_path).endswith(".fmi"):
             db_file_path = self.db_path
         else:
             db_file_path = os.path.join(self.db_path, "*.fmi")
-
-        default_nodes = os.path.join(os.path.dirname(db_file_path), "nodes.dmp")
-        db_nodes = self.run_config.get("db_nodes") or default_nodes
+        # Kaiju keeps nodes.dmp beside the index dir (…/kaijudb/nodes.dmp,
+        # index in …/kaijudb/refseq/), not inside the refseq folder.
+        explicit = str(self.run_config.get("db_nodes") or "").strip()
+        folder = Path(str(db_file_path).replace("*", "")).parent
+        db_nodes = explicit or str(folder / "nodes.dmp")
         try:
             nodes_ok = Path(str(db_nodes)).is_file()
         except OSError:
             nodes_ok = False
+        if not nodes_ok:
+            parent_nodes = folder.parent / "nodes.dmp"
+            try:
+                if parent_nodes.is_file():
+                    db_nodes = str(parent_nodes)
+                    nodes_ok = True
+            except OSError:
+                nodes_ok = False
         if not nodes_ok:
             try:
                 from samovar.taxdump import nodes_dmp
@@ -245,14 +351,70 @@ class KaijuAnnotator(BaseAnnotator):
                     db_nodes = str(found)
             except Exception:
                 pass
+        return _expand_index(str(db_file_path)), str(db_nodes)
+
+    def batch_shell(self, samples: Sequence[str], r1_dir: str, r2_dir: str, output_dir: str) -> str:
+        """One ``kaiju-multi`` for every sample of this run."""
+        from samovar.paths import resolve_executable
+        from samovar.seqio import fastq_has_reads, find_fastq_mate
+
+        database, nodes = self._database_and_nodes()
+        binary = command_argv(resolve_executable("kaiju-multi") or "kaiju-multi")[0]
+        active_r1: List[str] = []
+        active_r2: List[str] = []
+        active_out: List[str] = []
+        empty: List[str] = []
+        paired = True
+        for sample in samples:
+            r1 = find_fastq_mate(r1_dir, sample, "R1")
+            r2 = find_fastq_mate(r2_dir, sample, "R2")
+            out = os.path.join(output_dir, f"{sample}_{self.run_name}.kaiju.out")
+            if r1 is None or not fastq_has_reads(str(r1)):
+                empty.append(out)
+                continue
+            if r2 is None:
+                paired = False
+            active_r1.append(str(r1))
+            active_r2.append(str(r2) if r2 is not None else "")
+            active_out.append(out)
+        r2_arg: List[str] = []
+        if paired and active_r2 and all(active_r2):
+            r2_arg = active_r2
+        elif any(active_r2):
+            lines = ["set -euo pipefail"]
+            for path in empty:
+                lines.append(f"touch {shlex.quote(str(path))}")
+            for r1, r2, out in zip(active_r1, active_r2, active_out):
+                lines.append(
+                    self.get_snakemake_shell_cmd(r1, r2, [out])
+                )
+            return wrap_shell("\n".join(lines))
+        script = kaiju_multi_script(
+            binary=binary,
+            nodes=nodes,
+            database=database,
+            r1=active_r1,
+            r2=r2_arg,
+            outputs=active_out,
+            threads=int(self.threads),
+            extra=self.extra or "",
+            empty=empty,
+        )
+        return wrap_shell(script)
+
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        out_file = outputs[0]
+        db_file_path, db_nodes = self._database_and_nodes()
 
         common = (
             f"{self.cmd} "
-            f"-t {db_nodes} "
-            f"-f {db_file_path} "
-            f"-i {input_r1} "
+            f"-t {shlex.quote(str(db_nodes))} "
+            f"-f {shlex.quote(str(db_file_path))} "
+            f"-i {shlex.quote(str(input_r1))} "
             f"-z {self.threads} "
-            f"-o {out_file} "
+            f"-o {shlex.quote(str(out_file))} "
             f"{self.extra}"
         )
         return single_or_paired_reads_cmd(
@@ -260,7 +422,7 @@ class KaijuAnnotator(BaseAnnotator):
             input_r2,
             outputs,
             single_cmd=common,
-            paired_cmd=f"{common} -j {input_r2}",
+            paired_cmd=f"{common} -j {shlex.quote(str(input_r2))}",
         )
 
     def parse_output(self, file_path: str) -> pd.DataFrame:
@@ -292,13 +454,16 @@ class MetaPhlanAnnotator(BaseAnnotator):
             f"{self.cmd} "
             f"--input_type fastq "
             f"--nproc {self.threads} "
-            f"-1 {input_r1} "
-            f"-2 {input_r2} "
-            f"--bowtie2out {bowtie_file} "
-            f"-o {raw_file} "
+            + (
+                f"-1 {shlex.quote(str(input_r1))} -2 {shlex.quote(str(input_r2))} "
+                if _has_r2(input_r2)
+                else f"{shlex.quote(str(input_r1))} "
+            )
+            + f"--bowtie2out {shlex.quote(str(bowtie_file))} "
+            f"-o {shlex.quote(str(raw_file))} "
             f"{self.extra} "
             f"&& "
-            f"bzcat {bowtie_file} | awk -F'\\t' '{{print $1 \"\\t\" $3}}' > {out_file}"
+            f"bzcat {shlex.quote(str(bowtie_file))} | awk -F'\\t' '{{print $1 \"\\t\" $3}}' > {shlex.quote(str(out_file))}"
         )
         return skip_empty_reads_cmd(input_r1, outputs, cmd)
 
@@ -357,12 +522,17 @@ class Kraken1Annotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
+        reads = (
+            f"--paired {shlex.quote(str(input_r1))} {shlex.quote(str(input_r2))}"
+            if _has_r2(input_r2)
+            else shlex.quote(str(input_r1))
+        )
         cmd = (
             f"{self.cmd} "
-            f"--db {self.db_path} "
+            f"--db {shlex.quote(str(self.db_path))} "
             f"--threads {self.threads} "
-            f"--paired {input_r1} {input_r2} "
-            f"--output {out_file} "
+            f"{reads} "
+            f"--output {shlex.quote(str(out_file))} "
             f"{self.extra}"
         )
         return skip_empty_reads_cmd(input_r1, outputs, cmd)
@@ -391,12 +561,17 @@ class KrakenUniqAnnotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
+        reads = (
+            f"--paired {shlex.quote(str(input_r1))} {shlex.quote(str(input_r2))}"
+            if _has_r2(input_r2)
+            else shlex.quote(str(input_r1))
+        )
         cmd = (
             f"{self.cmd} "
-            f"--db {self.db_path} "
+            f"--db {shlex.quote(str(self.db_path))} "
             f"--threads {self.threads} "
-            f"--paired {input_r1} {input_r2} "
-            f"--output {out_file} "
+            f"{reads} "
+            f"--output {shlex.quote(str(out_file))} "
             f"{self.extra}"
         )
         return skip_empty_reads_cmd(input_r1, outputs, cmd)
@@ -417,7 +592,7 @@ def _cmd_is_custom_wrapper(cmd: str) -> bool:
     text = str(cmd)
     if "custom.sh" in text:
         return True
-    token = text.split()[-1]
+    token = command_argv(text)[-1]
     return os.path.basename(token) in CUSTOM_WRAPPER_SCRIPTS
 
 
@@ -431,7 +606,7 @@ class CustomAnnotator(BaseAnnotator):
     @property
     def default_cmd(self) -> str:
         script = Path(__file__).resolve().parent.parent / "annotators" / "custom.sh"
-        return f"bash {script}"
+        return f"bash {shlex.quote(str(script))}"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         out_file = os.path.join(
@@ -450,6 +625,17 @@ class CustomAnnotator(BaseAnnotator):
 
         rec = lookup_tool_record(load_config(), self.tool_name)
         tflag = threads_cli_token(self.tool_name, self.threads, rec)
+        from samovar.memory import translated_mem_flag
+
+        raw_limit = self.config.get("mem_mb")
+        mflag = translated_mem_flag(
+            self.tool_name,
+            self.threads,
+            cores=int(self.config.get("cores") or 0) or None,
+            limit_mb=int(raw_limit) if raw_limit else None,
+            record=rec,
+            existing=extra,
+        )
         use_router = _cmd_is_custom_wrapper(self.cmd) or (
             str(self.tool_name).lower() in CUSTOM_SH_ROUTER_TOOLS
         )
@@ -457,15 +643,16 @@ class CustomAnnotator(BaseAnnotator):
             cmd = self.cmd if _cmd_is_custom_wrapper(self.cmd) else self.default_cmd
             return (
                 f"{cmd} "
-                f"-i {input_r1} "
-                f"-I {input_r2} "
-                f"-d {self.db_path} "
-                f"-o {out_file} "
+                f"-i {shlex.quote(str(input_r1))} "
+                f"{_r2_flag('-I', input_r2)}"
+                f"-d {shlex.quote(str(self.db_path))} "
+                f"-o {shlex.quote(str(out_file))} "
                 f"-p {self.tool_name} "
                 f"{tflag} "
+                f"{mflag} "
                 f"{extra}"
             )
-        first = str(self.cmd or "").split()[0]
+        first = command_argv(self.cmd)[0]
         try:
             direct = bool(first) and Path(first).expanduser().is_file()
         except OSError:
@@ -473,22 +660,24 @@ class CustomAnnotator(BaseAnnotator):
         if direct:
             return (
                 f"{self.cmd} "
-                f"-i {input_r1} "
-                f"-I {input_r2} "
-                f"-d {self.db_path} "
-                f"-o {out_file} "
+                f"-i {shlex.quote(str(input_r1))} "
+                f"{_r2_flag('-I', input_r2)}"
+                f"-d {shlex.quote(str(self.db_path))} "
+                f"-o {shlex.quote(str(out_file))} "
                 f"{tflag} "
+                f"{mflag} "
                 f"{extra}"
             )
         cmd = self.default_cmd
         return (
             f"{cmd} "
-            f"-i {input_r1} "
-            f"-I {input_r2} "
-            f"-d {self.db_path} "
-            f"-o {out_file} "
+            f"-i {shlex.quote(str(input_r1))} "
+            f"{_r2_flag('-I', input_r2)}"
+            f"-d {shlex.quote(str(self.db_path))} "
+            f"-o {shlex.quote(str(out_file))} "
             f"-p {self.tool_name} "
             f"{tflag} "
+            f"{mflag} "
             f"{extra}"
         )
 
@@ -512,20 +701,20 @@ class ConstantTaxidAnnotator(CustomAnnotator):
     @property
     def default_cmd(self) -> str:
         script = Path(__file__).resolve().parent / "baselines" / "constant_taxid.py"
-        return f"{sys.executable} {script}"
+        return f"{shlex.quote(python_path())} {shlex.quote(str(script))}"
 
     def get_snakemake_shell_cmd(
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file = outputs[0]
         cmd = self.cmd
-        if not cmd or os.path.basename(str(cmd).split()[0]).split(".")[0].lower() in CONSTANT_TAXID_TOOL_NAMES:
+        if not cmd or os.path.basename(command_argv(cmd)[0]).split(".")[0].lower() in CONSTANT_TAXID_TOOL_NAMES:
             cmd = self.default_cmd
         extra = self.extra or ""
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-o {shlex.quote(str(out_file))} "
             f"--taxid {shlex.quote(self.taxid)} "
             f"{extra}"
@@ -538,7 +727,7 @@ class AssemblyAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.assembly_profiling"
+        return f"{shlex.quote(python_path())} -m samovar.assembly_profiling"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.assembly.out")]
@@ -555,7 +744,7 @@ class AssemblyAnnotator(BaseAnnotator):
         cmd = self.cmd or self.default_cmd
         # Prepare stores the bare name (`assembly_profiling`). That is not a
         # PATH binary; the implementation is this module.
-        bare = os.path.basename(str(cmd).split()[-1]) if str(cmd).strip() else ""
+        bare = os.path.basename(command_argv(cmd)[-1]) if str(cmd).strip() else ""
         if "samovar.assembly_profiling" not in str(cmd) and bare in {
             "assembly",
             "assembly_profiling",
@@ -564,7 +753,7 @@ class AssemblyAnnotator(BaseAnnotator):
         run = (
             f"{cmd} annotator "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-d {shlex.quote(str(self.db_path or ''))} "
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
@@ -580,6 +769,7 @@ class AssemblyAnnotator(BaseAnnotator):
 
 
 GC_TOOL_NAMES = {"gc", "gc_content", "gc-content", "gcfrac", "gc_fraction"}
+LENGTH_TOOL_NAMES = {"length", "read_length", "readlen", "read-length"}
 
 
 class GcAnnotator(BaseAnnotator):
@@ -587,7 +777,7 @@ class GcAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.gc"
+        return f"{shlex.quote(python_path())} -m samovar.gc"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.gc.out")]
@@ -598,13 +788,48 @@ class GcAnnotator(BaseAnnotator):
         out_file = outputs[0]
         extra = self.extra or ""
         cmd = self.cmd
-        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower().replace("-", "_") in GC_TOOL_NAMES:
             cmd = self.default_cmd
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"{_r2_flag('-I', input_r2)}"
+            f"-o {shlex.quote(str(out_file))} "
+            f"-t {int(self.threads)} "
+            f"{extra}"
+        )
+        return skip_empty_reads_cmd(input_r1, [out_file], run)
+
+    def parse_output(self, file_path: str) -> pd.DataFrame:
+        from samovar.parse_annotators import read_custom_raw
+
+        return read_custom_raw(file_path)
+
+
+class LengthAnnotator(BaseAnnotator):
+    """Per-read length Feature extractor (R1 + R2 bases)."""
+
+    @property
+    def default_cmd(self) -> str:
+        return f"{shlex.quote(python_path())} -m samovar.length"
+
+    def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.length.out")]
+
+    def get_snakemake_shell_cmd(
+        self, input_r1: str, input_r2: str, outputs: List[str]
+    ) -> str:
+        out_file = outputs[0]
+        extra = self.extra or ""
+        cmd = self.cmd
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
+        if not cmd or first.split(".")[0].lower().replace("-", "_") in LENGTH_TOOL_NAMES:
+            cmd = self.default_cmd
+        run = (
+            f"{cmd} "
+            f"-i {shlex.quote(str(input_r1))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
             f"{extra}"
@@ -625,7 +850,7 @@ class Kmer2Annotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.kmer2"
+        return f"{shlex.quote(python_path())} -m samovar.kmer2"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.kmer2.out")]
@@ -636,13 +861,13 @@ class Kmer2Annotator(BaseAnnotator):
         out_file = outputs[0]
         extra = self.extra or ""
         cmd = self.cmd
-        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower() in KMER2_TOOL_NAMES:
             cmd = self.default_cmd
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
             f"{extra}"
@@ -669,7 +894,7 @@ class KmerEncoderAnnotator(BaseAnnotator):
 
     @property
     def default_cmd(self) -> str:
-        return f"{sys.executable} -m samovar.kmer_encoder"
+        return f"{shlex.quote(python_path())} -m samovar.kmer_encoder"
 
     def get_expected_outputs(self, sample: str, output_dir: str) -> List[str]:
         return [os.path.join(output_dir, f"{sample}_{self.run_name}.kmer_encoder.out")]
@@ -680,14 +905,14 @@ class KmerEncoderAnnotator(BaseAnnotator):
         out_file = outputs[0]
         extra = self.extra or ""
         cmd = self.cmd
-        first = os.path.basename(str(cmd).split()[0]) if cmd else ""
+        first = os.path.basename(command_argv(cmd)[0]) if cmd else ""
         if not cmd or first.split(".")[0].lower().replace("-", "_") in KMER_ENCODER_TOOL_NAMES:
             cmd = self.default_cmd
         db = self.db_path or ""
         run = (
             f"{cmd} "
             f"-i {shlex.quote(str(input_r1))} "
-            f"-I {shlex.quote(str(input_r2 or ''))} "
+            f"{_r2_flag('-I', input_r2)}"
             f"-d {shlex.quote(str(db))} "
             f"-o {shlex.quote(str(out_file))} "
             f"-t {int(self.threads)} "
@@ -725,6 +950,10 @@ def get_annotator_instance(
         "gc-content": GcAnnotator,
         "gcfrac": GcAnnotator,
         "gc_fraction": GcAnnotator,
+        "length": LengthAnnotator,
+        "read_length": LengthAnnotator,
+        "readlen": LengthAnnotator,
+        "read-length": LengthAnnotator,
         "kmer2": Kmer2Annotator,
         "kmer_counter": Kmer2Annotator,
         "dinuc": Kmer2Annotator,

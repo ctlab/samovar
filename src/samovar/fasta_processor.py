@@ -7,6 +7,7 @@ from pathlib import Path
 import argparse
 
 from samovar.seqio import (
+    atomic_genome_output,
     fasta_handle,
     is_fasta_name,
     open_text,
@@ -66,8 +67,11 @@ def preprocess_fasta(
     mutation_rate: float,
     include_percent: float,
     inject_taxid: Optional[bool] = None,
+    taxid: Optional[str] = None,
 ):
     """Process FASTA file, apply mutations and split sequences."""
+    if taxid is not None and (not str(taxid).isdigit() or int(taxid) <= 0):
+        raise ValueError(f"Expected a positive numeric taxid, got {taxid!r}")
     sequences = read_fasta(input_file)
     input_filename = taxid_from_fasta_name(input_file) or Path(
         str(input_file).removesuffix(".gz")
@@ -80,41 +84,43 @@ def preprocess_fasta(
     if str(out_parent):
         out_parent.mkdir(parents=True, exist_ok=True)
 
-    with open_text(output_file, "wt") as f:
-        for i, (header, sequence) in enumerate(sequences):
-            # Calculate length of sequence to include
-            include_length = int(len(sequence) * include_percent / 100)
-            if include_length <= 0:
-                include_length = len(sequence) or 1
+    with atomic_genome_output(output_file) as pending:
+        with open_text(pending, "wt") as f:
+            for i, (header, sequence) in enumerate(sequences):
+                # Calculate length of sequence to include
+                include_length = int(len(sequence) * include_percent / 100)
+                if include_length <= 0:
+                    include_length = len(sequence) or 1
 
-            # Split sequence into parts
-            for j in range(0, len(sequence), include_length):
-                part = sequence[j:j + include_length]
-                if not part:  # Skip empty parts
-                    continue
+                # Split sequence into parts
+                for j in range(0, len(sequence), include_length):
+                    part = sequence[j:j + include_length]
+                    if not part:  # Skip empty parts
+                        continue
                     
-                # Apply mutations
-                mutated_part = apply_mutations(part, mutation_rate)
+                    # Apply mutations
+                    mutated_part = apply_mutations(part, mutation_rate)
                 
-                # Write to output file
-                if inject_taxid:
-                    taxid_token = input_filename
-                    try:
-                        from samovar.genome_index import numeric_taxid_for
+                    # Write to output file
+                    if inject_taxid:
+                        taxid_token = taxid or input_filename
+                        if taxid is None:
+                            try:
+                                from samovar.genome_index import numeric_taxid_for
 
-                        resolved = str(numeric_taxid_for(input_filename) or "").split(".")[0]
-                        if resolved.isdigit():
-                            taxid_token = resolved
-                    except Exception:
-                        pass
-                    new_header = (
-                        f">{input_filename}|taxid:{taxid_token}|{i+1}|{j//include_length + 1}"
-                    )
-                else:
-                    token = header.split()[0] if header else input_filename
-                    new_header = f">{token}"
-                f.write(f"{new_header}\n")
-                f.write(f"{mutated_part}\n")
+                                resolved = str(numeric_taxid_for(input_filename) or "").split(".")[0]
+                                if resolved.isdigit():
+                                    taxid_token = resolved
+                            except Exception:
+                                pass
+                        new_header = (
+                            f">{input_filename}|taxid:{taxid_token}|{i+1}|{j//include_length + 1}"
+                        )
+                    else:
+                        token = header.split()[0] if header else input_filename
+                        new_header = f">{token}"
+                    f.write(f"{new_header}\n")
+                    f.write(f"{mutated_part}\n")
 
 def process_fasta_directories(directories: List[str]) -> dict:
     """

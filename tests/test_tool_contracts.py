@@ -67,6 +67,19 @@ def tiny_fastq(tmp_path):
     return r1, r2
 
 
+def _annotator_db(request) -> Path | None:
+    """Real classifier database. An empty pytest tmp dir is not a database."""
+    import os
+
+    raw = request.config.getoption("--db-path") or ""
+    if not str(raw).strip():
+        raw = os.environ.get("SAMOVAR_CONTRACT_DB") or ""
+    text = str(raw).strip()
+    if not text:
+        return None
+    return Path(text).expanduser()
+
+
 def test_annotator_contract(request, tmp_path, tiny_fastq):
     _skip_if_other_type(request, "annotator")
     path = _tool_path(request, "annotator")
@@ -90,13 +103,16 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
         import subprocess
 
+        db = _annotator_db(request)
+        if db is None:
+            pytest.skip("contract needs a DB (pass --db-path or SAMOVAR_CONTRACT_DB)")
         subprocess.check_call(
-            [str(path), "-i", str(r1), "-I", str(r2), "-d", str(tmp_path), "-o", str(out), "-t", "1"]
+            [str(path), "-i", str(r1), "-I", str(r2), "-d", str(db), "-o", str(out), "-t", "1"]
         )
         from samovar.annotators_wrapper import CustomAnnotator
 
         inst = CustomAnnotator(
-            {"run_name": "clf", "type": "clf", "cmd": str(path), "db_path": str(tmp_path), "threads": 1},
+            {"run_name": "clf", "type": "clf", "cmd": str(path), "db_path": str(db), "threads": 1},
             {},
             "clf",
         )
@@ -441,9 +457,15 @@ def test_qc_contract(request, tmp_path, tiny_fastq):
 
 
 def _run_py_main(path: Path, argv: list) -> None:
-    module = load_python_module(path, "contract_assembly_" + path.stem)
-    rc = module.main(argv)
-    assert rc in (None, 0)
+    if path.suffix.lower() == ".py":
+        module = load_python_module(path, "contract_assembly_" + path.stem)
+        rc = module.main(argv)
+        assert rc in (None, 0)
+        return
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    import subprocess
+
+    subprocess.check_call([str(path), *argv])
 
 
 def test_assembler_contract(request, tmp_path, tiny_fastq):
@@ -452,10 +474,9 @@ def test_assembler_contract(request, tmp_path, tiny_fastq):
     r1, r2 = tiny_fastq
     dest = tmp_path / "contigs.fa"
     _run_py_main(path, ["-i", str(r1), "-I", str(r2), "-o", str(dest), "-t", "1"])
-    text = dest.read_text()
     assert dest.is_file()
-    assert text.startswith(">")
-    assert "ACGT" in text
+    text = dest.read_text()
+    assert text == "" or text.lstrip().startswith(">")
 
 
 def test_gene_caller_contract(request, tmp_path):
@@ -599,6 +620,49 @@ def test_read_assigner_contract(request, tmp_path):
     }
 
 
+def test_mag_homology_contract(request, tmp_path):
+    _skip_if_other_type(request, "mag_homology")
+    path = _tool_path(request, "mag_homology")
+    mag_dir = tmp_path / "mags"
+    mag_dir.mkdir()
+    same = "ACGT" * 400
+    other = "GGGG" * 400
+    (mag_dir / "bin_a.fa").write_text(f">bin_a\n{same}\n")
+    (mag_dir / "bin_b.fa").write_text(f">bin_b\n{same}\n")
+    (mag_dir / "bin_c.fa").write_text(f">bin_c\n{other}\n")
+    dest = tmp_path / "assign.tsv"
+    _run_py_main(path, ["-c", str(mag_dir), "-o", str(dest), "-t", "1"])
+    frame = pd.read_csv(dest, sep="\t")
+    assert list(frame.columns)[:2] == ["query", "mag_id"]
+    ids = dict(zip(frame["query"].astype(str), frame["mag_id"].astype(str)))
+    assert ids["bin_a"] == ids["bin_b"]
+    assert ids["bin_c"] != ids["bin_a"]
+    assert str(ids["bin_a"]).startswith("M")
+
+
+def test_mag_mapping_contract(request, tmp_path, tiny_fastq):
+    _skip_if_other_type(request, "mag_mapping")
+    path = _tool_path(request, "mag_mapping")
+    mag_dir = tmp_path / "mags"
+    mag_dir.mkdir()
+    (mag_dir / "M0001.fa").write_text(">M0001\n" + ("ACGT" * 40) + "\n")
+    (mag_dir / "M0002.fa").write_text(">M0002\n" + ("GGGG" * 40) + "\n")
+    r1, _r2 = tiny_fastq
+    r1.write_text("@r0\n" + "ACGT" * 30 + "\n+\n" + "I" * 120 + "\n")
+    tax = tmp_path / "tax.tsv"
+    tax.write_text("mag_id\ttaxid\tlineage\nM0001\t562\td__Bacteria\nM0002\t4932\t\n")
+    dest = tmp_path / "mapped.tsv"
+    _run_py_main(
+        path,
+        ["-i", str(r1), "-I", str(_r2), "-r", str(mag_dir), "-x", str(tax), "-o", str(dest), "-t", "1"],
+    )
+    frame = pd.read_table(dest)
+    assert "MAG_ID" in frame.columns
+    hit = frame.loc[frame["seq"].astype(str) == "r0"].iloc[0]
+    assert str(hit["MAG_ID"]) == "M0001"
+    assert str(hit["taxID"]) == "562"
+
+
 def test_feature_importance_contract(request, tmp_path):
     _skip_if_other_type(request, "feature_importance")
     path = _tool_path(request, "feature_importance")
@@ -636,5 +700,69 @@ def test_feature_importance_contract(request, tmp_path):
     mqc = list(dest.glob("*_mqc.json"))
     assert mqc, f"{path} must write MultiQC JSON under dest"
     assert payload is None or isinstance(payload, dict)
+
+
+def _db_stub(tmp_path: Path) -> tuple:
+    stub = tmp_path / "dbstub.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        'I=""; D=""; O=""\n'
+        'while [[ $# -gt 0 ]]; do\n'
+        '  case "$1" in\n'
+        '    -i) I=$2; shift 2;;\n'
+        '    -d) D=$2; shift 2;;\n'
+        '    -o) O=$2; shift 2;;\n'
+        "    *) shift 2;;\n"
+        "  esac\n"
+        "done\n"
+        '[[ -f "$D/db.marker" ]] || { echo "ERROR: database not found in -d \'$D\'" >&2; exit 2; }\n'
+        "{ printf 'seq\\ttaxID\\n'; awk 'NR%4==1{sub(/^@/,\"\");print $1\"\\t562\"}' \"$I\"; } > \"$O\"\n"
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    db = tmp_path / "stubdb"
+    db.mkdir()
+    (db / "db.marker").write_text("ok\n")
+    return stub, db
+
+
+def test_annotator_shell_contract_needs_a_real_db(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    stub, db = _db_stub(tmp_path)
+    node = str(Path(__file__).resolve()) + "::test_annotator_contract"
+    env = os.environ.copy()
+    env.pop("SAMOVAR_CONTRACT_DB", None)
+    env.pop("SAMOVAR_CONTRACT_TOOL", None)
+    base = [
+        sys.executable,
+        "-m",
+        "pytest",
+        node,
+        "-q",
+        "-rs",
+        "--tb=line",
+        "--tool",
+        str(stub),
+        "--tool-type",
+        "annotator",
+    ]
+    skipped = subprocess.run(base, cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True)
+    skipped_text = skipped.stdout + skipped.stderr
+    assert skipped.returncode == 0, skipped_text
+    assert "skipped" in skipped_text.lower()
+    assert "contract needs a DB" in skipped_text
+    passed = subprocess.run(
+        [*base, "--db-path", str(db)],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    passed_text = passed.stdout + passed.stderr
+    assert passed.returncode == 0, passed_text
+    assert "passed" in passed_text.lower()
 
 

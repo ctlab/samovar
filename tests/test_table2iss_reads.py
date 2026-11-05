@@ -14,7 +14,6 @@ from samovar.table2iss import (
     write_readcount_file,
 )
 
-pytestmark = pytest.mark.optional
 
 
 def create_test_fasta(output_dir, name="test"):
@@ -32,9 +31,10 @@ def _count_fastq_records(path):
     with open(path) as handle:
         return sum(1 for line in handle if line.startswith("@"))
 
-def test_generate_reads_genome():
+@pytest.mark.optional
+def test_generate_reads_genome(tmp_path):
     """Test generating reads from a single genome."""
-    output_dir = "tests_outs/test_generate_reads_genome"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
 
     fasta_path = create_test_fasta(output_dir)
@@ -52,9 +52,10 @@ def test_generate_reads_genome():
     assert os.path.exists(f"{output_path}_R1.fastq")
     assert os.path.exists(f"{output_path}_R2.fastq")
 
-def test_generate_reads_metagenome():
+@pytest.mark.optional
+def test_generate_reads_metagenome(tmp_path):
     """Test generating a mixed metagenome from multiple genomes in one ISS call."""
-    output_dir = "tests_outs/test_generate_reads_metagenome"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
 
     fasta_paths = [create_test_fasta(output_dir, f"g{i}") for i in range(3)]
@@ -77,9 +78,10 @@ def test_generate_reads_metagenome():
     assert _count_fastq_records(r1) > 0
     assert _count_fastq_records(r1) == _count_fastq_records(r2)
 
-def test_regenerate_metagenome():
+@pytest.mark.optional
+def test_regenerate_metagenome(tmp_path):
     """Test regenerating metagenome reads."""
-    output_dir = "tests_outs/test_regenerate_metagenome"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
 
     fasta_paths = [create_test_fasta(output_dir, f"g{i}") for i in range(3)]

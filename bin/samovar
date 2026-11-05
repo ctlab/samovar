@@ -10,8 +10,8 @@ _has_run_dir() {
     local a
     for a in "$@"; do
         case "$a" in
-            --output_dir|--output-dir|--outdir|--directory) return 0 ;;
-            --output_dir=*|--output-dir=*|--outdir=*|--directory=*) return 0 ;;
+            --output_dir|--output-dir|--outdir|--directory|-o|-d) return 0 ;;
+            --output_dir=*|--output-dir=*|--outdir=*|--directory=*|-o=*|-d=*) return 0 ;;
         esac
     done
     return 1
@@ -23,7 +23,7 @@ _find_cfg() {
         return
     fi
     if [ -f "$SCRIPT_DIR/../build/config_path" ]; then
-        _ptr="$(tr -d '[:space:]' < "$SCRIPT_DIR/../build/config_path")"
+        _ptr="$(cat "$SCRIPT_DIR/../build/config_path")"
         if [ -n "$_ptr" ] && [ -f "$_ptr" ]; then
             echo "$_ptr"
             return
@@ -40,12 +40,36 @@ _find_cfg() {
     return 1
 }
 
+_samovar_version() {
+    local root pyproject ver
+    root="${SAMOVAR_ROOT:-$SCRIPT_DIR/..}"
+    pyproject="$root/pyproject.toml"
+    ver=""
+    if [ -f "$pyproject" ]; then
+        ver="$(
+            grep -E '^version[[:space:]]*=' "$pyproject" 2>/dev/null \
+                | head -n1 \
+                | sed -E 's/^version[[:space:]]*=[[:space:]]*["'\'']([^"'\'']+)["'\''].*/\1/'
+        )"
+    fi
+    if [ -z "$ver" ] && [ -x "${PYTHON_PATH:-}" ]; then
+        ver="$(
+            PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" \
+                "$PYTHON_PATH" -c 'from samovar.version import get_version; print(get_version())' 2>/dev/null || true
+        )"
+    fi
+    printf '%s\n' "${ver:-unknown}"
+}
+
 show_usage() {
+    echo "SAMOVAR $(_samovar_version)"
+    echo ""
     echo "Usage: samovar [command] [options]"
+    echo "       samovar -h | --help | help"
     echo ""
     echo "Commands:"
     echo "  prepare     Generate main pipeline configuration (alias: preprocess)"
-    echo "  build       Build Kaiju or Kraken2 database from config (alias: build_database)"
+    echo "  build       Build Kaiju, Kraken2, KrakenUniq, or Centrifuge database from config (alias: build_database)"
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "              Optional --startpoint / --endpoint slice the run (same names as prepare)"
     echo "  checkup     Verify outdir has inputs for --start-point (does not run the pipeline)"
@@ -58,16 +82,17 @@ show_usage() {
     echo "  reproduce   Reinstall locked tools if needed and re-run generate/prepare/exec"
     echo "  genome      Download FASTA by accession or taxid (genome download)"
     echo "  reindex     Move processed genomes into samovar_database and update the install config"
+    echo "  update      Update the installed checkout (its current branch) and reinstall"
     echo "  convert     Convert Annotation (abundance, kraken2, CAMI, or a custom converter)"
     echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
     echo "  merge       Combine two or more run directories (modes: initial, regenerated)"
     echo "  methods     Write methods.md from a prepared run (alias: samovar-method)"
-    echo "  help        Show this help message"
+    echo "  help        Show this help message (also: -h, --help)"
     echo ""
     echo "Examples:"
     echo "  samovar generate --genome_dir [...] --directory [...] --host_genome [...]"
     echo "  samovar generate --simulator camisim --camisim-mode table --outdir samovar/camisim-table ..."
-    echo "  samovar prepare --input_dir [...] --directory [...]"
+    echo "  samovar prepare --input_dir [...] --directory [...] --cores 16 --mem 16G"
     echo "  samovar prepare --to-mpa --to-cami --directory [...]"
     echo "  samovar checkup --start-point abundance_tables --outdir [...]"
     echo "  samovar prepare --startpoint abundance_tables --endpoint score_regenerated_tables --directory [...]"
@@ -93,19 +118,34 @@ show_usage() {
     echo "  samovar convert -i initial_annotations -o reports --to kraken2"
     echo "  samovar convert -i initial_annotations -o profiles --to cami --taxonomy gtdb"
     echo "  samovar convert -i table.csv --from abundance --to annotation -o long.csv"
-    echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_out"
+    echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_out --cores 8 --mem 16G"
     echo "  samovar apply --input_dir new_fastq --pipeline samovar_out --output_dir apply_full --full"
     echo "  samovar merge --mode initial --output_dir merged_init run_a run_b"
     echo "  samovar merge --mode regenerated --output_dir merged_regen run_a run_b"
     echo "  samovar methods --output_dir RUN"
+    echo "  samovar update"
+    echo "  samovar update --auto"
+    echo "  samovar update --branch main"
     echo "  samovar build --type kaiju --config_path [...] --db_path [...] --index phage_test"
 }
+
+case "${1:-}" in --version|-V|version) echo "SAMOVAR $(SAMOVAR_ROOT="$SCRIPT_DIR/.." _samovar_version)"; exit 0 ;; esac
+if [ "${1:-help}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    SAMOVAR_ROOT="$SCRIPT_DIR/.." show_usage
+    exit 0
+fi
 
 CFG=""
 if CFG="$(_find_cfg)"; then
     :
 else
-    if [ "${1:-}" = "help" ] || [ -z "${1:-}" ]; then
+    if [ "${1:-}" = "update" ]; then
+        ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+        export SAMOVAR_ROOT="$ROOT"
+        shift
+        exec "$SCRIPT_DIR/samovar_update" "$@"
+    fi
+    if [ "${1:-}" = "help" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ -z "${1:-}" ]; then
         ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
         export SAMOVAR_ROOT="$ROOT"
         show_usage
@@ -116,43 +156,37 @@ else
     exit 1
 fi
 
-ROOT="${SAMOVAR_ROOT:-}"
-if [ -z "$ROOT" ] && command -v python3 >/dev/null 2>&1; then
-    ROOT="$(
-        SAMOVAR_CFG="$CFG" python3 -c 'import json,os; print(json.load(open(os.environ["SAMOVAR_CFG"])).get("root","") or "")' 2>/dev/null || true
-    )"
+# A PATH Python may belong to a classifier env. The OS interpreter only reads
+# the JSON schema; it never imports SAMOVAR or runs application commands.
+BOOTSTRAP=""
+for candidate in /usr/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$candidate" ]; then BOOTSTRAP="$candidate"; break; fi
+done
+_CALLER_PATH="$PATH"
+if [ -f "$(dirname "$CFG")/env" ]; then
+    . "$(dirname "$CFG")/env"
 fi
-if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
-    ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Older install env files prepend every classifier env; keep the caller's PATH.
+export PATH="$_CALLER_PATH"
+unset _CALLER_PATH
+if [ -z "$BOOTSTRAP" ] && [ -x "${PYTHON_PATH:-}" ]; then
+    BOOTSTRAP="$PYTHON_PATH"
 fi
-export SAMOVAR_ROOT="$ROOT"
-export PATH="$SCRIPT_DIR:$ROOT/bin:$PATH"
+if [ -z "$BOOTSTRAP" ]; then
+    echo "Cannot read the SAMOVAR config: no bootstrap interpreter. Run install.sh." >&2
+    exit 1
+fi
+export SAMOVAR_CONFIG="$CFG"
+runtime_exports="$("$BOOTSTRAP" "$SCRIPT_DIR/../src/samovar/main_config.py" "$CFG" "$SCRIPT_DIR/..")"
+eval "$runtime_exports"
+ROOT="$SAMOVAR_ROOT"
+PYTHON="$PYTHON_PATH"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
-if [ -f "$(dirname "$CFG")/env" ]; then
-    # shellcheck disable=SC1090
-    . "$(dirname "$CFG")/env"
-elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
-    # shellcheck disable=SC1090
-    . "$XDG_CONFIG_HOME/samovar/env"
-fi
-# env files often export SAMOVAR_CONFIG to the XDG install; the path
-# _find_cfg already chose (including an explicit override) must win.
-export SAMOVAR_CONFIG="$CFG"
-
-PYTHON="${PYTHON_PATH:-}"
-if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
-    PYTHON="$(
-        SAMOVAR_CFG="$CFG" python3 -c 'import json,os; print(json.load(open(os.environ["SAMOVAR_CFG"])).get("python_path","") or "")' 2>/dev/null || true
-    )"
-fi
-if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
-    PYTHON="$(command -v python3 || command -v python || true)"
-fi
-PYTHON="${PYTHON:-python3}"
-export PYTHON_PATH="$PYTHON"
-
 case "${1:-}" in
+    "_runtime-env")
+        "$PYTHON" -c 'from samovar.paths import shell_runtime_exports; print(shell_runtime_exports())'
+        ;;
     "generate")
         shift
         "$PYTHON" "$SCRIPT_DIR/samovar_generate" "$@"
@@ -187,11 +221,11 @@ case "${1:-}" in
         EXTRA=()
         while [[ $# -gt 0 ]]; do
             case $1 in
-                --output_dir|--output-dir|--outdir|--directory)
+                --output_dir|--output-dir|--outdir|--directory|-o|-d)
                     OUT="$2"
                     shift 2
                     ;;
-                --output_dir=*|--output-dir=*|--outdir=*|--directory=*)
+                --output_dir=*|--output-dir=*|--outdir=*|--directory=*|-o=*|-d=*)
                     OUT="${1#*=}"
                     shift
                     ;;
@@ -294,7 +328,11 @@ case "${1:-}" in
         shift
         "$PYTHON" "$SCRIPT_DIR/samovar_reindex" "$@"
         ;;
-    "help"|"")
+    "update")
+        shift
+        exec "$SCRIPT_DIR/samovar_update" "$@"
+        ;;
+    "help"|"-h"|"--help"|"")
         show_usage
         ;;
     *)

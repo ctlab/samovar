@@ -1,4 +1,8 @@
+import json
+import os
 from pathlib import Path
+
+import pytest
 
 from samovar.paths import (
     PACKAGE_VERSION,
@@ -14,6 +18,7 @@ from samovar.paths import (
     resolve_executable,
     user_config_dir,
     user_config_path,
+    update_config,
     workflow_dir,
     write_config,
     write_install_config_pointer,
@@ -59,20 +64,132 @@ def test_samovar_config_env_overrides_pointer(tmp_path, monkeypatch):
     assert load_config().get("python_path") == "/from/env"
 
 
-def test_write_config_records_pointer(tmp_path, monkeypatch):
+def test_samovar_config_override_keeps_user_pointer(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
-    dest = tmp_path / "etc" / "config.json"
-    monkeypatch.setenv("SAMOVAR_CONFIG", str(dest))
+    user = tmp_path / "user" / "config.json"
+    user.parent.mkdir()
+    user.write_text(
+        json.dumps({"root": str(tmp_path), "compilers": {"python": "/usr/bin/python3"}})
+        + "\n"
+    )
+    write_install_config_pointer(user, root=tmp_path)
+    pointer = tmp_path / "build" / "config_path"
+    before_pointer = pointer.read_text()
+    before_user = user.read_text()
+    override = tmp_path / "x" / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(override))
+    write_config({})
+    assert pointer.read_text() == before_pointer
+    assert user.read_text() == before_user
+    assert override.is_file()
+    assert not list(override.parent.glob(".config.json.*.tmp"))
+    assert not (override.parent / ".config.json.checkpoint").is_file()
+
+
+def test_write_config_appends_to_existing_user_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_CONFIG", raising=False)
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "root": str(tmp_path),
+                "compilers": {"python": "/usr/bin/python3"},
+                "tools": {
+                    "keep:1": {
+                        "type": "annotator",
+                        "exec": {"env": "", "parser": "bash", "path": "/bin/true"},
+                    }
+                },
+            }
+        )
+        + "\n"
+    )
+    write_install_config_pointer(cfg, root=tmp_path)
     write_config(
         {
-            "version": get_version(),
-            "root": str(tmp_path),
-            "compilers": {"python": "/usr/bin/python3"},
+            "tools": {
+                "added": {
+                    "type": "annotator",
+                    "exec": {"env": "", "parser": "bash", "path": "/bin/true"},
+                }
+            }
         }
     )
-    assert dest.is_file()
-    assert (tmp_path / "build" / "config_path").read_text().strip() == str(dest.resolve())
-    assert (tmp_path / "build" / "config.json").is_file()
+    data = json.loads(cfg.read_text())
+    assert data["compilers"]["python"] == "/usr/bin/python3"
+    names = set(data["tools"])
+    assert any(name.startswith("keep") for name in names)
+    assert any(name.startswith("added") for name in names)
+    assert (tmp_path / "build" / "config_path").read_text().strip() == str(cfg.resolve())
+    assert not (cfg.parent / ".config.json.checkpoint").is_file()
+    assert not list(cfg.parent.glob(".config.json.*.tmp"))
+
+
+def test_parallel_write_config_appends_every_tool(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.delenv("SAMOVAR_CONFIG", raising=False)
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "root": str(tmp_path),
+                "compilers": {"python": "/usr/bin/python3"},
+                "tools": {},
+            }
+        )
+        + "\n"
+    )
+    write_install_config_pointer(cfg, root=tmp_path)
+
+    def one(index: int) -> None:
+        write_config(
+            {
+                "tools": {
+                    f"race_{index}": {
+                        "type": "annotator",
+                        "exec": {"env": "", "parser": "bash", "path": "/bin/true"},
+                    }
+                }
+            }
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(one, range(8)))
+    data = json.loads(cfg.read_text())
+    assert data["compilers"]["python"] == "/usr/bin/python3"
+    kept = [name for name in data["tools"] if str(name).startswith("race_")]
+    assert len(kept) == 8
+    assert (tmp_path / "build" / "config_path").read_text().strip() == str(cfg.resolve())
+
+
+def test_parallel_update_config_keeps_every_tool(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+
+    def one(index: int) -> None:
+        update_config(
+            {
+                "tools": {
+                    f"race_{index}": {
+                        "type": "annotator",
+                        "exec": {"path": "/bin/true", "parser": "bash"},
+                    }
+                }
+            },
+            also_repo_build=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(one, range(18)))
+    tools = json.loads(cfg.read_text())["tools"]
+    kept = [name for name in tools if str(name).startswith("race_")]
+    assert len(kept) == 18
 
 
 def test_discover_opal_from_config(tmp_path, monkeypatch):
@@ -120,6 +237,17 @@ def test_portable_annotator_cmd_warns_when_missing(capsys, monkeypatch):
     assert "Warning:" in err
     assert "definitely_not_a_real_annotator_xyz" in err
     assert "not on PATH" in err
+
+
+def test_portable_annotator_cmd_silent_for_in_tree_module(capsys, monkeypatch):
+    from samovar.config import _portable_annotator_cmd
+
+    monkeypatch.setattr("samovar.paths.load_config", lambda: {})
+    monkeypatch.setattr("samovar.config.shutil.which", lambda name: None)
+    out = _portable_annotator_cmd("assembly_profiling")
+    err = capsys.readouterr().err
+    assert "Warning:" not in err
+    assert " -m samovar.assembly_profiling" in out
 
 
 def test_portable_annotator_cmd_silent_when_absolute_exists(tmp_path, capsys):
@@ -238,6 +366,26 @@ def test_resolve_executable_uses_tool_envs(tmp_path, monkeypatch):
     assert resolve_executable("kaiju", tool_key="kaiju") == str(exe.resolve())
 
 
+def test_resolve_kaiju_multi_beside_registered_kaiju(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    kaiju = bindir / "kaiju"
+    multi = bindir / "kaiju-multi"
+    for path in (kaiju, multi):
+        path.write_text("#!/bin/sh\n")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    cfg = {
+        "tools": {
+            "kaiju": {
+                "exec": {"env": "conda", "parser": "conda", "path": str(kaiju)},
+                "type": "annotator",
+            }
+        }
+    }
+    assert resolve_executable("kaiju-multi", cfg=cfg) == str(multi.resolve())
+
+
 def test_cli_help_from_other_directory(tmp_path):
     import subprocess
 
@@ -312,6 +460,41 @@ def test_format_install_status_without_nextflow(monkeypatch):
     assert nxt["path"] == ""
 
 
+def test_status_sees_centrifuge_and_metax_from_config(tmp_path, monkeypatch):
+    """Off-PATH imports must count. Status used to call shutil.which only."""
+    import shutil as _shutil
+
+    from samovar.paths import install_status_rows
+
+    centrifuge = tmp_path / "centrifuge"
+    metax = tmp_path / "metax"
+    for exe in (centrifuge, metax):
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+    monkeypatch.setattr(
+        "samovar.paths.load_config",
+        lambda: {
+            "tools": {
+                "centrifuge": ["conda", "", str(centrifuge), "annotator"],
+                "metax": ["conda", "metax", str(metax), "annotator"],
+            }
+        },
+    )
+    real_which = _shutil.which
+
+    def fake_which(cmd, path=None):
+        if cmd in {"centrifuge", "metax"}:
+            return None
+        return real_which(cmd, path=path)
+
+    monkeypatch.setattr("samovar.paths.shutil.which", fake_which)
+    rows = {row["name"]: row for row in install_status_rows()}
+    assert rows["centrifuge"]["found"] is True
+    assert rows["centrifuge"]["path"] == str(centrifuge.resolve())
+    assert rows["metax"]["found"] is True
+    assert rows["metax"]["path"] == str(metax.resolve())
+
+
 def test_iss_executable_uses_config(tmp_path, monkeypatch):
     exe = tmp_path / "iss"
     exe.write_text("#!/bin/sh\n")
@@ -342,6 +525,8 @@ def test_output_dir_cli_aliases_and_shell_override(tmp_path):
     assert parser.parse_args(["--directory", "/run/a"]).output_dir == "/run/a"
     assert parser.parse_args(["--outdir", "/run/b"]).output_dir == "/run/b"
     assert parser.parse_args(["--output-dir", "/run/c"]).output_dir == "/run/c"
+    assert parser.parse_args(["-o", "/run/d"]).output_dir == "/run/d"
+    assert parser.parse_args(["-d", "/run/e"]).output_dir == "/run/e"
 
     script = tmp_path / "samovar.sh"
     script.write_text(
@@ -360,3 +545,36 @@ def test_output_dir_cli_aliases_and_shell_override(tmp_path):
         check=True,
     )
     assert result.stdout.strip() == str(dest)
+    short = subprocess.run(
+        ["bash", str(script), "-d", str(dest)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert short.stdout.strip() == str(dest)
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_shell_install_env_preserves_config_selection(tmp_path, explicit):
+    import subprocess
+    from samovar.paths import shell_source_install_env_snippet
+
+    root = tmp_path / "repo"
+    (root / "build").mkdir(parents=True)
+    default = tmp_path / "default" / "config.json"
+    override = tmp_path / "override" / "config.json"
+    for config, marker in ((default, "default"), (override, "override")):
+        config.parent.mkdir()
+        config.write_text("{}")
+        (config.parent / "env").write_text(
+            f'export SELECTED_TEST_ENV={marker}\nexport SAMOVAR_CONFIG="{default}"\n'
+        )
+    (root / "build" / "config_path").write_text(str(default))
+    env = os.environ.copy()
+    env["SAMOVAR_ROOT"] = str(root)
+    env.pop("SAMOVAR_CONFIG", None)
+    if explicit:
+        env["SAMOVAR_CONFIG"] = str(override)
+    script = shell_source_install_env_snippet() + '\nprintf "%s\\n%s\\n" "$SAMOVAR_CONFIG" "$SELECTED_TEST_ENV"\n'
+    output = subprocess.check_output(["bash", "-eu", "-c", script], env=env, text=True)
+    assert output.splitlines() == ([str(override), "override"] if explicit else [str(default), "default"])

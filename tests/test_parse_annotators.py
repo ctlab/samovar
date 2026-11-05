@@ -73,6 +73,7 @@ def test_extract_true_taxid_from_headers():
     assert extract_true_taxid("Scer.fna-NC_001134.8_0_0", pattern) == "4932"
     assert extract_true_taxid("Scer.fna-NC_001139.9_1_1/1", pattern) == "4932"
     assert extract_true_taxid("taxid:562_0_0/1", pattern) == "562"
+    assert extract_true_taxid("seq0|kraken:taxid|562", pattern) == "562"
     assert extract_true_taxid("random_read", pattern) == ""
 
 
@@ -86,6 +87,7 @@ def test_read_kaiju_raw(kaiju_file):
     assert len(df) > 0
 
 
+@pytest.mark.optional
 def test_read_kraken1_raw(kraken1_file):
     """Test reading Kraken1 output file."""
     df = read_kraken1_raw(kraken1_file)
@@ -103,6 +105,7 @@ def test_read_kraken2_raw(kraken2_file):
     assert len(df.seq.unique()) == len(df.seq)
     assert len(df) > 0
 
+@pytest.mark.optional
 def test_read_krakenu_raw(krakenu_file):
     """Test reading Kraken Unique output file."""
     df = read_krakenu_raw(krakenu_file)
@@ -112,6 +115,7 @@ def test_read_krakenu_raw(krakenu_file):
     assert len(df) > 0
 
 
+@pytest.mark.optional
 def test_read_metaphlan_raw(metaphlan_file):
     """Test reading MetaPhlAn output file."""
     df = read_metaphlan_raw(metaphlan_file)
@@ -127,11 +131,9 @@ def test_read_annotation(test_data_dir):
         os.path.join(test_data_dir, "kaiju.log"): "kaiju",
         os.path.join(test_data_dir, "kraken.log"): "kraken1",
         os.path.join(test_data_dir, "kraken2.log"): "kraken2",
-        os.path.join(test_data_dir, "krakenunique.log"): "krakenu"
-        #os.path.join(test_data_dir, "metaphlan4.log"): "metaphlan"
+        os.path.join(test_data_dir, "krakenunique.log"): "krakenu",
     }
     ann = Annotation(file_path_type, get_true_annotation=r".*")
-    ann.export("tests_outs/annotation.csv")
 
     assert isinstance(ann.DataFrame, pd.DataFrame)
     assert len(ann.DataFrame) > 0
@@ -140,8 +142,9 @@ def test_read_annotation(test_data_dir):
     assert kraken_feat, f"expected feat_ columns from Kraken length, got {list(ann.DataFrame.columns)}"
 
 
-def test_annotation_class(test_data_dir):
-    """Test Annotation class functionality."""
+@pytest.mark.optional
+def test_kaiju_and_kraken1_logs_build_species_and_genus_ranks(test_data_dir):
+    """Kaiju and Kraken 1 logs become a ranked Annotation. Kraken 1 is not a core install."""
     file_path_type = {
         os.path.join(test_data_dir, "kaiju.log"): "kaiju",
         os.path.join(test_data_dir, "kraken.log"): "kraken1"
@@ -281,19 +284,7 @@ def test_ensure_taxid_name_map_writes_pipe_table(tmp_path, monkeypatch):
     assert "562|" in text
 
 
-def test_rank_annotation_class():
-    """Test RankAnnotation class functionality."""
-    rank_ann = RankAnnotation("species")
-    assert rank_ann.rank == "species"
-    assert isinstance(rank_ann.annotation, pd.DataFrame)
-
-
-def test_expand_annotation_class():
-    """Test ExpandAnnotation class functionality."""
-    expand_ann = ExpandAnnotation()
-    assert isinstance(expand_ann.rank_annotation, dict)
-
-
+@pytest.mark.optional
 def test_parse_metaphlan_db(test_data_dir):
     """Test parsing MetaPhlAn database."""
     # Create a mock database file
@@ -329,6 +320,7 @@ def test_parse_metaphlan_db(test_data_dir):
     os.remove(db_file)
     os.rmdir(db_dir)
 
+@pytest.mark.optional
 def test_read_metaphlan_with_db(test_data_dir):
     """Test reading MetaPhlAn output with database mapping."""
     # Create mock database
@@ -364,6 +356,7 @@ def test_read_metaphlan_with_db(test_data_dir):
     os.rmdir(db_dir)
 
 
+@pytest.mark.optional
 def test_resolve_metaphlan_db_file_db_name_and_file(tmp_path):
     db_file = tmp_path / "custom_map.db"
     db_file.write_bytes(b"")

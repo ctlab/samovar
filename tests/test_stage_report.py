@@ -207,6 +207,7 @@ def test_multiqc_render_is_adequate(tmp_path):
     assert html_path.stat().st_size > 50_000
 
 
+@pytest.mark.optional
 def test_bundle_hides_hybrid_platform_sections(tmp_path):
     plots = tmp_path / "initial_annotations_plots"
     plots.mkdir()

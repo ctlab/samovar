@@ -53,11 +53,97 @@ def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+_TAX_TOOL = re.compile(r"taxid[_./]*([a-z][a-z0-9]*)", re.I)
+_NOT_A_TOOL = {"samovar", "true", "length", "sample", "read", "feat"}
+
+
+def comparable_contract_names(columns) -> list:
+    """Fold ``taxID_<tool>_<n>`` and ``feat_*_<n>`` to the names training uses.
+
+    ``taxID_kaiju_0`` and ``taxid_kaiju`` are one column. Two different tools
+    stay two columns.
+    """
+    out = []
+    seen = set()
+    for col in columns:
+        name = str(col)
+        low = name.lower()
+        if low.startswith("feat_"):
+            key = re.sub(r"_[0-9]+(?=(_|$))", "", name, count=1)
+        elif low.startswith("taxid"):
+            match = _TAX_TOOL.match(low)
+            if not match or match.group(1) in _NOT_A_TOOL:
+                continue
+            key = "taxid_" + match.group(1)
+        else:
+            continue
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def align_contract_columns(*frames: pd.DataFrame) -> list:
+    """Give every frame the same tax and feature columns.
+
+    A tool that classified only on one side (or returned taxid 0) still occupies
+    its column on the other side, filled with 0 for tax IDs and blank for features.
+    """
+    import warnings
+
+    ordered = []
+    seen = set()
+    for frame in frames:
+        if not isinstance(frame, pd.DataFrame):
+            continue
+        for name in comparable_contract_names(frame.columns):
+            if name not in seen:
+                seen.add(name)
+                ordered.append(name)
+    aligned = []
+    for frame in frames:
+        if not isinstance(frame, pd.DataFrame):
+            aligned.append(frame)
+            continue
+        have = set(comparable_contract_names(frame.columns))
+        missing = [name for name in ordered if name not in have]
+        if not missing:
+            aligned.append(frame)
+            continue
+        work = frame.copy()
+        for name in missing:
+            work[name] = 0 if name.lower().startswith("taxid_") else ""
+        warnings.warn(
+            "Combined annotation columns differ ("
+            + ", ".join(missing)
+            + "). Missing columns are filled so the ML feature set matches.",
+            UserWarning,
+            stacklevel=2,
+        )
+        aligned.append(work)
+    return aligned
+
+
+def _read_annotation_csv(path: Path) -> Optional[pd.DataFrame]:
+    try:
+        tmp = pd.read_csv(path)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError):
+        return None
+    if tmp.empty:
+        return None
+    tmp.columns = _normalize_colnames(tmp.columns)
+    return _coalesce_duplicate_columns(tmp)
+
+
 def read_annotation_dir(
     data_dir: Union[str, Path],
     sample_name_position: int = 0,
 ) -> pd.DataFrame:
-    """Load per-sample annotation CSVs, skipping combined tables."""
+    """Load per-sample annotation CSVs.
+
+    When those files are gone, read ``combined_annotation_table*.csv`` and keep
+    its ``sample`` column.
+    """
     data_dir = Path(data_dir)
     frames = []
     for path in sorted(data_dir.glob("*.csv")):
@@ -65,16 +151,19 @@ def read_annotation_dir(
             continue
         parts = path.name.split(".")
         sample_name = "_".join(parts[: sample_name_position + 1])
-        try:
-            tmp = pd.read_csv(path)
-        except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError):
+        tmp = _read_annotation_csv(path)
+        if tmp is None:
             continue
-        if tmp.empty:
-            continue
-        tmp.columns = _normalize_colnames(tmp.columns)
-        tmp = _coalesce_duplicate_columns(tmp)
         tmp["sample"] = sample_name
         frames.append(tmp)
+    if not frames:
+        for path in sorted(data_dir.glob("combined_annotation_table*.csv")):
+            tmp = _read_annotation_csv(path)
+            if tmp is None:
+                continue
+            if "sample" not in tmp.columns:
+                tmp["sample"] = path.stem
+            frames.append(tmp)
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True, sort=False)

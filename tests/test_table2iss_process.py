@@ -1,11 +1,20 @@
 import os
-import shutil
 import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from samovar.table2iss import process_abundance_table
+from samovar.table2iss import _iss_worker_count, process_abundance_table
 import pytest
+
+
+@pytest.mark.mandatory
+def test_iss_workers_match_chunks(tmp_path):
+    # 38 reads → 19 pairs. 24 CPUs would leave empty temp files.
+    assert _iss_worker_count(24, 38) == 19
+    assert _iss_worker_count(12, 38) == 10
+    assert _iss_worker_count(4, 1000) == 4
+    assert _iss_worker_count(8, 0) == 1
+    assert _iss_worker_count(8, 2) == 1
 
 def create_test_fasta(output_dir, taxid):
     """Create a test FASTA file for a specific taxid."""
@@ -15,10 +24,11 @@ def create_test_fasta(output_dir, taxid):
     SeqIO.write(record, genome_path, "fasta")
     return genome_path
 
-def test_process_abundance_table_with_dataframe():
+@pytest.mark.optional
+def test_process_abundance_table_with_dataframe(tmp_path):
     """Test process_abundance_table with DataFrame input."""
     # Create output directory
-    output_dir = "tests_outs/test_process_abundance_table_df"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test DataFrame
@@ -56,10 +66,11 @@ def test_process_abundance_table_with_dataframe():
         assert os.path.exists(os.path.join(reads_dir, f"merged_{annotator}_R1.fastq"))
         assert os.path.exists(os.path.join(reads_dir, f"merged_{annotator}_R2.fastq"))
 
-def test_process_abundance_table_with_file():
+@pytest.mark.optional
+def test_process_abundance_table_with_file(tmp_path):
     """Test process_abundance_table with file input."""
     # Create output directory
-    output_dir = "tests_outs/test_process_abundance_table_file"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test table
@@ -100,11 +111,11 @@ def test_process_abundance_table_with_file():
         assert os.path.exists(os.path.join(reads_dir, f"test_sample_{annotator}_R1.fastq"))
         assert os.path.exists(os.path.join(reads_dir, f"test_sample_{annotator}_R2.fastq"))
 
-def test_process_abundance_table_with_missing_genome():
+@pytest.mark.optional
+def test_process_abundance_table_with_missing_genome(tmp_path):
     """Test process_abundance_table with some missing genome files."""
     # Create output directory
-    output_dir = "tests_outs/test_process_abundance_table_missing_genome"
-    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test DataFrame
@@ -141,10 +152,11 @@ def test_process_abundance_table_with_missing_genome():
         assert os.path.exists(os.path.join(reads_dir, f"merged_{annotator}_R1.fastq"))
         assert os.path.exists(os.path.join(reads_dir, f"merged_{annotator}_R2.fastq"))
 
-def test_process_abundance_table_with_zero_reads():
+@pytest.mark.optional
+def test_process_abundance_table_with_zero_reads(tmp_path):
     """Test process_abundance_table with zero reads for some taxids."""
     # Create output directory
-    output_dir = "tests_outs/test_process_abundance_table_zero_reads"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test DataFrame with zero reads for some taxids

@@ -52,15 +52,21 @@ pytest -m optional
 pytest
 ```
 
-**Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`. Only `pytest-full` uses `./install.sh full`. Each example job installs the tools that `samovar prepare` records for those pipelines: core (`iss`, `snakemake`) plus `MultiQC`, conda `kraken2`/`kaiju` where the prepared annotator list names them, and `SparseDOSSA2` only on `examples-sparsedossa` (`examples/multiple_tables`, after `libmpfr-dev` and conda `r-rmpfr`). `examples-public` sets `SAMOVAR_CI_LIGHT_INDEXES=1` so realistic/assembly/databases_comparison use locally built `phage_test` indexes instead of downloading standard_8GB/refseq.
+**Full integration** (`full-integration.yml`) runs on a published GitHub Release or `workflow_dispatch`. Only `pytest-full` uses `./install.sh full`. Each example job installs the tools that `samovar prepare` records for those pipelines: core (`iss`, `snakemake`) plus `MultiQC`, conda `kraken2`/`kaiju` where the prepared annotator list names them, and `SparseDOSSA2` only on `examples-sparsedossa` (`examples/multiple_tables`, using the binary R dependencies from `environment.yml`). `examples-public` sets `SAMOVAR_CI_LIGHT_INDEXES=1` so realistic/assembly/databases_comparison use locally built `phage_test` indexes instead of downloading standard_8GB/refseq.
 
 Mandatory tests must be fast, deterministic, and cover the core package, contracts, and essential pipeline paths (built-in baselines and small fixtures; no optional programs). Optional tests cover extended integrations, optional dependencies/programs, large datasets, stress/performance, and broader pipeline combinations.
+
+Choose the suite by the behavior protected, not by whether a test is a unit test or was written for an old bug. Keep sample/read identity, ground truth, ML train/predict compatibility, failed-stage handling, tool import contracts, and prepare/exec wiring mandatory. Keep useful detailed adapter options, rendering, resource tuning, and native ecosystem checks as optional. Remove redundant source/constant assertions only when retained behavior tests cover their purpose.
+
+Mandatory tests receive a private install config/cache, real configured core executable paths, and the small taxonomy fixture in `tests/data/taxdump`. They must not fetch a real taxdump or call NCBI/other external services. Mock the transport with a small response when testing download handling; keep the real service integration optional. Optional dependencies are checked when their test runs, not during collection. Use `tmp_path` (or a temporary directory in unittest cases), never fixed shared run directories. See [tests/README.md](tests/README.md) for suite selection and validation.
 
 Installation is validated through `install.sh` (the same procedure GitHub Actions uses before pytest). Do not add a second install path for tests.
 
 Test data may come from repository `data/` / `tests/` fixtures or stable public Internet sources. Test code may use `src/`, `tests/`, and installed package APIs. Tests must never import executable code from `examples/`; examples demonstrate the public interface and are not test infrastructure.
 
 New functionality gets mandatory tests if it is core, optional tests if it is ecosystem/extended, or both when both roles apply.
+
+Fixes to existing behavior do not require adding new tests. Validate fixes with relevant existing tests or a focused behavior check; adapt existing tests if their expectations encode the bug. Do not add tests merely because code changed, and do not weaken existing checks to make a fix pass.
 
 ## 4. Repository structure
 
@@ -87,7 +93,24 @@ If a step cannot be written as a `samovar` command and needs a large helper, sto
 
 Keep each example small. Changes to public CLI, configuration, contracts, or workflow semantics also update the README or Wiki.
 
-## 6. Validate the whole change
+## 6. Optional tools in `install.sh` and `ask`
+
+A new installer option is a row in the lists that already exist. Do not add `install_<tool>.sh`, a second installer, or a conda/pip command copied into a launch script. `cami_resume.sh` and the other launchers call `./install.sh <name>`.
+
+Put the option in these places, in this order:
+
+1. One usage line in the `install.sh` header, next to the other `./install.sh <Name>` lines. The spelling there is the user-facing name (`./install.sh cuml`, `./install.sh Metax`).
+2. `normalize_optional_arg` maps that spelling, and any accepted alias, to one lowercase key (`cuml`, `metax`).
+3. `run_optional_named` handles that key. The body is a function already in `install.sh` (`install_cuml`) or the sidecar (`python -m samovar.sidecar <name>`). Do not shell out to a new file.
+4. The install-or-skip block sits with the other `SAMOVAR_INSTALL_*` blocks. The skip line names the same `./install.sh <name>` command.
+5. One `AskTool` row in `ASK_TOOLS` (`src/samovar/install_ask.py`). `install` is `optional:<key>` from step 2, or `conda:<package>` when bioconda into the active env is enough. `which` is the executable the installer leaves on `PATH` or in that env's `bin` (a one-line wrapper in the env `bin` counts; a new repo script does not). `scope` stays `"full"`. `"core"` is only Kraken2 and Kaiju, so `./install.sh ask` does not grow. `./install.sh full ask` asks the new row with the same prompt as the others.
+6. One optional row in `install_status_rows` (`src/samovar/paths.py`). `install` is the same `./install.sh <name>` string.
+
+`./install.sh full` installs only what `enable_full_install_flags` turns on. A heavy or hardware-specific tool (cuML) is asked in `full ask` and installed by `./install.sh <name>`, and is not added to that flag list. A tool that belongs in `full` gets both the flag and the `SAMOVAR_INSTALL_<NAME>` comment in the `install.sh` header.
+
+`tests/test_install_ask.py` requires every `ASK_TOOLS` row to have a non-empty `which` and an `install` of `conda:` or `optional:`. The core set stays Kraken2 and Kaiju.
+
+## 7. Validate the whole change
 
 Before considering a change complete:
 

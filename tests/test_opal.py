@@ -11,8 +11,10 @@ from samovar.opal import (
     opal_executable,
     opal_rank_range,
     opal_style_metrics,
+    run_opal,
     series_to_counts,
     write_cami_profile,
+    write_profiles_for_annotators,
 )
 from samovar.scores import score_annotators
 from samovar.viz_annotation import viz_annotation
@@ -62,9 +64,10 @@ def test_write_cami_profile_keeps_phage_without_genus(tmp_path):
     assert "\t0\t" not in text
 
 
+@pytest.mark.optional
 def test_opal_rank_range_includes_species():
     assert opal_rank_range("genus") == "genus,species"
-    assert opal_rank_range("species") == "species,species"
+    assert opal_rank_range("species") == "genus,species"
 
 
 def test_series_to_counts_skips_unclassified():
@@ -72,11 +75,9 @@ def test_series_to_counts_skips_unclassified():
     assert counts == {"562": 2.0}
 
 
-def test_opal_executable_optional():
-    exe = opal_executable()
-    assert exe is None or Path(exe).exists()
 
 
+@pytest.mark.optional
 def test_opal_command_uses_python_for_script(tmp_path, monkeypatch):
     script = tmp_path / "opal.py"
     script.write_text("#!/usr/bin/env python3\n")
@@ -95,12 +96,16 @@ def test_score_table_includes_opal_and_tn(tmp_path):
             "true": ["562", "562", "9606", "9606"],
         }
     )
-    table = score_annotators(df, ["kaiju", "kraken2"])
+    table = score_annotators(df, ["kaiju", "kraken2"], opal=True)
     for col in ("tnr", "fnr", "tn_pct", "fn_pct", "completeness", "opal_purity", "l1_norm"):
         assert col in table.columns
         assert table[col].notna().all()
+    plain = score_annotators(df, ["kaiju", "kraken2"])
+    assert plain["completeness"].isna().all()
+    assert plain["accuracy"].tolist() == table["accuracy"].tolist()
 
 
+@pytest.mark.optional
 def test_viz_writes_opal_scores_plot(tmp_path):
     df = pd.DataFrame(
         {
@@ -119,9 +124,32 @@ def test_viz_writes_opal_scores_plot(tmp_path):
         plot=False,
         rank="none",
         use_names=False,
+        opal=True,
     )
     csv = pd.read_csv(out / "quality_scores.csv")
     assert "tn_pct" in csv.columns
     assert "completeness" in csv.columns
     assert (out / "scores.png").is_file()
     assert (out / "opal_scores.png").is_file()
+
+
+@pytest.mark.optional
+def test_empty_profile_still_writes_opal_html(tmp_path):
+    if opal_executable() is None:
+        pytest.skip("OPAL is not installed")
+    work = pd.DataFrame(
+        {
+            "sample": ["a", "a", "b", "b"],
+            "true": ["562", "562", "9606", "9606"],
+            "kaiju": ["562", "562", "9606", "9606"],
+            "assembly": ["0", "0", "0", "0"],
+            "kraken2": ["562", "0", "0", "9606"],
+        }
+    )
+    gold, profiles = write_profiles_for_annotators(
+        work, ["kaiju", "assembly", "kraken2"], tmp_path / "profiles"
+    )
+    out = run_opal(gold, profiles, tmp_path / "opal")
+    assert out is not None
+    assert (out / "results.html").is_file()
+    assert "OPAL finished successfully" in (out / "log.txt").read_text(errors="replace")

@@ -72,6 +72,25 @@ def test_generate_reads_metagenome_single_iss_call(tmp_path):
     assert "taxid:9606" in text
 
 
+def test_iss_preserves_unindexed_accession_truth(tmp_path, monkeypatch):
+    from samovar.parse_annotators import extract_true_taxid
+    from samovar.seqio import iter_fastq_records
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    genome = _write_fasta(
+        tmp_path / ".genomes" / "processed" / "GCA_035764635.1.fa",
+        "contig|taxid:2681611",
+    )
+    r1, r2 = generate_reads_metagenome(
+        genome_files=[genome], output_dir=str(tmp_path / "reads"), amount=[8],
+        cpus=1, seed=42,
+    )
+    for path in (r1, r2):
+        records = list(iter_fastq_records(path))
+        assert len(records) == 8
+        assert {extract_true_taxid(rec[0]) for rec in records} == {"2681611"}
+
+
 def test_process_annotation_tables_generates_once_then_splits(tmp_path):
     genome_dir = tmp_path / "genomes"
     _write_fasta(genome_dir / "562.fa", "ecoli")
@@ -106,6 +125,7 @@ def test_process_annotation_tables_generates_once_then_splits(tmp_path):
             ],
             genome_dir=str(genome_dir),
             output_dir=str(reads),
+            regeneration_config={"regeneration_mode": "direct"},
         )
 
     iss_calls = [c for c in calls if _is_iss_cmd(c)]
@@ -121,7 +141,7 @@ def test_process_annotation_tables_generates_once_then_splits(tmp_path):
     s1_k1 = (reads / "s1_k1_R1.fastq").read_text()
     s2_k1 = (reads / "s2_k1_R1.fastq").read_text()
     assert "taxid:562" in (s1_k1 + s2_k1)
-    assert not (reads / ".iss_full").exists()
+    assert not (reads / ".tmp" / "iss").exists()
 
 
 def test_generate_iss_test_samples_two_iss_calls(tmp_path):
@@ -158,13 +178,83 @@ def test_generate_iss_test_samples_two_iss_calls(tmp_path):
         assert r1.exists()
         assert r2.exists()
         assert _count_fastq_records(r1) == _count_fastq_records(r2)
-    assert not (out / ".iss_full").exists()
+    assert not (out / ".tmp" / "iss").exists()
+
+
+@pytest.mark.parametrize("total_reads", [1, 20])
+def test_generate_without_host_keeps_each_sample_nonempty(tmp_path, total_reads):
+    genome_dir = tmp_path / "meta"
+    _write_fasta(genome_dir / "562.fna", "ecoli", seq="ACGT" * 1000)
+    out = tmp_path / "initial"
+    generate_iss_test_samples(
+        genome_dir=str(genome_dir), host_genome="", output_dir=str(out),
+        n_samples=2, total_reads=total_reads, host_fraction="RANDOM", seed=42, cpus=1,
+    )
+    for sample in ("1", "2"):
+        for mate in ("R1", "R2"):
+            assert _count_fastq_records(out / f"{sample}_full_{mate}.fastq") == total_reads
+
+
+def test_generate_fails_if_only_one_sample_has_reads(tmp_path, monkeypatch):
+    genome_dir = tmp_path / "meta"
+    _write_fasta(genome_dir / "562.fna", "ecoli")
+    out = tmp_path / "initial"
+
+    def incomplete_pool(**kwargs):
+        dest = Path(kwargs["output_dir"])
+        for mate in ("R1", "R2"):
+            (dest / f"meta_full_{mate}.fastq").write_text("@taxid:562_0\nACGT\n+\nIIII\n")
+
+    monkeypatch.setattr("samovar.table2iss.generate_reads_metagenome", incomplete_pool)
+    with pytest.raises(RuntimeError, match=r"empty sample\(s\) 1"):
+        generate_iss_test_samples(
+            genome_dir=str(genome_dir), host_genome="", output_dir=str(out),
+            n_samples=2, total_reads=20, seed=42,
+        )
+    assert _count_fastq_records(out / "2_full_R1.fastq") == 1
+
+
+def test_generate_rejects_missing_host(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Host genome does not exist"):
+        generate_iss_test_samples(
+            genome_dir=str(tmp_path), host_genome=str(tmp_path / "missing.fna"),
+            output_dir=str(tmp_path / "initial"), n_samples=2, total_reads=20,
+        )
+
+
+def test_table_generate_rejects_empty_sample(tmp_path, monkeypatch):
+    from samovar.table2iss import generate_iss_from_abundance_table
+
+    genome = _write_fasta(tmp_path / "562.fna", "ecoli")
+    monkeypatch.setattr("samovar.table2iss._resolve_genomes_for_taxids", lambda *a, **kw: {"562": genome})
+    with pytest.raises(RuntimeError, match=r"empty sample\(s\) empty"):
+        generate_iss_from_abundance_table(
+            pd.DataFrame({"taxid": ["562"], "N_empty": [0], "N_ok": [4]}),
+            genome_dir=str(tmp_path), output_dir=str(tmp_path / "initial"), cpus=1,
+        )
+
+
+def test_empty_genome_file_with_requested_reads_fails(tmp_path):
+    genome = tmp_path / "562.fa"
+    genome.write_text("")
+    with pytest.raises(RuntimeError, match="empty"):
+        generate_reads_metagenome(
+            genome_files=[str(genome)],
+            output_dir=str(tmp_path / "reads"),
+            amount=[10],
+            genome_ids=["562"],
+            sample_name="s",
+            annotator_name="concat_weighted",
+        )
 
 
 def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
     genomes = [_write_fasta(tmp_path / "genomes" / "562.fa", "orig562")]
 
     def fail(cmd, **kwargs):
+        prefix = Path(cmd[cmd.index("--output") + 1])
+        Path(str(prefix) + ".iss.tmp.0").write_text("incomplete")
+        Path(str(prefix) + "_R1.fastq").write_text("incomplete")
         class Result:
             returncode = 1
 
@@ -180,3 +270,42 @@ def test_generate_reads_metagenome_raises_on_iss_failure(tmp_path):
                 annotator_name="k1",
                 genome_ids=["562"],
             )
+
+    assert not list((tmp_path / "reads").glob("*.fastq"))
+    assert not list((tmp_path / "reads").rglob("*.iss.tmp.*"))
+    assert not list((tmp_path / "reads" / ".tmp").glob("iss_*"))
+
+
+def test_nonzero_abundance_without_genomes_fails(tmp_path, monkeypatch):
+    abund = tmp_path / "abund"
+    abund.mkdir()
+    pd.DataFrame({"taxid": ["562"], "N_a": [2000], "N_b": [2000]}).to_csv(
+        abund / "concat_weighted.csv", index=False
+    )
+    monkeypatch.setattr("samovar.table2iss._resolve_genomes_for_taxids", lambda *args, **kwargs: {})
+    with pytest.raises(RuntimeError, match="no genome files"):
+        process_annotation_tables(
+            table_paths=[str(abund / "concat_weighted.csv")],
+            genome_dir=str(tmp_path / "genomes"),
+            output_dir=str(tmp_path / "regenerated"),
+            abundance_dir=str(abund),
+            regeneration_config={"abundance_dir": str(abund), "seed": 1},
+        )
+
+
+def test_zero_abundance_without_genomes_stays_empty(tmp_path, monkeypatch):
+    abund = tmp_path / "abund"
+    abund.mkdir()
+    pd.DataFrame({"taxid": ["562"], "N_a": [0]}).to_csv(abund / "concat_weighted.csv", index=False)
+    monkeypatch.setattr("samovar.table2iss._resolve_genomes_for_taxids", lambda *args, **kwargs: {})
+    out = tmp_path / "regenerated"
+    process_annotation_tables(
+        table_paths=[str(abund / "concat_weighted.csv")],
+        genome_dir=str(tmp_path / "genomes"),
+        output_dir=str(out),
+        abundance_dir=str(abund),
+        regeneration_config={"abundance_dir": str(abund), "seed": 1},
+    )
+    from samovar.seqio import has_r1_reads
+
+    assert not has_r1_reads(out)

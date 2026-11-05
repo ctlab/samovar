@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -31,7 +30,6 @@ from samovar.tools_import import import_tool
 
 
 REPO = repo_root()
-SAMPLE_QC_ROOT = REPO / "samovar" / "sampleQC"
 
 
 def _tiny(cols=None, extra_refs=None):
@@ -43,18 +41,6 @@ def _tiny(cols=None, extra_refs=None):
     return pd.DataFrame(data)
 
 
-def _publish_sample_qc(src: Path) -> None:
-    SAMPLE_QC_ROOT.mkdir(parents=True, exist_ok=True)
-    for phase in ("full", "final"):
-        dest = SAMPLE_QC_ROOT / phase
-        dest.mkdir(parents=True, exist_ok=True)
-        incoming = src / "sampleQC" / phase
-        if not incoming.is_dir():
-            continue
-        for path in incoming.rglob("*.csv"):
-            target = dest / path.relative_to(incoming)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target)
 
 
 def test_bray_curtis_higher_is_better():
@@ -307,9 +293,6 @@ def test_pipeline_full_and_final_stages(tmp_path):
     assert scores["sample"].nunique() >= 1
     disabled = stage_score_sample_qc(tmp_path, {}, phase="full")
     assert disabled["enabled"] is False
-    _publish_sample_qc(tmp_path)
-    assert (SAMPLE_QC_ROOT / "full" / "all.csv").is_file()
-    assert (SAMPLE_QC_ROOT / "final" / "all.csv").is_file()
 
 
 def test_annotator_specific_stage_skips_unmapped(tmp_path):
@@ -338,8 +321,3 @@ def test_annotator_specific_stage_skips_unmapped(tmp_path):
     written = [Path(p).name for p in result["written"]]
     assert "kaiju.csv" in written
     assert "kraken2.csv" not in written
-    dest = SAMPLE_QC_ROOT / "final"
-    dest.mkdir(parents=True, exist_ok=True)
-    src = tmp_path / "sampleQC" / "final" / "kaiju.csv"
-    if src.is_file():
-        shutil.copy2(src, dest / "kaiju.csv")

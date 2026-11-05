@@ -6,6 +6,7 @@ builders, ISS, and annotator workflows can share the same lookup rules.
 
 from __future__ import annotations
 
+from functools import lru_cache
 import gzip
 import os
 import re
@@ -46,6 +47,9 @@ FASTQ_R2_SUFFIXES = (
     "_2.fastq",
     "_2.fq",
 )
+
+# Bare FASTQ names are single-end; explicit mate suffixes take precedence.
+FASTQ_SE_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 
 PROCESSED_FASTA_EXTS = (
     ".fa.gz",
@@ -170,8 +174,9 @@ def gzip_file(path: PathLike, *, remove_source: bool = True) -> Path:
     if is_gzip_path(src):
         return src
     dest = Path(str(src) + ".gz")
-    with open(src, "rb") as fin, gzip.open(dest, "wb") as fout:
-        shutil.copyfileobj(fin, fout)
+    with atomic_genome_output(dest) as pending:
+        with open(src, "rb") as fin, gzip.open(pending, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
     if remove_source:
         try:
             src.unlink()
@@ -193,8 +198,9 @@ def gunzip_file(path: PathLike, dest: Optional[PathLike] = None, *, remove_sourc
     out.parent.mkdir(parents=True, exist_ok=True)
     same = src.resolve() == out.resolve()
     write_to = Path(str(out) + ".ungz.tmp") if same else out
-    with gzip.open(src, "rb") as fin, open(write_to, "wb") as fout:
-        shutil.copyfileobj(fin, fout)
+    with atomic_genome_output(write_to) as pending:
+        with gzip.open(src, "rb") as fin, open(pending, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
     if same:
         write_to.replace(out)
     elif remove_source:
@@ -239,7 +245,7 @@ def find_existing_processed_genome(genome_dir: PathLike, taxid: str) -> Optional
         for name in names:
             for ext in preferred:
                 candidate = folder / f"{name}{ext}"
-                if candidate.exists():
+                if usable_genome_file(candidate):
                     return candidate
     return None
 
@@ -292,7 +298,7 @@ def list_fasta_files(
 def mate_suffixes(mate: str) -> Tuple[str, ...]:
     mate = mate.upper()
     if mate == "R1":
-        return FASTQ_R1_SUFFIXES
+        return FASTQ_R1_SUFFIXES + FASTQ_SE_SUFFIXES
     if mate == "R2":
         return FASTQ_R2_SUFFIXES
     raise ValueError(f"mate must be R1 or R2, not {mate!r}")
@@ -300,7 +306,9 @@ def mate_suffixes(mate: str) -> Tuple[str, ...]:
 
 def sample_name_from_r1(path: PathLike) -> str:
     name = as_path(path).name
-    for suffix in FASTQ_R1_SUFFIXES:
+    if name.endswith(FASTQ_R2_SUFFIXES):
+        raise ValueError(f"Not a recognised R1 FASTQ name: {path}")
+    for suffix in mate_suffixes("R1"):
         if name.endswith(suffix):
             return name[: -len(suffix)]
     raise ValueError(f"Not a recognised R1 FASTQ name: {path}")
@@ -312,16 +320,24 @@ def r2_for_r1(r1: PathLike) -> Path:
     for s1, s2 in zip(FASTQ_R1_SUFFIXES, FASTQ_R2_SUFFIXES):
         if name.endswith(s1):
             return path.with_name(name[: -len(s1)] + s2)
+    if not name.endswith(FASTQ_R2_SUFFIXES):
+        for suffix in FASTQ_SE_SUFFIXES:
+            if name.endswith(suffix):
+                return path.with_name(name[: -len(suffix)] + "_R2" + suffix)
     raise ValueError(f"Not a recognised R1 FASTQ name: {r1}")
 
 
 def find_fastq_mate(directory: PathLike, sample: str, mate: str = "R1") -> Optional[Path]:
     directory = as_path(directory)
-    for suffix in mate_suffixes(mate):
-        candidate = directory / f"{sample}{suffix}"
-        if candidate.exists():
-            return candidate
-    return None
+    candidates = [directory / f"{sample}{suffix}" for suffix in mate_suffixes(mate)]
+    found = [path for path in candidates if path.is_file()]
+    if len(found) > 1:
+        raise ValueError(
+            f"Multiple {mate} FASTQ files for sample {sample!r}: "
+            + ", ".join(str(path) for path in found)
+            + ". Use unique sample names."
+        )
+    return found[0] if found else None
 
 
 # CAMISIM harvest writes ``{n}_{tech}_R1.fastq`` then copies to ``{n}_full_``.
@@ -354,7 +370,7 @@ def _drop_duplicate_camisim_tech_samples(samples: Sequence[str]) -> List[str]:
     return out
 
 
-def list_fastq_samples(directory: PathLike) -> List[str]:
+def list_fastq_samples(directory: PathLike, *, include_libraries: bool = False) -> List[str]:
     directory = as_path(directory)
     if not directory.is_dir():
         return []
@@ -364,20 +380,25 @@ def list_fastq_samples(directory: PathLike) -> List[str]:
         if not path.is_file():
             continue
         name = path.name
-        for suffix in FASTQ_R1_SUFFIXES:
+        if name.endswith(FASTQ_R2_SUFFIXES):
+            continue
+        for suffix in mate_suffixes("R1"):
             if name.endswith(suffix):
                 sample = name[: -len(suffix)]
                 if sample not in seen:
                     seen.add(sample)
                     samples.append(sample)
                 break
-    return _drop_duplicate_camisim_tech_samples(samples)
+    for sample in samples:
+        for mate in ("R1", "R2"):
+            find_fastq_mate(directory, sample, mate)
+    return samples if include_libraries else _drop_duplicate_camisim_tech_samples(samples)
 
 
-def list_r1_files(directory: PathLike) -> List[Path]:
+def list_r1_files(directory: PathLike, *, include_libraries: bool = False) -> List[Path]:
     directory = as_path(directory)
     files: List[Path] = []
-    for sample in list_fastq_samples(directory):
+    for sample in list_fastq_samples(directory, include_libraries=include_libraries):
         found = find_fastq_mate(directory, sample, "R1")
         if found is not None:
             files.append(found)
@@ -391,18 +412,65 @@ def fastq_pair_paths(prefix: PathLike, gzip_reads: bool = False) -> Tuple[str, s
     return f"{prefix_s}_R1{ext}", f"{prefix_s}_R2{ext}"
 
 
+def strip_mate_suffix(read_id: str) -> str:
+    """Drop only a trailing ``/1`` or ``/2``. ``r/10`` stays ``r/10``."""
+    token = str(read_id)
+    if len(token) >= 2 and token[-2] == "/" and token[-1] in "12":
+        return token[:-2]
+    return token
+
+
+def fastq_record_id(header: str) -> str:
+    """Read id with only a trailing ``/1`` or ``/2`` mate suffix removed.
+
+    ``r/10`` stays ``r/10``. A suffix in the middle of the token is not a mate mark.
+    """
+    token = str(header or "").strip()
+    if token.startswith("@"):
+        token = token[1:]
+    token = token.split()[0] if token else ""
+    if not token:
+        raise ValueError(f"FASTQ record has an empty read id: {header!r}")
+    return strip_mate_suffix(token)
+
+
 def iter_fastq_records(path: PathLike) -> Iterator[Tuple[str, str, str, str]]:
-    with open_text(path) as handle:
+    """Yield ``(header, seq, plus, qual)`` lines, including their newlines.
+
+    A blank line or a record cut off before the quality line is an error.
+    """
+    target = as_path(path)
+    with open_text(target) as handle:
+        line_no = 0
         while True:
             header = handle.readline()
             if not header:
                 return
+            line_no += 1
+            if not header.strip():
+                raise ValueError(f"Blank line in FASTQ {target} at line {line_no}")
+            if not header.startswith("@"):
+                raise ValueError(f"FASTQ record at {target}:{line_no} does not start with @")
             seq = handle.readline()
             plus = handle.readline()
             qual = handle.readline()
+            line_no += 3
             if not (seq and plus and qual):
-                return
+                raise ValueError(f"Truncated FASTQ record in {target} at line {line_no}")
+            if not plus.startswith("+"):
+                raise ValueError(f"FASTQ record at {target}:{line_no} is missing the + line")
             yield header, seq, plus, qual
+
+
+def validate_fastq_directory(directory: PathLike) -> None:
+    """Read every FASTQ in ``directory``. A blank or truncated record raises."""
+    directory = as_path(directory)
+    if not directory.is_dir():
+        return
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and is_fastq_name(path.name):
+            for _ in iter_fastq_records(path):
+                pass
 
 
 DEFAULT_MIN_FASTQ_BYTES = 1
@@ -441,9 +509,25 @@ def fastq_has_reads(
             n += 1
             if n >= need_reads:
                 return True
-    except OSError:
+    except (OSError, ValueError):
         return False
     return False
+
+
+def require_generated_samples(directory: PathLike, samples: Sequence[str], annotator: str = "full") -> None:
+    """Reject a successful simulation that left any requested sample empty."""
+    if not samples:
+        raise ValueError("No samples requested for read generation")
+    empty = []
+    for sample in samples:
+        path = find_fastq_mate(directory, f"{sample}_{annotator}", "R1")
+        if path is None or not fastq_has_reads(path):
+            empty.append(str(sample))
+    if empty:
+        raise RuntimeError(
+            f"Read generation produced empty sample(s) {', '.join(empty)} under {directory}. "
+            "Increase --total_reads or check the simulator output."
+        )
 
 
 def has_r1_reads(
@@ -488,27 +572,169 @@ def concat_r1_fastqs(directory: PathLike, dest: PathLike) -> Path:
     return concat_fastq_files(list_r1_files(directory), dest)
 
 
-def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike) -> int:
-    """Symlink (or copy) FASTQ pairs from ``src_dir`` into ``dst_dir``."""
+def _fastq_r2_name(name: str) -> bool:
+    return any(name.endswith(suffix) for suffix in FASTQ_R2_SUFFIXES)
+
+
+def _stem_before_r2(name: str) -> Optional[str]:
+    for suffix in FASTQ_R2_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return None
+
+
+def single_end_sample_names(directory: PathLike) -> List[str]:
+    """Sample stems in ``directory`` that have R1 and no non-empty R2."""
+    directory = as_path(directory)
+    names: List[str] = []
+    for r1 in list_r1_files(directory):
+        sample = sample_name_from_r1(r1)
+        mate = find_fastq_mate(directory, sample, "R2")
+        if mate is not None and mate.is_file() and mate.stat().st_size > 0:
+            continue
+        if sample not in names:
+            names.append(sample)
+    return names
+
+
+def canonicalize_single_end_fastqs(directory: PathLike) -> dict[Path, Path]:
+    """Use bare FASTQ names for generated unpaired libraries; preserve pairs."""
+    renamed = {}
+    for r1 in list_r1_files(directory, include_libraries=True):
+        sample = sample_name_from_r1(r1)
+        r2 = find_fastq_mate(directory, sample, "R2")
+        if r2 is not None and r2.stat().st_size > 0:
+            continue
+        for suffix in FASTQ_R1_SUFFIXES:
+            if r1.name.endswith(suffix):
+                dest = r1.with_name(sample + suffix[suffix.index("."):])
+                r1.rename(dest)
+                renamed[r1] = dest
+                break
+        if r2 is not None:
+            r2.unlink()
+    return renamed
+
+
+def drop_r2_if_source_single_end(output_dir: PathLike) -> List[Path]:
+    """Delete regenerated R2 when the matching input sample was single-end.
+
+    ISS and ONT simulators write ``*_R2.fastq`` even for an unpaired source.
+    A present R2 file, including an empty one, makes later stages call the
+    paired CLI. The surviving unpaired file uses a bare FASTQ name; its record
+    count is the pair count the abundance table already uses.
+    """
+    dest = as_path(output_dir)
+    if not dest.is_dir():
+        return []
+    root = dest.resolve().parent
+    source: Optional[Path] = None
+    for name in ("initial_trimmed", "initial"):
+        candidate = root / name
+        if candidate.is_dir() and candidate.resolve() != dest.resolve() and list_r1_files(candidate):
+            source = candidate
+            break
+    se_names = set(single_end_sample_names(source)) if source is not None else set()
+    source_names = list_fastq_samples(source) if source is not None else []
+    all_se = bool(se_names) and len(se_names) == len(source_names)
+    removed: List[Path] = []
+    for path in list(dest.iterdir()):
+        if not path.is_file() or not _fastq_r2_name(path.name):
+            continue
+        stem = _stem_before_r2(path.name) or ""
+        # A hybrid canonical R1 is SE, but its Illumina library is still paired.
+        tail = _CAMISIM_TECH_TAIL.search(stem)
+        if tail and tail.group(1).lower() in {"illumina", "art", "wgsim", "bgi", "mgi"}:
+            base = stem[:tail.start()]
+            if any(find_fastq_mate(dest, f"{base}_{tech}") for tech in ("ont", "nanosim3")):
+                continue
+        if all_se:
+            drop = True
+        else:
+            hits = [
+                sample
+                for sample in source_names
+                if stem == sample or stem.startswith(sample + "_")
+            ]
+            owner = max(hits, key=len) if hits else None
+            drop = owner in se_names
+        if not drop:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed.append(path)
+    canonicalize_single_end_fastqs(dest)
+    return removed
+
+
+def link_or_copy_reads(src_dir: PathLike, dst_dir: PathLike, *, validate_only: bool = False) -> int:
+    """Validate sample identities, then symlink/copy pairs unless validate_only."""
     src = as_path(src_dir).resolve()
     dst = as_path(dst_dir).resolve()
-    dst.mkdir(parents=True, exist_ok=True)
-    if src == dst:
+    sources = list_r1_files(src, include_libraries=True)
+    list_fastq_samples(dst)
+    # External hybrids use the same canonical classifier input as generated hybrids.
+    groups = {}
+    for path in sources:
+        sample = sample_name_from_r1(path)
+        tail = _CAMISIM_TECH_TAIL.search(sample)
+        if tail and tail.group(1).lower() not in {"sequence_type", "read_type"}:
+            base = sample[:tail.start()]
+            kind = "long" if tail.group(1).lower() in {"ont", "nanosim3"} else "short"
+            groups.setdefault(base, {"short": [], "long": []})[kind].append(sample)
+    hybrids = {}
+    for base, libraries in groups.items():
+        if not libraries["short"] or not libraries["long"]:
+            continue
+        if find_fastq_mate(src, base) or find_fastq_mate(src, base + "_full"):
+            continue
+        if any(len(names) != 1 for names in libraries.values()):
+            raise ValueError(f"Ambiguous hybrid libraries for sample {base!r}")
+        hybrids[base] = libraries["short"] + libraries["long"]
+    import filecmp
+
+    filecmp.clear_cache()  # Copies must be rechecked even if file timestamps did not change.
+    transfers = []
+    for r1 in sources:
+        sample = sample_name_from_r1(r1)
+        for mate in ("R1", "R2"):
+            src_file = find_fastq_mate(src, sample, mate)
+            existing = find_fastq_mate(dst, sample, mate)
+            if src_file is not None and existing is not None:
+                same = existing.name == src_file.name and (
+                    existing.samefile(src_file) or (
+                        not existing.is_symlink() and filecmp.cmp(existing, src_file, shallow=False)
+                    )
+                )
+                if not same:
+                    raise ValueError(f"Sample name collision for {sample!r} ({mate}): {src_file} and {existing}")
+            if src_file is not None:
+                transfers.append(src_file)
+    if validate_only:
         return 0
+    dst.mkdir(parents=True, exist_ok=True)
     n = 0
-    for r1 in list_r1_files(src):
-        r2 = r2_for_r1(r1)
-        for src_file in (r1, r2):
-            if not src_file.exists():
-                continue
-            target = dst / src_file.name
-            if target.exists() or target.is_symlink():
-                continue
-            try:
-                target.symlink_to(src_file.resolve())
-            except OSError:
-                shutil.copy2(src_file, target)
-            n += 1
+    for src_file in transfers:
+        target = dst / src_file.name
+        if target.exists() or target.is_symlink():
+            continue
+        try:
+            target.symlink_to(src_file.resolve())
+        except OSError:
+            shutil.copy2(src_file, target)
+        n += 1
+    for base, libraries in hybrids.items():
+        canonical = dst / f"{base}_full.fastq"
+        if find_fastq_mate(dst, base + "_full"):
+            continue
+        parts = [
+            path for sample in libraries for mate in ("R1", "R2")
+            if (path := find_fastq_mate(dst, sample, mate)) is not None
+        ]
+        concat_fastq_files(parts, canonical)
+        n += 1
     return n
 
 
@@ -566,3 +792,133 @@ def sibling_candidates(path: PathLike, taxid: str, suffixes: Sequence[str]) -> L
         seen.add(key)
         ordered.append(cand)
     return ordered
+
+
+@contextmanager
+def assembly_read_libraries(r1: PathLike, r2: PathLike = ""):
+    """Yield (short R1, short R2, ONT, typed) without guessing lost pairing.
+
+    Generated hybrids retain libraries beside the canonical classifier input.
+    Older flattened inputs can only recover short reads as an unpaired library.
+    Untagged inputs retain their caller's existing interpretation.
+    """
+    r1 = as_path(r1)
+    try:
+        stem = sample_name_from_r1(r1)
+    except ValueError:
+        stem = r1.stem
+    bases = [stem]
+    if stem.endswith("_full"):
+        bases.append(stem[:-5])
+    for base in bases:
+        short = []
+        long = []
+        present = set()
+        for tech in ("illumina", "art", "wgsim", "bgi", "mgi", "ont", "nanosim3"):
+            path = find_fastq_mate(r1.parent, f"{base}_{tech}")
+            kind = "long" if tech in {"ont", "nanosim3"} else "short"
+            if path:
+                present.add(kind)
+                if path.stat().st_size:
+                    (long if kind == "long" else short).append(path)
+        # A lone alias is not enough to replace a potentially mixed canonical R1.
+        if present != {"short", "long"}:
+            continue
+        if len(short) > 1 or len(long) > 1:
+            raise ValueError("Hybrid assembly requires one short-read and one ONT library")
+        mate = find_fastq_mate(r1.parent, sample_name_from_r1(short[0]), "R2") if short else None
+        yield str(short[0]) if short else "", str(mate or ""), str(long[0]) if long else "", True
+        return
+    with tempfile.TemporaryDirectory(prefix="samovar_libraries_") as tmp:
+        short_path = Path(tmp) / "short.fastq"
+        long_path = Path(tmp) / "ont.fastq"
+        tagged = untagged = 0
+        with short_path.open("w") as sh, long_path.open("w") as lg:
+            for path in (r1, as_path(r2) if r2 else None):
+                if path is None or not path.is_file():
+                    continue
+                for record in iter_fastq_records(path):
+                    match = re.search(r"(?:^|[|\s])read_type:([^|\s/]+)", record[0].lstrip("@"))
+                    if not match:
+                        untagged += 1
+                        continue
+                    tech = match.group(1).lower()
+                    if tech not in {"illumina", "art", "wgsim", "bgi", "mgi", "ont", "nanosim", "nanosim3"}:
+                        raise ValueError(f"Unsupported assembly read_type: {tech}")
+                    tagged += 1
+                    (lg if tech in {"ont", "nanosim", "nanosim3"} else sh).writelines(record)
+        if tagged and untagged:
+            raise ValueError("Cannot assemble a mixture of tagged and untagged read types")
+        if not tagged:
+            yield str(r1), str(r2 or ""), "", False
+        elif long_path.stat().st_size:
+            yield str(short_path) if short_path.stat().st_size else "", "", str(long_path), True
+        else:
+            # Pure short reads retain their original pairing.
+            yield str(r1), str(r2 or ""), "", True
+
+
+@contextmanager
+def atomic_genome_output(destination):
+    """Serialize writers and publish only closed output; retain interrupted staging."""
+    import fcntl
+    import logging
+
+    dest = Path(destination)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pending = dest.with_name("." + dest.name + ".pending" + (".gz" if str(dest).endswith(".gz") else ""))
+    locks = dest.parent / ".locks"
+    locks.mkdir(exist_ok=True)
+    with (locks / dest.name).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if pending.exists():
+            logging.getLogger(__name__).warning("Retrying interrupted genome write: %s", dest)
+        yield pending
+        pending.replace(dest)
+
+
+def usable_genome_file(path):
+    """Validate cached FASTA/gzip once per file identity; never reuse broken data."""
+    import logging
+
+    path = Path(path)
+    try:
+        st = path.stat()
+        valid = _valid_genome_content(str(path), st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    except OSError:
+        return False
+    if not valid:
+        logging.getLogger(__name__).warning("Ignoring damaged/empty genome %s; will retry download", path)
+    return valid
+
+
+@lru_cache(maxsize=4096)
+def _valid_genome_content(path, inode, size, mtime, ctime):
+    import zlib
+
+    try:
+        with open_text(path) as handle:
+            first = next((line for line in handle if line.strip()), "")
+            if not first.startswith(">"):
+                return False
+            bases = False
+            for line in handle:
+                if line.strip() and not line.startswith(">"):
+                    bases = True
+            return bases
+    except (OSError, EOFError, UnicodeError, zlib.error):
+        return False
+
+
+def publish_genome_file(source, destination, *, move=False):
+    """Stage a complete hardlink/copy, including cross-filesystem moves."""
+    src, dest = Path(source), Path(destination)
+    with atomic_genome_output(dest) as pending:
+        pending.unlink(missing_ok=True)
+        try:
+            os.link(src, pending)
+        except OSError:
+            shutil.copy2(src, pending)
+    if move:
+        src.unlink()
+    return dest

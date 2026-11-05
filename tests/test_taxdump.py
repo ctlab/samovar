@@ -1,19 +1,27 @@
+import shutil
 from pathlib import Path
+
+import pytest
 
 from samovar.taxdump import (
     TAXDUMP_DMP_FILES,
+    attach_taxdump_catalog,
+    ensure_taxdump,
     find_dmp,
     link_taxdump_into,
     load_scientific_names,
+    metax_dmp_dir,
+    require_metax_taxdump,
     parse_names_dmp,
     taxdump_dir,
+    usable_taxdump_dir,
 )
 from samovar.build_database import get_taxonomy_db
 from samovar.main_config import build_install_config, disk_payload
 from samovar.version import get_version
 
 
-def test_link_taxdump_into_symlinks_dmp_only(tmp_path):
+def test_link_taxdump_into_copies_dmp_only(tmp_path):
     src = tmp_path / "taxdump"
     src.mkdir()
     (src / "nodes.dmp").write_text("1\t|\t1\t|\n")
@@ -21,10 +29,30 @@ def test_link_taxdump_into_symlinks_dmp_only(tmp_path):
     (src / "prot.accession2taxid.gz").write_text("huge")
     dest = tmp_path / "kaiju_db"
     link_taxdump_into(dest, src)
-    assert (dest / "nodes.dmp").is_symlink()
-    assert (dest / "nodes.dmp").resolve() == (src / "nodes.dmp").resolve()
-    assert (dest / "names.dmp").is_symlink()
+    assert (dest / "nodes.dmp").is_file()
+    assert not (dest / "nodes.dmp").is_symlink()
+    assert (dest / "nodes.dmp").read_text() == "1\t|\t1\t|\n"
+    assert (dest / "names.dmp").is_file()
+    assert not (dest / "names.dmp").is_symlink()
     assert not (dest / "prot.accession2taxid.gz").exists()
+
+
+def test_link_taxdump_into_survives_moving_the_db(tmp_path):
+    src = tmp_path / "taxdump"
+    src.mkdir()
+    (src / "nodes.dmp").write_text("1\t|\t1\t|\n")
+    (src / "names.dmp").write_text("1\t|\troot\t|\n")
+    dest = tmp_path / "kaiju_db"
+    dest.mkdir()
+    (dest / "kaiju_db.fmi").write_text("index")
+    link_taxdump_into(dest, src)
+    moved = tmp_path / "elsewhere" / "kaiju_db"
+    shutil.move(str(dest), str(moved))
+    shutil.rmtree(src)
+    assert (moved / "nodes.dmp").is_file()
+    assert not (moved / "nodes.dmp").is_symlink()
+    assert (moved / "nodes.dmp").read_text() == "1\t|\t1\t|\n"
+    assert (moved / "kaiju_db.fmi").read_text() == "index"
 
 
 def test_get_taxonomy_db_uses_source_dir(tmp_path, monkeypatch):
@@ -34,7 +62,22 @@ def test_get_taxonomy_db_uses_source_dir(tmp_path, monkeypatch):
     (src / "names.dmp").write_text("1\t|\troot\t|\n")
     db = tmp_path / "db"
     get_taxonomy_db(db_path=str(db), taxonomy_path=str(src))
-    assert (db / "nodes.dmp").is_symlink()
+    assert (db / "nodes.dmp").is_file()
+    assert not (db / "nodes.dmp").is_symlink()
+
+
+def test_get_taxonomy_db_replaces_symlink_with_copy(tmp_path):
+    src = tmp_path / "shared"
+    src.mkdir()
+    (src / "nodes.dmp").write_text("1\t|\t1\t|\n")
+    (src / "names.dmp").write_text("1\t|\troot\t|\n")
+    db = tmp_path / "db"
+    db.mkdir()
+    (db / "nodes.dmp").symlink_to(src / "nodes.dmp")
+    get_taxonomy_db(db_path=str(db), taxonomy_path=str(src))
+    assert (db / "nodes.dmp").is_file()
+    assert not (db / "nodes.dmp").is_symlink()
+    assert (db / "nodes.dmp").read_text() == "1\t|\t1\t|\n"
 
 
 def test_build_install_config_records_taxdump(tmp_path):
@@ -84,6 +127,104 @@ def test_find_dmp_nested_taxonomy(tmp_path):
     assert "nodes.dmp" in TAXDUMP_DMP_FILES
 
 
+def test_usable_taxdump_prefers_configured_dump_over_download(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_TAXDUMP", raising=False)
+    monkeypatch.delenv("SAMOVAR_TAXDUMP_VERSION", raising=False)
+    real = tmp_path / "ncbi"
+    real.mkdir()
+    nodes = real / "nodes.dmp"
+    nodes.write_text("1\t|\t1\t|\n")
+    empty = tmp_path / "empty-taxdump"
+    cfg = {
+        "genomes": {
+            "samovar_database": str(tmp_path / "store"),
+            "taxdump": str(empty),
+        },
+        "databases": {
+            "taxdump": {
+                "ncbi:2024-01-01": {
+                    "path": str(real),
+                    "version": "2024-01-01",
+                    "type": "database",
+                    "lazy-download": "curl should not run",
+                }
+            }
+        },
+    }
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("taxdump download was attempted")
+
+    monkeypatch.setattr("subprocess.run", boom)
+    assert usable_taxdump_dir(cfg, version="2024-01-01") == real
+    assert usable_taxdump_dir(cfg, version="1999-01-01") is None
+    assert ensure_taxdump(cfg).resolve() == real.resolve()
+    assert metax_dmp_dir(cfg) == str(real)
+
+
+def test_disk_payload_records_taxdump_version_without_download_recipe(tmp_path):
+    dump = tmp_path / "taxdump"
+    dump.mkdir()
+    nodes = dump / "nodes.dmp"
+    nodes.write_text("1\t|\t1\t|\n")
+    (dump / "taxdump.version").write_text("2024-08-14\n")
+    cfg = build_install_config(
+        root=str(tmp_path),
+        python_path=str(tmp_path / "python"),
+        version=get_version(),
+        samovar_database=str(tmp_path / "genomes"),
+        taxdump=str(dump),
+    )
+    cfg.setdefault("databases", {})["taxdump"] = {
+        "ncbi": {
+            "path": str(dump),
+            "type": "database",
+            "lazy-download": "curl -L https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
+            "url": "https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz",
+        }
+    }
+    payload = disk_payload(cfg)
+    assert payload["genomes"]["taxdump_version"] == "2024-08-14"
+    recorded = payload["databases"]["taxdump"]["ncbi:2024-08-14"]
+    assert recorded["path"] == str(dump)
+    assert recorded["version"] == "2024-08-14"
+    assert recorded["lazy-download"] == ""
+    assert "ncbi" not in payload["databases"]["taxdump"]
+    attached = attach_taxdump_catalog({"genomes": {"taxdump": str(dump)}, "databases": {}})
+    assert attached["genomes"]["taxdump_version"] == "2024-08-14"
+
+
+def test_attach_keeps_distinct_taxdump_versions(tmp_path):
+    older = tmp_path / "old"
+    newer = tmp_path / "new"
+    older.mkdir()
+    newer.mkdir()
+    (older / "nodes.dmp").write_text("1\t|\n")
+    (newer / "nodes.dmp").write_text("1\t|\n")
+    (older / "taxdump.version").write_text("2020-01-01\n")
+    (newer / "taxdump.version").write_text("2024-01-01\n")
+    payload = attach_taxdump_catalog(
+        {
+            "genomes": {"taxdump": str(older)},
+            "databases": {
+                "taxdump": {
+                    "ncbi:2024-01-01": {
+                        "path": str(newer),
+                        "version": "2024-01-01",
+                        "type": "database",
+                        "lazy-download": "curl -L https://example.invalid/taxdump.tar.gz",
+                    }
+                }
+            },
+        }
+    )
+    recorded = payload["databases"]["taxdump"]
+    assert recorded["ncbi:2020-01-01"]["path"] == str(older)
+    assert recorded["ncbi:2024-01-01"]["path"] == str(newer)
+    assert recorded["ncbi:2024-01-01"]["lazy-download"] == ""
+    assert payload["genomes"]["taxdump_version"] == "2020-01-01"
+
+
 def test_parse_and_cache_scientific_names(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_CACHE_DIR", str(tmp_path / "cache"))
     names = tmp_path / "names.dmp"
@@ -98,3 +239,17 @@ def test_parse_and_cache_scientific_names(tmp_path, monkeypatch):
     assert parsed[562] == "Escherichia coli"
     assert 1 in load_scientific_names(names)
     assert load_scientific_names(names)[562] == "Escherichia coli"
+
+
+def test_prepare_rejects_metax_without_nodes_dmp(tmp_path, monkeypatch):
+    monkeypatch.delenv("SAMOVAR_TAXDUMP", raising=False)
+    monkeypatch.delenv("METAX_DMP_DIR", raising=False)
+    monkeypatch.setattr("samovar.taxdump.metax_dmp_dir", lambda *args, **kwargs: "")
+    require_metax_taxdump([{"type": "kaiju"}])
+    with pytest.raises(ValueError, match="nodes.dmp"):
+        require_metax_taxdump([{"type": "metax", "run_name": "metax"}])
+    dump = tmp_path / "dmp"
+    dump.mkdir()
+    (dump / "nodes.dmp").write_text("1\t|\t1\t|\n")
+    monkeypatch.setenv("METAX_DMP_DIR", str(dump))
+    require_metax_taxdump([{"type": "metax"}])

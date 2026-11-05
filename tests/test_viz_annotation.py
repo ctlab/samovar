@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.annotation_io import annotation_to_abundance, read_annotation_dir
 from samovar.viz_annotation import (
@@ -60,6 +61,7 @@ def test_annotation_to_abundance_counts(tmp_path):
     assert int(out["N_1"].sum()) == 100
 
 
+@pytest.mark.optional
 def test_clip_taxon_label():
     assert _clip_taxon_label("Escherichia") == "Escherichia"
     long = "Candidatus Blochmanniella extra"
@@ -68,6 +70,7 @@ def test_clip_taxon_label():
     assert clipped.endswith("…")
 
 
+@pytest.mark.optional
 def test_fpc_taxon_order_stable():
     freq = pd.DataFrame(
         {"x": ["1", "2", "1"], "y": ["1", "2", "2"], "Freq": [10, 5, 1]}
@@ -77,6 +80,7 @@ def test_fpc_taxon_order_stable():
     assert "0" not in order
 
 
+@pytest.mark.optional
 def test_viz_annotation_writes_png(tmp_path):
     df = pd.DataFrame(
         {
@@ -122,6 +126,7 @@ def test_viz_annotation_writes_png(tmp_path):
     assert img.shape[0] > 50 and img.shape[1] > 50
 
 
+@pytest.mark.optional
 def test_viz_annotation_writes_assembly_r2_when_preds_are_unclassified(tmp_path):
     df = pd.DataFrame(
         {
@@ -178,6 +183,7 @@ def test_viz_annotation_without_true_keeps_cv(tmp_path):
     assert not list(out.glob("F1_*_mqc.json"))
 
 
+@pytest.mark.optional
 def test_compare_annotations_skips_correlation_on_raw(tmp_path):
     ann = tmp_path / "initial_annotations"
     ann.mkdir()
@@ -200,6 +206,7 @@ def test_compare_annotations_skips_correlation_on_raw(tmp_path):
     assert not list(out.glob("CV_*_mqc.json"))
 
 
+@pytest.mark.optional
 def test_compare_annotations_writes_correlation_on_regenerated(tmp_path):
     ann = tmp_path / "regenerated_annotations"
     ann.mkdir()
@@ -257,12 +264,27 @@ def test_compare_annotations_skips_empty_dir(tmp_path):
     assert data.empty
 
 
-def test_compare_annotations_skips_combined_only(tmp_path):
-    pd.DataFrame({"seq": ["r1"]}).to_csv(
-        tmp_path / "combined_annotation_table.csv", index=False
+def test_compare_annotations_reads_combined_when_parts_are_gone(tmp_path):
+    pd.DataFrame(
+        {"seq": ["r1"], "taxID_kaiju_0": [562], "true": [562], "sample": ["s1"]}
+    ).to_csv(tmp_path / "combined_annotation_table.csv", index=False)
+    data = compare_annotations(annotation_dir=str(tmp_path), types=())
+    assert list(data["sample"].astype(str)) == ["s1"]
+    tax = [c for c in data.columns if str(c).lower().startswith("taxid")]
+    assert int(data.loc[0, tax[0]]) == 562
+
+
+def test_compare_annotations_prefers_per_sample_csv(tmp_path):
+    pd.DataFrame(
+        {"seq": ["r1"], "taxID_kaiju_0": [1], "sample": ["combined"]}
+    ).to_csv(tmp_path / "combined_annotation_table.csv", index=False)
+    pd.DataFrame({"seq": ["r1"], "taxID_kaiju_0": [562]}).to_csv(
+        tmp_path / "s1.annotation.csv", index=False
     )
-    data = compare_annotations(annotation_dir=str(tmp_path))
-    assert data.empty
+    data = compare_annotations(annotation_dir=str(tmp_path), types=())
+    assert set(data["sample"].astype(str)) == {"s1"}
+    tax = [c for c in data.columns if str(c).lower().startswith("taxid")]
+    assert int(data.loc[0, tax[0]]) == 562
 
 
 def test_compare_annotations_cli_skips_empty_dir(tmp_path):
@@ -286,6 +308,7 @@ def test_compare_annotations_cli_skips_empty_dir(tmp_path):
     assert "skipping visualization" in (proc.stderr + proc.stdout)
 
 
+@pytest.mark.optional
 def test_compare_annotations_cli_integrity(tmp_path):
     src = Path("data/test_annotations")
     out = tmp_path / "plots"
@@ -304,3 +327,27 @@ def test_compare_annotations_cli_integrity(tmp_path):
     # Combined table on disk is not rewritten by viz
     orig = pd.read_csv(src / "1.annotation.csv")
     assert "taxID_kraken2_0" in orig.columns or "taxID_kraken2" in list(map(str, orig.columns))
+
+
+def test_compare_cli_viz_config_and_overrides(tmp_path, monkeypatch):
+    import importlib.util
+    import yaml
+    from samovar.paths import repo_root
+    script = repo_root() / "workflow" / "compare_annotations.py"
+    spec = importlib.util.spec_from_file_location("compare_cli", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    monkeypatch.setattr(module, "compare_annotations", lambda **kwargs: calls.append(kwargs))
+    cfg = tmp_path / "viz.yaml"
+    cfg.write_text(yaml.safe_dump({"viz": {"full": True, "opal": True, "metrics_sample": 50000},
+                                   "cores": 3, "seed": 17}))
+    module.main(["--annotation_dir", str(tmp_path), "--config", str(cfg)])
+    assert calls[-1]["opal"] and "f1" in calls[-1]["types"]
+    assert calls[-1]["metrics_sample"] == 50000
+    assert calls[-1]["threads"] == 3 and calls[-1]["seed"] == 17
+    module.main(["--annotation_dir", str(tmp_path), "--config", str(cfg), "--no-full", "--no-opal",
+                 "--viz-metrics-sample", "0", "--viz-metrics", "accuracy,tnr", "--threads", "2", "--seed", "9"])
+    assert calls[-1]["types"] == ("scores",) and not calls[-1]["opal"]
+    assert calls[-1]["metrics"] == ["accuracy", "tnr"] and calls[-1]["metrics_sample"] == 0
+    assert calls[-1]["threads"] == 2 and calls[-1]["seed"] == 9

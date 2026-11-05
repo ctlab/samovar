@@ -6,31 +6,19 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from samovar.build_database import build_database_from_config
 from samovar.config import PipelineConfig, setup_pipeline
+from samovar.version import get_version
 
 
 REPO = Path(__file__).resolve().parents[1]
 
 
-def _ensure_config_json():
-    cfg = REPO / "build" / "config.json"
-    if cfg.exists():
-        return
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    example = REPO / "build" / "config.json.example"
-    if example.exists():
-        cfg.write_text(example.read_text())
-    else:
-        cfg.write_text(
-            '{"python_path": "python3", "r_path": "R", "r_lib_path": "."}\n'
-        )
-
 
 def test_cli_help_lists_prepare_build_exec():
-    _ensure_config_json()
     result = subprocess.run(
         ["bash", str(REPO / "bin" / "samovar"), "help"],
         cwd=REPO,
@@ -53,6 +41,34 @@ def test_cli_help_lists_prepare_build_exec():
     assert "apply" in out
     assert "merge" in out
     assert "methods" in out
+    assert "update" in out
+    assert f"SAMOVAR {get_version()}" in out
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help", "help"])
+def test_cli_help_flags_print_version(flag):
+    result = subprocess.run(
+        ["bash", str(REPO / "bin" / "samovar"), flag],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert f"SAMOVAR {get_version()}" in result.stdout
+    assert "prepare" in result.stdout
+
+
+@pytest.mark.parametrize("flag", ["--version", "-V", "version"])
+def test_cli_version_flags(flag):
+    result = subprocess.run(
+        ["bash", str(REPO / "bin" / "samovar"), flag],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"SAMOVAR {get_version()}"
+    assert "prepare" not in result.stdout
 
 
 def test_prepare_writes_pipeline_and_configs(tmp_path):
@@ -72,7 +88,7 @@ def test_prepare_writes_pipeline_and_configs(tmp_path):
     pipeline = Path(result["pipeline"])
     assert pipeline.exists()
     text = pipeline.read_text()
-    assert "snakemake -s " in text
+    assert '"$SNAKEMAKE" -s ' in text
     assert '--directory "$out_dir"' in text
     assert "workflow/annotators/Snakefile" in text
     assert "workflow/combine_annotation_tables.py" in text
@@ -207,34 +223,30 @@ def test_exec_runs_generated_samovar_sh(tmp_path):
     assert "Pipeline execution completed" in result.stdout
 
 
-def test_prepare_to_exec_mocked_end_to_end(tmp_path):
-    """prepare generates a script; exec runs it. External tools are not required."""
-    out_dir = tmp_path / "run"
-    reads = tmp_path / "reads"
-    reads.mkdir()
-    (reads / "1_full_R1.fastq").write_text("@r\nA\n+\nI\n")
-    (reads / "1_full_R2.fastq").write_text("@r\nT\n+\nI\n")
-    args = type(
-        "Args",
-        (),
-        {
-            "input_config": None,
-            "input_dir": str(reads),
-            "output_dir": str(out_dir),
-            "kraken2": None,
-            "kaiju": [["kaiju /tmp/kaiju_db.fmi"]],
-        },
-    )()
-    result = setup_pipeline(args)
-    pipeline = Path(result["pipeline"])
-    # Replace the generated pipeline with a stub that still consumes the same path.
-    pipeline.write_text("#!/bin/bash\nset -e\necho prepared-and-execed\n")
-    proc = subprocess.run(
-        ["bash", str(REPO / "bin" / "samovar_exec"), "--output_dir", str(out_dir)],
+def test_exec_short_directory_warns_prepare_flags(tmp_path):
+    log = tmp_path / ".log"
+    log.mkdir()
+    script = log / "samovar.sh"
+    script.write_text("#!/bin/bash\nexit 0\n")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO / "bin" / "samovar_exec"),
+            "-d",
+            str(tmp_path),
+            "--cores",
+            "8",
+            "-t",
+            "4",
+        ],
         cwd=REPO,
         capture_output=True,
         text=True,
         check=True,
     )
-    assert "prepared-and-execed" in proc.stdout or "Pipeline execution completed" in proc.stdout
-    assert "Running main SamovaR pipeline" in proc.stdout
+    assert "Pipeline execution completed" in result.stdout
+    assert "prepare has priority" in result.stderr
+    assert "--cores" in result.stderr
+    assert "-t" in result.stderr
+    assert str(tmp_path) in result.stdout

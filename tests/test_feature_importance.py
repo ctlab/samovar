@@ -55,6 +55,37 @@ def test_extract_tree_and_linear_and_hmm():
     assert unwrap_estimator(rf) is rf
 
 
+def test_two_kraken2_databases_stay_separate_in_multiqc(tmp_path):
+    annotation = pd.DataFrame(
+        {
+            "seq": [f"r{i}" for i in range(16)],
+            "taxID_kraken2_0": [9606, 9606, 562, 562] * 4,
+            "taxID_kraken2_1": [562, 9606, 9606, 562] * 4,
+            "length": [50] * 16,
+            "true": [9606, 9606, 562, 562] * 4,
+        }
+    )
+    from samovar.reprofiling import preprocess_data
+
+    processed = preprocess_data(annotation)
+    feature_cols = [c for c in processed.columns if c != "true"]
+    model = RandomForestClassifier(n_estimators=8, random_state=0).fit(
+        processed[feature_cols], processed["true"]
+    )
+    model.samovar_preprocessing_ = processed.attrs["samovar_preprocessing"]
+    dest = tmp_path / "feature_importance_plots"
+    score_feature_importance(
+        model,
+        annotation,
+        {"obs": pd.DataFrame({"taxid": [9606, 562], "N_1": [4, 12]})},
+        {"obs": pd.DataFrame({"taxid": [9606, 562], "N_1": [8, 8]})},
+        {"plot_dir": str(dest), "output_dir": str(tmp_path / "reprofiled_annotations"), "seed": 0},
+    )
+    bars = next(dest.glob("*_bars_mqc.json")).read_text()
+    assert "taxid_kraken2_0" in bars
+    assert "taxid_kraken2_1" in bars
+
+
 def test_score_writes_multiqc_json(tmp_path):
     annotation, initial, regenerated = _tiny()
     X = annotation[["taxid_dummy", "length"]]
@@ -83,6 +114,32 @@ def test_score_writes_multiqc_json(tmp_path):
     )
     assert set(table["feature"]) == {"taxid_dummy", "length"}
     assert table["importance"].sum() > 0
+
+
+def test_permutation_uses_model_category_dictionary(monkeypatch):
+    from samovar.reprofiling import train_models
+    import samovar.feature_importance as module
+
+    annotation = pd.DataFrame({
+        "feat_assembly_0_MAG_ID": ["M0001", "M0002", "M0003"] * 20,
+        "read_type": ["illumina"] * 60,
+        "true": [562, 543, 9606] * 20,
+    })
+    model, _, _, columns = train_models(annotation)
+    seen = []
+    real = module.permutation_importance_scores
+
+    def record(model, X, y, **kwargs):
+        assert list(X.columns) == columns
+        seen.append(X["feat_assembly_0_MAG_ID"].tolist())
+        return real(model, X, y, **kwargs)
+
+    monkeypatch.setattr(module, "permutation_importance_scores", record)
+    subset = annotation.iloc[[2, 5, 8]]
+    importance_table(model=model, annotation=subset, initial_abundance={},
+                     regenerated_abundance={},
+                     config={"method": "permutation"})
+    assert seen == [[2, 2, 2]]
 
 
 def test_default_best_model_only():

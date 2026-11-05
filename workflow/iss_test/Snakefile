@@ -32,6 +32,8 @@ rule all:
 rule generate_full_metagenome_and_split:
     output:
         OUTPUT_FILES
+    threads:
+        int(config.get("cores", 2))
     params:
         genome_dir = config["genome_dir"],
         host_genome = config["host_genome"],
@@ -42,7 +44,6 @@ rule generate_full_metagenome_and_split:
         seed = config["seed"],
         model = config["model"],
         genomes = config["genomes"],
-        cpus = int(config.get("cores", 2)),
     run:
         generate_iss_test_samples(
             genome_dir=params.genome_dir,
@@ -54,7 +55,7 @@ rule generate_full_metagenome_and_split:
             seed=params.seed,
             model=params.model,
             genomes=params.genomes,
-            cpus=params.cpus,
+            cpus=threads,
             extra_flags=config.get("extra_flags") or config.get("reads_generator_flags") or None,
             abundance_table=config.get("abundance_table") or None,
             max_genomes=config.get("max_genomes"),

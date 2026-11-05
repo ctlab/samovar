@@ -45,6 +45,10 @@ PYTHON_PATH=${PYTHON_PATH:-python3}
 
 out_dir="tests_outs"
 mkdir -p $out_dir
+VIZ_ARGS=()
+if [ -f "$out_dir/benchmarking/.log/configs/config_scoring.yaml" ]; then
+    VIZ_ARGS=(--config "$out_dir/benchmarking/.log/configs/config_scoring.yaml")
+fi
 
 # optional: build custom databases
 if true; then
@@ -73,6 +77,7 @@ $PYTHON_PATH "$ROOT/workflow/combine_annotation_tables.py" \
     -o tests_outs/benchmarking/initial_annotations
 
 $PYTHON_PATH "$ROOT/workflow/compare_annotations.py" \
+    "${VIZ_ARGS[@]}" \
     --annotation_dir tests_outs/benchmarking/initial_annotations \
     --output_dir tests_outs/benchmarking/initial_annotations_plots
 
@@ -104,6 +109,7 @@ $PYTHON_PATH "$ROOT/workflow/combine_annotation_tables.py" \
     -s 2
 
 $PYTHON_PATH "$ROOT/workflow/compare_annotations.py" \
+    "${VIZ_ARGS[@]}" \
     --annotation_dir tests_outs/benchmarking/regenerated_annotations \
     --output_dir tests_outs/benchmarking/regenerated_annotations_plots \
     --csv tests_outs/benchmarking/regenerated_annotations/combined_annotation_table.csv
@@ -114,6 +120,7 @@ $PYTHON_PATH "$ROOT/workflow/ML.py" \
     --output_dir tests_outs/benchmarking/reprofiled_annotations
 
 $PYTHON_PATH "$ROOT/workflow/compare_annotations.py" \
+    "${VIZ_ARGS[@]}" \
     --annotation_dir tests_outs/benchmarking/reprofiled_annotations \
     --output_dir tests_outs/benchmarking/reprofiled_annotations_plots \
     --csv tests_outs/benchmarking/reprofiled_annotations/combined_annotation_table.csv

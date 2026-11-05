@@ -1,0 +1,336 @@
+#!/bin/bash
+# Update the installed SamovaR checkout in place and reinstall.
+#   samovar update
+#   samovar update --branch main
+#   samovar update --auto
+set -euo pipefail
+
+ORIGIN_URL="https://github.com/ctlab/samovar"
+BRANCH=""
+AUTO=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    echo "Usage: samovar update [--branch NAME] [--auto]"
+    echo "Locate the installed checkout, fetch its current branch (or NAME), then reinstall."
+    echo "Without --branch the current branch is used, or main when HEAD is detached."
+    echo "Without --auto this runs ./install.sh full ask (a prompt for every optional program)."
+    echo "With --auto it refreshes the Python package, keeps tools already in config, and does not ask."
+    echo "The conda env from environment.yml is created only when it is missing, then activated."
+}
+
+config_root() {
+    python3 - "$@" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+candidates = []
+env = os.environ.get("SAMOVAR_CONFIG", "").strip()
+if env:
+    candidates.append(Path(env).expanduser())
+xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or str(Path.home() / ".config")
+candidates.append(Path(xdg) / "samovar" / "config.json")
+for pointer in sys.argv[1:]:
+    path = Path(pointer).expanduser()
+    if not path.is_file():
+        continue
+    try:
+        text = path.read_text(encoding="utf-8").strip().splitlines()
+    except OSError:
+        continue
+    if text:
+        candidates.append(Path(text[0]).expanduser())
+
+def root_of(cfg):
+    if not isinstance(cfg, dict):
+        return ""
+    root = str(cfg.get("root") or "").strip()
+    if root:
+        return root
+    api = cfg.get("API") or cfg.get("api") or {}
+    if isinstance(api, dict):
+        return str(api.get("root") or "").strip()
+    return ""
+
+for path in candidates:
+    try:
+        if not path.is_file():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError):
+        continue
+    root = root_of(data)
+    if root:
+        print(root)
+        raise SystemExit(0)
+raise SystemExit(0)
+PY
+}
+
+is_checkout() {
+    [ -n "${1:-}" ] && [ -f "$1/install.sh" ] && [ -f "$1/environment.yml" ] && [ -d "$1/.git" ]
+}
+
+locate_root() {
+    local found="" candidate=""
+    # An explicit SAMOVAR_ROOT is the tree to update. The config root is the
+    # installed checkout, and on CI that file points at the job workspace.
+    # Preferring it made `samovar update` check out origin/main in the tree
+    # under test and delete the branch it was running from.
+    if is_checkout "${SAMOVAR_ROOT:-}"; then
+        printf '%s\n' "$SAMOVAR_ROOT"
+        return 0
+    fi
+    candidate="$(config_root "$SCRIPT_DIR/../build/config_path" || true)"
+    if is_checkout "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    if command -v samovar >/dev/null 2>&1; then
+        found="$(command -v samovar)"
+        candidate="$(cd "$(dirname "$found")/.." && pwd)"
+        if is_checkout "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+    candidate="$(cd "$SCRIPT_DIR/.." && pwd)"
+    if is_checkout "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    return 1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --branch)
+            BRANCH="${2:-}"
+            shift 2
+            ;;
+        --branch=*)
+            BRANCH="${1#*=}"
+            shift
+            ;;
+        --auto)
+            AUTO=1
+            shift
+            ;;
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Error: unknown option $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "Error: git is not on PATH." >&2
+    exit 1
+fi
+if ! ROOT="$(locate_root)"; then
+    echo "Error: could not find a SamovaR git checkout (config root, SAMOVAR_ROOT, or this script)." >&2
+    echo "Clone with: git clone $ORIGIN_URL" >&2
+    exit 1
+fi
+ROOT="$(cd "$ROOT" && pwd)"
+export SAMOVAR_ROOT="$ROOT"
+
+# /usr/bin/git is linked to the distro OpenSSL. An active conda env puts a
+# newer libssl on LD_LIBRARY_PATH, and git then dies with
+# "OpenSSL version mismatch" before fetch ("Could not read from remote repository").
+run_git() {
+    local old_ifs="$IFS"
+    local cleaned="" part
+    IFS=':'
+    for part in ${LD_LIBRARY_PATH:-}; do
+        case "$part" in
+            *conda*|*anaconda*|*miniforge*|*mamba*|*micromamba*)
+                ;;
+            "")
+                ;;
+            *)
+                if [ -n "$cleaned" ]; then
+                    cleaned="${cleaned}:${part}"
+                else
+                    cleaned="$part"
+                fi
+                ;;
+        esac
+    done
+    IFS="$old_ifs"
+    if [ -n "$cleaned" ]; then
+        LD_LIBRARY_PATH="$cleaned" git -C "$ROOT" "$@"
+    else
+        env -u LD_LIBRARY_PATH git -C "$ROOT" "$@"
+    fi
+}
+
+if [ -z "$BRANCH" ]; then
+    BRANCH="$(run_git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
+        BRANCH="$(run_git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+        BRANCH="${BRANCH#origin/}"
+    fi
+    if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ] || [ "$BRANCH" = "@{u}" ]; then
+        BRANCH="main"
+    fi
+fi
+
+if ! run_git remote get-url origin >/dev/null 2>&1; then
+    run_git remote add origin "$ORIGIN_URL"
+fi
+
+echo "SamovaR checkout: $ROOT"
+echo "Updating $ROOT to origin/$BRANCH"
+run_git fetch origin "$BRANCH"
+
+# cite/citations.json is rewritten by install and by hand. `git status` hides
+# skip-worktree bits, but checkout still refuses ("local changes would be
+# overwritten"). Compare the worktree blob to HEAD and park the user's copy.
+CITE_REL="cite/citations.json"
+CITE_SAVED=""
+if [ -f "$ROOT/$CITE_REL" ]; then
+    run_git update-index --no-skip-worktree --no-assume-unchanged -- "$CITE_REL" >/dev/null 2>&1 || true
+    cite_dirty=0
+    if ! run_git ls-files --error-unmatch -- "$CITE_REL" >/dev/null 2>&1; then
+        cite_dirty=1
+    elif ! run_git diff --quiet HEAD -- "$CITE_REL"; then
+        cite_dirty=1
+    fi
+    if [ "$cite_dirty" = "1" ]; then
+        CITE_SAVED="$(mktemp)"
+        cp "$ROOT/$CITE_REL" "$CITE_SAVED"
+        if ! run_git checkout -f HEAD -- "$CITE_REL" >/dev/null 2>&1; then
+            rm -f "$ROOT/$CITE_REL"
+        fi
+        echo "Set aside local $CITE_REL so pull can proceed."
+    fi
+fi
+# install.sh rebuilds these tracked binaries. A dirty copy blocks checkout.
+for rel in bin/samovar_kmer bin/samovar_combine_annotations bin/samovar_spearman; do
+    if run_git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+        run_git update-index --no-skip-worktree --no-assume-unchanged -- "$rel" >/dev/null 2>&1 || true
+        if ! run_git diff --quiet HEAD -- "$rel"; then
+            run_git checkout -f HEAD -- "$rel"
+        fi
+    fi
+done
+restore_local_citations() {
+    if [ -n "${CITE_SAVED:-}" ] && [ -f "$CITE_SAVED" ]; then
+        mkdir -p "$ROOT/cite"
+        cp "$CITE_SAVED" "$ROOT/$CITE_REL"
+        rm -f "$CITE_SAVED"
+        CITE_SAVED=""
+        echo "Restored local $CITE_REL (not overwritten by pull)."
+    fi
+}
+trap restore_local_citations EXIT
+
+# fetch already stored origin/$BRANCH in FETCH_HEAD. pull would fetch it again.
+current="$(run_git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ "$current" != "$BRANCH" ]; then
+    if run_git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        run_git checkout "$BRANCH"
+    else
+        run_git checkout -b "$BRANCH" FETCH_HEAD
+    fi
+fi
+head_sha="$(run_git rev-parse HEAD)"
+fetched="$(run_git rev-parse FETCH_HEAD)"
+if [ "$head_sha" = "$fetched" ]; then
+    echo "Already up to date with origin/$BRANCH."
+else
+    run_git merge --ff-only FETCH_HEAD
+fi
+restore_local_citations
+trap - EXIT
+
+ENV_NAME="$(
+    grep -E '^name:[[:space:]]*' "$ROOT/environment.yml" | head -n1 | awk '{print $2}'
+)"
+ENV_NAME="${ENV_NAME:-samovar}"
+
+if [ "${CONDA_DEFAULT_ENV:-}" != "$ENV_NAME" ]; then
+    CONDA_BIN="$(command -v conda || true)"
+    if [ -z "$CONDA_BIN" ]; then
+        echo "Error: conda is not on PATH. Create the env with: conda env create -f environment.yml" >&2
+        exit 1
+    fi
+    CONDA_BASE="$("$CONDA_BIN" info --base)"
+    # shellcheck disable=SC1091
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+    if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
+        echo "Conda env $ENV_NAME already exists."
+    else
+        echo "Creating conda env $ENV_NAME"
+        conda env create -f "$ROOT/environment.yml"
+    fi
+    echo "Activating conda env $ENV_NAME"
+    conda activate "$ENV_NAME"
+else
+    echo "Conda env $ENV_NAME is already active."
+fi
+
+chmod +x "$ROOT/install.sh"
+if [ "$AUTO" = "1" ]; then
+    if [ -z "${NCBI_EMAIL:-}" ]; then
+        NCBI_EMAIL="$(
+            SAMOVAR_ROOT="$ROOT" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+root = Path(os.environ["SAMOVAR_ROOT"])
+candidates = []
+env = os.environ.get("SAMOVAR_CONFIG", "").strip()
+if env:
+    candidates.append(Path(env).expanduser())
+xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or str(Path.home() / ".config")
+candidates.append(Path(xdg) / "samovar" / "config.json")
+pointer = root / "build" / "config_path"
+if pointer.is_file():
+    line = pointer.read_text(encoding="utf-8").strip().splitlines()
+    if line:
+        candidates.append(Path(line[0]).expanduser())
+for path in candidates:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError):
+        continue
+    if not isinstance(data, dict):
+        continue
+    api = data.get("API") or data.get("api") or {}
+    email = ""
+    if isinstance(api, dict):
+        email = str(api.get("ncbi_email") or "").strip()
+    email = email or str(data.get("ncbi_email") or "").strip()
+    if email:
+        print(email)
+        break
+PY
+        )"
+        if [ -n "$NCBI_EMAIL" ]; then
+            export NCBI_EMAIL
+        else
+            export NCBI_EMAIL="anonymous@example.com"
+        fi
+    fi
+    echo "Auto update: refreshing the Python package and keeping tools already in config (no prompts)."
+    (
+        cd "$ROOT"
+        # Version mismatches otherwise call input() and look like a hung update.
+        SAMOVAR_UPDATE_SHELL=0 ./install.sh
+    )
+else
+    echo "Running ./install.sh full ask"
+    (
+        cd "$ROOT"
+        ./install.sh full ask
+    )
+fi

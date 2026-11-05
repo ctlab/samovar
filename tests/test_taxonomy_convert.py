@@ -10,6 +10,11 @@ from samovar.parse_annotators import Annotation
 from samovar.taxonomy import normalize_taxonomy
 from tests.test_cami_profile import assert_rfc, parse_profile
 
+import pytest
+
+# Extended GTDB conversion; NCBI export contracts remain mandatory.
+pytestmark = pytest.mark.optional
+
 
 def write_mini_gtdb_dmp(root: Path) -> Path:
     """GTDB-like dump: domain Bacteria → Escherichia → E. coli."""

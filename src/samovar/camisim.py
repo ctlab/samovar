@@ -45,15 +45,16 @@ from samovar.paths import (
     load_config,
     python_path,
     repo_root,
-    runtime_path_prefix,
     tool_env_prefix,
     user_cache_dir,
 )
 from samovar.seqio import (
     concat_fastq_files,
+    find_fastq_mate,
     is_fastq_name,
     iter_fastq_records,
     list_fasta_files,
+    require_generated_samples,
     open_text,
     taxid_from_fasta_name,
     write_text_lines,
@@ -100,7 +101,7 @@ MODE_TO_TYPE = {
 }
 
 READ_TYPE_RE = re.compile(r"read_type:([A-Za-z0-9_+\-]+)", re.IGNORECASE)
-TAXID_RE = re.compile(r"taxid:([0-9]+)", re.IGNORECASE)
+TAXID_RE = re.compile(r"taxid:([0-9]+)(?=[|/\s]|$)", re.IGNORECASE)
 
 
 def normalize_camisim_mode(raw: Optional[str]) -> str:
@@ -126,7 +127,7 @@ def extract_read_type(seq_id: Optional[str]) -> str:
 
 
 def tag_read_id(header_or_id: str, read_type: str, taxid: str = "") -> str:
-    """Append ``taxid:`` / ``read_type:`` tokens to a FASTQ id if missing."""
+    """Tag a FASTQ id before its mate suffix, which classifiers may truncate."""
     raw = str(header_or_id or "").rstrip("\r\n")
     prefix = "@" if raw.startswith("@") else ""
     body = raw[1:] if prefix else raw
@@ -135,12 +136,23 @@ def tag_read_id(header_or_id: str, read_type: str, taxid: str = "") -> str:
     parts = body.split(None, 1)
     rid = parts[0]
     rest = (" " + parts[1]) if len(parts) > 1 else ""
-    if taxid and not TAXID_RE.search(rid):
-        rid = f"{rid}|taxid:{taxid}"
+    # Kaiju drops everything from the first slash, including tags after /1 or /2.
+    # Also repair IDs tagged in that old order when harvesting existing reads.
+    mate = re.search(r"/[12](?=\||$)", rid)
+    mate_suffix = mate.group(0) if mate else ""
+    if mate:
+        rid = rid[:mate.start()] + rid[mate.end():]
+    if taxid:
+        if not str(taxid).isdigit() or int(taxid) <= 0:
+            raise ValueError(f"Expected a positive numeric taxid, got {taxid!r}")
+        if re.search(r"taxid:[^|\s]*", rid, re.IGNORECASE):
+            rid = re.sub(r"taxid:[^|\s]*", f"taxid:{taxid}", rid, flags=re.IGNORECASE)
+        else:
+            rid = f"{rid}|taxid:{taxid}"
     token = str(read_type or "").strip().lower()
     if token and not READ_TYPE_RE.search(rid):
         rid = f"{rid}|read_type:{token}"
-    return f"{prefix}{rid}{rest}"
+    return f"{prefix}{rid}{mate_suffix}{rest}"
 
 
 def discover_camisim() -> Optional[str]:
@@ -279,7 +291,12 @@ def collect_generate_genomes(
         if key in seen:
             return
         seen.add(key)
-        taxid = taxid_from_fasta_name(path) or ("9606" if host else path.stem.split(".")[0])
+        from samovar.genome_index import numeric_taxid_from_fasta
+
+        resolved = numeric_taxid_from_fasta(path)
+        if not resolved.isdigit() or int(resolved) <= 0:
+            raise ValueError(f"Cannot resolve a numeric ground-truth taxid for genome {path}")
+        taxid = resolved
         gid = str(taxid)
         suffix = 2
         existing = {r["genome_ID"] for r in rows}
@@ -290,7 +307,7 @@ def collect_generate_genomes(
             {
                 "genome_ID": gid,
                 "path": str(path),
-                "NCBI_ID": str(taxid) if str(taxid).isdigit() else "1",
+                "NCBI_ID": str(taxid),
                 "OTU": gid,
                 "novelty_category": "known_strain",
                 "host": "1" if host else "0",
@@ -307,7 +324,9 @@ def collect_generate_genomes(
 
 
 def select_camisim_genome_rows(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Use locked ``cfg['genomes']`` when present; else cap by ``max_genomes``."""
+    """Use regeneration rows, locked genomes, or discovery capped by max_genomes."""
+    if cfg.get("genome_rows") is not None:
+        return list(cfg["genome_rows"])
     rows = collect_generate_genomes(cfg["genome_dir"], cfg.get("host_genome"))
     locked = [str(x) for x in (cfg.get("genomes") or []) if str(x).strip()]
     if locked:
@@ -404,11 +423,15 @@ def camisim_sizes_by_type(
 
 
 def camisim_taxdump(root: Optional[str]) -> str:
-    """NCBI taxdump tarball: install ``genomes.taxdump``, else CAMISIM bundled dump."""
-    try:
-        from samovar.taxdump import taxdump_tarball
+    """NCBI taxdump tarball: configured dump (any version), else CAMISIM's copy.
 
-        archive = taxdump_tarball()
+    The configured archive is reused as-is. Missing ``.tar.gz`` next to an
+    already extracted dump is packed locally. This does not fetch NCBI.
+    """
+    try:
+        from samovar.taxdump import local_taxdump_tarball
+
+        archive = local_taxdump_tarball()
         if archive is not None:
             return str(archive.resolve())
     except Exception:
@@ -719,7 +742,7 @@ def sanitize_fasta_for_camisim(src: Path, dest: Path, genome_id: str) -> Path:
     SAM converter (expected 6 fields, got 7).
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    token = re.sub(r"[^A-Za-z0-9]", "", str(genome_id)) or "g"
+    token = _camisim_sequence_prefix(genome_id)
     n = 0
 
     def chunks() -> Iterable[str]:
@@ -743,7 +766,12 @@ def stage_genomes_for_camisim(
     staged_dir = dest_dir / "genomes"
     staged_dir.mkdir(parents=True, exist_ok=True)
     staged: List[Dict[str, str]] = []
+    prefixes = set()
     for row in rows:
+        prefix = _camisim_sequence_prefix(row["genome_ID"])
+        if prefix in prefixes:
+            raise ValueError(f"Ambiguous CAMISIM genome ID after normalization: {row['genome_ID']}")
+        prefixes.add(prefix)
         copy = dict(row)
         src = Path(row["path"])
         dest = staged_dir / f"{row['genome_ID']}.fna"
@@ -1014,8 +1042,10 @@ params {{
 
 process.time = '2h'
 """
+    # Nextflow 25 defaults to mamba. Force the conda binary our launch shim provides.
+    body += "\nconda.useMamba = false\n"
     if conda_cache:
-        body += f'\nconda.cacheDir = "{conda_cache}"\n'
+        body += f'conda.cacheDir = "{conda_cache}"\n'
     nano_env = (
         tool_env_prefix("nanosim")
         or tool_env_prefix("nanosim3")
@@ -1113,7 +1143,6 @@ view=False
 
 
 def write_generate_pipeline(output_dir: str, cfg: Dict[str, Any]) -> str:
-    from samovar.paths import python_path as py_path
     from samovar.paths import shell_outdir_override_snippet, shell_source_install_env_snippet
 
     base = Path(absolute_path(output_dir))
@@ -1121,21 +1150,16 @@ def write_generate_pipeline(output_dir: str, cfg: Dict[str, Any]) -> str:
     generate.mkdir(parents=True, exist_ok=True)
     yaml_path = config_yaml_path(str(base))
     root = repo_root()
-    py = py_path()
-    tool_path = runtime_path_prefix()
+    from samovar.paths import shell_runtime_snippet
+
     env_snippet = shell_source_install_env_snippet()
+    runtime_snippet = shell_runtime_snippet()
     pipeline = generate / "generate.sh"
     pipeline.write_text(
         f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
-{env_snippet}export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
-export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
-PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
-if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
-  PYTHON_PATH="$(command -v python3 || command -v python || true)"
-fi
-PYTHON_PATH="${{PYTHON_PATH:-python3}}"
+{env_snippet}{runtime_snippet}export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
 
 out_dir="{base}"
 {shell_outdir_override_snippet()}
@@ -1229,17 +1253,19 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
     mode = normalize_camisim_mode(cfg.get("mode"))
     dist_dir = work / "distributions"
     design_rows = [r for r in rows if r.get("host") != "1"] or list(rows)
-    samples = design_communities(
-        [r["genome_ID"] for r in design_rows],
-        int(cfg.get("n_samples") or 1),
-        seed=int(cfg.get("seed") or 42),
-        mode=str((cfg.get("distribution") or {}).get("mode") or "differential"),
-        log_mu=float((cfg.get("distribution") or {}).get("log_mu", 1)),
-        log_sigma=float((cfg.get("distribution") or {}).get("log_sigma", 2)),
-        gauss_mu=float((cfg.get("distribution") or {}).get("gauss_mu", 1)),
-        gauss_sigma=float((cfg.get("distribution") or {}).get("gauss_sigma", 1)),
-    )
-    if mode != "table":
+    samples = cfg.get("communities")
+    if samples is None:
+        samples = design_communities(
+            [r["genome_ID"] for r in design_rows],
+            int(cfg.get("n_samples") or 1),
+            seed=int(cfg.get("seed") or 42),
+            mode=str((cfg.get("distribution") or {}).get("mode") or "differential"),
+            log_mu=float((cfg.get("distribution") or {}).get("log_mu", 1)),
+            log_sigma=float((cfg.get("distribution") or {}).get("log_sigma", 2)),
+            gauss_mu=float((cfg.get("distribution") or {}).get("gauss_mu", 1)),
+            gauss_sigma=float((cfg.get("distribution") or {}).get("gauss_sigma", 1)),
+        )
+    if mode != "table" and cfg.get("communities") is None:
         samples = add_host_abundance(
             samples,
             rows,
@@ -1266,6 +1292,7 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
         # Native design only. CAMISIM Nextflow ignores just_community_design when
         # distribution_files is set, and would otherwise start a full ART run.
         outputs = _iss_from_distributions(cfg, rows, samples, out_dir)
+        require_generated_samples(out_dir, [str(i + 1) for i in range(int(cfg.get("n_samples") or 1))])
         return {
             "mode": mode,
             "abundance": str(abundance_csv),
@@ -1299,6 +1326,11 @@ def run_from_config(config_path: str) -> Dict[str, Any]:
     else:
         read_type = next(iter(harvested))
         outputs = _promote_to_full(harvested[read_type], out_dir, int(cfg.get("n_samples") or 1), read_type)
+    from samovar.seqio import canonicalize_single_end_fastqs
+
+    renamed = canonicalize_single_end_fastqs(out_dir)
+    outputs = [str(renamed.get(Path(path), Path(path))) for path in outputs]
+    require_generated_samples(out_dir, [str(i + 1) for i in range(int(cfg.get("n_samples") or 1))])
     return {
         "mode": mode,
         "abundance": str(abundance_csv),
@@ -1338,6 +1370,86 @@ def _try_camisim_community(cfg: Dict[str, Any], work: Path) -> bool:
     except Exception as exc:
         logger.warning("CAMISIM community design skipped (%s); using native abundances", exc)
         return False
+
+
+def nextflow_version(binary: str) -> Optional[Tuple[int, int, int]]:
+    """``(major, minor, patch)`` from ``nextflow -version``, or None."""
+    try:
+        result = subprocess.run(
+            [str(binary), "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = (result.stdout or "") + (result.stderr or "")
+    match = re.search(r"version\s+(\d+)\.(\d+)\.(\d+)", text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def nextflow_supports_camisim(version: Optional[Tuple[int, int, int]]) -> bool:
+    """Nextflow 26 rejects CAMISIM's ``if`` / ``includeConfig`` mix."""
+    if version is None:
+        return True
+    return version < (26, 0, 0)
+
+
+def absolute_conda_executable() -> Optional[str]:
+    """Conda binary Nextflow should exec, not the shell function named ``conda``."""
+    env = os.environ.get("CONDA_EXE", "").strip()
+    candidates = [env, shutil.which("conda") or ""]
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        path = Path(text).expanduser()
+        try:
+            if path.is_file():
+                return str(path.resolve())
+        except OSError:
+            continue
+    return None
+
+
+def write_conda_mkdir_shim(directory: Path, conda_bin: Optional[str] = None) -> Optional[Path]:
+    """``conda`` on PATH that drops ``--mkdir`` and execs the absolute conda binary.
+
+    Nextflow <=24.10 passes ``conda create --mkdir``, which conda >=25.3 rejects.
+    A shell function named ``conda`` is invisible to that process, so the shim
+    must call ``CONDA_EXE`` by path.
+    """
+    real = conda_bin or absolute_conda_executable()
+    if not real:
+        return None
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "conda"
+    py = python_path()
+    script.write_text(
+        f"#!{py}\n"
+        "import os, sys\n"
+        f"real = {str(Path(real).resolve())!r}\n"
+        "args = [arg for arg in sys.argv[1:] if arg != '--mkdir']\n"
+        "os.execv(real, [real, *args])\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def nextflow_cache_dir(work: Path, cam_type: str) -> Path:
+    """Per-run Nextflow cache. The CAMISIM checkout must stay the cwd.
+
+    ``-resume`` locks the session in ``NXF_CACHE_DIR`` (otherwise the shared
+    clone's ``.nextflow``). Parallel runs in that clone then fail with
+    ``Unable to acquire lock on session``.
+    """
+    path = Path(work) / f"nf_cache_{cam_type}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
 
 
 def nextflow_run_cmd(
@@ -1387,11 +1499,32 @@ def _run_camisim_reads(
     log_path = dest / "camisim.nextflow.log"
     if kind == "nextflow":
         nxt = discover_nextflow() or run_cfg.get("nextflow") or "nextflow"
+        version = nextflow_version(str(nxt))
+        if not nextflow_supports_camisim(version):
+            logger.warning(
+                "Nextflow %s breaks CAMISIM (if statements cannot be mixed with "
+                "config statements). Install nextflow>=25.04.2,<26.",
+                ".".join(str(part) for part in (version or ())),
+            )
+            return False
         cmd = nextflow_run_cmd(str(nxt), str(root), nf, work / f"nf_work_{cam_type}")
         extra = extra_flags_argv(
             run_cfg.get("extra_flags") or run_cfg.get("reads_generator_flags")
         )
         cmd.extend(extra)
+        env = os.environ.copy()
+        env["NXF_CACHE_DIR"] = str(nextflow_cache_dir(work, cam_type))
+        shim = write_conda_mkdir_shim(work / "conda_shim")
+        if shim is not None:
+            env["PATH"] = str(shim.parent) + os.pathsep + env.get("PATH", "")
+            real_conda = absolute_conda_executable()
+            if real_conda:
+                env["CONDA_EXE"] = real_conda
+        elif version is not None and version < (25, 4, 2):
+            logger.warning(
+                "Nextflow %s calls conda create --mkdir and no conda binary was found to wrap.",
+                ".".join(str(part) for part in version),
+            )
         logger.info("Running CAMISIM: %s (cwd=%s)", " ".join(cmd), root)
         try:
             with open(log_path, "w", encoding="utf-8") as log:
@@ -1400,6 +1533,7 @@ def _run_camisim_reads(
                 result = subprocess.run(
                     cmd,
                     cwd=str(root),
+                    env=env,
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     check=False,
@@ -1537,14 +1671,21 @@ def _mate_kind(path: Path, rows: Optional[Sequence[Dict[str, str]]] = None) -> s
     return "R1"
 
 
+def _camisim_sequence_prefix(genome_id: str) -> str:
+    """Contig-id prefix shared by FASTA staging and NanoSim read recovery."""
+    return re.sub(r"[^A-Za-z0-9]", "", str(genome_id)) or "g"
+
+
 def _taxid_for_filename(path: Path, rows: Sequence[Dict[str, str]]) -> str:
+    if _is_pooled_fastq(path):
+        return ""  # Mixed taxa: recover the genome id from each read header.
     by_id = {r["genome_ID"]: r["NCBI_ID"] for r in rows}
     name = path.name
     for gid, taxid in sorted(by_id.items(), key=lambda kv: len(kv[0]), reverse=True):
         if gid in name:
             return str(taxid)
     tax = taxid_from_fasta_name(path)
-    return tax or ""
+    return tax if tax and tax.isdigit() else ""
 
 
 def _taxid_for_read_id(header_or_id: str, rows: Sequence[Dict[str, str]]) -> str:
@@ -1552,9 +1693,13 @@ def _taxid_for_read_id(header_or_id: str, rows: Sequence[Dict[str, str]]) -> str
     raw = str(header_or_id or "")
     body = raw[1:] if raw.startswith("@") else raw
     rid = body.split(None, 1)[0] if body else ""
-    for row in sorted(rows, key=lambda r: len(str(r["genome_ID"])), reverse=True):
+    for row in sorted(rows, key=lambda r: len(_camisim_sequence_prefix(r["genome_ID"])), reverse=True):
         gid = str(row["genome_ID"])
-        if rid == gid or rid.startswith(gid):
+        normalized = _camisim_sequence_prefix(gid)
+        staged = normalized + "c"
+        if (rid == gid or rid.startswith(gid + "_") or rid == normalized
+                or rid.startswith(normalized + "_")
+                or re.match(re.escape(staged) + r"\d+(?=[^A-Za-z0-9]|$)", rid)):
             return str(row["NCBI_ID"])
     return ""
 
@@ -1570,11 +1715,20 @@ def tag_fastq_file(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     same_file = src.resolve() == dest.resolve()
-    write_to = dest.with_name(dest.name + ".tagging.tmp") if same_file else dest
+    write_to = dest
+    if same_file:
+        scratch = dest.parent / ".tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        write_to = scratch / (dest.name + ".tagging.tmp")
 
     def chunks() -> Iterable[str]:
         for header, seq, plus, qual in iter_fastq_records(src):
             rec_tax = taxid or (_taxid_for_read_id(header, rows) if rows else "")
+            if rows and not rec_tax:
+                match = TAXID_RE.search(header)
+                rec_tax = match.group(1) if match else ""
+                if not rec_tax:
+                    raise ValueError(f"Cannot resolve ground-truth taxid for read {header.strip()!r} in {src}")
             yield tag_read_id(header, read_type, rec_tax) + "\n"
             yield seq
             yield plus
@@ -1598,14 +1752,15 @@ def _harvest_camisim_reads(
     for i, files in enumerate(groups, start=1):
         r1_src = [p for p in files if _mate_kind(p, rows) == "R1"]
         r2_src = [p for p in files if _mate_kind(p, rows) == "R2"]
-        r1_dest = out_dir / f"{i}_{read_type}_R1.fastq"
+        r1_dest = find_fastq_mate(out_dir, f"{i}_{read_type}") or out_dir / f"{i}_{read_type}_R1.fastq"
         r2_dest = out_dir / f"{i}_{read_type}_R2.fastq"
         _concat_tagged(r1_src, r1_dest, read_type, rows)
+        written.append(r1_dest)
         if r2_src:
             _concat_tagged(r2_src, r2_dest, read_type, rows)
-        else:
-            _write_empty_fastq(r2_dest)
-        written.extend([r1_dest, r2_dest])
+            written.append(r2_dest)
+        elif r2_dest.exists():
+            r2_dest.unlink()
     return written
 
 
@@ -1640,7 +1795,7 @@ def _write_empty_fastq(path: Path) -> None:
 
 
 _TECH_FASTQ = re.compile(
-    r"^(\d+)_(illumina|ont|wgsim|nanosim3|art)_(R[12])\.fastq(?:\.gz)?$",
+    r"^(\d+)_(illumina|ont|wgsim|nanosim3|art)(?:_(R[12]))?\.fastq(?:\.gz)?$",
     re.IGNORECASE,
 )
 
@@ -1667,14 +1822,14 @@ def _merge_hybrid_reads(
     A mixed paired-end/single-end library cannot be passed to classifiers as a
     paired FASTQ because R1 and R2 would contain different record counts. If a
     sample includes any single-end technology, flatten every sequence (both
-    paired ends plus the long reads) into R1 and leave R2 empty. Annotator
-    wrappers then select their single-end CLI form.
+    paired ends plus the long reads) into R1 and do not leave an R2 file.
+    Annotator wrappers then select their single-end CLI form.
     """
     outputs: List[str] = []
     for i in range(1, n_samples + 1):
         by_type = {
             read_type: {
-                mate: out_dir / f"{i}_{read_type}_{mate}.fastq"
+                mate: find_fastq_mate(out_dir, f"{i}_{read_type}", mate) or out_dir / f"{i}_{read_type}_{mate}.fastq"
                 for mate in ("R1", "R2")
             }
             for read_type in harvested
@@ -1695,11 +1850,12 @@ def _merge_hybrid_reads(
                     path = paths[mate]
                     if path.is_file() and path.stat().st_size > 0:
                         r1_parts.append(path)
-            r1_dest = out_dir / f"{i}_full_R1.fastq"
+            r1_dest = find_fastq_mate(out_dir, f"{i}_full") or out_dir / f"{i}_full_R1.fastq"
             r2_dest = out_dir / f"{i}_full_R2.fastq"
             concat_fastq_files(r1_parts, r1_dest)
-            _write_empty_fastq(r2_dest)
-            outputs.extend([str(r1_dest), str(r2_dest)])
+            if r2_dest.exists():
+                r2_dest.unlink()
+            outputs.append(str(r1_dest))
             continue
         for mate in ("R1", "R2"):
             parts = [
@@ -1707,13 +1863,13 @@ def _merge_hybrid_reads(
                 for paths in by_type.values()
                 if paths[mate].is_file() and paths[mate].stat().st_size > 0
             ]
-            dest = out_dir / f"{i}_full_{mate}.fastq"
+            dest = find_fastq_mate(out_dir, f"{i}_full", mate) or out_dir / f"{i}_full_{mate}.fastq"
             if parts:
                 concat_fastq_files(parts, dest)
             else:
                 _write_empty_fastq(dest)
             outputs.append(str(dest))
-    _remove_tech_fastq_copies(out_dir)
+    # Keep the original libraries for hybrid assembly (including Illumina mates).
     return outputs
 
 
@@ -1727,13 +1883,16 @@ def _promote_to_full(
     outputs: List[str] = []
     for i in range(1, n_samples + 1):
         for mate in ("R1", "R2"):
-            src = out_dir / f"{i}_{read_type}_{mate}.fastq"
-            dest = out_dir / f"{i}_full_{mate}.fastq"
-            if src.is_file():
+            src = find_fastq_mate(out_dir, f"{i}_{read_type}", mate) or out_dir / f"{i}_{read_type}_{mate}.fastq"
+            dest = find_fastq_mate(out_dir, f"{i}_full", mate) or out_dir / f"{i}_full_{mate}.fastq"
+            if src.is_file() and src.stat().st_size > 0:
                 shutil.copy2(src, dest)
-            else:
+                outputs.append(str(dest))
+            elif mate == "R1":
                 _write_empty_fastq(dest)
-            outputs.append(str(dest))
+                outputs.append(str(dest))
+            elif dest.exists():
+                dest.unlink()
     _remove_tech_fastq_copies(out_dir)
     return outputs
 

@@ -183,6 +183,9 @@ def annotation_to_abundance_tables(frame: pd.DataFrame) -> Dict[str, pd.DataFram
     result: Dict[str, pd.DataFrame] = {}
     for col in taxid_annotation_columns(work):
         piece = work[[col, "sample"]].copy()
+        from samovar.taxonomy import require_regeneration_taxids
+
+        require_regeneration_taxids(piece[col].tolist(), source=str(col))
         piece[col] = piece[col].astype(str)
         mat = piece.groupby([col, "sample"], dropna=False).size().unstack(fill_value=0)
         mat.index = mat.index.astype(str)
@@ -191,6 +194,13 @@ def annotation_to_abundance_tables(frame: pd.DataFrame) -> Dict[str, pd.DataFram
         n_cols = n_sample_columns(out)
         if n_cols:
             out = out[out[n_cols].sum(axis=1) > 0]
+        if out.empty:
+            # All labels were missing. Keep the annotator so the column
+            # contract matches a table where this tool did classify.
+            sample = "1"
+            if "sample" in work.columns and len(work.index):
+                sample = str(work["sample"].iloc[0])
+            out = pd.DataFrame({"taxid": ["0"], f"N_{sample}": [0]})
         result[annotator_name(col)] = out.reset_index(drop=True)
     return result
 
@@ -229,13 +239,24 @@ def dir_looks_like_annotation(path: PathLike) -> bool:
     folder = Path(path)
     if not folder.is_dir():
         return False
+    combined = None
     for csv in sorted(folder.glob("*.csv")):
-        if csv.name.startswith("combined_annotation_table") or csv.name.startswith("."):
+        if csv.name.startswith("."):
+            continue
+        if csv.name.startswith("combined_annotation_table"):
+            combined = csv
             continue
         try:
             peek = pd.read_csv(csv, nrows=5)
         except Exception:
             continue
+        if looks_like_annotation(peek) and not is_abundance_table(peek):
+            return True
+    if combined is not None:
+        try:
+            peek = pd.read_csv(combined, nrows=5)
+        except Exception:
+            return False
         if looks_like_annotation(peek) and not is_abundance_table(peek):
             return True
     return False

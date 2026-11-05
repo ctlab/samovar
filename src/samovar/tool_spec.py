@@ -47,8 +47,8 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "metax": "conda install -y -c zldeng metax=0.9.23=beta_0",
     "iss": "pip install 'insilicoseq>2.0.0'",
     "snakemake": "pip install snakemake",
-    "multiqc": "pip install 'multiqc>=1.21'",
-    "nextflow": "conda install -y bioconda::nextflow",
+    "multiqc": "pip install 'multiqc>=1.21' && pip install 'kaleido>=1'",
+    "nextflow": "conda install -y 'bioconda::nextflow>=25.04.2,<26'",
     "wgsim": "conda install -y bioconda::wgsim",
     "art_illumina": "conda install -y bioconda::art",
     "seqtk": "conda install -y bioconda::seqtk",
@@ -91,14 +91,97 @@ DEFAULT_FLAGS_TRANSLATE: Dict[str, Dict[str, str]] = {
     "custom": {"--threads": "-t", "--cores": "-t"},
     "assembly": {"--threads": "-t", "--cores": "-t"},
     "assembly_profiling": {"--threads": "-t", "--cores": "-t"},
-    "megahit": {"--threads": "-t", "--cores": "-t"},
-    "flye": {"--threads": "-t", "--cores": "-t"},
-    "metaflye": {"--threads": "-t", "--cores": "-t"},
+    "megahit": {"--threads": "-t", "--cores": "-t", "--mem_mb": "-m@bytes"},
+    "spades": {"--threads": "-t", "--cores": "-t", "--mem_mb": "-m@gb"},
+    "flye": {"--threads": "-t", "--cores": "-t", "--mem_mb": "--asm-coverage@40"},
+    "metaflye": {"--threads": "-t", "--cores": "-t", "--mem_mb": "--asm-coverage@40"},
     "fastp": {"--threads": "--thread", "--cores": "--thread"},
     "cutadapt": {"--threads": "--cores", "--cores": "--cores"},
     "trimmomatic": {"--threads": "-threads", "--cores": "-threads"},
     "chopper": {"--threads": "--threads", "--cores": "--threads"},
 }
+
+# Cores one Snakemake job may reserve. ``--cores`` stays the machine budget.
+# A rule that reserves the whole budget runs alone, even when samples are independent.
+SCHEDULER_THREAD_CAP = {
+    "gc": 1,
+    "length": 1,
+    # Same OpenMP counter as kmer2 (samovar_kmer -k). Cap matches that job.
+    "kmer_encoder": 8,
+    # OpenMP over reads. Several samples at this width beat one job on every core.
+    "kmer2": 8,
+    "kaiju": 32,
+    "kraken2": 16,
+    "kraken": 16,
+    "krakenuniq": 16,
+    "metaphlan": 8,
+    "metaphlan4": 8,
+    # Alignment uses the threads. The profile after it is one thread and would
+    # otherwise hold every core until it finishes.
+    "metax": 4,
+    "centrifuge": 8,
+    # Widest assembly stage. Later stages use a lower cap inside the assembly job.
+    "assembly": 16,
+    "assembly_profiling": 16,
+}
+DEFAULT_SCHEDULER_CAP = 8
+
+# RSS is the database. One of these jobs takes the whole memory ceiling, so
+# Kraken2 and MetaX cannot run beside each other.
+HEAVY_DB_TOOLS = frozenset({
+    "kraken2", "kraken", "krakenuniq", "metax", "flye", "metaflye",
+})
+
+# Higher runs first. Kaiju (including kaiju-multi) finishes the cohort before a
+# database-sized job occupies the machine. Heavy families then go one at a time.
+# Light tools share whatever memory is left and run together.
+ANNOTATOR_PRIORITY = {
+    "kaiju": 100,
+    "kraken2": 80,
+    "kraken": 70,
+    "krakenuniq": 60,
+    "metax": 50,
+}
+DEFAULT_ANNOTATOR_PRIORITY = 10
+
+
+def _tool_key(tool: str) -> str:
+    return str(tool or "").strip().lower().replace("-", "_")
+
+
+def heavy_db_tool(tool: str) -> bool:
+    return _tool_key(tool) in HEAVY_DB_TOOLS
+
+
+def memory_tool_name(tool: str, extra: str = "") -> str:
+    """Tool key used for the memory budget.
+
+    An assembly job that runs Flye takes Flye's ceiling. MEGAHIT and SPAdes
+    stay on the assembly thread share.
+    """
+    key = _tool_key(tool)
+    if key not in {"assembly", "assembly_profiling"}:
+        return key
+    parts = str(extra or "").split()
+    if "--assembler" not in parts:
+        return key
+    assembler = _tool_key(parts[parts.index("--assembler") + 1]) if parts.index("--assembler") + 1 < len(parts) else ""
+    if assembler in {"flye", "metaflye", "meta_flye"}:
+        return "flye"
+    return key
+
+
+def annotator_priority(tool: str) -> int:
+    return ANNOTATOR_PRIORITY.get(_tool_key(tool), DEFAULT_ANNOTATOR_PRIORITY)
+
+
+def scheduler_threads(tool: str, cores: int, *, n_samples: int = 1) -> int:
+    """Cores this annotator job may take from ``--cores``."""
+    del n_samples
+    budget = max(1, int(cores or 1))
+    key = str(tool or "").strip().lower().replace("-", "_")
+    cap = SCHEDULER_THREAD_CAP.get(key, DEFAULT_SCHEDULER_CAP)
+    return max(1, min(budget, cap))
 
 _VERSION_TOKEN = re.compile(r"(\d+\.\d+(?:\.\d+)?)")
 
@@ -330,7 +413,17 @@ def record_to_spec(record: Mapping[str, Any], name: str = "") -> List[str]:
     )
 
 
-def probe_tool_version(path: str, name: str = "") -> str:
+def probe_tool_version(
+    path: str, name: str = "", *, cfg: Optional[Mapping[str, Any]] = None,
+) -> str:
+    bare = bare_tool_name(name)
+    if cfg is not None:
+        from samovar.paths import python_path, resolve_executable
+
+        try:
+            path = python_path(cfg) if bare in {"python", "python3"} else resolve_executable(path, tool_key=bare, cfg=cfg)
+        except OSError:
+            return ""
     exe = str(path or "").strip()
     if not exe:
         return ""
@@ -351,7 +444,6 @@ def probe_tool_version(path: str, name: str = "") -> str:
         match = _VERSION_TOKEN.search(blob)
         if match:
             return match.group(1)
-    bare = bare_tool_name(name)
     if bare in {"python", "python3"}:
         try:
             proc = subprocess.run(
@@ -385,20 +477,53 @@ def custom_flags_from_cfg(cfg: Optional[Mapping[str, Any]] = None) -> List[str]:
     return out
 
 
+def _scaled_flag_value(value: Any, unit: str) -> str:
+    """Turn a MiB budget into the unit stored after ``@`` in flags-translate."""
+    if unit.isdigit():
+        return unit
+    mb = max(0, int(float(value)))
+    if unit == "bytes":
+        return str(mb * 1024 * 1024)
+    if unit == "gb":
+        return str(max(1, (mb + 1023) // 1024))
+    if unit == "mb":
+        return str(max(1, mb))
+    return str(value)
+
+
 def translated_argv(canonical_flag: str, value: Any, mapping: Mapping[str, str]) -> str:
+    """One ``dest value`` token. ``-m@bytes`` / ``-m@gb`` convert MiB; ``--flag@40`` is constant."""
     dest = mapping.get(_norm_flag(canonical_flag)) or mapping.get(str(canonical_flag).strip())
     if not dest:
         return ""
+    unit = ""
+    if "@" in dest:
+        dest, unit = dest.rsplit("@", 1)
     if value is True or value in (None, ""):
         return str(dest)
     if value is False:
         return ""
+    if unit:
+        value = _scaled_flag_value(value, unit)
     return f"{dest} {value}".strip()
 
 
 def threads_cli_token(name: str, threads: Any, record: Optional[Mapping[str, Any]] = None) -> str:
     mapping = flags_translate_for(name, record)
     return translated_argv("--threads", threads, mapping)
+
+
+def mem_cli_token(name: str, mem_mb: Any, record: Optional[Mapping[str, Any]] = None) -> str:
+    """Memory flag for ``name`` from a MiB budget, or empty when unmapped or unset."""
+    if mem_mb in (None, "", False):
+        return ""
+    try:
+        if int(float(mem_mb)) <= 0:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    mapping = flags_translate_for(name, record)
+    return translated_argv("--mem_mb", mem_mb, mapping)
 
 
 def apply_translated_flags(
@@ -468,13 +593,14 @@ def version_mismatch_rows(cfg: Optional[Mapping[str, Any]] = None) -> List[Tuple
     for key, value in raw.items():
         rec = parse_tool_record(value, str(key))
         bare, prev = split_tool_key(key)
-        found = probe_tool_version(str((rec.get("exec") or {}).get("path") or ""), bare)
         tested = TESTED_TOOL_VERSIONS.get(bare) or prev
         if bare == "samovar":
             from samovar.version import get_version
 
             found = get_version()
             tested = get_version()
+        else:
+            found = probe_tool_version(str((rec.get("exec") or {}).get("path") or ""), bare, cfg=data)
         if not found or not tested:
             continue
         if found.split(".")[:2] != tested.split(".")[:2] and found != tested:
@@ -510,3 +636,65 @@ def parse_known_with_custom(parser, argv: Optional[Sequence[str]] = None):
         except (TypeError, ValueError):
             pass
     return args, leftover
+
+
+_UNKNOWN_OPTION = re.compile(
+    r"(?:unknown|unrecognized|unrecognised|invalid|illegal)\s+option\b",
+    re.IGNORECASE,
+)
+
+
+def check_external_flags(cmd: str, extra: Optional[str], *, timeout: float = 5) -> None:
+    """Ask an installed tool whether ``extra`` flags are accepted.
+
+    The tool is started with only those flags and no inputs. A missing binary,
+    a built-in Python module, or a check that does not finish is left alone.
+    A message such as ``Unknown option`` stops prepare before annotation.
+    """
+    text = str(extra or "").strip()
+    if not text:
+        return
+    try:
+        flags = shlex.split(text)
+    except ValueError as exc:
+        raise ValueError(f"Cannot parse flags for {cmd}: {exc}") from exc
+    if not any(token.startswith("-") for token in flags):
+        return
+    from samovar.paths import command_argv, resolve_executable
+
+    argv = command_argv(cmd)
+    if not argv or "-m" in argv:
+        return
+    token = argv[0]
+    if Path(token).name in {"python", "python3"}:
+        return
+    token_path = Path(token).expanduser()
+    if token_path.is_absolute() or "/" in token:
+        if not (token_path.is_file() and os.access(token_path, os.X_OK)):
+            return
+        path = token_path.resolve()
+    else:
+        resolved = resolve_executable(token)
+        exe = command_argv(resolved)[0] if resolved else ""
+        path = Path(exe).expanduser() if exe else Path()
+        if not (path.is_file() and os.access(path, os.X_OK)):
+            import shutil
+
+            found = shutil.which(token)
+            if not found:
+                return
+            path = Path(found)
+    try:
+        proc = subprocess.run(
+            [str(path), *flags],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    blob = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+    line = next((row.strip() for row in blob.splitlines() if _UNKNOWN_OPTION.search(row)), "")
+    if line:
+        raise ValueError(f"{path.name}: {line}")

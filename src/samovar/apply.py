@@ -23,14 +23,21 @@ import yaml
 
 from samovar.abundance import materialize_observed_abundance, regenerated_abundance_dir
 from samovar.abundance_correctors import export_run_dir, is_skipped_export
-from samovar.combine_tables import combine_with_cpp
+from samovar.combine_tables import combine_with_cpp, finalize_annotations
 from samovar.exec_control import CHECKPOINT_STEPS, mark_done, resolve_window
-from samovar.paths import add_output_dir_argument, repo_root, runtime_path_prefix
+from samovar.memory import memory_limit_mb
+from samovar.paths import add_output_dir_argument, python_path, repo_root, runtime_path_prefix
+from samovar.tool_spec import scheduler_threads
 from samovar.qc import trim_stage
 from samovar.regenerate import stage_regenerate_tables
 from samovar.reprofilers import apply_saved_reprofiler, run_reprofiler
 from samovar.scorers import run_custom_scorers
-from samovar.seqio import has_r1_reads, link_or_copy_reads, list_r1_files
+from samovar.seqio import (
+    has_r1_reads,
+    link_or_copy_reads,
+    list_r1_files,
+    validate_fastq_directory,
+)
 from samovar.table_scorers import stage_score_regenerated_tables
 from samovar.sample_scorers import sample_qc_configured, stage_score_sample_qc
 from samovar.sample_filters import sample_filter_configured, stage_filter_sample_qc
@@ -216,18 +223,33 @@ def _apply_env(dest: Path) -> Dict[str, str]:
     env["PYTHONPATH"] = f"{root / 'src'}{os.pathsep}{env['PYTHONPATH']}" if env.get("PYTHONPATH") else str(root / "src")
     env["SAMOVAR_ROOT"] = str(root)
     env["SAMOVAR_RUN_DIR"] = str(dest)
+    env["PYTHON_PATH"] = python_path()
     return env
 
 
-def _retarget_init_config(cfg: Dict[str, Any], dest: Path, cores: int) -> Dict[str, Any]:
+def _retarget_init_config(
+    cfg: Dict[str, Any], dest: Path, cores: int, mem_mb: int
+) -> Dict[str, Any]:
     out = copy.deepcopy(cfg)
     trimmed = dest / "initial_trimmed"
     out["r1_dir"] = str(trimmed)
     out["r2_dir"] = str(trimmed)
     out["output_dir"] = str(dest / "initial_reports")
+    out["annotation_dir"] = str(dest / "initial_annotations")
+    if cfg.get("mag_catalog_root"):
+        out["mag_catalog_root"] = str(dest / "MAG")
+        # New samples are queries against the trained run's frozen reference,
+        # even though their output folder is named initial_annotations.
+        out["mag_catalog_phase"] = "regenerated"
+    out["cores"] = int(cores)
+    out["mem_mb"] = int(mem_mb)
+    from samovar.taxdump import require_metax_taxdump
+
+    require_metax_taxdump(out.get("run_config"))
     for run in out.get("run_config") or []:
         if isinstance(run, dict):
-            run["threads"] = cores
+            tool = str(run.get("type") or run.get("run_name") or "")
+            run["threads"] = scheduler_threads(tool, cores)
     return out
 
 
@@ -241,7 +263,27 @@ def _retarget_annotation2iss(cfg: Dict[str, Any], dest: Path, cores: int) -> Dic
     return out
 
 
-def _run_annotators(config: Dict[str, Any], dest: Path, cores: int, env: Dict[str, str]) -> None:
+def _combine_initial(dest: Path, cfg: Dict[str, Any]) -> None:
+    """Finish tables in ``dest``. Incremental ingest already filled per-sample CSVs."""
+    reports = dest / "initial_reports"
+    ann = dest / "initial_annotations"
+    parts = list(ann.glob("*.annotation.csv")) if ann.is_dir() else []
+    ingested = reports.is_dir() and any(reports.glob("*.ingested"))
+    truth = str(cfg.get("truth_table") or "").strip() or None
+    if parts or ingested:
+        finalize_annotations(ann, truth_table=truth)
+        return
+    combine_with_cpp(
+        str(reports),
+        str(ann),
+        int(cfg.get("split_sample_name") or 1),
+        truth_table=truth,
+    )
+
+
+def _run_annotators(
+    config: Dict[str, Any], dest: Path, cores: int, env: Dict[str, str], mem_mb: int
+) -> None:
     cfg_path = dest / ".log" / "configs" / "config_init.yaml"
     _dump_yaml(cfg_path, config)
     snakefile = repo_root() / "workflow" / "annotators" / "Snakefile"
@@ -257,6 +299,8 @@ def _run_annotators(config: Dict[str, Any], dest: Path, cores: int, env: Dict[st
             str(dest),
             "--cores",
             str(cores),
+            "--resources",
+            f"mem_mb={mem_mb}",
         ]
         subprocess.check_call(cmd, env=env)
         return
@@ -278,7 +322,7 @@ def _run_annotators(config: Dict[str, Any], dest: Path, cores: int, env: Dict[st
                 raise IncompatibleInputError(f"missing R1 for sample {sample}")
             outs = annotator.get_expected_outputs(sample, str(reports))
             Path(outs[0]).parent.mkdir(parents=True, exist_ok=True)
-            cmd = annotator.get_snakemake_shell_cmd(str(r1), str(r2) if r2 else str(r1), outs)
+            cmd = annotator.get_snakemake_shell_cmd(str(r1), str(r2) if r2 else "", outs)
             subprocess.check_call(cmd, shell=True, env=env)
 
 
@@ -315,12 +359,21 @@ def _viz_and_score(
     combined: Optional[Path] = None,
 ) -> None:
     try:
+        from samovar.viz_annotation import normalize_viz_config
+
+        viz = normalize_viz_config(scoring_cfg.get("viz"))
         compare_annotations(
             annotation_dir=str(annotation_dir),
             output_dir=str(plots_dir),
             csv_file=str(combined) if combined else None,
             show_top=0,
             rank="none",
+            types=("f1", "R2", "cv", "scores") if viz["full"] else ("scores",),
+            opal=viz["opal"],
+            metrics_sample=viz["metrics_sample"],
+            metrics=viz["metrics"],
+            seed=int(scoring_cfg.get("seed", 42)),
+            threads=int(scoring_cfg.get("cores", 1)),
         )
     except Exception as exc:
         print(f"[apply] visualization skipped ({stage}): {exc}", file=sys.stderr)
@@ -336,6 +389,7 @@ def apply_pipeline(
     *,
     full: bool = False,
     cores: int = 1,
+    mem_mb: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run apply. Returns provenance dict written to ``.log/apply.yaml``."""
     src_reads = Path(input_dir).expanduser().resolve()
@@ -367,6 +421,9 @@ def apply_pipeline(
     env = _apply_env(dest)
     steps = configured_steps(state, full=full)
     cores = max(1, int(cores or 1))
+    limit = memory_limit_mb(mem_mb)
+    os.environ["SAMOVAR_MEM_MB"] = str(limit)
+    os.environ["SAMOVAR_CORES"] = str(cores)
 
     scoring_cfg = dict(state.scoring_config)
     scoring_cfg["output_dir"] = str(dest)
@@ -383,9 +440,13 @@ def apply_pipeline(
     repro_cfg["output_dir"] = str(dest / "reprofiled_annotations")
     repro_cfg["initial_dir"] = str(dest / "initial_annotations")
     repro_cfg["seed"] = state.seed
+    repro_cfg["cores"] = cores
+    repro_cfg["mem_mb"] = limit
     _dump_yaml(dest / ".log" / "configs" / "config_reprofiling.yaml", repro_cfg)
 
-    init_cfg = _retarget_init_config(state.init_config, dest, cores)
+    if (state.root / "MAG").is_dir():
+        shutil.copytree(state.root / "MAG", dest / "MAG", dirs_exist_ok=True)
+    init_cfg = _retarget_init_config(state.init_config, dest, cores, limit)
     reference = (
         Path(state.regenerated_annotations)
         if state.regenerated_annotations is not None
@@ -398,16 +459,13 @@ def apply_pipeline(
         if step == "setup_reads":
             (dest / "initial").mkdir(parents=True, exist_ok=True)
             link_or_copy_reads(src_reads, dest / "initial")
+            validate_fastq_directory(dest / "initial")
         elif step == "qc_initial":
             trim_stage(dest, "initial", qc_cfg)
         elif step == "annotate_initial":
-            _run_annotators(init_cfg, dest, cores, env)
+            _run_annotators(init_cfg, dest, cores, env, limit)
         elif step == "combine_initial":
-            combine_with_cpp(
-                str(dest / "initial_reports"),
-                str(dest / "initial_annotations"),
-                1,
-            )
+            _combine_initial(dest, init_cfg)
             _export_stage(
                 dest,
                 "initial",
@@ -466,7 +524,7 @@ def apply_pipeline(
                 name = (
                     repro_cfg.get("reprofiler")
                     or state.reprofiling_config.get("reprofiler")
-                    or "ensemble"
+                    or "random_forest"
                 )
                 run_reprofiler(
                     name,
@@ -537,7 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--input_dir",
+        "--input_dir", "-i", "--input-dir",
         required=True,
         help="Directory with one sample of paired FASTQ (*_R1 / *_R2)",
     )
@@ -555,11 +613,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Regenerate tables from the new sample and refit the ML reprofiler",
     )
     parser.add_argument(
-        "--cores",
+        "--cores", "-t",
         type=int,
         default=1,
-        help="Threads for annotators (default: 1)",
+        help="Machine thread budget. Each annotator reserves its own cap; prediction does not.",
     )
+    from samovar.memory import add_mem_argument
+
+    add_mem_argument(parser)
     return parser
 
 
@@ -572,6 +633,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.output_dir,
             full=bool(args.full),
             cores=args.cores,
+            mem_mb=args.mem_mb,
         )
     except (
         ApplyError,

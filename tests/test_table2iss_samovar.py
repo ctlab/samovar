@@ -10,9 +10,14 @@ import pytest
 import yaml
 
 from samovar.table2iss import (
+    SAMOVAR_R_VERSION,
+    R_REGENERATE_DRIVER,
     _resolve_r_executable,
+    installed_samovar_r_version,
     process_abundance_table,
+    require_compatible_samovar_r,
     samovar_annotation_regenerate,
+    samovar_r_version_ok,
 )
 
 
@@ -25,35 +30,34 @@ def _r_script_from_branch() -> Optional[Path]:
     return dest
 
 
-def _r_with_samovar_available() -> bool:
-    """True when R can load samovaR and the regenerator script is locatable."""
+def _samovar_r_skip_reason() -> str:
+    """Skip integration when R or a compatible samovaR release is absent."""
     if _r_script_from_branch() is None:
-        return False
+        return "R with samovaR package is required for this integration test"
     try:
         r_path, r_lib_path = _resolve_r_executable()
     except FileNotFoundError:
-        return False
+        return "R with samovaR package is required for this integration test"
     env = os.environ.copy()
     if r_lib_path:
         env["R_LIBS"] = r_lib_path
         env["R_LIBS_USER"] = r_lib_path
-    try:
-        proc = subprocess.run(
-            [r_path, "--vanilla", "-s", "-e", "library(samovaR)"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=env,
+    found = installed_samovar_r_version(r_path, env)
+    if not found or found == "MISSING":
+        return "R with samovaR package is required for this integration test"
+    if not samovar_r_version_ok(found):
+        return (
+            f"samovaR {found} is incompatible; this SAMOVAR requires {SAMOVAR_R_VERSION} "
+            "or newer. Run ./install.sh R-package."
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
+    return ""
 
 
-requires_r_samovar = pytest.mark.skipif(
-    not _r_with_samovar_available(),
-    reason="R with samovaR package is required for this integration test",
-)
+@pytest.fixture
+def requires_r_samovar():
+    reason = _samovar_r_skip_reason()
+    if reason:
+        pytest.skip(reason)
 
 
 @pytest.fixture
@@ -67,12 +71,12 @@ def r_regenerator_script(monkeypatch):
 
 @pytest.fixture
 def test_data_dir():
-    return Path("data/test_annotations")
+    return Path(__file__).resolve().parents[1] / "data" / "test_annotations"
 
 
 @pytest.fixture
-def test_output_dir():
-    output_dir = Path("tests_outs/test_samovar")
+def test_output_dir(tmp_path):
+    output_dir = tmp_path / "test_samovar"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
@@ -155,7 +159,7 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypa
         "samovar.table2iss.annotation_regenerate_r", lambda: script
     )
     config_path = _write_config(
-        {**mock_config, "output_dir": str(output_dir), "regeneration_mode": "samovar"}
+        {**mock_config, "N": 1, "output_dir": str(output_dir), "regeneration_mode": "samovar"}
     )
 
     calls = []
@@ -165,14 +169,16 @@ def test_samovar_annotation_regenerate_invokes_r(tmp_path, mock_config, monkeypa
         class Result:
             returncode = 0
 
-        output_dir.mkdir(parents=True, exist_ok=True)
+        generated = Path(cmd[cmd.index("--output_dir") + 1])
+        generated.mkdir(parents=True, exist_ok=True)
         pd.DataFrame({"taxid": [562], "N_1": [10]}).to_csv(
-            output_dir / "kaiju.csv", index=False
+            generated / "kaiju.csv", index=False
         )
         return Result()
 
     try:
         with patch("samovar.table2iss._resolve_r_executable", return_value=("R", None)), \
+             patch("samovar.table2iss.require_compatible_samovar_r"), \
              patch("samovar.table2iss.subprocess.run", side_effect=fake_run):
             samovar_annotation_regenerate(
                 annotation_dir=str(annotation_dir),
@@ -253,6 +259,7 @@ def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config
 
     try:
         with patch("samovar.table2iss._resolve_r_executable", return_value=("R", None)), \
+             patch("samovar.table2iss.require_compatible_samovar_r"), \
              patch("samovar.table2iss.subprocess.run", side_effect=boom):
             with pytest.raises(RuntimeError, match="failed while running R"):
                 samovar_annotation_regenerate(
@@ -265,9 +272,8 @@ def test_samovar_annotation_regenerate_raises_on_r_failure(tmp_path, mock_config
 
 
 @pytest.mark.optional
-@requires_r_samovar
 def test_samovar_annotation_regenerate_basic(
-    test_data_dir, test_output_dir, mock_config, r_regenerator_script
+    test_data_dir, test_output_dir, mock_config, r_regenerator_script, requires_r_samovar
 ):
     """Integration: real R + samovaR regeneration produces abundance CSVs."""
     assert test_data_dir.exists(), f"Missing fixture annotations at {test_data_dir}"
@@ -284,13 +290,15 @@ def test_samovar_annotation_regenerate_basic(
         )
 
         output_files = list(test_output_dir.glob("*.csv"))
-        assert len(output_files) > 0, "No output files were created"
+        assert {p.name for p in output_files} == {"taxID_kraken2.csv", "taxID_kaiju.csv"}
 
         for output_file in output_files:
             df = pd.read_csv(output_file)
             assert not df.empty, f"Output file {output_file} is empty"
             assert "taxid" in df.columns
+            assert "error" not in set(df["taxid"].astype(str))
             numeric = df.drop(columns=["taxid"], errors="ignore")
+            assert len(numeric.columns) == mock_config["N"]
             if not numeric.empty:
                 values = numeric.apply(pd.to_numeric, errors="coerce")
                 assert (values.fillna(0) >= 0).all().all()
@@ -299,9 +307,8 @@ def test_samovar_annotation_regenerate_basic(
 
 
 @pytest.mark.optional
-@requires_r_samovar
 def test_samovar_annotation_regenerate_integration(
-    test_data_dir, test_output_dir, mock_config, r_regenerator_script
+    test_data_dir, test_output_dir, mock_config, r_regenerator_script, requires_r_samovar
 ):
     """Integration: regenerated tables feed process_abundance_table."""
     config_path = _write_config(
@@ -340,6 +347,24 @@ def test_samovar_annotation_regenerate_integration(
                 assert not result.empty
     finally:
         os.unlink(config_path)
+
+
+def test_declared_samovar_r_version_rejects_1_0_0():
+    assert samovar_r_version_ok("1.0.1")
+    assert samovar_r_version_ok("1.0.2")
+    assert not samovar_r_version_ok("1.0.0")
+    assert not samovar_r_version_ok("MISSING")
+    assert SAMOVAR_R_VERSION in R_REGENERATE_DRIVER
+    assert "@@SAMOVAR_R_VERSION@@" not in R_REGENERATE_DRIVER
+    with patch(
+        "samovar.table2iss.installed_samovar_r_version", return_value="1.0.0"
+    ):
+        with pytest.raises(RuntimeError, match="samovaR 1.0.0 is incompatible"):
+            require_compatible_samovar_r("R")
+    with patch(
+        "samovar.table2iss.installed_samovar_r_version", return_value="1.0.1"
+    ):
+        require_compatible_samovar_r("R")
 
 
 def test_process_abundance_table_after_mocked_regenerate(tmp_path, mock_config):

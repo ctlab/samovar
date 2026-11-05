@@ -1,18 +1,12 @@
 import os
-import shutil
 import pytest
 import argparse
 from pathlib import Path
 from src.samovar.config import PipelineConfig, setup_pipeline, AnnotatorConfig
 import yaml
 
-def clean_dir(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-
-def test_pipeline_config_from_args_file():
-    test_output_dir = 'tests_outs/test_pipeline_config_from_args_file'
-    clean_dir(test_output_dir)
+def test_pipeline_config_from_args_file(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config_path = Path(test_output_dir) / "test_config.yaml"
     config_content = """
@@ -58,9 +52,8 @@ def test_pipeline_config_from_args_file():
     assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
 
-def test_pipeline_config_uses_yaml_output_dir_when_cli_unset():
-    test_output_dir = "tests_outs/test_pipeline_config_yaml_output_dir"
-    clean_dir(test_output_dir)
+def test_pipeline_config_uses_yaml_output_dir_when_cli_unset(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config_path = Path(test_output_dir) / "test_config.yaml"
     config_path.write_text(
@@ -92,9 +85,8 @@ def test_pipeline_config_default_output_dir():
     config = PipelineConfig.from_args(args)
     assert config.output_dir == str((Path.cwd() / "samovar_out").resolve())
 
-def test_pipeline_config_from_args_cli():
-    test_output_dir = 'tests_outs/test_pipeline_config_from_args_cli'
-    clean_dir(test_output_dir)
+def test_pipeline_config_from_args_cli(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     args = argparse.Namespace(
         input_config=None,
@@ -117,9 +109,37 @@ def test_pipeline_config_from_args_cli():
     assert kaiju.cmd == "/path/to/kaiju"
     assert kaiju.db_path == "/path/to/kaiju"
 
-def test_generate_configs():
-    test_output_dir = 'tests_outs/test_generate_configs'
-    clean_dir(test_output_dir)
+def test_prepare_rejects_colliding_sample_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (reads / "sample_1.fq").write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Multiple R1 FASTQ files"):
+        PipelineConfig.from_args(argparse.Namespace(
+            input_config=None, input_dir=str(reads), output_dir=str(tmp_path / "out"),
+        ))
+    assert not (tmp_path / "out").exists()
+
+
+def test_prepare_rejects_collision_with_existing_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    first, second, out = (tmp_path / name for name in ("first", "second", "out"))
+    first.mkdir()
+    second.mkdir()
+    (first / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (second / "sample_R1.fastq").write_text("@b\nT\n+\nI\n")
+    (out / "initial").mkdir(parents=True)
+    (out / "initial" / "sample_R1.fastq").symlink_to(first / "sample_R1.fastq")
+    with pytest.raises(ValueError, match="Sample name collision"):
+        PipelineConfig.from_args(argparse.Namespace(
+            input_config=None, input_dir=str(second), output_dir=str(out),
+        ))
+    assert not (out / ".log").exists()
+
+
+def test_generate_configs(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config = PipelineConfig(
         input_dir="/path/to/input",
@@ -163,15 +183,14 @@ def test_generate_configs():
         iss_config = yaml.safe_load(f)
         assert iss_config['gzip_genomes'] is True
         assert iss_config['gzip_reads'] is False
-        assert iss_config['N_reads'] == 1000
-        assert iss_config['max_genomes'] == float("inf")
-        assert iss_config['max_genome_mb'] == float("inf")
+        assert iss_config['N_reads'] == 1000000
+        assert iss_config['max_genomes'] == 100
+        assert iss_config['max_genome_mb'] == 100
         assert iss_config['genome_skip_list'] == []
 
 
-def test_pipeline_config_n_reads_cli_overrides_default():
-    test_output_dir = "tests_outs/test_n_reads_cli"
-    clean_dir(test_output_dir)
+def test_pipeline_config_n_reads_cli_overrides_default(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     args = argparse.Namespace(
         input_config=None,
         input_dir="/path/to/input",
@@ -191,7 +210,7 @@ def test_pipeline_config_n_reads_cli_overrides_default():
     assert iss_config["max_genomes"] == 20
 
 
-def test_pipeline_config_max_genomes_default_inf(tmp_path, monkeypatch):
+def test_pipeline_config_max_genomes_default(tmp_path, monkeypatch):
     monkeypatch.delenv("SAMOVAR_MAX_GENOMES", raising=False)
     args = argparse.Namespace(
         input_config=None,
@@ -201,11 +220,11 @@ def test_pipeline_config_max_genomes_default_inf(tmp_path, monkeypatch):
         kaiju=None,
     )
     config = PipelineConfig.from_args(args)
-    assert config.max_genomes == float("inf")
+    assert config.max_genomes == 100
     configs = config.generate_configs(str(tmp_path))
     with open(configs["annotation2iss"], "r") as f:
         iss_config = yaml.safe_load(f)
-    assert iss_config["max_genomes"] == float("inf")
+    assert iss_config["max_genomes"] == 100
 
 
 def test_pipeline_config_genome_skip_and_max_mb_cli(tmp_path):
@@ -229,9 +248,8 @@ def test_pipeline_config_genome_skip_and_max_mb_cli(tmp_path):
     assert "9606" in iss_config["genome_skip_list"]
 
 
-def test_generate_pipeline():
-    test_output_dir = 'tests_outs/test_generate_pipeline'
-    clean_dir(test_output_dir)
+def test_generate_pipeline(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     config = PipelineConfig(
         input_dir="/path/to/input",
@@ -264,35 +282,38 @@ def test_generate_pipeline():
         
         # Check basic structure
         assert "set -e" in pipeline_content
-        assert "PYTHON_PATH=" in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/compare_annotations.R" not in pipeline_content
         assert "export R_PATH=" not in pipeline_content
-        assert "R_PATH=" not in pipeline_content.replace("SAMOVAR_PATH", "")
         
         # Check config file paths
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
-        assert 'PYTHON_PATH="${PYTHON_PATH:-' in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert '[ -f "$CKPT/$1.done" ]' in pipeline_content
         assert "visualization failed; continuing" not in pipeline_content
         assert "XDG_CONFIG_HOME" in pipeline_content
         assert "samovar/env" in pipeline_content
-        assert "SAMOVAR_PATH" in pipeline_content
-        assert "tool_envs" in pipeline_content or "Baked tool bins" in pipeline_content
+        assert "_runtime-env" in pipeline_content
+        assert 'export PATH="$_SAMOVAR_CALLER_PATH"' in pipeline_content
         
         # Check snakemake commands
-        assert "snakemake -s " in pipeline_content
+        assert '"$SNAKEMAKE" -s ' in pipeline_content
         assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/annotators/Snakefile" in pipeline_content
         assert "workflow/abundance2iss/Snakefile" in pipeline_content
         
         # Check Python and R commands
         assert "workflow/combine_annotation_tables.py" in pipeline_content
+        assert "samovar.combine_tables finalize" in pipeline_content
+        init_yaml = Path(test_output_dir) / ".log" / "configs" / "config_init.yaml"
+        assert "incremental_annotations: true" in init_yaml.read_text(encoding="utf-8")
         assert "workflow/compare_annotations.py" in pipeline_content
         assert "workflow/ML.py" in pipeline_content
         assert "--seed 42" in pipeline_content
         assert "samovar.seqio" in pipeline_content
         assert "link_or_copy_reads" in pipeline_content
+        assert "validate_fastq_directory" in pipeline_content
         assert "cp data/test_genomes" not in pipeline_content
         assert "samovar.genome_cache seed" in pipeline_content
         assert "export PYTHONPATH=" in pipeline_content
@@ -330,9 +351,8 @@ def test_generate_pipeline():
             assert f"ckpt_finish {step}" in pipeline_content
 
 
-def test_generate_pipeline_multiqc_flags():
-    test_output_dir = "tests_outs/test_generate_pipeline_multiqc_flags"
-    clean_dir(test_output_dir)
+def test_generate_pipeline_multiqc_flags(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     annotators = [
         AnnotatorConfig(
@@ -361,9 +381,8 @@ def test_generate_pipeline_multiqc_flags():
     assert "stage_report multiqc" in on_text
 
 
-def test_setup_pipeline():
-    test_output_dir = 'tests_outs/test_setup_pipeline'
-    clean_dir(test_output_dir)
+def test_setup_pipeline(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(
@@ -395,7 +414,7 @@ def test_setup_pipeline():
         assert '--directory "$out_dir"' in pipeline_content
 
 
-def test_generate_pipeline_bakes_tool_env_bins(tmp_path, monkeypatch):
+def test_generate_pipeline_resolves_tools_without_baking_env_bins(tmp_path, monkeypatch):
     env = tmp_path / "kaiju_env"
     (env / "bin").mkdir(parents=True)
     kaiju = env / "bin" / "kaiju"
@@ -426,10 +445,10 @@ def test_generate_pipeline_bakes_tool_env_bins(tmp_path, monkeypatch):
         ],
     )
     script = Path(config.generate_pipeline(str(out))).read_text()
-    assert str(env / "bin") in script
-    assert str(extra) in script
+    assert str(env / "bin") not in script
+    assert str(extra) not in script
     assert "samovar/env" in script
-    assert "SAMOVAR_PATH" in script
+    assert "_runtime-env" in script
 
 
 def test_prepare_to_flags_embed_convert(tmp_path):
@@ -454,9 +473,9 @@ def test_prepare_to_flags_embed_convert(tmp_path):
     assert "--to cami" in text
     assert "--to kraken2_mpa" in text
     assert "--to kraken2" in text
-    assert "exports/initial" in text
-    assert "exports/regenerated" in text
-    assert "exports/reprofiled" in text
+    assert text.count('"$out_dir/exports/initial"') == 1
+    assert text.count('"$out_dir/exports/regenerated"') == 1
+    assert text.count('"$out_dir/exports/reprofiled"') == 1
     assert "--taxdump /tmp/taxdump" in text
     assert "--taxonomy gtdb" in text
     cfg = PipelineConfig.from_args(args)
@@ -516,3 +535,141 @@ def test_prepare_yaml_export_formats(tmp_path):
     config = PipelineConfig.from_args(args)
     assert config.export_formats == ["cami", "kraken2_mpa"]
     assert config.export_taxonomy == "gtdb"
+
+
+def test_prepare_preserves_tagged_hybrid_generator(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "s_R1.fastq").write_text(
+        "@short|taxid:562|read_type:illumina\nACGT\n+\nIIII\n"
+        "@long|taxid:562|read_type:ont\nACGTACGT\n+\nIIIIIIII\n"
+    )
+    args = argparse.Namespace(input_config=None, input_dir=str(reads), output_dir=str(tmp_path / "out"))
+    assert PipelineConfig.from_args(args).reads_generator == "hybrid"
+    args.reads_generator = "iss"
+    assert PipelineConfig.from_args(args).reads_generator == "iss"
+    args.reads_generator = None
+    config = tmp_path / "input.yaml"
+    config.write_text(yaml.safe_dump({"input_dir": str(reads)}))
+    args.input_config = str(config)
+    assert PipelineConfig.from_args(args).reads_generator == "hybrid"
+    config.write_text(yaml.safe_dump({"input_dir": str(reads), "reads_generator": "iss"}))
+    assert PipelineConfig.from_args(args).reads_generator == "iss"
+
+
+@pytest.mark.parametrize("mode, expected", [("hybrid", "hybrid"), ("ont", "nanosim"), ("illumina", "art"), ("wgsim", "wgsim"), ("table", "camisim")])
+def test_prepare_inherits_pending_hybrid_generation(tmp_path, monkeypatch, mode, expected):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    out = tmp_path / "run"
+    generated = out / ".generate" / "configs" / "camisim.yaml"
+    generated.parent.mkdir(parents=True)
+    generated.write_text(f"mode: {mode}\n")
+    args = argparse.Namespace(input_config=None, input_dir=str(out / "initial"), output_dir=str(out))
+    assert PipelineConfig.from_args(args).reads_generator == expected
+    args.reads_generator = "iss"
+    assert PipelineConfig.from_args(args).reads_generator == "iss"
+
+
+@pytest.mark.parametrize("field,generator", [("reads_generator", g) for g in ["iss", "nanosim", "art", "wgsim", "hybrid"]] + [("metagenome_generator", "nanosim"), ("metagenome_generator", "hybrid")])
+def test_prepare_inherits_generate_snapshot(tmp_path, monkeypatch, field, generator):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    source = tmp_path / "source"
+    snapshot = source / ".hydra" / "config.yaml"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text(yaml.safe_dump({"generate": {"args": {field: generator}}}))
+    # A stale CAMISIM YAML must not override the last recorded generate command.
+    stale = source / ".generate" / "configs" / "camisim.yaml"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("mode: hybrid\n")
+    args = argparse.Namespace(input_config=None, input_dir=str(source / "initial"), output_dir=str(tmp_path / "new"))
+    assert getattr(PipelineConfig.from_args(args), field) == generator
+    args.reads_generator = "iss"
+    assert PipelineConfig.from_args(args).reads_generator == "iss"
+
+
+@pytest.mark.parametrize("field", ["reads_generator", "metagenome_generator"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_prepare_inherits_camisim_ont_mode(tmp_path, monkeypatch, field, legacy):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    if legacy:
+        saved = tmp_path / ".generate" / "configs" / "camisim.yaml"
+        payload = {field: "camisim", "mode": "ont"}
+    else:
+        saved = tmp_path / ".hydra" / "config.yaml"
+        payload = {"generate": {"args": {field: "camisim", "camisim_mode": "ont"}}}
+    saved.parent.mkdir(parents=True)
+    saved.write_text(yaml.safe_dump(payload))
+    args = argparse.Namespace(input_config=None, input_dir=str(tmp_path / "initial"), output_dir=str(tmp_path))
+    assert getattr(PipelineConfig.from_args(args), field) == "nanosim"
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_viz_settings_yaml_cli_and_all_pipeline_stages(tmp_path, override):
+    import shlex
+    from samovar.repro import _argv_from_args
+
+    source = tmp_path / "viz.yaml"
+    source.write_text(yaml.safe_dump({"input_dir": "/path/to/reads", "viz": {
+        "full": True, "opal": True, "metrics_sample": 50000, "metrics": ["accuracy", "tnr"],
+    }}))
+    args = argparse.Namespace(input_config=str(source), input_dir=None, output_dir=str(tmp_path / "run with spaces"),
+                              cores=2, viz_full=False if override else None,
+                              viz_opal=False if override else None,
+                              viz_metrics_sample=0 if override else None,
+                              viz_metrics=["accuracy,f1"] if override else None)
+    config = PipelineConfig.from_args(args)
+    assert config.viz == {"full": not override, "opal": not override,
+                          "metrics_sample": 0 if override else 50000,
+                          "metrics": ["accuracy", "f1"] if override else ["accuracy", "tnr"]}
+    configs = config.generate_configs(config.output_dir)
+    saved = yaml.safe_load(Path(configs["scoring"]).read_text())
+    assert saved["viz"] == config.viz
+    assert saved["cores"] == 2 and saved["seed"] == 42
+    script = Path(config.generate_pipeline(config.output_dir)).read_text()
+    calls = [line for line in script.splitlines() if "--show_top 0 --config" in line]
+    assert len(calls) == 3
+    assert all(shlex.split(line)[-1] == configs["scoring"] for line in calls)
+    if override:
+        argv = _argv_from_args("prepare", vars(args))
+        assert "--no-viz-full" in argv and "--no-viz-opal" in argv
+        assert argv[argv.index("--viz-metrics-sample") + 1] == "0"
+        assert argv[argv.index("--viz-metrics") + 1] == "accuracy,f1"
+
+
+@pytest.mark.parametrize("viz", [{"metrics_sample": -1}, {"metrics_sample": 1.5},
+                                 {"opal": "false"}, {"metrics": "typo"}, {"typo": True}])
+def test_viz_settings_reject_invalid_values(viz):
+    with pytest.raises(ValueError):
+        PipelineConfig(viz=viz)
+
+
+def test_prepare_offers_yaml_tool_before_validation(tmp_path, monkeypatch):
+    import src.samovar.config as module
+    import samovar.prepare_import as preflight
+
+    conf = tmp_path / "input.yaml"
+    conf.write_text("qc: custom_qc\nannotators: []\n")
+    offered = []
+    monkeypatch.setattr(preflight, "offer_prepare_imports", lambda ns: offered.append(ns.qc))
+
+    def validate(name):
+        assert name in offered
+        return name
+
+    monkeypatch.setattr(module, "require_known_qc", validate)
+    args = argparse.Namespace(input_config=str(conf), input_dir=None,
+                              output_dir=str(tmp_path / "out"), _offer_imports=True)
+    assert PipelineConfig.from_args(args).qc == "custom_qc"
+
+
+def test_prepare_offers_resolved_default_generator(tmp_path, monkeypatch):
+    import samovar.prepare_import as preflight
+
+    offered = []
+    monkeypatch.setattr(preflight, "offer_prepare_imports", lambda ns: offered.append(ns))
+    args = argparse.Namespace(input_config=None, input_dir=None,
+                              output_dir=str(tmp_path / "out"), _offer_imports=True)
+    setup_pipeline(args)
+    assert offered[-1].reads_generator == "iss"
+    assert offered[-1].workflow == "snakemake"

@@ -4,13 +4,13 @@ Minimal contract: ``taxid`` × ``N_<sample>`` in, same shape out. Long
 annotation tables (``taxID_*``) and phyloseq-style OTU tables are converted
 first. Sequence regenerate (ISS) consumes that same abundance shape.
 
-``config["max_genomes"]`` (CLI ``--max-genomes``, default ``inf``) caps how
+``config["max_genomes"]`` (CLI ``--max-genomes``, default 100) caps how
 many taxa are kept (top by abundance) before table regenerate and how many
 non-host genomes a metagenome generator uses.
 
 Modes:
 
-- ``direct`` (default; aliases: preserve, exact, raw): observed taxID counts,
+- ``direct`` (aliases: preserve, exact, raw): observed taxID counts,
   same sample names, no generative remodelling.
 - ``bootstrap``: column bootstrap of observed sample profiles.
 - ``vae``: latent-factor generative model (FactorAnalysis on log abundances).
@@ -19,7 +19,8 @@ Modes:
   design on the observed taxIDs (same engine as ``samovar generate --simulator camisim --camisim-mode table``).
 - ``concat``: merge prior annotator tables into one (union taxa, equal
   reads per taxon), then one regeneration.
-- ``concat_weighted``: same merge, summing counts for shared taxa.
+- ``concat_weighted`` (default): same merge into one table, summing counts
+  for shared taxa (same proportions as the mean across annotators).
 - ``samovar``: optional R regenerator (not part of the Python install). Looked
   up via ``SAMOVAR_R_REGENERATE`` / config ``annotation_regenerate_r``.
 - any other name: custom ``table_reads_generator`` registered with
@@ -32,6 +33,7 @@ import math
 import os
 import re
 import zlib
+from copy import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -39,6 +41,7 @@ import numpy as np
 import pandas as pd
 
 UNLIMITED_MAX_GENOMES = float("inf")
+DEFAULT_MAX_GENOMES = 100.0
 
 
 def parse_max_genomes(
@@ -46,14 +49,19 @@ def parse_max_genomes(
     *,
     default_from_env: bool = True,
 ) -> float:
-    """Count cap for taxa / non-host genomes. ``0`` / ``inf`` / empty → unlimited."""
+    """Count cap for taxa / non-host genomes. ``0`` / ``inf`` → unlimited.
+
+    An omitted value uses ``SAMOVAR_MAX_GENOMES`` or 100.
+    """
     if value is None and default_from_env:
         value = os.environ.get("SAMOVAR_MAX_GENOMES", "")
     if value is None or value is False:
-        return UNLIMITED_MAX_GENOMES
+        return DEFAULT_MAX_GENOMES if default_from_env else UNLIMITED_MAX_GENOMES
     if isinstance(value, str):
         text = value.strip().lower()
-        if text in {"", "inf", "infinity", "+inf", "none", "unlimited"}:
+        if text == "":
+            return DEFAULT_MAX_GENOMES if default_from_env else UNLIMITED_MAX_GENOMES
+        if text in {"inf", "infinity", "+inf", "none", "unlimited"}:
             return UNLIMITED_MAX_GENOMES
         try:
             value = float(text)
@@ -681,6 +689,23 @@ def _write_abundance_tables(
         table.to_csv(out / f"{safe}.csv", index=False)
 
 
+def _without_unclassified(data: Any) -> Any:
+    """Abundance view of ``data`` with unclassified taxids removed."""
+    from samovar.abundance import input_to_abundance_tables
+    from samovar.annotation_qc import drop_unclassified_abundance_tables
+    from samovar.parse_annotators import Annotation
+
+    tables = input_to_abundance_tables(data)
+    if not tables:
+        return data
+    if isinstance(data, Annotation):
+        # Preserve read-level data and metadata for custom Python regenerators.
+        out = copy(data)
+        out.abundance_tables = drop_unclassified_abundance_tables(tables)
+        return out
+    return Annotation.from_abundance_tables(drop_unclassified_abundance_tables(tables))
+
+
 def _regenerate_one_mode(
     annotation_dir: Union[str, Path],
     output_dir: Union[str, Path],
@@ -694,7 +719,7 @@ def _regenerate_one_mode(
         load_samples_metadata,
     )
 
-    source = load_table_input(annotation_dir, data)
+    source = _without_unclassified(load_table_input(annotation_dir, data))
     mode = cfg.get("table_reads_generator") or cfg.get("regeneration_mode", "direct")
     local = dict(cfg)
     local["annotation_dir"] = str(annotation_dir)
@@ -706,6 +731,9 @@ def _regenerate_one_mode(
         load_samples_metadata(local),
         local,
     )
+    from samovar.annotation_qc import drop_unclassified_abundance_tables
+
+    tables = drop_unclassified_abundance_tables(tables)
     tables = cap_abundance_tables(tables, max_genomes_from_config(local))
     _write_abundance_tables(output_dir, tables)
     return tables
@@ -726,6 +754,7 @@ def regenerate_annotation_tables(
     under ``.table_candidates/`` and the first success is copied to ``output_dir``.
     """
     from samovar.table_regenerators import (
+        UnsupportedTableRegeneratorError,
         apply_concat_choose_best_policy,
         canonical_regeneration_modes,
     )
@@ -737,10 +766,9 @@ def regenerate_annotation_tables(
     )
 
     cfg = dict(config or {})
-    if data is None:
-        from samovar.abundance import load_table_input
+    from samovar.abundance import load_table_input
 
-        data = load_table_input(annotation_dir)
+    data = _without_unclassified(load_table_input(annotation_dir, data))
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -768,6 +796,7 @@ def regenerate_annotation_tables(
     candidates_root = out / ".table_candidates"
     tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
     generate_errors: Dict[str, str] = {}
+    unsupported: Dict[str, str] = {}
     for mode in modes:
         cand = candidates_root / re.sub(r"[^A-Za-z0-9._-]+", "_", mode)
         one = dict(cfg)
@@ -777,9 +806,18 @@ def regenerate_annotation_tables(
         one["output_dir"] = str(cand)
         try:
             tables_by_mode[mode] = _regenerate_one_mode(annotation_dir, cand, one, data)
+        except UnsupportedTableRegeneratorError as exc:
+            tables_by_mode[mode] = {}
+            unsupported[mode] = str(exc)
+            import warnings
+
+            warnings.warn(f"Table regenerator '{mode}' unsupported: {exc}", UserWarning, stacklevel=2)
         except Exception as exc:
             tables_by_mode[mode] = {}
             generate_errors[mode] = str(exc)
+            import warnings
+
+            warnings.warn(f"Table regenerator '{mode}' failed: {exc}", RuntimeWarning, stacklevel=2)
 
     mixed: Dict[str, pd.DataFrame] = {}
     for mode in modes:
@@ -791,17 +829,25 @@ def regenerate_annotation_tables(
             "No table_reads_generator produced abundance tables. "
             f"Tried: {', '.join(modes)}"
             + (f" Errors: {generate_errors}" if generate_errors else "")
+            + (f" Unsupported: {unsupported}" if unsupported else "")
         )
 
     if not select_best:
         _write_abundance_tables(out, mixed)
+        selected = next(mode for mode in modes if tables_by_mode.get(mode))
+        payload = {"winner": selected, "generate_errors": generate_errors, "unsupported": unsupported}
+        if generate_errors:
+            payload["failed"] = list(generate_errors)
+        write_table_selection(out / "table_selection.json", payload)
+        write_table_selection(candidates_root / "table_selection.json", payload)
         return mixed
 
     from samovar.table_scorers import rank_methods_per_annotator
 
     try:
         ranked = rank_methods_per_annotator(
-            data, tables_by_mode, scorer, config=cfg, modes=modes
+            data, tables_by_mode, scorer, config=cfg,
+            modes=[mode for mode in modes if mode not in unsupported]
         )
     except Exception as exc:
         ranked = {
@@ -819,8 +865,11 @@ def regenerate_annotation_tables(
             ],
             "tables": {},
         }
+    ranked["unsupported"] = unsupported
     for mode, err in generate_errors.items():
         ranked.setdefault("generate_errors", {})[mode] = err
+    if generate_errors:
+        ranked["failed"] = list(generate_errors)
     mixed = ranked.get("tables") or {}
     if not mixed:
         for mode in modes:
@@ -834,6 +883,7 @@ def regenerate_annotation_tables(
             "No table_reads_generator produced abundance tables. "
             f"Tried: {', '.join(modes)}"
             + (f" Errors: {generate_errors}" if generate_errors else "")
+            + (f" Unsupported: {unsupported}" if unsupported else "")
         )
     _write_abundance_tables(out, mixed)
     payload = {k: v for k, v in ranked.items() if k != "tables"}
@@ -855,13 +905,13 @@ def write_samovar_config_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         "plot_log": False,
         "min_cluster_size": 2,
         "max_cluster_size": 100,
-        "N_reads": 1000,
-        "regeneration_mode": "direct",
+        "N_reads": 1_000_000,
+        "regeneration_mode": "concat_weighted",
         "seed": 42,
         "vae_latent_dim": 4,
         "rescale_abundance": False,
         "bootstrap_error_scale": 0.15,
-        "max_genomes": UNLIMITED_MAX_GENOMES,
+        "max_genomes": DEFAULT_MAX_GENOMES,
     }
     merged = {**defaults, **config}
     # keep R spelling alias

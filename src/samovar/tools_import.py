@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -37,6 +39,11 @@ def resolve_import_path(
         if candidate.is_file():
             return str(candidate.resolve())
         if candidate.is_dir():
+            if name.lower() == "camisim":
+                from samovar.camisim import _camisim_kind
+
+                if _camisim_kind(candidate):
+                    return str(candidate.resolve())
             for nested in (candidate / "bin" / exe, candidate / exe):
                 try:
                     if nested.is_file():
@@ -88,6 +95,72 @@ def collect_bibtex_args(
     return inline, files
 
 
+def _flags_with_import_mem(
+    name: str,
+    flags: str,
+    mem_mb: Optional[int],
+    flags_translate: str = "",
+) -> str:
+    """Append the tool's memory flag when ``--mem`` was given at import.
+
+    The spelling comes from flags-translate (the default table or
+    ``--flags-translate``). A tool with no ``--mem_mb`` entry needs that map.
+    """
+    if mem_mb in (None, 0):
+        return flags
+    from samovar.tool_spec import mem_cli_token
+
+    record = {"flags-translate": flags_translate} if str(flags_translate or "").strip() else None
+    token = mem_cli_token(name, mem_mb, record)
+    if not token:
+        raise ValueError(
+            f"{name} has no --mem_mb translation. "
+            'Pass --flags-translate "--mem_mb:-m@mb" '
+            "(units: @bytes, @gb, @mb, or a constant such as --asm-coverage@40)."
+        )
+    dest = token.split()[0]
+    if dest in flags.split():
+        return flags
+    return f"{flags} {token}".strip()
+
+
+_SHORT_OPTION = re.compile(r"(?<![\w-])-([A-Za-z])\b")
+
+
+def warn_direct_samovar_flags(path: str, *, name: str, flags_translate: str) -> None:
+    """Warn when a custom annotator binary's ``--help`` has no ``-i`` and ``-o``.
+
+    SamovaR launches that binary with ``-i/-I/-d/-o``. A tool that only documents
+    its own flags (kraken2's ``--output``) still imports; the warning says to pass
+    ``--flags-translate`` or check it with ``--pytest``.
+    """
+    if str(flags_translate or "").strip():
+        return
+    exe = Path(path).expanduser()
+    if not (exe.is_file() and os.access(exe, os.X_OK)):
+        return
+    try:
+        proc = subprocess.run(
+            [str(exe), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    blob = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    shorts = set(_SHORT_OPTION.findall(blob))
+    if "i" in shorts and "o" in shorts:
+        return
+    print(
+        f"[WARNING] {name}: {exe.name} --help does not list -i and -o. "
+        "A custom annotator is launched with -i/-I/-d/-o. "
+        "Pass --flags-translate, or check the tool with --pytest.",
+        file=sys.stderr,
+    )
+
+
 def import_tool(
     *,
     name: str,
@@ -99,6 +172,7 @@ def import_tool(
     inputs: str = "",
     lazy_install: str = "",
     flags_translate: str = "",
+    mem_mb: Optional[int] = None,
     version: str = "",
     also_repo_build: bool = True,
     bibtex: Optional[list] = None,
@@ -112,6 +186,8 @@ def import_tool(
     env = str(env or "").strip()
     exe = str(exec_name or "").strip() or name
     path = resolve_import_path(name=name, exec_name=exe, exec_path=exec_path, env=env)
+    if group == "annotator":
+        warn_direct_samovar_flags(path, name=name, flags_translate=flags_translate)
     workflow = env if env else "bash"
     glob = str(inputs or "").strip()
     if group == "scoring" and not glob:
@@ -126,12 +202,15 @@ def import_tool(
 
         citation_refs = register_tool_citations(name, inline=inline, files=files)
     cfg = load_config()
+    stored_flags = _flags_with_import_mem(
+        name, str(flags or "").strip(), mem_mb, flags_translate
+    )
     kwargs = dict(
         path=path,
         env=env,
         workflow=workflow,
         group=group,
-        flags=str(flags or "").strip(),
+        flags=stored_flags,
         lazy_install=lazy or None,
         flags_translate=flags_translate or None,
         version=str(version or "").strip() or None,
@@ -241,8 +320,9 @@ def format_import_status(cfg: Optional[dict] = None) -> str:
             exe = rec.get("exec") or {}
             path = str(exe.get("path") or "")
             kind = str(rec.get("type") or "")
-            mark = _path_status(path)
-            lines.append(f"{name}\t{kind}\t{mark}\t{path}")
+            shown = _resolved_tool_path(rec, name) or path
+            mark = _file_status(shown)
+            lines.append(f"{name}\t{kind}\t{mark}\t{shown}")
     lines.extend(["", "Databases", "tool\tname\tstatus\tpath\tflags\turl\tlazy-download"])
     rows = []
     for tool, grouped in iter_database_records(cfg).items():
@@ -272,6 +352,34 @@ def format_status(cfg: Optional[dict] = None) -> str:
     from samovar.paths import format_install_status
 
     return format_import_status(cfg) + "\n\n" + format_install_status()
+
+
+def _resolved_tool_path(record: dict, name: str) -> str:
+    """Binary for a tools.* record, including ``<conda prefix>/bin/<name>``."""
+    from samovar.main_config import tool_path
+    from samovar.tool_spec import bare_tool_name
+
+    bare = bare_tool_name(name) or name
+    resolved = str(tool_path(record, bare) or "").strip()
+    if not resolved:
+        return ""
+    candidate = Path(resolved).expanduser()
+    try:
+        if candidate.is_file():
+            return str(candidate.resolve())
+    except OSError:
+        return ""
+    return ""
+
+
+def _file_status(path: str) -> str:
+    text = str(path or "").strip()
+    if not text:
+        return "missing"
+    try:
+        return "ok" if Path(text).expanduser().is_file() else "missing"
+    except OSError:
+        return "missing"
 
 
 def _path_status(path: str) -> str:
@@ -344,6 +452,15 @@ def build_parser() -> argparse.ArgumentParser:
             "merged into the annotator's extra at prepare (e.g. --memory-mapping)."
         )
     )
+    from samovar.memory import add_mem_argument
+
+    add_mem_argument(parser)
+    parser._option_string_actions["--mem"].help = (
+        "Memory budget stored on this tool through flags-translate "
+        "(MEGAHIT -m bytes, SPAdes -m GB, Flye --asm-coverage 40). "
+        "A bare number is MiB; 16G is accepted. "
+        "Other tools need --flags-translate \"--mem_mb:<their flag>\"."
+    )
     parser.add_argument(
         "--flags-translate",
         dest="flags_translate",
@@ -405,6 +522,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--db-path",
+        "--database",
+        dest="db_path",
+        default="",
+        help=(
+            "Database directory for an annotator contract (--pytest). "
+            "Falls back to SAMOVAR_CONTRACT_DB, then a database already "
+            "imported for this tool name."
+        ),
+    )
+    parser.add_argument(
         "--bibtex",
         "--citation",
         action="append",
@@ -425,6 +553,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Link a .bib/.txt file into the citation registry (repeatable).",
     )
     return parser
+
+
+def _imported_database_path(name: str) -> str:
+    """A database already stored for this annotator name, if the path exists."""
+    from samovar.db_spec import iter_database_records
+    from samovar.paths import load_config
+
+    grouped = iter_database_records(load_config()).get(str(name or "").strip()) or {}
+    for rec in grouped.values():
+        raw = str((rec or {}).get("path") or "").strip()
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if path.exists():
+            return str(path)
+    return ""
+
+
+def _contract_skipped(output: str) -> bool:
+    text = str(output or "")
+    return "skipped" in text.lower() and "passed" not in text.lower()
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -455,7 +604,12 @@ def main(argv: Optional[list] = None) -> int:
                 name=args.name,
                 tool=str(getattr(args, "tool", "") or ""),
                 exec_path=args.exec_path,
-                flags=args.flags,
+                flags=_flags_with_import_mem(
+                    str(getattr(args, "tool", "") or args.name),
+                    args.flags,
+                    getattr(args, "mem_mb", None),
+                    str(getattr(args, "flags_translate", "") or ""),
+                ),
                 lazy_download=lazy,
                 version=args.version,
                 url=str(getattr(args, "url", "") or ""),
@@ -471,15 +625,27 @@ def main(argv: Optional[list] = None) -> int:
         group = normalize_tool_group(args.type)
         if args.pytest:
             print(f"Running contract pytest for {group} on {dest} …")
+            db = str(getattr(args, "db_path", "") or "").strip()
+            if not db:
+                db = os.environ.get("SAMOVAR_CONTRACT_DB", "").strip()
+            if not db and group == "annotator":
+                db = _imported_database_path(args.name)
             try:
-                code, output = run_contract_pytest(dest, group)
+                code, output = run_contract_pytest(dest, group, db_path=db)
             except ValueError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 print(format_contract(group), file=sys.stderr)
                 return 1
-            if code != 0:
+            if code != 0 or _contract_skipped(output):
                 print(output, file=sys.stderr)
-                print("Import blocked: contract pytest failed.", file=sys.stderr)
+                if _contract_skipped(output):
+                    print(
+                        "Import blocked: contract needs a DB. "
+                        "Pass --db-path or SAMOVAR_CONTRACT_DB.",
+                        file=sys.stderr,
+                    )
+                else:
+                    print("Import blocked: contract pytest failed.", file=sys.stderr)
                 print(format_contract(group), file=sys.stderr)
                 return 1
             print(output.rstrip() or "contract pytest passed")
@@ -494,6 +660,7 @@ def main(argv: Optional[list] = None) -> int:
             exec_name=args.exec_name,
             exec_path=dest,
             flags=args.flags,
+            mem_mb=getattr(args, "mem_mb", None),
             inputs=args.inputs,
             lazy_install=lazy,
             flags_translate=args.flags_translate,

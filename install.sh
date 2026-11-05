@@ -5,14 +5,23 @@
 # Usage:
 #   ./install.sh                 Python pipeline only
 #   ./install.sh full            core + every optional extra (reuse if already installed)
+#   ./install.sh ask             core, then ask how to import Kraken2 and Kaiju.
+#                                At the end, optionally run examples/smoketest
+#                                and ask for a thread count (default 3/4 of the CPUs)
+#   ./install.sh full ask        core, then ask about every supported program
+#   ./install.sh full ask --no-check   same, without launching each imported program
 #   ./install.sh R-package       install samovaR from GitHub branch r-package
+#   ./install.sh Kraken2        Kraken2 + build helpers in a separate conda env
+#   ./install.sh Kaiju          Kaiju + build helpers in a separate conda env
 #   ./install.sh OPAL            optional CAMI OPAL (https://github.com/CAMI-challenge/OPAL)
 #   ./install.sh MultiQC         optional MultiQC HTML reports
 #   ./install.sh CAMISIM         optional CAMISIM community/read simulator
 #   ./install.sh NanoSim         optional NanoSim in a separate conda env (ONT / hybrid)
 #   ./install.sh ART             optional ART Illumina simulator in a separate conda env
 #   ./install.sh seqtk           optional seqtk (FASTQ subsample / rarefaction)
+#   ./install.sh nextflow        optional Nextflow >=25.04.2,<26 (CAMISIM read modes)
 #   ./install.sh MegaHIT         optional MegaHIT assembler (sidecar)
+#   ./install.sh SPAdes          optional SPAdes / metaSPAdes assembler (sidecar; included in full)
 #   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
 #   ./install.sh Metax          optional Metax profiler (sidecar; custom.sh -p metax)
 #   ./install.sh Prodigal        optional Prodigal gene caller (sidecar)
@@ -23,6 +32,7 @@
 #   ./install.sh CheckM2         optional CheckM2 (sidecar)
 #   ./install.sh GTDB-Tk         optional GTDB-Tk (sidecar; set GTDBTK_DATA_PATH)
 #   ./install.sh SparseDOSSA2    SparseDOSSA2 (also included in ./install.sh full)
+#   ./install.sh cuml            optional cuML (RandomForest --gpu, this env)
 #   ./install.sh CAMISIM NanoSim ART   several optionals without reinstalling the core
 #   ./install.sh --rebuild-citations 1 refresh cite/*.bib after install (default)
 #   ./install.sh --rebuild-citations 0 skip doi.org / R citation() / CLI harvest
@@ -31,24 +41,33 @@
 #   SAMOVAR_OFFLINE=1          pip --offline (air-gapped; optional SAMOVAR_WHEELHOUSE)
 #   SAMOVAR_INSTALL_DEV=1      also install pytest/flake8 extras
 #   SAMOVAR_INSTALL_FULL=1     same as ./install.sh full
+#   SAMOVAR_INSTALL_ASK=1      same as ./install.sh ask
 #   SAMOVAR_INSTALL_R=1        also install optional R package (same as ./install.sh R-package)
 #   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
 #   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
 #   SAMOVAR_INSTALL_CAMISIM=1  also clone optional CAMISIM (same as ./install.sh CAMISIM)
 #   SAMOVAR_INSTALL_NANOSIM=1  also sidecar-conda NanoSim (same as ./install.sh NanoSim)
+#   SAMOVAR_INSTALL_KRAKEN2=1  also install Kraken2 (included in full)
+#   SAMOVAR_INSTALL_KAIJU=1    also install Kaiju (included in full)
 #   SAMOVAR_INSTALL_ART=1      also sidecar-conda ART (same as ./install.sh ART)
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
+#   SAMOVAR_INSTALL_SPADES=1   also sidecar-conda SPAdes (included in full; same as ./install.sh SPAdes)
+#   SAMOVAR_INSTALL_CUML=1     also install cuML (same as ./install.sh cuml)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
 #   SAMOVAR_R_BRANCH           default r-package
+#   SAMOVAR_R_VERSION          declared samovaR release; default 1.0.1
+#                              (1.0.0 is installed but breaks Kaiju generation)
 #   SAMOVAR_UPDATE_SHELL=1     default: add bin/ to PATH this session and ~/.bashrc
 #   SAMOVAR_UPDATE_SHELL=0     shared/read-only: skip PATH and ~/.bashrc edits
 #   SAMOVAR_REBUILD_CITATIONS=0 same as --rebuild-citations 0
 #   SAMOVAR_CONFIG=/path/to/config.json
 #                              write main config to this file (dir holds env/)
 #   SAMOVAR_CONFIG_DIR=/dir    write $dir/config.json instead of ~/.config/samovar
-#   SAMOVAR_DATABASE=/path     processed genome library (default: $ROOT/genomes)
+#   SAMOVAR_DATABASE=/path     genome library (default: next to the install config,
+#                              <config dir>/genomes). full / update / --auto
+#                              keep genomes.samovar_database already in config.
 #   SAMOVAR_TAXDUMP=/path      NCBI taxdump dir (default: $SAMOVAR_DATABASE/taxdump)
 #   NCBI_EMAIL / ENTREZ_EMAIL / SAMOVAR_EMAIL
 #   CI=true                    non-interactive; NCBI_EMAIL defaults to test@samovar.com
@@ -161,25 +180,44 @@ r_install_github_local() {
     return 0
 }
 
+# $1 installed version, $2 declared version. True when installed >= declared.
+samovar_r_version_at_least() {
+    local found="$1"
+    local required="$2"
+    case "$found" in
+        ""|MISSING) return 1 ;;
+    esac
+    [ "$(printf '%s\n%s\n' "$required" "$found" | sort -V | head -n1)" = "$required" ]
+}
+
+samovar_r_installed_version() {
+    local reported
+    reported="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) cat(as.character(packageVersion("samovaR"))) else cat("MISSING")' 2>/dev/null || true)"
+    printf '%s' "$reported" | tr -d '[:space:]'
+}
+
 install_samovar_r_package() {
     local repo="${SAMOVAR_R_REPO:-ctlab/samovar}"
     local branch="${SAMOVAR_R_BRANCH:-r-package}"
+    local required="${SAMOVAR_R_VERSION:-1.0.1}"
     local script_dest="$USER_CFG_DIR/annotation_regenerate.R"
 
     if ! command -v R >/dev/null 2>&1; then
         echo "R is not on PATH; cannot install the optional samovaR package."
+        echo "Activate the environment from environment.yml, or update it with conda env update -f environment.yml."
         return 1
     fi
 
-    local info
-    info="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("samovaR")), find.package("samovaR")) } else cat("MISSING")' 2>/dev/null || true)"
-    if echo "$info" | grep -q '^INSTALLED'; then
-        local ver lib
-        ver="$(echo "$info" | awk '{print $2}')"
-        lib="$(echo "$info" | awk '{print $3}')"
-        echo "Warning: samovaR is already installed (version ${ver:-unknown}${lib:+ at $lib})."
-        echo "Skipping GitHub install. Uninstall the package (not its dependencies) to reinstall from $repo@$branch."
+    local ver
+    ver="$(samovar_r_installed_version)"
+    if samovar_r_version_at_least "$ver" "$required"; then
+        echo "samovaR ${ver} satisfies declared version ${required}."
     else
+        if [ "$ver" = "MISSING" ] || [ -z "$ver" ]; then
+            echo "samovaR ${required} is required but the package is not installed; installing from $repo@$branch."
+        else
+            echo "samovaR ${ver} is incompatible; declared version is ${required}. Installing from $repo@$branch."
+        fi
         if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
             echo "Skipping samovaR install in offline mode."
             return 1
@@ -200,8 +238,12 @@ install_samovar_r_package() {
             fi
             rm -rf "$tmp"
         fi
-        info="$(R --vanilla -s -e 'if (requireNamespace("samovaR", quietly=TRUE)) { cat("INSTALLED", as.character(packageVersion("samovaR"))) } else cat("MISSING")' 2>/dev/null || true)"
-        echo "samovaR: $info"
+        ver="$(samovar_r_installed_version)"
+        echo "samovaR: ${ver:-unavailable}"
+        if ! samovar_r_version_at_least "$ver" "$required"; then
+            echo "samovaR ${ver:-missing} is incompatible after installation; declared version is ${required}."
+            return 1
+        fi
     fi
 
     mkdir -p "$USER_CFG_DIR"
@@ -239,6 +281,7 @@ PY
 install_sparsedossa2() {
     if ! command -v R >/dev/null 2>&1 && ! command -v Rscript >/dev/null 2>&1; then
         echo "R is not on PATH; cannot install SparseDOSSA2."
+        echo "Activate the environment from environment.yml, or update it with conda env update -f environment.yml."
         echo "See https://github.com/biobakery/SparseDOSSA2 and https://github.com/biobakery/biobakery/wiki/SparseDOSSA2"
         return 1
     fi
@@ -267,7 +310,7 @@ if (length(missing)) {
         echo "Installing SparseDOSSA2 from https://github.com/biobakery/SparseDOSSA2 ..."
         # Do not swallow stderr: failed Rmpfr/huge builds are the usual GHA failure mode.
         # Do not use remotes::install_github: bundled PAT → HTTP 401 on GHA.
-        if ! r_install_github_local "biobakery/SparseDOSSA2" "" "TRUE"; then
+        if ! r_install_github_local "biobakery/SparseDOSSA2" "" "NA"; then
             echo "GitHub SparseDOSSA2 install failed."
             echo "On Debian/Ubuntu install build deps first:"
             echo "  sudo apt-get install -y libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran"
@@ -366,6 +409,27 @@ print("Updated config opal_path:", cfg.get("opal_path"))
 PY
 }
 
+ensure_kaleido() {
+    # plotly 6+ refuses kaleido 0.2. MultiQC --export needs kaleido>=1 and its Chrome.
+    if "$PYTHON_PATH" -c 'import importlib.metadata; raise SystemExit(0 if int(importlib.metadata.version("kaleido").split(".")[0]) >= 1 else 1)' 2>/dev/null; then
+        echo "kaleido>=1 already present."
+    elif [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+        echo "Warning: kaleido>=1 is required for MultiQC PNG/SVG/PDF export."
+        return 1
+    else
+        echo "Installing kaleido>=1 for MultiQC static plot export ..."
+        if ! "$PYTHON_PATH" -m pip install "kaleido>=1" "${PIP_OPTS[@]+"${PIP_OPTS[@]}"}"; then
+            echo "Warning: pip install kaleido failed. MultiQC PNG/SVG/PDF export will be skipped."
+            echo "Install later with: $PYTHON_PATH -m pip install 'kaleido>=1'"
+            return 1
+        fi
+    fi
+    if ! "$PYTHON_PATH" -c 'import kaleido; kaleido.get_chrome_sync()'; then
+        echo "Warning: kaleido Chrome was not fetched. Static MultiQC export may still fail."
+        echo "Retry with: $PYTHON_PATH -c \"import kaleido; kaleido.get_chrome_sync()\""
+    fi
+}
+
 install_multiqc() {
     if "$PYTHON_PATH" -c "from samovar.paths import discover_multiqc; import shutil; raise SystemExit(0 if (discover_multiqc() or shutil.which('multiqc')) else 1)" 2>/dev/null; then
         echo "MultiQC already present; recording it in the install config."
@@ -381,6 +445,7 @@ install_multiqc() {
         fi
         hash -r 2>/dev/null || true
     fi
+    ensure_kaleido || echo "Warning: kaleido>=1 was not installed. MultiQC static plot export needs it."
     export PY_BIN
     "$PYTHON_PATH" - <<'PY'
 import os, shutil, sys
@@ -533,37 +598,58 @@ install_seqtk() {
     return 1
 }
 
+nextflow_compatible() {
+    # 25.04.2 removed `conda create --mkdir`, rejected by conda >=25.3.
+    # Nextflow 26 rejects CAMISIM configs that mix if statements with includeConfig.
+    local version major minor patch
+    version="$(nextflow -version 2>&1)" || return 1
+    [[ "$version" =~ version[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
+    major=$((10#${BASH_REMATCH[1]}))
+    minor=$((10#${BASH_REMATCH[2]}))
+    patch=$((10#${BASH_REMATCH[3]}))
+    (( major == 25 && (minor > 4 || (minor == 4 && patch >= 2)) ))
+}
+
 install_nextflow() {
-    if command -v nextflow >/dev/null 2>&1; then
-        echo "nextflow: $(command -v nextflow)"
-        return 0
+    if ! nextflow_compatible; then
+        if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
+            echo "Nextflow >=25.04.2,<26 is required. Offline mode: install it before running CAMISIM."
+            return 1
+        fi
+        local conda_bin="${SAMOVAR_CONDA:-}"
+        if [ -z "$conda_bin" ]; then
+            conda_bin="$(command -v mamba || command -v conda || true)"
+        fi
+        if [ -z "$conda_bin" ]; then
+            echo "Nextflow >=25.04.2,<26 is missing and conda/mamba was not found."
+            echo "Install with: conda install -c conda-forge -c bioconda 'nextflow>=25.04.2,<26'"
+            echo "or https://www.nextflow.io/docs/latest/install.html"
+            return 1
+        fi
+        echo "Installing/upgrading optional Nextflow >=25.04.2,<26 (CAMISIM 2 read simulation) ..."
+        if ! "$conda_bin" install -y -c conda-forge -c bioconda 'nextflow>=25.04.2,<26'; then
+            echo "Warning: nextflow install failed. CAMISIM table+ISS mode still works without it."
+            return 1
+        fi
+        hash -r 2>/dev/null || true
+        if ! nextflow_compatible; then
+            echo "Nextflow on PATH is still outside >=25.04.2,<26. Check PATH and NXF_VER."
+            return 1
+        fi
     fi
-    if [ "${SAMOVAR_OFFLINE:-0}" != "0" ]; then
-        echo "Skipping nextflow install in offline mode. conda install -c bioconda nextflow"
-        return 1
-    fi
-    local conda_bin="${SAMOVAR_CONDA:-}"
-    if [ -z "$conda_bin" ]; then
-        conda_bin="$(command -v mamba || command -v conda || true)"
-    fi
-    if [ -z "$conda_bin" ]; then
-        echo "nextflow is not on PATH and conda/mamba was not found."
-        echo "Install with: conda install -c bioconda nextflow"
-        echo "or https://www.nextflow.io/docs/latest/install.html"
-        return 1
-    fi
-    echo "Installing optional Nextflow via bioconda (needed for CAMISIM 2 read simulation) ..."
-    if ! "$conda_bin" install -y -c bioconda -c conda-forge nextflow; then
-        echo "Warning: nextflow install failed. CAMISIM table+ISS mode still works without it."
-        return 1
-    fi
-    hash -r 2>/dev/null || true
-    if command -v nextflow >/dev/null 2>&1; then
-        echo "nextflow: $(command -v nextflow)"
-        return 0
-    fi
-    echo "nextflow installed but not on PATH in this shell."
-    return 1
+    local nextflow_bin
+    nextflow_bin="$(command -v nextflow)"
+    echo "nextflow: $nextflow_bin"
+    "$PYTHON_PATH" - "$nextflow_bin" <<'PYCONFIG'
+import sys
+from samovar.main_config import set_tool
+from samovar.paths import load_config, write_config
+
+cfg = load_config()
+cfg["nextflow_path"] = sys.argv[1]
+set_tool(cfg, "nextflow", path=sys.argv[1], group="workflow")
+write_config(cfg)
+PYCONFIG
 }
 
 print_install_status() {
@@ -577,12 +663,44 @@ except Exception as exc:
 PY
 }
 
+# RandomForest --gpu imports cuml.ensemble in this env, not a sidecar.
+install_cuml() {
+    local py prefix conda wrapper
+    py="${PYTHON_PATH:-python3}"
+    prefix="${CONDA_PREFIX:-}"
+    if [ -z "$prefix" ]; then
+        prefix="$("$py" -c 'import sys; print(sys.prefix)')"
+    fi
+    if "$py" -c 'import cuml.ensemble' >/dev/null 2>&1; then
+        echo "cuML already importable by $py"
+    else
+        conda="$(command -v conda || true)"
+        if [ -z "$conda" ]; then
+            echo "conda was not found; cannot install cuML into $prefix" >&2
+            return 1
+        fi
+        echo "Installing cuML into $prefix"
+        "$conda" install -y -p "$prefix" \
+            -c rapidsai -c conda-forge -c nvidia \
+            'cuml>=26.02' 'cuda-version>=12.0,<13'
+        "$py" -c 'import cuml.ensemble'
+    fi
+    mkdir -p "$prefix/bin"
+    wrapper="$prefix/bin/cuml"
+    cat > "$wrapper" <<EOF
+#!/bin/sh
+exec $(printf '%q' "$py") -c 'import cuml.ensemble'
+EOF
+    chmod +x "$wrapper"
+}
+
 normalize_optional_arg() {
     local raw="${1:-}"
     local lower
     lower="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
     case "$lower" in
         r-package|rpackage|r) echo "r-package" ;;
+        kraken2|kaiju) echo "$lower" ;;
         opal) echo "opal" ;;
         multiqc) echo "multiqc" ;;
         camisim) echo "camisim" ;;
@@ -590,6 +708,7 @@ normalize_optional_arg() {
         art|art_illumina) echo "art" ;;
         nextflow) echo "nextflow" ;;
         seqtk) echo "seqtk" ;;
+        spades|spades.py|metaspades|meta-spades|metaspades.py) echo "spades" ;;
         megahit|mega-hit) echo "megahit" ;;
         metaflye|meta-flye|flye) echo "flye" ;;
         prodigal) echo "prodigal" ;;
@@ -601,7 +720,9 @@ normalize_optional_arg() {
         gtdbtk|gtdb-tk|gtdb_tk) echo "gtdbtk" ;;
         sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
         metax) echo "metax" ;;
+        cuml) echo "cuml" ;;
         full|all|everything) echo "full" ;;
+        ask) echo "ask" ;;
         *) echo "" ;;
     esac
 }
@@ -635,6 +756,8 @@ run_optional_named() {
         art) install_art ;;
         seqtk) install_seqtk ;;
         nextflow) install_nextflow ;;
+        kraken2|kaiju) "$PYTHON_PATH" -m samovar.sidecar "$1" ;;
+        spades) "$PYTHON_PATH" -m samovar.sidecar spades ;;
         megahit) "$PYTHON_PATH" -m samovar.sidecar megahit ;;
         flye) "$PYTHON_PATH" -m samovar.sidecar flye ;;
         prodigal) "$PYTHON_PATH" -m samovar.sidecar prodigal ;;
@@ -645,6 +768,7 @@ run_optional_named() {
         checkm2) "$PYTHON_PATH" -m samovar.sidecar checkm2 ;;
         gtdbtk) "$PYTHON_PATH" -m samovar.sidecar gtdbtk ;;
         sparsedossa2) install_sparsedossa2 ;;
+        cuml) install_cuml ;;
         metax) "$PYTHON_PATH" -m samovar.sidecar metax ;;
         *) return 1 ;;
     esac
@@ -667,6 +791,8 @@ rebuild_citations() {
 }
 
 enable_full_install_flags() {
+    export SAMOVAR_INSTALL_KRAKEN2=1
+    export SAMOVAR_INSTALL_KAIJU=1
     export SAMOVAR_INSTALL_R=1
     export SAMOVAR_INSTALL_OPAL=1
     export SAMOVAR_INSTALL_MULTIQC=1
@@ -677,13 +803,19 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_NEXTFLOW=1
     export SAMOVAR_INSTALL_SPARSEDOSSA2=1
     export SAMOVAR_INSTALL_METAX=1
+    export SAMOVAR_INSTALL_SPADES=1
 }
 
 INSTALL_FULL=0
+INSTALL_ASK=0
 if [ "${SAMOVAR_INSTALL_FULL:-0}" != "0" ]; then
     INSTALL_FULL=1
 fi
+if [ "${SAMOVAR_INSTALL_ASK:-0}" != "0" ]; then
+    INSTALL_ASK=1
+fi
 REBUILD_CITATIONS="${SAMOVAR_REBUILD_CITATIONS:-1}"
+ASK_NO_CHECK=0
 FILTERED_ARGS=()
 SKIP_NEXT=0
 for arg in "$@"; do
@@ -711,10 +843,18 @@ for arg in "$@"; do
             REBUILD_CITATIONS=0
             continue
             ;;
+        --no-check)
+            ASK_NO_CHECK=1
+            continue
+            ;;
     esac
     mapped="$(normalize_optional_arg "$arg")"
     if [ "$mapped" = "full" ]; then
         INSTALL_FULL=1
+        continue
+    fi
+    if [ "$mapped" = "ask" ]; then
+        INSTALL_ASK=1
         continue
     fi
     FILTERED_ARGS+=("$arg")
@@ -727,13 +867,18 @@ if [ "${#FILTERED_ARGS[@]}" -gt 0 ]; then
 else
     set --
 fi
-if [ "$INSTALL_FULL" = "1" ]; then
+if [ "$INSTALL_ASK" = "1" ] && [ "$INSTALL_FULL" = "1" ]; then
+    echo "Full ask: Python pipeline, then a prompt for every supported program."
+    export SAMOVAR_INSTALL_ASK_FULL=1
+elif [ "$INSTALL_ASK" = "1" ]; then
+    echo "Ask install: Python pipeline, then a prompt for Kraken2 and Kaiju."
+elif [ "$INSTALL_FULL" = "1" ]; then
     echo "Full install: Python pipeline plus every optional extra (reuse if already present, then record in config)."
     enable_full_install_flags
 fi
 
 OPTIONAL_ONLY_ARGS=()
-if [ "$INSTALL_FULL" != "1" ] && [ "$#" -gt 0 ]; then
+if [ "$INSTALL_FULL" != "1" ] && [ "$INSTALL_ASK" != "1" ] && [ "$#" -gt 0 ]; then
     ALL_OPTIONAL=1
     for arg in "$@"; do
         mapped="$(normalize_optional_arg "$arg")"
@@ -849,14 +994,55 @@ if [ -z "$CXX_BIN" ] || ! command -v "$CXX_BIN" >/dev/null 2>&1; then
 fi
 if [ -n "${CXX_BIN:-}" ]; then
     echo "C++ compiler: $CXX_BIN"
+    # samovar_kmer includes zlib.h. Conda's g++ does not search the system
+    # include tree, so the header has to come from this environment.
+    if ! echo '#include <zlib.h>' | "$CXX_BIN" -E -x c++ - -o /dev/null >/dev/null 2>&1; then
+        echo "zlib headers are not visible to $CXX_BIN"
+        if command -v conda >/dev/null 2>&1; then
+            conda install -y -c conda-forge zlib
+        elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends zlib1g-dev
+        else
+            echo "ERROR: install zlib development headers (conda: zlib, Debian: zlib1g-dev)."
+            exit 1
+        fi
+    fi
+    # A binary copied from a newer machine (glibc 2.32+) is newer than the
+    # source, so make would keep it. Drop it and compile on this host.
+    for built in bin/samovar_combine_annotations bin/samovar_kmer bin/samovar_spearman; do
+        if [ ! -e "$built" ]; then
+            continue
+        fi
+        probe="$("$built" --help 2>&1 || true)"
+        if printf '%s\n' "$probe" | grep -Eq 'GLIBC_.*not found|error while loading shared libraries|Exec format error'; then
+            echo "Removing $built (linked against a different glibc); recompiling here."
+            rm -f "$built"
+        fi
+    done
     make -C src/cpp CXX="$CXX_BIN"
     chmod +x bin/samovar_combine_annotations 2>/dev/null || true
 else
     echo "Warning: no C++ compiler (g++/c++/clang++); annotation merge will try to compile on first use."
 fi
 
+if [ "$INSTALL_ASK" = "1" ]; then
+    echo "Ask mode: optional extras are imported from your answers after the core install."
+else
+for tool in kraken2 kaiju; do
+    flag="SAMOVAR_INSTALL_${tool^^}"
+    if [ "${!flag:-0}" != "0" ]; then
+        "$PYTHON_PATH" -m samovar.sidecar "$tool" || {
+            echo "ERROR: required full-install annotator $tool failed to install."
+            exit 1
+        }
+    fi
+done
 if [ "${SAMOVAR_INSTALL_R:-0}" != "0" ]; then
-    install_samovar_r_package || echo "Warning: optional R package install did not complete."
+    if ! install_samovar_r_package; then
+        echo "ERROR: samovaR package install did not complete."
+        [ "$INSTALL_FULL" = "1" ] && exit 1
+    fi
 else
     echo "Skipping R package (not required). Use ./install.sh R-package to install samovaR from GitHub branch r-package."
 fi
@@ -917,10 +1103,23 @@ else
     echo "Skipping SparseDOSSA2 (not required). Use ./install.sh SparseDOSSA2 for table generators + CV scoring."
 fi
 
+if [ "${SAMOVAR_INSTALL_SPADES:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar spades || echo "Warning: optional SPAdes install did not complete."
+else
+    echo "Skipping SPAdes (not required). Use ./install.sh SPAdes or ./install.sh full for hybrid assembly."
+fi
+
 if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then
     "$PYTHON_PATH" -m samovar.sidecar metax || echo "Warning: optional Metax sidecar install did not complete."
 else
     echo "Skipping Metax (not required). Use ./install.sh Metax for the custom.sh annotator."
+fi
+
+if [ "${SAMOVAR_INSTALL_CUML:-0}" != "0" ]; then
+    install_cuml || echo "Warning: optional cuML install did not complete."
+else
+    echo "Skipping cuML (not required). Use ./install.sh cuml for RandomForest on GPU."
+fi
 fi
 
 # Write main config.json (location: $SAMOVAR_CONFIG) and build/config_path
@@ -934,7 +1133,6 @@ from pathlib import Path
 from samovar.main_config import build_install_config, format_install_report
 from samovar.paths import (
     PACKAGE_VERSION,
-    collect_runtime_path_dirs,
     discover_multiqc,
     discover_opal,
     discover_tools,
@@ -1006,9 +1204,12 @@ def _usable_dir(raw, *, allow_home: bool = False):
         return ""
     return str(path)
 
-samovar_database = _usable_dir(
-    os.environ.get("SAMOVAR_DATABASE", "").strip() or str(Path(root) / "genomes")
-) or str(Path(root) / "genomes")
+from samovar.main_config import resolve_install_database
+samovar_database = resolve_install_database(
+    previous_raw,
+    env=os.environ.get("SAMOVAR_DATABASE", ""),
+)
+samovar_database = _usable_dir(samovar_database, allow_home=True) or samovar_database
 _store_processed = _usable_dir(str(Path(samovar_database) / "processed")) or str(Path(samovar_database) / "processed")
 
 from samovar.main_config import genomes_block as _gb_existing
@@ -1132,7 +1333,7 @@ pointer = write_install_config_pointer(cfg_path, root=Path(root))
 user_cfg = Path(os.environ["USER_CFG_DIR"])
 user_cfg.mkdir(parents=True, exist_ok=True)
 email = os.environ.get("NCBI_EMAIL", "")
-dirs = collect_runtime_path_dirs()
+dirs = [str(Path(root) / "bin"), str(Path(python_path).parent)]
 path_export = ":".join(dirs + ["$PATH"])
 conda_lib = ""
 prefix = os.environ.get("CONDA_PREFIX") or ""
@@ -1165,9 +1366,19 @@ print(
 )
 PY
 
+ASK_STATUS=0
+if [ "$INSTALL_ASK" = "1" ]; then
+    if [ "$ASK_NO_CHECK" = "1" ]; then
+        export SAMOVAR_INSTALL_ASK_NO_CHECK=1
+    fi
+    "$PYTHON_PATH" -m samovar.install_ask || ASK_STATUS=$?
+fi
+
 echo ""
 echo "Note: bulky genome caches should not live under \$HOME (quota)."
-echo "  Each \`samovar exec\` pins XDG_CACHE_HOME/SAMOVAR_GENOMES to \$out_dir/.cache."
+echo "  Genome downloads use genomes.samovar_database (default: the config directory /genomes)."
+echo "  Override with SAMOVAR_DATABASE, SAMOVAR_GENOMES, or SAMOVAR_PROCESSED_GENOMES."
+echo "  Each \`samovar exec\` pins XDG_CACHE_HOME to \$out_dir/.cache for non-genome caches."
 echo "  Shared library: SAMOVAR_DATABASE=/scratch/... ./install.sh"
 echo "  data/test_genomes is truncated (ISS/CI only), never an NCBI substitute."
 
@@ -1250,6 +1461,9 @@ rebuild_citations
 
 print_install_status
 
+if [ "$INSTALL_ASK" = "1" ] && [ "$ASK_STATUS" != "0" ]; then
+    echo "Ask smoketest did not pass. See the examples/smoketest report above."
+fi
 echo "Installation completed successfully!"
 echo "Config: $SAMOVAR_CONFIG"
 if [ -f "$ROOT/build/config_path" ]; then

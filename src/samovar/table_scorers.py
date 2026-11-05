@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
@@ -336,6 +337,7 @@ def score_sparsedossa2_cv(
         n_observed=n_obs,
         n_generated=n_gen,
         cv_goodness_of_fit=mean if math.isfinite(mean) else None,
+        ok=bool(scores),
         details=details,
     )
 
@@ -656,6 +658,27 @@ def rank_methods_per_annotator(
             block = score_sparsedossa2_cv_grid(
                 tables_by_mode, annotator, mode_list, config=config
             )
+            unsupported = [
+                row for row in block["candidates"]
+                if (row.get("details") or {}).get("status") == "unsupported"
+            ]
+            if unsupported:
+                reason = "; ".join(
+                    f"{row['mode']}: {row['error']}" for row in unsupported
+                )
+                warnings.warn(
+                    f"{annotator}: {reason}. Comparing all candidates with shannon_ks.",
+                    RuntimeWarning,
+                )
+                cv_block = block
+                block = score_shannon_ks_annotator(
+                    annotation, tables_by_mode, annotator, mode_list
+                )
+                block.update(
+                    requested_scorer=kind,
+                    fallback_reason=reason,
+                    sparsedossa2_cv=cv_block,
+                )
         elif kind == "shannon_ks":
             block = score_shannon_ks_annotator(
                 annotation, tables_by_mode, annotator, mode_list
@@ -687,13 +710,13 @@ def rank_methods_per_annotator(
     flat = []
     for block in by_annotator.values():
         flat.extend(block.get("candidates") or [])
-    metric_name = "rank_value"
-    for block in by_annotator.values():
-        if block.get("metric_name"):
-            metric_name = str(block["metric_name"])
-            break
+    metric_names = {block["metric_name"] for block in by_annotator.values()
+                    if block.get("metric_name")}
+    metric_name = next(iter(metric_names), "rank_value") if len(metric_names) <= 1 else "mixed"
+    effective_scorers = {block["scorer"] for block in by_annotator.values()}
     return {
-        "scorer": kind,
+        "scorer": next(iter(effective_scorers), kind) if len(effective_scorers) <= 1 else "mixed",
+        "requested_scorer": kind,
         "winner": overall,
         "winner_by_annotator": winner_by_annotator,
         "by_annotator": by_annotator,
@@ -917,7 +940,16 @@ def write_table_score_plots(
         want_html = False
 
     all_rows: List[Dict[str, Any]] = []
+    fallback_notes: List[str] = [
+        f"Unsupported table generator {mode}: {reason}."
+        for mode, reason in (payload.get("unsupported") or {}).items()
+    ]
     for annotator, block in by_annotator.items():
+        if block.get("fallback_reason"):
+            fallback_notes.append(
+                f"{annotator}: requested {block['requested_scorer']}, "
+                f"used {block['scorer']}. {block['fallback_reason']}."
+            )
         rows = list(block.get("candidates") or [])
         for row in rows:
             labeled = dict(row)
@@ -1027,7 +1059,8 @@ def write_table_score_plots(
             all_rows,
             table_path,
             section_name="Table generator scores",
-            description="Per-annotator ranking of table_reads_generator methods.",
+            description=("Per-annotator ranking of table_reads_generator methods. "
+                         + " ".join(fallback_notes)),
             col1_header="Annotator / method",
             id_field="label",
             numeric_fields=(
@@ -1044,20 +1077,32 @@ def write_table_score_plots(
     return written
 
 
+def _candidate_generation_status(dest: Path) -> Dict[str, Any]:
+    selection = dest / ".table_candidates" / "table_selection.json"
+    if not selection.is_file():
+        return {}
+    return json.loads(selection.read_text(encoding="utf-8"))
+
+
 def load_tables_by_mode_from_run(output_dir: PathLike) -> Dict[str, Dict[str, pd.DataFrame]]:
     from samovar.abundance import load_abundance_dir, regenerated_abundance_dir
 
     dest = regenerated_abundance_dir(output_dir)
     candidates = dest / ".table_candidates"
+    status = _candidate_generation_status(dest)
+    failed = {
+        re.sub(r"[^A-Za-z0-9._-]+", "_", mode)
+        for mode in {**(status.get("generate_errors") or {}), **(status.get("unsupported") or {})}
+    }
     tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
     if candidates.is_dir():
         for child in sorted(candidates.iterdir()):
-            if not child.is_dir():
+            if not child.is_dir() or child.name in failed:
                 continue
             loaded = load_abundance_dir(child)
             if loaded:
                 tables_by_mode[child.name] = loaded
-    if not tables_by_mode:
+    if not tables_by_mode and not failed:
         loaded = load_abundance_dir(dest)
         if loaded:
             tables_by_mode["generated"] = loaded
@@ -1095,6 +1140,9 @@ def stage_score_regenerated_tables(
     )
     mixed = ranked.get("tables") or {}
     dest = regenerated_abundance_dir(root)
+    status = _candidate_generation_status(dest)
+    ranked["generate_errors"] = status.get("generate_errors") or {}
+    ranked["unsupported"] = status.get("unsupported") or {}
     if mixed:
         write_abundance_dir(dest, mixed)
     payload = {k: v for k, v in ranked.items() if k != "tables"}

@@ -13,6 +13,9 @@ Modes:
 from __future__ import annotations
 
 import argparse
+import os
+import tempfile
+from contextlib import ExitStack
 import shutil
 import sys
 from pathlib import Path
@@ -27,7 +30,7 @@ from samovar.abundance import (
     normalize_abundance_table,
     write_abundance_dir,
 )
-from samovar.add_annotator import existing_run_names, write_active_pipeline
+from samovar.add_annotator import existing_run_names, load_prepare_hydra_args, write_active_pipeline
 from samovar.exec_control import (
     CHECKPOINT_STEPS,
     as_path,
@@ -202,6 +205,14 @@ def assert_matching_annotators(sources: Sequence[Path]) -> List[str]:
                 "cannot merge runs with different annotator sets "
                 f"(have {sorted(set(primary))} vs {sorted(set(names))})"
             )
+    definitions = []
+    for src in sources:
+        cfg = yaml.safe_load((src / ".log/configs/config_init.yaml").read_text()) or {}
+        definitions.append({str(row.get("run_name")): {
+            key: value for key, value in row.items() if key != "threads"
+        } for row in cfg.get("run_config", [])})
+    if any(value != definitions[0] for value in definitions[1:]):
+        raise MergeError("cannot merge runs with different annotator definitions (commands, databases or flags)")
     return primary
 
 
@@ -298,6 +309,8 @@ def _rewrite_paths(root: Path, sources: Sequence[Path], dest: Path) -> None:
         if not folder.is_dir():
             continue
         for path in folder.rglob("*"):
+            if "merge_sources" in path.relative_to(folder).parts:
+                continue
             if not path.is_file():
                 continue
             if path.suffix.lower() not in REWRITE_SUFFIXES and path.name not in {
@@ -417,12 +430,86 @@ def _write_checkpoints(dest: Path, mode: str) -> List[str]:
     return marked
 
 
+def _sample_maps(runs: Sequence[Path], mode: str, prefix_runs: bool) -> List[Dict[str, str]]:
+    names = [sample_names_for_run(run, mode) for run in runs]
+    for run, group in zip(runs, names):
+        if not group:
+            raise MergeError(f"no sample artifacts found in {run}; execute the source run first")
+    flat = [name for group in names for name in group]
+    rename = prefix_runs or len(flat) != len(set(flat))
+    # Ordinals are stable for the CLI input order and work even for runs with
+    # identical directory names. Reserve unchanged names before choosing targets.
+    reserved = set(flat)
+    maps = []
+    for index, group in enumerate(names, 1):
+        mapping = {}
+        for name in group:
+            target = f"run{index}__{name}" if rename else name
+            while rename and target in reserved:
+                target = "merged__" + target
+            mapping[name] = target
+            reserved.add(target)
+        maps.append(mapping)
+    return maps
+
+
+def _sample_filename(name: str, mapping: Dict[str, str]) -> Optional[str]:
+    for sample in sorted(mapping, key=len, reverse=True):
+        if name == sample or any(name.startswith(sample + sep) for sep in ("_", ".")):
+            return mapping[sample] + name[len(sample):]
+    return None
+
+
+def _stage_run(src: Path, stage: Path, dest: Path, mode: str,
+               mapping: Dict[str, str], label: str) -> None:
+    """Stage names consistently; never rewrite or relink the source run."""
+    archive = dest / ".log" / "merge_sources" / label
+    for rel in _rels_for_mode(mode):
+        folder = src / rel
+        if not folder.is_dir():
+            continue
+        for path in _iter_files(folder):
+            relative = path.relative_to(folder)
+            abundance = _abundance_root(Path(rel) / relative)
+            combined = _is_combined_table(path.name)
+            sample_name = _sample_filename(path.name, mapping)
+            if abundance is None and not combined and sample_name is None and rel != "genomes":
+                # Run-level logs/reports must not masquerade as sample data.
+                target = archive / rel / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target)
+                continue
+            else:
+                target = stage / rel / relative
+                if abundance is None and not combined and sample_name is not None:
+                    target = target.with_name(sample_name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if path.suffix == ".csv" and (combined or sample_name is not None or abundance is not None):
+                try:
+                    frame = pd.read_csv(path)
+                except pd.errors.EmptyDataError:
+                    shutil.copy2(path, target)
+                    continue
+                if "sample" in frame:
+                    frame["sample"] = frame["sample"].map(lambda x: mapping.get(str(x), x))
+                frame.rename(columns={"N_" + old: "N_" + new for old, new in mapping.items()}, inplace=True)
+                frame.to_csv(target, index=False)
+            else:
+                # Hard links avoid a second temporary copy of large FASTQ files.
+                # Final merge copies bytes, including for symlinked source reads.
+                try:
+                    os.link(path.resolve(), target)
+                except OSError:
+                    shutil.copy2(path, target)
+
+
 def merge_runs(
     sources: Sequence[PathLike],
     output_dir: PathLike,
     mode: str,
     *,
     force: bool = False,
+    prefix_runs: bool = False,
 ) -> Dict[str, Any]:
     mode_s = canonicalize_mode(mode)
     runs = [as_path(s).expanduser().resolve() for s in sources]
@@ -438,9 +525,12 @@ def merge_runs(
                 f"{src} has no .log/configs/config_init.yaml "
                 "(prepare/exec a source run first)"
             )
-        if src == dest:
-            raise MergeError("merge --output_dir must not be one of the source runs")
-    samples = assert_distinct_sample_names(runs, mode_s)
+        if src == dest or src in dest.parents or dest in src.parents:
+            raise MergeError("merge output and source directories must not contain one another")
+    if len(set(runs)) != len(runs):
+        raise MergeError("source runs must be distinct directories")
+    sample_maps = _sample_maps(runs, mode_s, prefix_runs)
+    samples = [target for mapping in sample_maps for target in mapping.values()]
     annotators = assert_matching_annotators(runs)
     if dest.exists() and any(dest.iterdir()):
         if not force:
@@ -452,9 +542,15 @@ def merge_runs(
 
     primary = runs[0]
     _copy_scaffold(primary, dest)
-    combined, abundance = _merge_trees(runs, dest, _rels_for_mode(mode_s))
-    _write_combined(combined)
-    _write_abundance(abundance)
+    with ExitStack() as stack:
+        staged = []
+        for index, (src, mapping) in enumerate(zip(runs, sample_maps), 1):
+            stage = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="samovar-merge-", dir=dest.parent)))
+            _stage_run(src, stage, dest, mode_s, mapping, f"run{index}")
+            staged.append(stage)
+        combined, abundance = _merge_trees(staged, dest, _rels_for_mode(mode_s))
+        _write_combined(combined)
+        _write_abundance(abundance)
     _rewrite_paths(dest, runs, dest)
     pipe = dest / ".log" / "samovar.sh"
     if pipe.is_file():
@@ -465,6 +561,8 @@ def merge_runs(
         "sources": [str(p) for p in runs],
         "output_dir": str(dest),
         "samples": samples,
+        "sample_maps": {str(src): mapping for src, mapping in zip(runs, sample_maps)},
+        "source_prepare_args": {str(src): load_prepare_hydra_args(src) for src in runs},
         "annotators": annotators,
         "checkpoints": marked,
         "next_step": (
@@ -484,7 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="samovar merge",
         description=(
             "Combine two or more SamovaR run directories. "
-            "Sample names must be distinct. "
+            "Colliding sample names are automatically prefixed by source run. "
             "Mode 'initial' unions initial-stage annotations; "
             "mode 'regenerated' also unions regenerated annotations."
         ),
@@ -496,6 +594,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="initial | regenerated",
     )
     add_output_dir_argument(parser, required=True)
+    parser.add_argument("--prefix-runs", action="store_true",
+                        help="Prefix all sample names even when they are already distinct")
     parser.add_argument(
         "--force",
         action="store_true",
@@ -517,6 +617,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.output_dir,
             args.mode,
             force=bool(args.force),
+            prefix_runs=bool(args.prefix_runs),
         )
     except MergeError as exc:
         print(f"Error: {exc}", file=sys.stderr)

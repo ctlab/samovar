@@ -1,6 +1,10 @@
 import os
+import shlex
+import re
 
-from samovar.annotators_wrapper import get_annotator_instance
+from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
+from samovar.memory import annotator_mem_mb
+from samovar.tool_spec import annotator_priority, memory_tool_name
 from samovar.seqio import find_fastq_mate, list_fastq_samples
 
 try:
@@ -18,27 +22,126 @@ def r1_input(wildcards):
     return ancient(path)
 
 def r2_input(wildcards):
+    # Single-end samples have no mate. [] is not an input, so Snakemake does
+    # not require sample_*_R2.fastq. shell_r2 then returns "" and the command
+    # is built without paired flags.
     found = find_fastq_mate(config["r2_dir"], wildcards.sample, "R2")
-    path = str(found) if found else os.path.join(config["r2_dir"], f"{wildcards.sample}_R2.fastq")
-    return ancient(path)
+    if found is None:
+        return []
+    return ancient(str(found))
+
+
+def shell_r2(wildcards, snakemake_input):
+    """Mate path when the sample is paired; empty string when it is single-end.
+
+    An empty string is not a missing file. Annotator commands omit paired flags.
+    """
+    del wildcards
+    raw = getattr(snakemake_input, "r2", "")
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else ""
+    text = str(raw or "")
+    if text and os.path.isfile(text):
+        return text
+    return ""
 
 SAMPLES = get_samples()
 
 # Initialize annotator instances and thread counts once during DAG generation
 ANNOTATORS = {}
 THREADS = {}
+TOOL_TYPES = {}
 for run_conf in config.get('run_config', []):
     run_name = run_conf['run_name']
     tool_type = run_conf['type']
     ANNOTATORS[run_name] = get_annotator_instance(tool_type, run_conf, config)
     THREADS[run_name] = run_conf.get('threads', 1)
+    TOOL_TYPES[run_name] = str(tool_type or run_name)
+
+MACHINE_CORES = max(1, int(config.get("cores") or os.environ.get("SAMOVAR_CORES") or 1))
+MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None
+
+
+def rule_mem(wildcards):
+    tool = TOOL_TYPES.get(wildcards.run_name, "")
+    ann = ANNOTATORS.get(wildcards.run_name)
+    extra = getattr(ann, "extra", "") or ""
+    return annotator_mem_mb(
+        memory_tool_name(tool, extra),
+        THREADS.get(wildcards.run_name, 1),
+        MACHINE_CORES,
+        MEM_LIMIT,
+    )
+
+
+# custom_tool is one rule for every custom annotator. If MetaX is among them,
+# the rule takes MetaX's priority so that database job is not stuck behind
+# per-read tools. Snakemake priority has to be a number, not a function.
+CUSTOM_PRIORITY = max(
+    (
+        annotator_priority(tool)
+        for name, tool in TOOL_TYPES.items()
+        if type(ANNOTATORS[name]).__name__ == "CustomAnnotator"
+    ),
+    default=annotator_priority("gc"),
+)
+
+KAIJU_RUNS = [
+    name for name, ann in ANNOTATORS.items()
+    if type(ann).__name__ == "KaijuAnnotator"
+]
+# One kaiju-multi job loads the FM-index once for the cohort. A wildcard
+# rule that also writes the same files would be ambiguous, so it is omitted.
+BATCH_KAIJU = use_kaiju_multi(len(SAMPLES)) and bool(KAIJU_RUNS)
+
+# Default: fold each finished annotator into a per-sample CSV and drop the per-read file.
+# The Snakemake target is then a sentinel, so a deleted *.out is not rerun.
+_INCREMENTAL_OFF = {"0", "false", "no", "off"}
+INCREMENTAL = str(config.get("incremental_annotations", True)).strip().lower() not in _INCREMENTAL_OFF
+ANN_DIR = str(config.get("annotation_dir") or "")
+if not ANN_DIR:
+    _reports_dir = str(config["output_dir"]).rstrip("/")
+    _parent, _name = os.path.split(_reports_dir)
+    if _name.endswith("_reports"):
+        ANN_DIR = os.path.join(_parent, _name[: -len("_reports")] + "_annotations")
+SPLIT = int(config.get("split_sample_name") or 1)
+TRUTH = str(config.get("truth_table") or "")
+
+
+def marker_output(suffix):
+    raw = config["output_dir"] + "/{sample}_{run_name}." + suffix
+    if INCREMENTAL and raw.endswith(".out"):
+        return raw[:-4] + ".ingested"
+    return raw
+
+
+def disk_out(wildcards, suffix):
+    return f"{config['output_dir']}/{wildcards.sample}_{wildcards.run_name}.{suffix}"
+
+
+def ingest_shell(wildcards, suffix):
+    if not INCREMENTAL:
+        return ""
+    written = disk_out(wildcards, suffix)
+    sentinel = written[:-4] + ".ingested" if written.endswith(".out") else written + ".ingested"
+    return (
+        '"$PYTHON_PATH" -m samovar.combine_tables ingest '
+        f"--out {shlex.quote(written)} "
+        f"--annotations {shlex.quote(ANN_DIR)} "
+        f"--sentinel {shlex.quote(sentinel)} "
+        f"--split {SPLIT} "
+        f"--truth-table {shlex.quote(TRUTH)}"
+    )
+
 
 def get_all_expected_outputs():
     outputs = []
     for run_name, annotator in ANNOTATORS.items():
         for sample in SAMPLES:
-            expected_files = annotator.get_expected_outputs(sample, config['output_dir'])
-            outputs.extend(expected_files)
+            for path in annotator.get_expected_outputs(sample, config["output_dir"]):
+                if INCREMENTAL and path.endswith(".out"):
+                    path = path[:-4] + ".ingested"
+                outputs.append(path)
     return outputs
 
 rule all:
@@ -53,44 +156,143 @@ rule custom_tool:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.custom_{{tool_name}}.out"
+        out = marker_output("custom_{tool_name}.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: CUSTOM_PRIORITY
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+        written = lambda wildcards: disk_out(wildcards, f"custom_{wildcards.tool_name}.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, f"custom_{wildcards.tool_name}.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, f"custom_{wildcards.tool_name}.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 # ==========================================
 # NATIVE TOOLS
 # ==========================================
+# One cohort job builds every initial MAG before any read assignment starts.
+from pathlib import Path
+from samovar.assembly_profiling import parse_slot_extra
+
+MAG_ROOT = str(config.get("mag_catalog_root") or Path(config["output_dir"]).parent / "MAG")
+MAG_PHASE = str(config.get("mag_catalog_phase") or "initial")
+MAP_RUNS = {
+    name for name, ann in ANNOTATORS.items()
+    if type(ann).__name__ == "AssemblyAnnotator" and
+    str(parse_slot_extra(ann.extra or "").get("mag_mode") or os.environ.get("SAMOVAR_MAG_MODE", "homology")).lower().replace("_", "-") == "map-initial"
+}
+
+
+def cohort_read_inputs(wildcards):
+    if wildcards.run_name not in MAP_RUNS:
+        return []
+    # Hybrid assembly reads the original libraries, not just the flattened
+    # classifier input. Track all cohort libraries before freezing a reference.
+    return [str(path) for sample in list_fastq_samples(config["r1_dir"], include_libraries=True)
+            for mate in ("R1", "R2")
+            if (path := find_fastq_mate(config["r1_dir"], sample, mate)) is not None]
+
+
+def catalog_dependency(wildcards):
+    if wildcards.run_name not in MAP_RUNS:
+        return []
+    root = Path(MAG_ROOT) / wildcards.run_name
+    manifest = root / "mapping.manifest.json"
+    if MAG_PHASE == "initial" and manifest.is_file():
+        from samovar.MAG.homology import validate_mapping_catalog
+        validate_mapping_catalog(root / "catalog.tsv", samples=SAMPLES)
+    return [str(manifest)]
+
+
+def mapping_environment(wildcards):
+    if wildcards.run_name not in MAP_RUNS:
+        return ""
+    catalog = str(Path(MAG_ROOT) / wildcards.run_name / "catalog.tsv")
+    return "export SAMOVAR_MAG_PHASE=map SAMOVAR_MAG_CATALOG=" + shlex.quote(catalog) + "; "
+
+
+if MAG_PHASE == "initial" and MAP_RUNS:
+    rule initial_mag_catalog:
+        input:
+            cohort_read_inputs
+        output:
+            manifest = MAG_ROOT + "/{run_name}/mapping.manifest.json"
+        wildcard_constraints:
+            run_name = "|".join(map(re.escape, sorted(MAP_RUNS)))
+        threads:
+            lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        resources:
+            mem_mb=rule_mem
+        run:
+            import subprocess
+            import shutil
+            from samovar.MAG.homology import finalize_mapping_catalog
+            ann = ANNOTATORS[wildcards.run_name]
+            root = Path(MAG_ROOT) / wildcards.run_name
+            if root.resolve() == Path(MAG_ROOT).resolve() or not root.resolve().is_relative_to(Path(MAG_ROOT).resolve()):
+                raise ValueError("Invalid assembly run name for MAG catalog")
+            # A rebuild is a complete cohort operation, never an extension of a
+            # potentially partial/obsolete reference. Existing run checkpoints
+            # determine whether this job executes.
+            if root.exists():
+                shutil.rmtree(root)
+            root.mkdir(parents=True)
+            catalog = root / "catalog.tsv"
+            env = os.environ.copy()
+            env["SAMOVAR_MAG_CATALOG"] = str(catalog)
+            env["SAMOVAR_MAG_PHASE"] = "build"
+            for sample in sorted(SAMPLES):
+                r1 = str(find_fastq_mate(config["r1_dir"], sample))
+                r2 = str(find_fastq_mate(config["r2_dir"], sample, "R2") or "")
+                dest = str(root / "build" / (sample + ".out"))
+                cmd = ann.get_snakemake_shell_cmd(r1, r2, [dest])
+                with (root / (sample + ".build.log")).open("w") as log:
+                    subprocess.run(cmd, shell=True, executable="/bin/bash", env=env,
+                                   stdout=log, stderr=subprocess.STDOUT, check=True)
+            slots = parse_slot_extra(ann.extra or "")
+            finalize_mapping_catalog(catalog, db=ann.db_path or "", threads=int(threads),
+                                     taxonomy_tool=slots.get("mag_taxonomy") or "gtdbtk", samples=SAMPLES)
+
+
 rule assembly:
     input:
         r1 = r1_input,
-        r2 = r2_input
+        r2 = r2_input,
+        catalog = catalog_dependency,
+        libraries = cohort_read_inputs
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.assembly.out"
+        out = marker_output("assembly.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("assembly")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+        environment = mapping_environment,
+        written = lambda wildcards: disk_out(wildcards, "assembly.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "assembly.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "assembly.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.environment}{params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kraken2:
@@ -99,64 +301,122 @@ rule kraken2:
         r2 = r2_input
     output:
         report = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.report",
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.out"
+        out = marker_output("kraken2.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("kraken2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
     params:
+        written = lambda wildcards: disk_out(wildcards, "kraken2.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kraken2.out"),
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.report, output.out]
+            input.r1, shell_r2(wildcards, input), [output.report, disk_out(wildcards, "kraken2.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.report})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {output.report:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
-rule kaiju:
-    input:
-        r1 = r1_input,
-        r2 = r2_input
-    output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kaiju.out"
-    threads:
-        lambda wildcards: THREADS.get(wildcards.run_name, 1)
-    log:
-        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
-    params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
-        )
-    shell:
-        """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
-        """
+if not BATCH_KAIJU:
+    rule kaiju:
+        input:
+            r1 = r1_input,
+            r2 = r2_input
+        output:
+            out = marker_output("kaiju.out")
+        threads:
+            lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        resources:
+            mem_mb=rule_mem,
+        priority: annotator_priority("kaiju")
+        log:
+            f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
+        params:
+            written = lambda wildcards: disk_out(wildcards, "kaiju.out"),
+            ingest = lambda wildcards: ingest_shell(wildcards, "kaiju.out"),
+            cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+                input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kaiju.out")]
+            )
+        shell:
+            """
+            mkdir -p "$(dirname {params.written:q})"
+            mkdir -p "$(dirname {log:q})"
+            {params.cmd} 2> {log:q}
+            {params.ingest}
+            """
+
+if BATCH_KAIJU:
+    for _kaiju_run in KAIJU_RUNS:
+        rule:
+            name:
+                f"kaiju_multi_{_kaiju_run}"
+            output:
+                expand(
+                    marker_output("kaiju.out").replace("{run_name}", _kaiju_run),
+                    sample=SAMPLES,
+                )
+            threads:
+                THREADS.get(_kaiju_run, 1)
+            resources:
+                mem_mb=annotator_mem_mb(
+                    "kaiju", THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT
+                ),
+            priority: annotator_priority("kaiju")
+            log:
+                f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"
+            params:
+                cmd = lambda wildcards, output, run_name=_kaiju_run: ANNOTATORS[run_name].batch_shell(
+                    SAMPLES, config["r1_dir"], config["r2_dir"], config["output_dir"]
+                ),
+                ingest = "\n".join(
+                    ingest_shell(
+                        type("W", (), {"sample": sample, "run_name": _kaiju_run})(),
+                        "kaiju.out",
+                    )
+                    for sample in SAMPLES
+                )
+            shell:
+                """
+                mkdir -p "$(dirname {log:q})"
+                {params.cmd} 2> {log:q}
+                {params.ingest}
+                """
 
 rule metaphlan4:
     input:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.out",
+        out = marker_output("metaphlan4.out"),
         raw = f"{config['output_dir']}/{{sample}}_{{run_name}}.metaphlan4.raw",
         bowtie = f"{config['output_dir']}/{{sample}}_{{run_name}}.bowtie2.bz2"
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("metaphlan4")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
     params:
+        written = lambda wildcards: disk_out(wildcards, "metaphlan4.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "metaphlan4.out"),
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out, output.raw, output.bowtie]
+            input.r1,
+            shell_r2(wildcards, input),
+            [disk_out(wildcards, "metaphlan4.out"), output.raw, output.bowtie],
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kmer2:
@@ -164,20 +424,26 @@ rule kmer2:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kmer2.out"
+        out = marker_output("kmer2.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("kmer2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+        written = lambda wildcards: disk_out(wildcards, "kmer2.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kmer2.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kmer2.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule gc:
@@ -185,20 +451,26 @@ rule gc:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.gc.out"
+        out = marker_output("gc.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("gc")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+        written = lambda wildcards: disk_out(wildcards, "gc.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "gc.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "gc.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kmer_encoder:
@@ -206,20 +478,26 @@ rule kmer_encoder:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kmer_encoder.out"
+        out = marker_output("kmer_encoder.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("kmer_encoder")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+        written = lambda wildcards: disk_out(wildcards, "kmer_encoder.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kmer_encoder.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kmer_encoder.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule kraken:
@@ -227,20 +505,26 @@ rule kraken:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken.out"
+        out = marker_output("kraken.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("kraken")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+        written = lambda wildcards: disk_out(wildcards, "kraken.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kraken.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kraken.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """
 
 rule krakenuniq:
@@ -248,18 +532,24 @@ rule krakenuniq:
         r1 = r1_input,
         r2 = r2_input
     output:
-        out = f"{config['output_dir']}/{{sample}}_{{run_name}}.krakenuniq.out"
+        out = marker_output("krakenuniq.out")
     threads:
         lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem,
+    priority: annotator_priority("krakenuniq")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
     params:
-        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
-            input.r1, input.r2, [output.out]
+        written = lambda wildcards: disk_out(wildcards, "krakenuniq.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "krakenuniq.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "krakenuniq.out")]
         )
     shell:
         """
-        mkdir -p $(dirname {output.out})
-        mkdir -p $(dirname {log})
-        {params.cmd} 2> {log}
+        mkdir -p "$(dirname {params.written:q})"
+        mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
         """

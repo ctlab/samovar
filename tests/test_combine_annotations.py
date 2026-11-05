@@ -10,11 +10,14 @@ import pandas as pd
 import pytest
 
 from samovar.parse_annotators import Annotation, extract_true_taxid
+from samovar.annotation_io import read_annotation_dir
 from samovar.combine_tables import (
     apply_rank_level_csv,
     apply_species_level_csv,
     combine_with_cpp,
     ensure_combine_binary,
+    finalize_annotations,
+    ingest_annotator,
 )
 
 
@@ -105,6 +108,21 @@ def test_combine_assembly_mag_id_feature(tmp_path, combiner):
     assert set(df[tax[0]].astype(str)) == {"562"}
 
 
+def test_combine_keeps_mag_candidate_vector(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_features(
+        reports / "s1_assembly-test.assembly.out",
+        ["seq", "taxID", "MAG_ID", "MAG_vector"],
+        [("readA|taxid:562|", "562", "M1", "M1=0.666667,M2=0.333333")],
+    )
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv")
+    column = next(c for c in df.columns if "MAG_vector" in c)
+    assert df.loc[0, column] == "M1=0.666667,M2=0.333333"
+
+
 def test_combine_tool_with_tax_and_features(tmp_path, combiner):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"
@@ -127,9 +145,6 @@ def test_combine_tool_with_tax_and_features(tmp_path, combiner):
     assert int(df.loc[0, "length"]) in {120, 80}
 
 
-def test_ensure_combine_binary(combiner):
-    assert combiner.exists()
-    assert os.access(combiner, os.X_OK)
 
 
 def test_sort_merge_outer_join(tmp_path, combiner):
@@ -166,21 +181,43 @@ def test_sort_merge_outer_join(tmp_path, combiner):
     )
     df = pd.read_csv(out / "s1.annotation.csv")
     df["seq"] = df["seq"].astype(str)
-    by_seq = df.set_index("seq")
-    assert set(by_seq.index) == {
+    assert set(df["seq"]) == {
         "readA|taxid:9606|",
         "readB|taxid:562|",
         "readC|taxid:4932|",
     }
-    assert str(int(by_seq.loc["readA|taxid:9606|", "taxID_kaiju_0"])) == "9606"
-    assert str(int(by_seq.loc["readA|taxid:9606|", "taxID_kraken2_1"])) == "9606"
+    read_a = df[df["seq"] == "readA|taxid:9606|"]
+    assert len(read_a) == 2
+    assert set(int(x) for x in read_a["taxID_kaiju_0"]) == {9606, 999}
+    assert set(int(x) for x in read_a["taxID_kraken2_1"]) == {9606}
+    assert set(int(x) for x in read_a["length"]) == {126}
+    by_seq = df.drop_duplicates("seq").set_index("seq")
     assert str(int(by_seq.loc["readB|taxid:562|", "taxID_kaiju_0"])) == "562"
     assert int(by_seq.loc["readB|taxid:562|", "taxID_kraken2_1"]) == 0
     assert int(by_seq.loc["readC|taxid:4932|", "taxID_kaiju_0"]) == 0
     assert str(int(by_seq.loc["readA|taxid:9606|", "true"])) == "9606"
     assert str(int(by_seq.loc["readC|taxid:4932|", "true"])) == "4932"
-    assert int(by_seq.loc["readA|taxid:9606|", "length"]) == 126
     assert int(by_seq.loc["readA|taxid:9606|", "feat_kraken2_1_length"]) == 126
+
+
+def test_custom_ids_without_overlap_do_not_add_rows(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    _write_kaiju(
+        reports / "s1_kaiju.kaiju.out",
+        [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")],
+    )
+    _write_custom(
+        reports / "s1_other.custom_other.out",
+        [("unknown-1", "1"), ("unknown-2", "2")],
+    )
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv")
+    assert list(df["seq"]) == ["readA|taxid:9606|", "readB|taxid:562|"]
+    assert "taxID_other_1" in df.columns
+    assert set(int(x) for x in df["taxID_other_1"]) == {0}
+    assert set(int(x) for x in df["taxID_kaiju_0"]) == {9606, 562}
 
 
 def test_true_taxid_prefix_without_token(tmp_path, combiner):
@@ -331,6 +368,23 @@ def test_combine_with_cpp_accepts_gzipped_truth_table(tmp_path):
     assert str(int(df.loc[0, "true"])) == "818"
 
 
+def test_ingest_accepts_gzipped_truth_table(tmp_path):
+    import gzip as gzip_mod
+
+    out_file = tmp_path / "s_dummy.custom_dummy.out"
+    _write_custom(out_file, [("S0R0", "9606")])
+    truth_gz = tmp_path / "map.tsv.gz"
+    with gzip_mod.open(truth_gz, "wt", encoding="utf-8") as handle:
+        handle.write("#anonymous_read_id\tgenome_id\ttax_id\tread_id\nS0R0/1\tg\t818\tr/1\n")
+    ann = tmp_path / "ann"
+    ingest_annotator(out_file, ann, tmp_path / "s.ingested", truth_table=str(truth_gz))
+    df = pd.read_csv(ann / "s.annotation.csv")
+    assert str(int(df.loc[0, "true"])) == "818"
+    assert not list(ann.glob("*.lock"))
+    assert (ann / ".tmp" / "locks" / "s.annotation.lock").is_file()
+    assert (ann / ".tmp" / "locks" / "s.annotation.csv.lock").is_file()
+
+
 def test_sample_name_keeps_underscores(tmp_path, combiner):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"
@@ -395,6 +449,7 @@ def test_large_tables_chunked_merge(tmp_path, combiner):
     assert int(only["true"]) == 4932
 
 
+@pytest.mark.optional
 def test_python_wrapper_species_pass(tmp_path):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"
@@ -486,3 +541,379 @@ def test_tenbac_reports_merge(tmp_path, combiner):
         zeros = sum(1 for row in rows if (row.get("true") or "") == "0")
         assert zeros == 0
     assert total > 1000
+
+
+def _same_table(left: Path, right: Path) -> None:
+    a = pd.read_csv(left)
+    b = pd.read_csv(right)
+    a = a.reindex(sorted(a.columns), axis=1).sort_values(list(sorted(a.columns)), kind="mergesort")
+    b = b.reindex(sorted(b.columns), axis=1).sort_values(list(sorted(b.columns)), kind="mergesort")
+    a = a.reset_index(drop=True)
+    b = b.reset_index(drop=True)
+    pd.testing.assert_frame_equal(a, b, check_dtype=False)
+
+
+def _ingest(path: Path, ann: Path, sentinel: Path, split_n: int = 1, truth: str = "") -> None:
+    ingest_annotator(
+        path,
+        ann,
+        sentinel,
+        split_n=split_n,
+        truth_table=truth or None,
+    )
+
+
+def test_custom_trailing_mate_suffix_joins_native_id(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    _write_kaiju(reports / "s1_kaiju.kaiju.out", [("readA|taxid:9606|", "9606")])
+    _write_custom(
+        reports / "s1_w8ok.custom_w8ok.out",
+        [("readA|taxid:9606|/1", "562"), ("readB/10", "111")],
+    )
+    out = tmp_path / "ann"
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(out), "-s", "1"])
+    df = pd.read_csv(out / "s1.annotation.csv").set_index("seq")
+    col = next(name for name in df.columns if name.startswith("taxID_w8ok"))
+    assert "readA|taxid:9606|/1" not in df.index
+    assert int(df.loc["readA|taxid:9606|", col]) == 562
+    assert int(df.loc["readB/10", col]) == 111
+    from samovar.parse_annotators import read_custom_raw
+
+    parsed = read_custom_raw(str(reports / "s1_w8ok.custom_w8ok.out"))
+    assert set(parsed["seq"]) == {"readA|taxid:9606|", "readB/10"}
+
+
+def test_append_matches_batch_for_both_orders(tmp_path, combiner):
+    kaiju_s1 = [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")]
+    kraken_s1 = [
+        ("readA|taxid:9606|", "9606", "126"),
+        ("readC|taxid:4932|", "4932", "150"),
+    ]
+    kaiju_s2 = [("readD|taxid:562|", "562")]
+    kraken_s2 = [("readD|taxid:562|", "562", "80"), ("readE|taxid:9606|", "9606", "90")]
+    batch_reports = tmp_path / "batch_reports"
+    batch_reports.mkdir()
+    _write_kaiju(batch_reports / "s1_kaiju.kaiju.out", kaiju_s1)
+    _write_kraken2(batch_reports / "s1_kraken2.kraken2.out", kraken_s1)
+    _write_kaiju(batch_reports / "s2_kaiju.kaiju.out", kaiju_s2)
+    _write_kraken2(batch_reports / "s2_kraken2.kraken2.out", kraken_s2)
+    batch = tmp_path / "batch"
+    subprocess.check_call([str(combiner), "-i", str(batch_reports), "-o", str(batch), "-s", "1"])
+
+    orders = (("kaiju", "kraken2"), ("kraken2", "kaiju"))
+    for order in orders:
+        ann = tmp_path / ("ann_" + "_".join(order))
+        ann.mkdir()
+        reports = tmp_path / ("rep_" + "_".join(order))
+        reports.mkdir()
+        written = {
+            "kaiju": [
+                ("s1_kaiju.kaiju.out", lambda path: _write_kaiju(path, kaiju_s1)),
+                ("s2_kaiju.kaiju.out", lambda path: _write_kaiju(path, kaiju_s2)),
+            ],
+            "kraken2": [
+                ("s1_kraken2.kraken2.out", lambda path: _write_kraken2(path, kraken_s1)),
+                ("s2_kraken2.kraken2.out", lambda path: _write_kraken2(path, kraken_s2)),
+            ],
+        }
+        for tool in order:
+            for name, write in written[tool]:
+                path = reports / name
+                write(path)
+                _ingest(path, ann, reports / (name[:-4] + ".ingested"))
+                assert not path.exists()
+        for sample in ("s1", "s2"):
+            _same_table(ann / f"{sample}.annotation.csv", batch / f"{sample}.annotation.csv")
+
+
+def test_append_regenerated_names_match_batch_split_two(tmp_path, combiner):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    _write_kaiju(reports / "sample_0_k1.kaiju.out", [("readA|taxid:9606|", "9606")])
+    _write_kraken2(
+        reports / "sample_0_k1.kraken2.out",
+        [("readA|taxid:9606|", "562", "100")],
+    )
+    _write_kaiju(reports / "sample_1_k1.kaiju.out", [("readB|taxid:562|", "562")])
+    batch = tmp_path / "batch"
+    subprocess.check_call([str(combiner), "-i", str(reports), "-o", str(batch), "-s", "2"])
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    for name in (
+        "sample_1_k1.kaiju.out",
+        "sample_0_k1.kraken2.out",
+        "sample_0_k1.kaiju.out",
+    ):
+        src = reports / name
+        copy = tmp_path / "one" / name
+        copy.parent.mkdir(exist_ok=True)
+        copy.write_bytes(src.read_bytes())
+        _ingest(copy, ann, tmp_path / "one" / (name[:-4] + ".ingested"), split_n=2)
+    _same_table(ann / "sample_0.annotation.csv", batch / "sample_0.annotation.csv")
+    _same_table(ann / "sample_1.annotation.csv", batch / "sample_1.annotation.csv")
+    truth = tmp_path / "truth.tsv"
+    truth.write_text("seq\ttaxid\nreadA|taxid:9606|\t818\nreadB|taxid:562|\t562\n", encoding="utf-8")
+    finalize_annotations(ann, truth_table=str(truth))
+    combined = pd.read_csv(ann / "combined_annotation_table.csv")
+    assert not list(ann.glob("*.annotation.csv"))
+    got = read_annotation_dir(ann)
+    assert set(got["sample"].astype(str)) == {"sample_0", "sample_1"}
+    by_seq = combined.set_index("seq")
+    assert str(int(by_seq.loc["readA|taxid:9606|", "true"])) == "818"
+
+
+def test_append_resume_redo_and_failed_commit(tmp_path, combiner):
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606")])
+    sentinel = reports / "s1_kaiju.ingested"
+    _ingest(kaiju, ann, sentinel)
+    assert sentinel.read_text(encoding="utf-8") == "ok\n"
+    assert not kaiju.exists()
+    csv_path = ann / "s1.annotation.csv"
+    committed = csv_path.read_text(encoding="utf-8")
+    sentinel.unlink()
+    _ingest(kaiju, ann, sentinel)
+    assert sentinel.is_file()
+    assert csv_path.read_text(encoding="utf-8") == committed
+
+    kaiju.write_text("C\treadA|taxid:9606|\t562\n", encoding="utf-8")
+    _ingest(kaiju, ann, sentinel)
+    redone = pd.read_csv(csv_path)
+    assert int(redone.loc[0, "taxID_kaiju_0"]) == 562
+
+    bad = reports / "s1_extra.kaiju.out"
+    bad.write_text("C\treadA|taxid:9606|\tNOT_TAX\n", encoding="utf-8")
+    before = csv_path.read_text(encoding="utf-8")
+    with pytest.raises(subprocess.CalledProcessError):
+        _ingest(bad, ann, reports / "s1_extra.ingested")
+    assert bad.is_file()
+    assert csv_path.read_text(encoding="utf-8") == before
+    assert not (reports / "s1_extra.ingested").exists()
+
+
+def test_add_after_finalize_keeps_previous_columns(tmp_path, combiner):
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    kraken = reports / "s1_kraken2.kraken2.out"
+    extra = reports / "s1_extra.custom_extra.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606")])
+    _write_kraken2(kraken, [("readA|taxid:9606|", "562", "40")])
+    _write_custom(extra, [("readA|taxid:9606|", "111")])
+    hold = tmp_path / "hold"
+    hold.mkdir()
+    for path in (kaiju, kraken, extra):
+        shutil.copy(path, hold / path.name)
+    batch = tmp_path / "batch"
+    subprocess.check_call([str(combiner), "-i", str(hold), "-o", str(batch), "-s", "1"])
+    _ingest(kaiju, ann, reports / "s1_kaiju.ingested")
+    _ingest(kraken, ann, reports / "s1_kraken2.ingested")
+    finalize_annotations(ann)
+    assert not (ann / "s1.annotation.csv").exists()
+    assert (ann / "s1.annotation.csv.tools").is_file()
+    _ingest(extra, ann, reports / "s1_extra.ingested")
+    _same_table(ann / "s1.annotation.csv", batch / "s1.annotation.csv")
+    finalize_annotations(ann)
+    combined = pd.read_csv(ann / "combined_annotation_table.csv")
+    assert any(name.startswith("taxID_kaiju_") for name in combined.columns)
+    assert any(name.startswith("taxID_kraken2_") for name in combined.columns)
+    assert any(name.startswith("taxID_extra_") for name in combined.columns)
+
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    reports2 = tmp_path / "reports2"
+    reports2.mkdir()
+    for name, write in (
+        ("s1_kaiju.kaiju.out", lambda path: _write_kaiju(path, [("readA|taxid:9606|", "9606")])),
+        ("s1_kraken2.kraken2.out", lambda path: _write_kraken2(path, [("readA|taxid:9606|", "562", "40")])),
+    ):
+        path = reports2 / name
+        write(path)
+        _ingest(path, bare, reports2 / (name[:-4] + ".ingested"))
+    finalize_annotations(bare)
+    (bare / "s1.annotation.csv.tools").unlink()
+    extra2 = reports2 / "s1_extra.custom_extra.out"
+    _write_custom(extra2, [("readA|taxid:9606|", "111")])
+    _ingest(extra2, bare, reports2 / "s1_extra.ingested")
+    restored = pd.read_csv(bare / "s1.annotation.csv")
+    row = restored.iloc[0]
+    assert int(row[[c for c in restored.columns if c.startswith("taxID_kaiju_")][0]]) == 9606
+    assert int(row[[c for c in restored.columns if c.startswith("taxID_kraken2_")][0]]) == 562
+    assert int(row[[c for c in restored.columns if c.startswith("taxID_extra_")][0]]) == 111
+
+
+def test_append_one_sample_is_serialized(tmp_path, combiner):
+    import threading
+
+    ann = tmp_path / "ann"
+    ann.mkdir()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    kraken = reports / "s1_kraken2.kraken2.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606"), ("readB|taxid:562|", "562")])
+    _write_kraken2(kraken, [("readA|taxid:9606|", "9606", "40")])
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    hold = tmp_path / "hold"
+    hold.mkdir()
+    shutil.copy(kaiju, hold / kaiju.name)
+    shutil.copy(kraken, hold / kraken.name)
+    subprocess.check_call([str(combiner), "-i", str(hold), "-o", str(batch), "-s", "1"])
+    errors = []
+
+    def run(path, sentinel):
+        try:
+            _ingest(path, ann, sentinel)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run, args=(kaiju, reports / "s1_kaiju.ingested")),
+        threading.Thread(target=run, args=(kraken, reports / "s1_kraken2.ingested")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    _same_table(ann / "s1.annotation.csv", batch / "s1.annotation.csv")
+
+
+def test_reprofile_passthrough_splits_combined_table(tmp_path):
+    from samovar.reprofiling import passthrough_reprofile_tables
+
+    src = tmp_path / "ann"
+    src.mkdir()
+    pd.DataFrame(
+        {
+            "seq": ["a", "b"],
+            "taxID_kaiju_0": [1, 2],
+            "true": [1, 2],
+            "sample": ["s1", "s2"],
+        }
+    ).to_csv(src / "combined_annotation_table.csv", index=False)
+    dest = tmp_path / "out"
+    written = passthrough_reprofile_tables(str(src), str(dest))
+    assert written == 2
+    s1 = pd.read_csv(dest / "s1_reprofiled.csv")
+    assert "sample" not in s1.columns
+    assert list(s1["seq"]) == ["a"]
+    assert int(s1.loc[0, "taxid_SAMOVAR"]) == 1
+
+
+def test_empty_annotator_output_skips_and_finalize_still_writes(tmp_path):
+    ann = tmp_path / "ann"
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    empty = reports / "s1_custom.custom_empty.out"
+    empty.write_text("\n# comment only\n", encoding="utf-8")
+    sentinel = reports / "s1_custom.ingested"
+    _ingest(empty, ann, sentinel)
+    assert sentinel.read_text(encoding="utf-8") == "empty\n"
+    assert empty.is_file()
+    assert not (ann / "s1.annotation.csv").exists()
+    dest = finalize_annotations(ann)
+    assert dest.read_text(encoding="utf-8") == "seq,length,true,read_type,sample\n"
+    assert read_annotation_dir(ann).empty
+
+    kaiju = reports / "s1_kaiju.kaiju.out"
+    _write_kaiju(kaiju, [("readA|taxid:9606|", "9606")])
+    _ingest(kaiju, ann, reports / "s1_kaiju.ingested")
+    other = reports / "s1_blank.custom_blank.out"
+    other.write_text("", encoding="utf-8")
+    _ingest(other, ann, reports / "s1_blank.ingested")
+    finalize_annotations(ann)
+    combined = pd.read_csv(ann / "combined_annotation_table.csv")
+    assert int(combined.loc[0, [c for c in combined.columns if c.startswith("taxID_kaiju_")][0]]) == 9606
+
+
+def test_parallel_samples_have_private_native_workspaces(tmp_path, combiner):
+    from concurrent.futures import ThreadPoolExecutor
+    reports = tmp_path / 'reports'; reports.mkdir()
+    annotations = tmp_path / 'annotations'
+    paths = []
+    for sample in range(4):
+        path = reports / f's{sample}_kaiju.kaiju.out'
+        _write_kaiju(path, [(f'r{i}', 562 + sample) for i in range(3000)])
+        paths.append(path)
+    def ingest(path):
+        return ingest_annotator(path,annotations,path.with_suffix('.ingested'))
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        outputs = list(executor.map(ingest, paths))
+    for sample, output in enumerate(outputs):
+        frame = pd.read_csv(output)
+        assert len(frame) == 3000
+        assert set(frame['taxID_kaiju_0']) == {562 + sample}
+    assert not list(annotations.glob('.combine_*'))
+
+
+def test_parallel_append_same_sample_keeps_both_tools(tmp_path, combiner):
+    """Two combines of one CSV run one after the other and both columns remain."""
+    parent = tmp_path / "ann"
+    parent.mkdir()
+    out = parent / "s1.annotation.csv"
+    kaiju = tmp_path / "s1_kaiju.kaiju.out"
+    kraken = tmp_path / "s1_k2.kraken2.out"
+    _write_kaiju(kaiju, [(f"r{i}", 562) for i in range(4000)])
+    _write_kraken2(kraken, [(f"r{i}", 9606, 40) for i in range(4000)])
+    procs = [
+        subprocess.Popen(
+            [str(combiner), "--add", str(src), "--name", src.name, "--out", str(out)]
+        )
+        for src in (kaiju, kraken)
+    ]
+    assert [proc.wait() for proc in procs] == [0, 0]
+    frame = pd.read_csv(out)
+    assert len(frame) == 4000
+    assert set(frame["taxID_kaiju_1"]) == {562}
+    assert set(frame["taxID_kraken2_0"]) == {9606}
+
+
+def test_parallel_append_without_shared_tmp(tmp_path, combiner):
+    """Two --add processes omit --tmp and must not share ann_0/run_0.tsv."""
+    parent = tmp_path / "ann"
+    parent.mkdir()
+    procs = []
+    for sample in (1, 2):
+        src = tmp_path / f"s{sample}_kaiju.kaiju.out"
+        _write_kaiju(src, [(f"r{i}", 562 + sample) for i in range(200)])
+        out = parent / f"s{sample}.annotation.csv"
+        procs.append(
+            subprocess.Popen(
+                [
+                    str(combiner),
+                    "--add",
+                    str(src),
+                    "--name",
+                    src.name,
+                    "--out",
+                    str(out),
+                ]
+            )
+        )
+    codes = [proc.wait() for proc in procs]
+    assert codes == [0, 0]
+    for sample in (1, 2):
+        frame = pd.read_csv(parent / f"s{sample}.annotation.csv")
+        assert len(frame) == 200
+        assert set(frame["taxID_kaiju_0"]) == {562 + sample}
+
+
+def test_missing_annotator_output_includes_rule_log(tmp_path):
+    out = tmp_path / "2_full.custom_k2alt.out"
+    log = tmp_path / "logs" / "2_full.custom_k2alt.log"
+    log.parent.mkdir()
+    log.write_text("Unknown option: i\nOption o is ambiguous\n")
+    with pytest.raises(FileNotFoundError, match="Unknown option: i") as caught:
+        ingest_annotator(out, tmp_path, tmp_path / "s.ingested")
+    text = str(caught.value)
+    assert "Annotator output is missing" in text
+    assert "Option o is ambiguous" in text

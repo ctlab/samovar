@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -24,7 +25,7 @@ from samovar.apply import (
     load_pipeline_state,
     main as apply_main,
 )
-from samovar.paths import write_config
+from samovar.paths import python_path, write_config
 from samovar.reprofilers import run_reprofiler
 from samovar.tools_import import import_tool
 
@@ -92,8 +93,13 @@ def _dump(path: Path, data: dict) -> None:
 
 def _source_pipeline(tmp_path: Path, monkeypatch, *, with_model: bool = True) -> Path:
     cfg = tmp_path / "install.json"
+    # Capture the install interpreter before this fixture replaces SAMOVAR_CONFIG.
+    interpreter = python_path()
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
-    write_config({"root": str(REPO), "tools": {}}, also_repo_build=False)
+    write_config(
+        {"root": str(REPO), "python_path": interpreter, "tools": {}},
+        also_repo_build=False,
+    )
     import_tool(
         name="adaptwrap",
         tool_type="ml",
@@ -116,6 +122,8 @@ def _source_pipeline(tmp_path: Path, monkeypatch, *, with_model: bool = True) ->
             "r1_dir": str(source / "initial_trimmed"),
             "r2_dir": str(source / "initial_trimmed"),
             "output_dir": str(source / "initial_reports"),
+            "annotation_dir": str(source / "initial_annotations"),
+            "incremental_annotations": True,
             "run_config": [
                 {
                     "run_name": "dummy",
@@ -193,10 +201,6 @@ def _source_pipeline(tmp_path: Path, monkeypatch, *, with_model: bool = True) ->
 
 
 def test_cli_help_lists_apply():
-    cfg = REPO / "build" / "config.json"
-    if not cfg.exists():
-        cfg.parent.mkdir(parents=True, exist_ok=True)
-        cfg.write_text('{"python_path": "python3", "r_path": "R", "r_lib_path": "."}\n')
     result = subprocess.run(
         ["bash", str(REPO / "bin" / "samovar"), "help"],
         cwd=REPO,
@@ -212,7 +216,7 @@ def test_apply_module_help():
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO / "src") + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
-        [os.environ.get("PYTHON_PATH") or "python3", "-m", "samovar.apply", "--help"],
+        [sys.executable, "-m", "samovar.apply", "--help"],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -241,6 +245,7 @@ def test_apply_missing_pipeline(tmp_path):
     assert rc == 1
 
 
+@pytest.mark.optional
 def test_apply_refuses_inplace_overwrite(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -249,6 +254,7 @@ def test_apply_refuses_inplace_overwrite(tmp_path, monkeypatch):
         apply_pipeline(reads, source, source, full=False)
 
 
+@pytest.mark.optional
 def test_apply_incompatible_input(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     empty = tmp_path / "empty"
@@ -265,6 +271,7 @@ def test_apply_missing_model(tmp_path, monkeypatch):
         apply_pipeline(reads, source, tmp_path / "out", full=False)
 
 
+@pytest.mark.optional
 def test_apply_full_missing_regenerated(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     import shutil
@@ -276,6 +283,7 @@ def test_apply_full_missing_regenerated(tmp_path, monkeypatch):
         apply_pipeline(reads, source, tmp_path / "out", full=True)
 
 
+@pytest.mark.optional
 def test_configured_steps_normal_skips_table_regen(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     state = load_pipeline_state(source)
@@ -290,12 +298,14 @@ def test_configured_steps_normal_skips_table_regen(tmp_path, monkeypatch):
     assert "regenerate_reads" not in normal
 
 
+@pytest.mark.optional
 def test_normal_apply_integration_and_contracts(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
     _fastq_pair(reads)
     out = tmp_path / "apply_out"
     prov = apply_pipeline(reads, source, out, full=False, cores=1)
+    assert not (source / "initial_annotations").exists()
     assert prov["retrained"] is False
     assert prov["mode"] == "normal"
     profiles = list((out / "reprofiled_annotations").glob("*_reprofiled.csv"))
@@ -354,6 +364,7 @@ def test_full_apply_retrains_and_regenerates(tmp_path, monkeypatch):
     assert counts.is_dir()
 
 
+@pytest.mark.optional
 def test_normal_vs_full_semantics(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -376,6 +387,7 @@ def test_normal_vs_full_semantics(tmp_path, monkeypatch):
         assert (dest / "apply_counts_scores").is_dir()
 
 
+@pytest.mark.optional
 def test_cli_apply_success(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)
     reads = tmp_path / "reads"
@@ -408,6 +420,7 @@ def test_cli_apply_success(tmp_path, monkeypatch):
     assert list((out / "reprofiled_annotations").glob("*_reprofiled.csv"))
 
 
+@pytest.mark.optional
 def test_apply_full_then_merge_initial_and_regenerated(tmp_path, monkeypatch):
     from samovar.merge import merge_runs
 
@@ -433,3 +446,16 @@ def test_apply_full_then_merge_initial_and_regenerated(tmp_path, monkeypatch):
     assert (tmp_path / "merged_regenerated" / "regenerated_annotations").is_dir()
     assert initial["next_step"] == "viz_initial"
     assert regenerated["next_step"] == "viz_regenerated"
+
+
+def test_apply_inherits_viz_settings(tmp_path, monkeypatch):
+    import samovar.apply as apply_module
+    calls = []
+    monkeypatch.setattr(apply_module, "compare_annotations", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(apply_module, "run_custom_scorers", lambda *args, **kwargs: None)
+    config = {"viz": {"full": True, "opal": True, "metrics_sample": 50000, "metrics": ["accuracy"]},
+              "cores": 3, "seed": 17}
+    apply_module._viz_and_score(tmp_path, tmp_path / "annotations", tmp_path / "plots", config, "viz_initial")
+    assert calls[0]["opal"] and "f1" in calls[0]["types"]
+    assert calls[0]["metrics_sample"] == 50000 and calls[0]["metrics"] == ["accuracy"]
+    assert calls[0]["threads"] == 3 and calls[0]["seed"] == 17

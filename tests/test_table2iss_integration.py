@@ -17,10 +17,10 @@ def create_test_fasta(output_dir, taxid):
     SeqIO.write(record, genome_path, "fasta")
     return genome_path
 
-def test_process_annotation_table():
+def test_process_annotation_table(tmp_path):
     """Test processing annotation table and generating reads."""
     # Create output directory
-    output_dir = "tests_outs/test_process_annotation_table"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test table
@@ -61,10 +61,10 @@ def test_process_annotation_table():
         assert os.path.exists(os.path.join(reads_dir, f"test_table_{annotator}_R1.fastq"))
         assert os.path.exists(os.path.join(reads_dir, f"test_table_{annotator}_R2.fastq"))
 
-def test_process_abundance_table_integration():
+def test_process_abundance_table_integration(tmp_path):
     """Integration test for process_abundance_table with process_annotation_table."""
     # Create output directory
-    output_dir = "tests_outs/test_process_abundance_table_integration"
+    output_dir = str(tmp_path / "run")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create test annotation table

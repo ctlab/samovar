@@ -10,6 +10,11 @@ from samovar.annotation_correlation import (
     spearman_annotation_correlation,
 )
 
+import pytest
+
+# Detailed Spearman report behavior.
+pytestmark = pytest.mark.optional
+
 
 def test_spearman_includes_tax_feat_true():
     df = pd.DataFrame(

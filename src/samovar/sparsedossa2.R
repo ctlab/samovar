@@ -90,7 +90,9 @@ parse_args <- function(argv) {
 limit_blas_threads <- function() {
   for (var in c("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")) {
     if (!nzchar(Sys.getenv(var, unset = ""))) {
-      Sys.setenv(var, "1")
+      arg <- list("1")
+      names(arg) <- var
+      do.call(Sys.setenv, arg)
     }
   }
 }
@@ -113,7 +115,143 @@ make_control <- function(opts) {
   control
 }
 
-setup_parallel <- function(workers, cv = FALSE) {
+sd2_cluster <- NULL
+
+stop_sd2_cluster <- function() {
+  if (!is.null(sd2_cluster)) {
+    try(parallel::stopCluster(sd2_cluster), silent = TRUE)
+    sd2_cluster <<- NULL
+  }
+}
+
+# EM's slope test is `if (slope1 <= slopes[2] & ...)` and aborts when a
+# spline slope is NA. Treat that region as unfinished so the search continues.
+patch_slope_guard <- function() {
+  if (!requireNamespace("SparseDOSSA2", quietly = TRUE)) return(invisible(NULL))
+  if (!requireNamespace("Rmpfr", quietly = TRUE)) return(invisible(NULL))
+  ns <- asNamespace("SparseDOSSA2")
+  if (isTRUE(getOption("samovar.slope_guard"))) {
+    return(invisible(NULL))
+  }
+  orig <- get("estimate_one_error", envir = ns)
+  guarded <- function(x3, y3, slopes, precBits) {
+    nums <- suppressWarnings(as.numeric(slopes))
+    if (length(nums) < 3L || any(!is.finite(nums))) {
+      return(Rmpfr::mpfr(Inf, precBits = precBits))
+    }
+    orig(x3, y3, slopes, precBits)
+  }
+  env <- new.env(parent = environment(orig))
+  env$orig <- orig
+  environment(guarded) <- env
+  assignInNamespace("estimate_one_error", guarded, ns = "SparseDOSSA2")
+  options(samovar.slope_guard = TRUE)
+  invisible(NULL)
+}
+
+# SparseDOSSA2 calls future_vapply without future.seed. The default lives on
+# future_lapply; a declared seed stops the "UNRELIABLE VALUE" warning.
+patch_future_seed <- function(seed) {
+  if (!requireNamespace("future.apply", quietly = TRUE)) return(invisible(NULL))
+  ns <- asNamespace("future.apply")
+  if (isTRUE(getOption("samovar.future_seed_patched"))) {
+    return(invisible(NULL))
+  }
+  orig <- get("future_lapply", envir = ns)
+  formals(orig)$future.seed <- seed
+  assignInNamespace("future_lapply", orig, ns = "future.apply")
+  options(samovar.future_seed_patched = TRUE)
+  invisible(NULL)
+}
+
+# A taxon seen twice with the same count has sigma 0. The EM integral then
+# compares a missing value and aborts on iteration 1. A handful of taxa also
+# makes ks::Hscv's covariance singular after EM. Floor sigma and, only if
+# that bandwidth fit still fails, use a diagonal covariance.
+patch_degenerate_fit <- function() {
+  if (!requireNamespace("SparseDOSSA2", quietly = TRUE)) return(invisible(NULL))
+  if (isTRUE(getOption("samovar.degenerate_fit"))) return(invisible(NULL))
+  ns <- asNamespace("SparseDOSSA2")
+  orig_fp <- get("fit_featureParam", envir = ns)
+  guarded_fp <- function(data) {
+    fp <- orig_fp(data)
+    sig <- fp[, "sigma"]
+    bad <- !is.finite(sig) | sig <= 0
+    if (any(bad)) {
+      repl <- suppressWarnings(stats::median(sig[!bad]))
+      if (!is.finite(repl) || repl <= 0) repl <- 0.5
+      fp[bad, "sigma"] <- repl
+    }
+    fp
+  }
+  orig_F <- get("fit_F", envir = ns)
+  guarded_F <- function(feature_param) {
+    tryCatch(orig_F(feature_param), error = function(e) {
+      if (!grepl("leading minor", conditionMessage(e), fixed = TRUE)) stop(e)
+      x <- feature_param
+      pi <- x[, "pi0"]
+      pi[!is.finite(pi) | pi <= 0] <- 1e-6
+      pi[pi >= 1] <- 1 - 1e-6
+      x[, "pi0"] <- log(pi) - log(1 - pi)
+      v <- apply(x, 2, stats::var)
+      v[!is.finite(v) | v <= 0] <- 1e-4
+      list(p0_sigma = 0, K_nonzero = diag(v, nrow = length(v)), K_zero = NULL)
+    })
+  }
+  assignInNamespace("fit_featureParam", guarded_fp, ns = "SparseDOSSA2")
+  assignInNamespace("fit_F", guarded_F, ns = "SparseDOSSA2")
+  options(samovar.degenerate_fit = TRUE)
+  invisible(NULL)
+}
+
+fit_support <- function(mat) {
+  supported <- rowSums(mat > 0) >= 2L
+  c(features = sum(supported),
+    samples = sum(colSums(mat[supported, , drop = FALSE]) > 0))
+}
+
+require_fit_size <- function(mat, output) {
+  # fit_F estimates a three-dimensional parameter density after filtering taxa.
+  support <- fit_support(mat)
+  if (support[["features"]] < 4L || support[["samples"]] < 2L) {
+    write_json(paste0(output, ".status.json"), list(
+      status = "unsupported",
+      error = paste0("SparseDOSSA2 fit unsupported: need at least 4 taxa observed ",
+                     "in at least 2 samples and at least 2 nonempty samples; got ",
+                     support[["features"]], " taxa and ", support[["samples"]], " samples")
+    ))
+    quit(save = "no", status = 0)
+  }
+}
+
+fit_or_stop <- function(expr) {
+  expr <- substitute(expr)
+  tryCatch(
+    eval(expr, parent.frame()),
+    error = function(e) {
+      msg <- conditionMessage(e)
+      stop_sd2_cluster()
+      if (grepl("missing value where TRUE/FALSE needed", msg, fixed = TRUE)) {
+        stop(
+          "SparseDOSSA2 EM failed: numeric integration returned a missing value",
+          call. = FALSE
+        )
+      }
+      if (grepl("leading minor", msg, fixed = TRUE)) {
+        stop(
+          "SparseDOSSA2 fit failed: covariance is singular",
+          call. = FALSE
+        )
+      }
+      stop(e)
+    }
+  )
+}
+
+setup_parallel <- function(workers, cv = FALSE, seed = TRUE) {
+  patch_future_seed(seed)
+  patch_slope_guard()
+  patch_degenerate_fit()
   workers <- as.integer(workers %||% 1L)
   if (!requireNamespace("future", quietly = TRUE)) {
     return(invisible(NULL))
@@ -124,11 +262,16 @@ setup_parallel <- function(workers, cv = FALSE) {
     future::plan(future::sequential)
     return(invisible(NULL))
   }
-  ms <- future::tweak(future::multisession, workers = workers)
+  stop_sd2_cluster()
+  # PSOCK workers do not see a namespace patch made in this process.
+  sd2_cluster <<- parallel::makeCluster(workers)
+  parallel::clusterExport(sd2_cluster, "patch_slope_guard", envir = .GlobalEnv)
+  parallel::clusterEvalQ(sd2_cluster, patch_slope_guard())
+  worker_plan <- future::tweak(future::cluster, workers = sd2_cluster)
   if (cv) {
-    future::plan(list(future::sequential, future::sequential, ms))
+    future::plan(list(future::sequential, future::sequential, worker_plan))
   } else {
-    future::plan(ms)
+    future::plan(worker_plan)
   }
   invisible(NULL)
 }
@@ -198,9 +341,28 @@ suppressPackageStartupMessages(library(SparseDOSSA2))
 if (opts$command %in% c("fitcv", "cv", "score")) {
   if (is.null(opts$input)) stop("--input is required for fitcv")
   mat <- read_feature_matrix(opts$input)
+  # fitCV also fits a three-dimensional parameter density (pi0, mu, sigma).
+  # Its all-zero filter drops taxa observed fewer than twice. A handful of
+  # surviving taxa cannot identify that density; namespace numeric patches
+  # must not turn such a table into a seemingly valid model comparison.
+  support <- fit_support(mat)
+  n_supported <- support[["features"]]
+  n_supported_samples <- support[["samples"]]
+  if (n_supported < 4L || n_supported_samples < 4L) {
+    write_json(opts$output, list(
+      cv_goodness_of_fit = NA_real_,
+      status = "unsupported",
+      error = paste0("SparseDOSSA2 CV unavailable: need at least 4 taxa observed ",
+                     "in at least 2 samples and at least 4 nonempty samples; got ",
+                     n_supported, " taxa and ", n_supported_samples, " samples"),
+      n_feature = nrow(mat),
+      n_sample = ncol(mat)
+    ))
+    quit(save = "no", status = 0)
+  }
   n_samp <- ncol(mat)
   k <- max(2L, min(as.integer(opts$cv_folds %||% 5L), n_samp))
-  setup_parallel(opts$workers, cv = TRUE)
+  setup_parallel(opts$workers, cv = TRUE, seed = opts$seed)
   if (!is.null(opts$seed) && !is.na(opts$seed)) set.seed(opts$seed)
   control <- make_control(opts)
   lambda_vec <- NULL
@@ -210,7 +372,7 @@ if (opts$command %in% c("fitcv", "cv", "score")) {
   }
   fit_args <- list(data = mat, K = k, control = control)
   if (length(lambda_vec)) fit_args$lambdas <- lambda_vec
-  fitted <- do.call(fitCV_SparseDOSSA2, fit_args)
+  fitted <- fit_or_stop(do.call(fitCV_SparseDOSSA2, fit_args))
   score <- extract_cv_score(fitted)
   write_json(opts$output, list(
     cv_goodness_of_fit = score,
@@ -218,16 +380,17 @@ if (opts$command %in% c("fitcv", "cv", "score")) {
     n_feature = nrow(mat),
     n_sample = ncol(mat)
   ))
+  stop_sd2_cluster()
   quit(save = "no", status = 0)
 }
-
-setup_parallel(opts$workers, cv = FALSE)
-if (!is.null(opts$seed) && !is.na(opts$seed)) set.seed(opts$seed)
 
 new_features <- opts$new_features
 if (identical(opts$mode, "fit") || identical(tolower(opts$template), "fit")) {
   if (is.null(opts$input)) stop("--input is required for fit mode")
   mat <- read_feature_matrix(opts$input)
+  require_fit_size(mat, opts$output)
+  setup_parallel(opts$workers, cv = FALSE, seed = opts$seed)
+  if (!is.null(opts$seed) && !is.na(opts$seed)) set.seed(opts$seed)
   if (is.na(new_features)) new_features <- FALSE
   n_feature <- opts$n_feature %||% nrow(mat)
   control <- make_control(opts)
@@ -235,7 +398,7 @@ if (identical(opts$mode, "fit") || identical(tolower(opts$template), "fit")) {
   if (!is.null(opts$fit_lambda) && is.finite(opts$fit_lambda)) {
     lambda <- opts$fit_lambda
   }
-  fitted <- fit_SparseDOSSA2(data = mat, lambda = lambda, control = control)
+  fitted <- fit_or_stop(fit_SparseDOSSA2(data = mat, lambda = lambda, control = control))
   sim <- SparseDOSSA2(
     template = fitted,
     n_sample = as.integer(opts$n_sample),
@@ -244,6 +407,8 @@ if (identical(opts$mode, "fit") || identical(tolower(opts$template), "fit")) {
     verbose = isTRUE(opts$verbose)
   )
 } else {
+  setup_parallel(opts$workers, cv = FALSE, seed = opts$seed)
+  if (!is.null(opts$seed) && !is.na(opts$seed)) set.seed(opts$seed)
   if (is.na(new_features)) new_features <- TRUE
   n_feature <- opts$n_feature %||% 100L
   sim <- SparseDOSSA2(
@@ -257,4 +422,5 @@ if (identical(opts$mode, "fit") || identical(tolower(opts$template), "fit")) {
 
 counts <- sim$simulated_data
 utils::write.csv(counts, opts$output, row.names = TRUE)
+stop_sd2_cluster()
 quit(save = "no", status = 0)

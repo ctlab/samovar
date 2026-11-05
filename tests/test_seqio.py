@@ -1,4 +1,5 @@
 import gzip
+import pytest
 
 from samovar.seqio import (
     concat_fastq_files,
@@ -11,7 +12,9 @@ from samovar.seqio import (
     is_fasta_name,
     is_fastq_name,
     list_fasta_files,
+    drop_r2_if_source_single_end,
     list_fastq_samples,
+    validate_fastq_directory,
     open_text,
     processed_genome_path,
     sequence_stem,
@@ -78,7 +81,13 @@ def test_fastq_discovery(tmp_path):
         handle.write("@a\nT\n+\nI\n")
     (tmp_path / "other_R1.fq").write_text("@b\nA\n+\nI\n")
     (tmp_path / "other_R2.fq").write_text("@b\nT\n+\nI\n")
-    assert list_fastq_samples(tmp_path) == ["other", "sample_k1"]
+    (tmp_path / "bare.fastq").write_text("@c\nA\n+\nI\n")
+    with gzip.open(tmp_path / "compressed.fq.gz", "wt") as handle:
+        handle.write("@d\nT\n+\nI\n")
+    (tmp_path / "orphan_R2.fastq").write_text("@e\nT\n+\nI\n")
+    assert list_fastq_samples(tmp_path) == ["bare", "compressed", "other", "sample_k1"]
+    assert find_fastq_mate(tmp_path, "bare", "R1") == tmp_path / "bare.fastq"
+    assert find_fastq_mate(tmp_path, "bare", "R2") is None
     assert find_fastq_mate(tmp_path, "sample_k1", "R1") == r1
     assert has_r1_reads(tmp_path)
     dest = tmp_path / "cat.fastq"
@@ -93,7 +102,7 @@ def test_has_r1_reads_rejects_empty_and_one_byte_stubs(tmp_path):
     empty.write_text("")
     stub = tmp_path / "stub_R1.fastq"
     stub.write_bytes(b"x")
-    gz = tmp_path / "empty_R1.fastq.gz"
+    gz = tmp_path / "compressed_empty_R1.fastq.gz"
     with gzip.open(gz, "wb") as handle:
         handle.write(b"")
     assert not fastq_has_reads(empty)
@@ -138,6 +147,73 @@ def test_fastq_ignores_camisim_tech_duplicates(tmp_path):
     assert list_fastq_samples(tmp_path) == ["1_full", "2_full"]
 
 
+def test_validate_fastq_directory_rejects_blank_and_truncated(tmp_path):
+    path = tmp_path / "a_R1.fastq"
+    path.write_text("@a\nAC\n+\nII\n\n")
+    with pytest.raises(ValueError, match="Blank line in FASTQ"):
+        validate_fastq_directory(tmp_path)
+    path.write_text("@a\nAC\n")
+    with pytest.raises(ValueError, match="Truncated FASTQ record"):
+        validate_fastq_directory(tmp_path)
+    path.write_text("@a\nAC\n+\nII\n")
+    validate_fastq_directory(tmp_path)
+
+
+@pytest.mark.parametrize("other", ["sample_R1.fq", "sample_R1.fastq.gz", "sample_1.fastq", "sample.fastq", "sample.fq.gz"])
+def test_fastq_discovery_rejects_colliding_names(tmp_path, other):
+    first = tmp_path / "sample_R1.fastq"
+    second = tmp_path / other
+    first.write_text("@a\nA\n+\nI\n")
+    second.write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Multiple R1 FASTQ files for sample 'sample'") as error:
+        list_fastq_samples(tmp_path)
+    assert str(first) in str(error.value) and str(second) in str(error.value)
+
+
+def test_fastq_discovery_rejects_colliding_r2(tmp_path):
+    (tmp_path / "s_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (tmp_path / "s_R2.fastq").write_text("@a\nA\n+\nI\n")
+    (tmp_path / "s_2.fq").write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Multiple R2 FASTQ files for sample 's'"):
+        list_fastq_samples(tmp_path)
+
+
+def test_link_reads_rejects_other_source_before_staging(tmp_path):
+    from samovar.seqio import link_or_copy_reads
+
+    first, second, out = (tmp_path / name for name in ("first", "second", "initial"))
+    first.mkdir()
+    second.mkdir()
+    (first / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (second / "sample_R1.fastq").write_text("@b\nT\n+\nI\n")
+    (second / "another_R1.fastq").write_text("@c\nT\n+\nI\n")
+    assert link_or_copy_reads(first, out) == 1
+    assert link_or_copy_reads(first, out) == 0
+    with pytest.raises(ValueError, match="Sample name collision"):
+        link_or_copy_reads(second, out)
+    assert not (out / "another_R1.fastq").exists()
+    assert (out / "sample_R1.fastq").resolve() == (first / "sample_R1.fastq").resolve()
+
+
+def test_link_reads_resumes_copied_files(tmp_path, monkeypatch):
+    from pathlib import Path
+    from samovar.seqio import link_or_copy_reads
+
+    source, out = tmp_path / "source", tmp_path / "out"
+    source.mkdir()
+    (source / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+
+    def no_symlinks(*args, **kwargs):
+        raise OSError("Symlinks unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", no_symlinks)
+    assert link_or_copy_reads(source, out) == 1
+    assert link_or_copy_reads(source, out) == 0
+    (source / "sample_R1.fastq").write_text("@b\nT\n+\nI\n")
+    with pytest.raises(ValueError, match="Sample name collision"):
+        link_or_copy_reads(source, out)
+
+
 def test_fastq_pair_paths():
     assert fastq_pair_paths("/tmp/s_k1") == ("/tmp/s_k1_R1.fastq", "/tmp/s_k1_R2.fastq")
     r1, r2 = fastq_pair_paths("/tmp/s_k1", gzip_reads=True)
@@ -149,6 +225,35 @@ def test_processed_genome_path():
     assert processed_genome_path("/g", "562").name == "562.fa.gz"
     assert processed_genome_path("/g", "GCF_000819615.1").name == "GCF_000819615.1.fa.gz"
     assert processed_genome_path("/g", "562", gzip_genomes=False).name == "562.fa"
+
+
+def test_drop_r2_when_source_is_single_end(tmp_path):
+    initial = tmp_path / "initial"
+    regen = tmp_path / "regenerated"
+    initial.mkdir()
+    regen.mkdir()
+    (initial / "sample_0.fq.gz").write_bytes(b"\x1f\x8b")
+    (regen / "sample_0_concat_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (regen / "sample_0_concat_R2.fastq").write_text("@a\nT\n+\nI\n")
+    (regen / "sample_0_metax_R2.fastq.gz").write_bytes(b"\x1f\x8b")
+    removed = drop_r2_if_source_single_end(regen)
+    assert (regen / "sample_0_concat.fastq").is_file()
+    assert not (regen / "sample_0_concat_R1.fastq").exists()
+    assert not (regen / "sample_0_concat_R2.fastq").exists()
+    assert not (regen / "sample_0_metax_R2.fastq.gz").exists()
+    assert {p.name for p in removed} == {
+        "sample_0_concat_R2.fastq",
+        "sample_0_metax_R2.fastq.gz",
+    }
+    paired = tmp_path / "paired"
+    (paired / "initial").mkdir(parents=True)
+    (paired / "regenerated").mkdir()
+    (paired / "initial" / "s_R1.fastq").write_text("@a\nA\n+\nI\n")
+    (paired / "initial" / "s_R2.fastq").write_text("@a\nT\n+\nI\n")
+    kept = paired / "regenerated" / "s_iss_R2.fastq"
+    kept.write_text("@a\nT\n+\nI\n")
+    assert drop_r2_if_source_single_end(paired / "regenerated") == []
+    assert kept.is_file()
 
 
 def test_list_fasta_includes_gzip(tmp_path):

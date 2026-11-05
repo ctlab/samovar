@@ -22,12 +22,14 @@ from samovar.seqio import (
     concat_fastq_files,
     fastq_pair_paths,
     find_genome_file,
+    find_fastq_mate,
     gzip_file,
     gunzip_file,
     is_gzip_file,
     is_gzip_path,
     iter_fastq_records,
     list_fasta_files,
+    require_generated_samples,
     open_text,
     sequence_stem,
     uncompressed_fasta_for_tool,
@@ -37,8 +39,16 @@ from samovar.seqio import (
 
 # Thin R CLI used with the optional samovaR package (GitHub branch r-package).
 # Not an R package source; it only calls exported samovaR functions.
-R_REGENERATE_DRIVER = r'''library(tidyverse)
-library(samovaR)
+# Keep in step with SAMOVAR_R_VERSION in install.sh. 1.0.0 breaks Kaiju generation.
+SAMOVAR_R_VERSION = "1.0.1"
+
+R_REGENERATE_DRIVER = r'''library(samovaR)
+if (utils::compareVersion(as.character(packageVersion("samovaR")), "@@SAMOVAR_R_VERSION@@") < 0) {
+  stop(paste0(
+    "samovaR ", packageVersion("samovaR"),
+    " is incompatible; this SAMOVAR requires @@SAMOVAR_R_VERSION@@ or newer. Run ./install.sh R-package"
+  ), call. = FALSE)
+}
 
 args <- commandArgs(trailingOnly = TRUE)
 annotation_dir <- NULL
@@ -117,17 +127,30 @@ if (!length(samovar_data_list)) {
   samovar_data_long <- read_annotation_dir(annotation_dir)
   samovar_data_list <- annotation2samovar(samovar_data_long)
 }
+if (!length(samovar_data_list)) stop("No input tables for samovaR regeneration")
 for (i in seq_along(samovar_data_list)) {
   annotator <- names(samovar_data_list)[i]
   tryCatch({
     config$samovar_data <- samovar_data_list[[i]]$copy()
     samovar <- do.call(samovar_preprocess, config)
-    if (!is.null(config$seed)) {
-      new_data <- samovar_boil(samovar, N = config$N, seed = config$seed)
-    } else {
-      new_data <- samovar_boil(samovar, N = config$N)
+    new_data <- withCallingHandlers({
+      if (!is.null(config$seed)) {
+        samovar_boil(samovar, N = config$N, seed = config$seed)
+      } else {
+        samovar_boil(samovar, N = config$N)
+      }
+    }, warning = function(w) {
+      if (grepl("incomplete|incompete", conditionMessage(w), ignore.case = TRUE)) {
+        stop(conditionMessage(w), call. = FALSE)
+      }
+    })
+    values <- round(as.matrix(new_data$data) * config$N_reads)
+    if ("error" %in% rownames(values) || ncol(values) != config$N ||
+        !nrow(values) || any(!is.finite(values)) || any(values < 0) ||
+        any(colSums(values) <= 0)) {
+      stop("Incomplete or invalid generated samples")
     }
-    result_df <- as.data.frame(round(new_data$data * config$N_reads))
+    result_df <- as.data.frame(values)
     result_df <- tibble::rownames_to_column(result_df, "taxid")
     colnames(result_df)[-1] <- paste0("N_", colnames(result_df)[-1])
     write.csv(
@@ -136,10 +159,10 @@ for (i in seq_along(samovar_data_list)) {
       row.names = FALSE
     )
   }, error = function(e) {
-    warning(paste0("samovaR generation failed for ", annotator, ": ", conditionMessage(e)))
+    stop(paste0("samovaR generation failed for ", annotator, ": ", conditionMessage(e)), call. = FALSE)
   })
 }
-'''
+'''.replace("@@SAMOVAR_R_VERSION@@", SAMOVAR_R_VERSION)
 
 
 SKIP_TAXIDS = {
@@ -193,12 +216,47 @@ def _iss_cmd(*args: str) -> List[str]:
     return [iss_executable(), *args, *_ISS_EXTRA_FLAGS]
 
 
+def _iss_worker_count(cpus: int, n_reads: int) -> int:
+    """How many ISS ``--cpus`` to request.
+
+    ISS turns ``n_reads // 2`` pairs into chunks of size ``ceil(pairs / cpus)``
+    and then concatenates one temp FASTQ per CPU. When that rounding yields
+    fewer chunks than CPUs, the extra paths are never written and the stitch
+    step crashes. Pick the largest worker count that still fills every file.
+    """
+    workers = max(1, int(cpus or 1))
+    pairs = max(0, int(n_reads)) // 2
+    if pairs < 1:
+        return 1
+    for count in range(min(workers, pairs), 0, -1):
+        chunk = -(-pairs // count)
+        n_chunks = -(-pairs // chunk)
+        if n_chunks == count:
+            return count
+    return 1
+
+
 def _run_iss(cmd: Sequence[str]) -> None:
-    result = subprocess.run(list(cmd), check=False)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ISS command failed (exit {result.returncode}): {' '.join(cmd)}"
-        )
+    argv = list(cmd)
+    output_index = argv.index("--output") + 1
+    dest = Path(argv[output_index])
+    scratch = dest.parent / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    # ISS writes worker fragments and model files beside its output prefix.
+    # Publish only the final pair, including when ISS fails midway through.
+    with tempfile.TemporaryDirectory(prefix="iss_", dir=scratch) as tmp:
+        prefix = str(Path(tmp) / dest.name)
+        argv[output_index] = prefix
+        result = subprocess.run(argv, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ISS command failed (exit {result.returncode}): {' '.join(argv)}"
+            )
+        pair = ensure_uncompressed_iss_pair(prefix)
+        if not all(os.path.isfile(path) for path in pair):
+            raise RuntimeError(f"ISS did not produce reads for {dest}")
+        for source, mate in zip(pair, ("R1", "R2")):
+            os.replace(source, f"{dest}_{mate}.fastq")
 
 
 def parse_annotation_table(table_path: str) -> pd.DataFrame:
@@ -268,9 +326,9 @@ def _safe_fasta_id(value: str) -> str:
 def _genome_id_from_path(path: str) -> str:
     stem = sequence_stem(path)
     try:
-        from samovar.genome_index import numeric_taxid_for
+        from samovar.genome_index import numeric_taxid_from_fasta
 
-        num = str(numeric_taxid_for(stem) or "").split(".")[0]
+        num = numeric_taxid_from_fasta(path)
         if num.isdigit():
             return num
     except Exception:
@@ -369,22 +427,6 @@ def ensure_uncompressed_iss_pair(prefix: str) -> Tuple[str, str]:
             shutil.copy2(found, dest)
         outs.append(dest)
     return outs[0], outs[1]
-
-
-def _cleanup_iss_tmp(prefix: str) -> None:
-    directory = os.path.dirname(prefix) or "."
-    base = os.path.basename(prefix)
-    for path in glob.glob(os.path.join(directory, f"{base}*")):
-        name = os.path.basename(path)
-        if name.endswith("_R1.fastq") or name.endswith("_R2.fastq"):
-            continue
-        if name.endswith("_R1.fastq.gz") or name.endswith("_R2.fastq.gz"):
-            continue
-        if os.path.isfile(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
 
 
 def _iss_record_id(genome_id: str) -> str:
@@ -541,6 +583,9 @@ def split_metagenome_to_samples(
             os.path.join(output_dir, f"{sample}_{annotator_name}"),
             gzip_reads=gzip_reads,
         )
+        # Reuse a previous bare SE filename when rebuilding an incomplete cache.
+        r1_out = str(find_fastq_mate(output_dir, f"{sample}_{annotator_name}") or r1_out)
+        r2_out = str(find_fastq_mate(output_dir, f"{sample}_{annotator_name}", "R2") or r2_out)
         os.makedirs(output_dir, exist_ok=True)
         output_handles[sample] = (open_text(r1_out, "wt"), open_text(r2_out, "wt"))
 
@@ -622,12 +667,11 @@ def generate_reads_genome(
                 "--model", model,
                 "--output", output_file,
                 "--n_reads", str(_iss_reads_for_pairs(amount)),
-                "--cpus", str(cpus),
+                "--cpus", str(_iss_worker_count(cpus, _iss_reads_for_pairs(amount))),
             )
             if seed is not None:
                 cmd.extend(["--seed", str(seed)])
             _run_iss(cmd)
-        _cleanup_iss_tmp(output_file)
         ensure_uncompressed_iss_pair(output_file)
         if amount > 0 and not _fastq_has_records(r1):
             raise RuntimeError(f"ISS did not produce reads for {output_file}")
@@ -671,11 +715,17 @@ def generate_reads_metagenome(
         for path, gid, n in zip(genome_files, genome_ids, amount)
         if path is not None and os.path.exists(path) and int(n) > 0
     ]
+    requested = sum(max(0, int(n)) for n in amount)
     if not pairs:
+        if requested > 0:
+            raise RuntimeError(
+                f"Read generation requested {requested} reads but no usable genome "
+                f"was available for {output_prefix}."
+            )
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
         return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 
-    work_dir = os.path.join(output_dir, ".iss_full")
+    work_dir = os.path.join(output_dir, ".tmp", "iss")
     os.makedirs(work_dir, exist_ok=True)
     combined_fasta = os.path.join(work_dir, f"{sample_name}_{annotator_name}.genomes.fasta")
     readcount_path = os.path.join(work_dir, f"{sample_name}_{annotator_name}.readcount.txt")
@@ -686,16 +736,22 @@ def generate_reads_metagenome(
         [p[1] for p in pairs],
     )
     amount_by_id = {_iss_record_id(gid): n_reads for _, gid, n_reads in pairs}
+    read_amounts = [_iss_reads_for_pairs(amount_by_id[gid]) for gid in written_ids]
     total_reads = write_readcount_file(
         readcount_path,
         written_ids,
-        [_iss_reads_for_pairs(amount_by_id[gid]) for gid in written_ids],
+        read_amounts,
     )
     if (
         total_reads <= 0
         or not os.path.exists(combined_fasta)
         or os.path.getsize(combined_fasta) == 0
     ):
+        if requested > 0:
+            raise RuntimeError(
+                f"Read generation requested {requested} reads but the combined genome "
+                f"FASTA for {output_prefix} is empty."
+            )
         _write_empty_fastq_pair(output_file_R1, output_file_R2)
         return _maybe_gzip_fastq_pair(output_file_R1, output_file_R2, gzip_reads)
 
@@ -705,12 +761,11 @@ def generate_reads_metagenome(
         "--readcount_file", readcount_path,
         "--model", model,
         "--output", output_prefix,
-        "--cpus", str(cpus),
+        "--cpus", str(_iss_worker_count(cpus, total_reads)),
     )
     if seed is not None:
         cmd.extend(["--seed", str(seed)])
     _run_iss(cmd)
-    _cleanup_iss_tmp(output_prefix)
     ensure_uncompressed_iss_pair(output_prefix)
     if os.path.exists(combined_fasta):
         try:
@@ -811,9 +866,12 @@ def _resolve_genomes_for_taxids(
 
     available = {}
     from samovar.regenerate import finite_max_genomes
+    from samovar.taxonomy import require_regeneration_taxids
 
+    queued = [str(taxid) for taxid in taxids]
+    require_regeneration_taxids(queued, source="abundance table")
     limit = finite_max_genomes(max_genomes, default_from_env=False)
-    for taxid in taxids:
+    for taxid in queued:
         if limit is not None and len(available) >= limit:
             break
         taxid = str(taxid).split(".")[0]
@@ -832,6 +890,31 @@ def _resolve_genomes_for_taxids(
         if genome_file is not None:
             available[taxid] = genome_file
     return available
+
+
+def _abundance_total(table: pd.DataFrame, annotator: Optional[str] = None) -> int:
+    total = 0
+    for col in _n_columns(table):
+        if annotator is not None and _annotator_from_n_col(col) != annotator:
+            continue
+        total += int(pd.to_numeric(table[col], errors="coerce").fillna(0).sum())
+    return total
+
+
+def require_positive_abundance_reads(
+    output_dir: str,
+    sample_tables: Dict[str, pd.DataFrame],
+    annotators: Sequence[str],
+) -> None:
+    """Fail when a table asks for reads and that sample's FASTQ is empty."""
+    for annotator in annotators:
+        samples = [
+            sample
+            for sample, table in sample_tables.items()
+            if _abundance_total(table, annotator) > 0
+        ]
+        if samples:
+            require_generated_samples(output_dir, samples, annotator)
 
 
 def _emit_empty_for_annotators(
@@ -1107,6 +1190,9 @@ def process_annotation_tables(
             output_dir, sample_names or ["1"], ["any"], gzip_reads=gzip_reads
         )
         warnings.warn("No annotation or abundance tables to process; emitted empty FASTQ files")
+        from samovar.seqio import drop_r2_if_source_single_end
+
+        drop_r2_if_source_single_end(output_dir)
         return
 
     annotator_cols: Dict[str, str] = {}
@@ -1134,8 +1220,16 @@ def process_annotation_tables(
         genome_skip_list=genome_skip_list,
     )
     if not available_genomes:
+        if any(_abundance_total(table) > 0 for table in sample_tables.values()):
+            raise RuntimeError(
+                "Abundance tables request reads but no genome files were resolved; "
+                f"refusing to write empty FASTQ under {output_dir}."
+            )
         _emit_empty_for_annotators(output_dir, sample_names, annotators, gzip_reads=gzip_reads)
         warnings.warn("No genome files available for any taxid; emitted empty FASTQ files")
+        from samovar.seqio import drop_r2_if_source_single_end
+
+        drop_r2_if_source_single_end(output_dir)
         return
 
     from samovar.reads_generators import simulate_from_sample_tables
@@ -1157,6 +1251,10 @@ def process_annotation_tables(
         config=regen_cfg,
         genome_dir=genome_dir,
     )
+    require_positive_abundance_reads(output_dir, sample_tables, annotators)
+    from samovar.seqio import drop_r2_if_source_single_end
+
+    drop_r2_if_source_single_end(output_dir)
 
 
 def generate_iss_test_samples(
@@ -1178,8 +1276,12 @@ def generate_iss_test_samples(
     Generate one host pool and one metagenome pool, then split them into samples.
     """
     from samovar.regenerate import coerce_seed
-    from samovar.seqio import taxid_from_fasta_name
+    from samovar.genome_index import numeric_taxid_from_fasta
 
+    if int(n_samples) <= 0 or int(total_reads) <= 0:
+        raise ValueError("n_samples and total_reads must be positive")
+    if host_genome and not os.path.isfile(host_genome):
+        raise FileNotFoundError(f"Host genome does not exist: {host_genome}")
     os.makedirs(output_dir, exist_ok=True)
     seed = coerce_seed(seed)
     has_table = isinstance(abundance_table, pd.DataFrame) or (
@@ -1203,7 +1305,9 @@ def generate_iss_test_samples(
     rng = random.Random(seed)
     samples = [str(i) for i in range(1, int(n_samples) + 1)]
 
-    if str(host_fraction).upper() == "RANDOM":
+    if not host_genome:
+        host_counts = {sample: 0 for sample in samples}
+    elif str(host_fraction).upper() == "RANDOM":
         host_counts = {sample: rng.randint(0, int(total_reads)) for sample in samples}
     else:
         host_n = int(float(host_fraction) * int(total_reads))
@@ -1222,7 +1326,7 @@ def generate_iss_test_samples(
 
     genome_files = cap_sequence(genome_files, max_genomes)
 
-    pool_dir = os.path.join(output_dir, ".iss_full")
+    pool_dir = os.path.join(output_dir, ".tmp", "iss")
     os.makedirs(pool_dir, exist_ok=True)
 
     with iss_cli_extra_flags(extra_flags):
@@ -1238,7 +1342,7 @@ def generate_iss_test_samples(
                 cpus=cpus,
                 seed=seed,
             )
-            host_tax = taxid_from_fasta_name(host_genome) or ""
+            host_tax = numeric_taxid_from_fasta(host_genome)
             if host_tax:
                 from samovar.camisim import tag_fastq_file
 
@@ -1293,11 +1397,7 @@ def generate_iss_test_samples(
             concat_fastq_files([host_path, meta_path], dest)
             outputs.append(dest)
 
-    if int(total_reads) > 0 and not any(_fastq_has_records(path) for path in outputs):
-        raise RuntimeError(
-            f"ISS generate wrote no FASTQ records under {output_dir} "
-            f"(n_samples={n_samples}, total_reads={total_reads})"
-        )
+    require_generated_samples(output_dir, samples)
 
     shutil.rmtree(pool_dir, ignore_errors=True)
     return outputs
@@ -1318,7 +1418,7 @@ def generate_iss_from_abundance_table(
     max_genomes: Any = None,
 ) -> List[str]:
     """ISS from a taxid × ``N_<sample>`` table; names ``{sample}_{annotator}_R*``."""
-    from samovar.seqio import taxid_from_fasta_name
+    from samovar.genome_index import numeric_taxid_from_fasta
 
     annotator_name = str(annotator_name or "full")
 
@@ -1343,14 +1443,7 @@ def generate_iss_from_abundance_table(
             name = name[2:]
         sample_names.append(name or str(col))
     if not n_cols:
-        _write_empty_fastq_pair(
-            os.path.join(output_dir, f"1_{annotator_name}_R1.fastq"),
-            os.path.join(output_dir, f"1_{annotator_name}_R2.fastq"),
-        )
-        return [
-            os.path.join(output_dir, f"1_{annotator_name}_R1.fastq"),
-            os.path.join(output_dir, f"1_{annotator_name}_R2.fastq"),
-        ]
+        raise ValueError("Abundance table has no sample columns for read generation")
 
     sample_tables: Dict[str, pd.DataFrame] = {}
     for sample, col in zip(sample_names, n_cols):
@@ -1378,7 +1471,7 @@ def generate_iss_from_abundance_table(
             max_genomes=finite_max_genomes(max_genomes),
         )
     outputs: List[str] = []
-    pool_dir = os.path.join(output_dir, ".iss_full")
+    pool_dir = os.path.join(output_dir, ".tmp", "iss")
     os.makedirs(pool_dir, exist_ok=True)
     sample_source_counts: Dict[str, Dict[str, int]] = {}
     total_by_taxid: Dict[str, int] = {}
@@ -1424,7 +1517,7 @@ def generate_iss_from_abundance_table(
             )
     if host_genome and os.path.exists(host_genome) and str(host_fraction).upper() not in {"0", "0.0", ""}:
         # Optional host spike-in on top of the table (same fractions as generate).
-        host_tax = taxid_from_fasta_name(host_genome) or ""
+        host_tax = numeric_taxid_from_fasta(host_genome)
         rng = random.Random(seed)
         for sample_name in sample_tables:
             dest_r1 = os.path.join(output_dir, f"{sample_name}_{annotator_name}_R1.fastq")
@@ -1459,7 +1552,66 @@ def generate_iss_from_abundance_table(
                 os.path.join(output_dir, f"{sample_name}_{annotator_name}_R2.fastq"),
             ]
         )
+    require_generated_samples(output_dir, list(sample_tables), annotator_name)
     return outputs
+
+
+def _version_tuple(text: str) -> Tuple[int, ...]:
+    parts = []
+    for piece in str(text).split("."):
+        digits = ""
+        for ch in piece:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        parts.append(int(digits or "0"))
+    return tuple(parts)
+
+
+def samovar_r_version_ok(found: str, required: str = SAMOVAR_R_VERSION) -> bool:
+    """True when an installed samovaR version meets the declared release."""
+    if not found or found == "MISSING":
+        return False
+    left, right = _version_tuple(found), _version_tuple(required)
+    width = max(len(left), len(right))
+    left = left + (0,) * (width - len(left))
+    right = right + (0,) * (width - len(right))
+    return left >= right
+
+
+def installed_samovar_r_version(r_path: str, env: Optional[dict] = None) -> Optional[str]:
+    """Return the loaded samovaR version, ``MISSING``, or None when R cannot answer."""
+    try:
+        proc = subprocess.run(
+            [
+                r_path,
+                "--vanilla",
+                "-s",
+                "-e",
+                'if (requireNamespace("samovaR", quietly=TRUE)) cat(as.character(packageVersion("samovaR"))) else cat("MISSING")',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").strip() or None
+
+
+def require_compatible_samovar_r(r_path: str, env: Optional[dict] = None) -> None:
+    """Refuse samovaR older than the declared release before generation starts."""
+    found = installed_samovar_r_version(r_path, env)
+    if not found or found == "MISSING" or samovar_r_version_ok(found):
+        return
+    raise RuntimeError(
+        f"samovaR {found} is incompatible; this SAMOVAR requires {SAMOVAR_R_VERSION} "
+        "or newer. Run ./install.sh R-package."
+    )
 
 
 def _resolve_r_executable() -> Tuple[str, Optional[str]]:
@@ -1468,7 +1620,7 @@ def _resolve_r_executable() -> Tuple[str, Optional[str]]:
     configured = (cfg.get("r_path") or "R").strip() or "R"
     lib = (cfg.get("r_lib_path") or "").strip()
     r_lib_path = lib or None
-    token = configured.split()[0]
+    token = configured
     if os.path.isfile(token) and os.access(token, os.X_OK):
         return token, r_lib_path
     found = shutil.which(configured)
@@ -1486,6 +1638,33 @@ def _resolve_r_executable() -> Tuple[str, Optional[str]]:
         "Install them separately and set r_path / SAMOVAR_R_REGENERATE, "
         "or use regeneration_mode=direct|bootstrap|vae|glm (Python)."
     )
+
+
+def _read_samovar_tables(output_dir, expected_names, n_samples):
+    """Accept only complete, fresh samovaR results (shared by both R callers)."""
+    import numpy as np
+    from samovar.abundance import n_sample_columns
+
+    root = Path(output_dir)
+    names = list(expected_names) or [p.stem for p in root.glob("*.csv")]
+    if not names:
+        raise RuntimeError("samovaR did not generate any abundance tables")
+    written = {}
+    for name in names:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name))
+        path = root / f"{safe}.csv"
+        if not path.is_file():
+            raise RuntimeError(f"samovaR did not generate the required table: {name}")
+        table = pd.read_csv(path)
+        cols = n_sample_columns(table)
+        values = table[cols].apply(pd.to_numeric, errors="coerce")
+        if ("taxid" not in table or table.empty or len(cols) != n_samples
+                or table["taxid"].astype(str).eq("error").any()
+                or not np.isfinite(values.to_numpy()).all()
+                or (values < 0).any().any() or (values.sum() <= 0).any()):
+            raise RuntimeError(f"samovaR generated an incomplete or invalid table: {name}")
+        written[safe] = table
+    return written
 
 
 def _samovar_annotation_regenerate_python(
@@ -1528,20 +1707,20 @@ def samovar_annotation_regenerate(
 
     Modes (``regeneration_mode`` / ``table_reads_generator`` in config):
 
-    - ``direct`` (default; alias ``preserve``): observed counts, same samples.
+    - ``direct`` (alias ``preserve``): observed counts, same samples.
+    - ``concat_weighted`` (default): one table, shared taxa summed across annotators.
     - ``bootstrap`` / ``vae`` / ``glm``: Python generative models.
     - ``samovar``: optional R regenerator (not part of the Python install).
     - any other name: imported ``table_reads_generator`` (``samovar tools import --type table``).
     """
     from samovar.regenerate import resolve_regeneration_mode
 
-    tmp_config_path = None
     if config_samovar is None:
         config_samovar_dict = {
             "threshold_amount": 1e-5,
             "plot_log": False,
-            "N_reads": 1000,
-            "regeneration_mode": "direct",
+            "N_reads": 1_000_000,
+            "regeneration_mode": "concat_weighted",
         }
     else:
         with open(config_samovar, "r") as f:
@@ -1554,7 +1733,7 @@ def samovar_annotation_regenerate(
 
     kind, mode = resolve_regeneration_mode(
         config_samovar_dict.get("table_reads_generator")
-        or config_samovar_dict.get("regeneration_mode", "direct")
+        or config_samovar_dict.get("regeneration_mode", "concat_weighted")
     )
     if not (kind == "builtin" and mode == "samovar"):
         _samovar_annotation_regenerate_python(
@@ -1562,49 +1741,41 @@ def samovar_annotation_regenerate(
         )
         return
 
-    annotation_regenerate = str(_optional_r_regenerator_script())
+    from samovar.abundance import dir_looks_like_annotation, input_to_abundance_tables, load_table_input
+    from samovar.regenerate import _write_abundance_tables
 
+    annotation_regenerate = str(_optional_r_regenerator_script())
     r_path, r_lib_path = _resolve_r_executable()
     os.makedirs(output_dir, exist_ok=True)
     env = os.environ.copy()
     if r_lib_path:
         env["R_LIBS"] = r_lib_path
         env["R_LIBS_USER"] = r_lib_path
-
-    config_path = config_samovar
-    if config_path is None:
-        handle = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-        )
-        yaml.dump(config_samovar_dict, handle)
-        handle.close()
-        tmp_config_path = handle.name
-        config_path = tmp_config_path
-
-    cmd = [
-        r_path,
-        "--vanilla",
-        "-s",
-        "-f",
-        annotation_regenerate,
-        "--args",
-        "--config",
-        str(config_path),
-        "--annotation_dir",
-        str(annotation_dir),
-        "--output_dir",
-        str(output_dir),
-    ]
-    try:
-        subprocess.run(cmd, check=True, env=env)
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            "samovar_annotation_regenerate failed while running R "
-            f"(exit {exc.returncode}). Command: {' '.join(cmd)}"
-        ) from exc
-    finally:
-        if tmp_config_path:
-            try:
-                os.unlink(tmp_config_path)
-            except OSError:
-                pass
+    require_compatible_samovar_r(r_path, env)
+    expected = list(input_to_abundance_tables(load_table_input(annotation_dir)))
+    if dir_looks_like_annotation(annotation_dir):
+        expected = ["taxID_" + name for name in expected]
+    n_samples = int(config_samovar_dict.get("N", config_samovar_dict.get(False, 1)) or 1)
+    scratch = Path(output_dir) / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="samovar_r_", dir=scratch) as tmp:
+        work = Path(tmp)
+        generated = work / "output"
+        generated.mkdir()
+        r_cfg = dict(config_samovar_dict, output_dir=str(generated))
+        config_path = work / "config.yaml"
+        config_path.write_text(yaml.safe_dump(r_cfg), encoding="utf-8")
+        cmd = [
+            r_path, "--vanilla", "-s", "-f", annotation_regenerate, "--args",
+            "--config", str(config_path), "--annotation_dir", str(annotation_dir),
+            "--output_dir", str(generated),
+        ]
+        try:
+            subprocess.run(cmd, check=True, env=env)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                "samovar_annotation_regenerate failed while running R "
+                f"(exit {exc.returncode}). Command: {' '.join(cmd)}"
+            ) from exc
+        written = _read_samovar_tables(generated, expected, n_samples)
+    _write_abundance_tables(output_dir, written)

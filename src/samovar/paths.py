@@ -13,10 +13,15 @@ Config is read from:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import shlex
 import shutil
+import subprocess
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -27,11 +32,8 @@ from samovar.main_config import (
     compiler_r,
     compiler_r_libs,
     disk_payload,
-    first_dir,
     iter_tools,
     ncbi_email_from_cfg,
-    processed_genome_dirs,
-    raw_genome_dirs,
     test_genome_dirs_from_cfg,
     tool_env_prefix as tool_entry_env_prefix,
     tool_path as tool_entry_path,
@@ -62,6 +64,7 @@ KNOWN_TOOLS = (
     "seqtk",
     "samtools",
     "megahit",
+    "spades",
     "flye",
     "minimap2",
     "coverm",
@@ -139,18 +142,27 @@ def recorded_config_path() -> Optional[Path]:
 
 
 def write_install_config_pointer(config_file: Path, root: Optional[Path] = None) -> Optional[Path]:
-    """Record ``config_file`` in ``build/config_path`` next to the install."""
+    """Record ``config_file`` in ``build/config_path`` next to the install.
+
+    Parallel writers queue on the pointer lock. The line is published with
+    tmp+rename; the tmp is removed when the rename finishes.
+    """
     try:
         dest = Path(config_file).expanduser().resolve()
     except OSError:
         dest = Path(config_file).expanduser()
     pointer = install_config_pointer_file(root)
+    tmp = pointer.with_name(f".{pointer.name}.{os.getpid()}.tmp")
     try:
         pointer.parent.mkdir(parents=True, exist_ok=True)
-        pointer.write_text(str(dest) + "\n", encoding="utf-8")
+        with _exclusive_config(pointer):
+            tmp.write_text(str(dest) + "\n", encoding="utf-8")
+            os.replace(tmp, pointer)
         return pointer
     except OSError:
         return None
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def user_config_path() -> Path:
@@ -170,6 +182,12 @@ def user_config_path() -> Path:
 def user_config_dir() -> Path:
     """Directory holding ``config.json``, ``env``, and optional R sidecar scripts."""
     return user_config_path().parent
+
+
+def default_samovar_database_dir(config_dir: Optional[Path] = None) -> Path:
+    """Genome library next to the install config (local samovar)."""
+    base = Path(config_dir).expanduser() if config_dir is not None else user_config_dir()
+    return base / "genomes"
 
 
 def repo_root() -> Path:
@@ -229,61 +247,57 @@ def user_cache_dir() -> Path:
     return Path.home() / ".cache" / "samovar"
 
 
-def genome_download_dir() -> Path:
-    """Directory where SamovaR stores NCBI-downloaded (full) assemblies.
+def configured_genome_store() -> Path:
+    """Genome library from ``SAMOVAR_DATABASE``, else ``genomes.samovar_database``.
 
-    Order: ``SAMOVAR_GENOMES`` → ``$SAMOVAR_RUN_DIR/.cache/samovar/genomes`` →
-    install config (ignored if under ``$HOME``) → ``user_cache_dir()/genomes``.
+    When neither is set, the library is ``default_samovar_database_dir()``
+    (next to the install config), not the git checkout and not the run cache.
     """
+    env = os.environ.get("SAMOVAR_DATABASE", "").strip()
+    if env:
+        return Path(env).expanduser()
+    cfg = load_config()
+    from samovar.main_config import genomes_block
+
+    block = genomes_block(cfg) if cfg else {}
+    raw = str(
+        (block.get("samovar_database") if isinstance(block, dict) else "")
+        or (cfg.get("samovar_database") if isinstance(cfg, dict) else "")
+        or ""
+    ).strip()
+    if raw:
+        return Path(raw).expanduser()
+    return default_samovar_database_dir()
+
+
+def genome_download_dir() -> Path:
+    """NCBI gzip cache: ``SAMOVAR_GENOMES``, else ``<samovar database>/raw``."""
     env = os.environ.get("SAMOVAR_GENOMES", "").strip()
     if env:
         return Path(env).expanduser()
-    run = _run_dir()
-    if run is not None:
-        return run / ".cache" / "samovar" / "genomes"
-    cfg = load_config()
-    val = first_dir(raw_genome_dirs(cfg))
-    if val:
-        path = Path(val).expanduser()
-        # Never silently dump multi-GB genomes into a home path from old configs.
-        try:
-            if not path.resolve().is_relative_to(Path.home().resolve()):
-                return path
-        except (OSError, ValueError):
-            return path
-    return user_cache_dir() / "genomes"
+    return configured_genome_store() / "raw"
 
 
 def processed_genomes_dir() -> Path:
-    """Directory for ``{taxid}-processed.fasta.gz`` files (defaults to genomes cache)."""
+    """Indexed FASTA: ``SAMOVAR_PROCESSED_GENOMES``, else ``<samovar database>/processed``."""
     env = os.environ.get("SAMOVAR_PROCESSED_GENOMES", "").strip()
     if env:
         return Path(env).expanduser()
-    run = _run_dir()
-    if run is not None:
-        return run / ".cache" / "samovar" / "genomes"
-    cfg = load_config()
-    val = first_dir(processed_genome_dirs(cfg))
-    if val:
-        path = Path(val).expanduser()
-        try:
-            if not path.resolve().is_relative_to(Path.home().resolve()):
-                return path
-        except (OSError, ValueError):
-            return path
-    return genome_download_dir()
+    return configured_genome_store() / "processed"
 
 
 def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict[str, Any]:
     """Merge ``updates`` into the install config and write it back."""
     from samovar.main_config import apply_legacy_updates
 
-    cfg = dict(load_config())
-    before = disk_payload(cfg)
-    apply_legacy_updates(cfg, updates)
-    after = disk_payload(cfg)
-    if before != after or not user_config_path().is_file():
-        write_config(cfg, also_repo_build=also_repo_build)
+    dest = user_config_path()
+    with _exclusive_config(dest):
+        cfg = dict(load_config())
+        before = disk_payload(cfg)
+        apply_legacy_updates(cfg, updates)
+        after = disk_payload(cfg)
+        if before != after or not dest.is_file():
+            _write_config_unlocked(cfg, also_repo_build=also_repo_build)
     return as_install_config(cfg)
 
 
@@ -293,6 +307,8 @@ OUTPUT_DIR_FLAGS = (
     "--output-dir",
     "--outdir",
     "--directory",
+    "-o",
+    "-d",
 )
 
 
@@ -301,7 +317,7 @@ def add_output_dir_argument(parser: Any, **kwargs: Any) -> None:
     kwargs.setdefault("dest", "output_dir")
     kwargs.setdefault(
         "help",
-        "Pipeline run directory (aliases: --outdir, --directory)",
+        "Pipeline run directory (aliases: --outdir, --directory, -o, -d)",
     )
     parser.add_argument(*OUTPUT_DIR_FLAGS, **kwargs)
 
@@ -317,11 +333,11 @@ def argv_has_output_dir(argv: Sequence[str]) -> bool:
 
 
 def shell_outdir_override_snippet() -> str:
-    """Bash: honor ``--directory`` / ``--outdir`` / ``--output_dir`` after baked ``out_dir``."""
+    """Bash: honor ``--directory`` / ``-d`` / ``-o`` after baked ``out_dir``."""
     return r"""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --directory|--output_dir|--output-dir|--outdir)
+    --directory|--output_dir|--output-dir|--outdir|-o|-d)
       if [[ $# -lt 2 ]]; then
         echo "$0: $1 requires a path" >&2
         exit 1
@@ -329,12 +345,12 @@ while [[ $# -gt 0 ]]; do
       out_dir="$2"
       shift 2
       ;;
-    --directory=*|--output_dir=*|--output-dir=*|--outdir=*)
+    --directory=*|--output_dir=*|--output-dir=*|--outdir=*|-o=*|-d=*)
       out_dir="${1#*=}"
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--directory DIR]"
+      echo "Usage: $0 [--directory DIR | -d DIR | -o DIR]"
       exit 0
       ;;
     *)
@@ -411,18 +427,15 @@ def load_config() -> Dict[str, Any]:
     return as_install_config(merged)
 
 
-def python_path() -> str:
-    cfg = load_config()
+def python_path(cfg: Optional[Dict[str, Any]] = None) -> str:
+    cfg = load_config() if cfg is None else cfg
     configured = compiler_python(cfg).strip()
-    if configured:
-        try:
-            present = Path(configured).is_file()
-        except OSError:
-            present = False
-        if present:
-            return configured
-    found = shutil.which(configured or "python3") or shutil.which("python")
-    return found or sys.executable
+    if not configured:
+        return sys.executable
+    path = Path(configured).expanduser()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise FileNotFoundError(f"Configured SAMOVAR Python is unavailable: {configured}")
+    return str(path)
 
 
 def _split_path_value(value: Any) -> List[str]:
@@ -543,7 +556,7 @@ def iss_executable() -> str:
         or "iss"
     )
     resolved = resolve_executable(configured, tool_key="iss")
-    token = (resolved or "iss").split()[0]
+    token = command_argv(resolved or "iss")[0]
     if token and Path(token).is_file() and os.access(token, os.X_OK):
         return str(Path(token).resolve())
     found = shutil.which(token) or shutil.which("iss")
@@ -562,24 +575,38 @@ def ncbi_email() -> str:
     return "anonymous@example.com"
 
 
-def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = None) -> str:
+def command_argv(command: str) -> List[str]:
+    """Split a command while preserving a raw executable path containing spaces."""
+    text = str(command or "").strip()
+    if not text:
+        return []
+    if Path(text).expanduser().is_file():
+        return [str(Path(text).expanduser())]
+    return shlex.split(text)
+
+
+def resolve_executable(
+    name_or_path: Optional[str], tool_key: Optional[str] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> str:
     """Return an absolute executable path when possible; otherwise the original token."""
     if not name_or_path:
         return ""
     raw = str(name_or_path).strip()
     if not raw:
         return raw
-    token = raw.split()[0]
-    rest = raw[len(token) :].lstrip()
+    parts = command_argv(raw)
+    token = parts[0]
+    rest = parts[1:]
     token_path = Path(token).expanduser()
     if (
         (token_path.is_absolute() or "/" in token)
         and token_path.is_file()
         and os.access(token_path, os.X_OK)
     ):
-        return f"{str(token_path.resolve())} {rest}".strip()
+        return shlex.join([str(token_path.resolve()), *rest]) if rest else str(token_path.resolve())
 
-    cfg = load_config()
+    cfg = load_config() if cfg is None else cfg
     tools_map = iter_tools(cfg)
     name = Path(tool_key or token).name
     mapped = tool_entry_path(tools_map.get(name) or tools_map.get(Path(name).stem), name)
@@ -596,57 +623,160 @@ def resolve_executable(name_or_path: Optional[str], tool_key: Optional[str] = No
 
     # Other-env prefixes in tool_envs beat a same-named binary already on PATH
     # (and beat tools.* discovered at install time).
-    candidates = [*env_candidates, mapped, token]
+    candidates = [*env_candidates, mapped, *_companion_siblings(name, tools_map), token]
     for cand in candidates:
         if not cand:
             continue
         path = Path(cand).expanduser()
         if path.is_file() and os.access(path, os.X_OK):
             resolved = str(path.resolve())
-            return f"{resolved} {rest}".strip()
+            return shlex.join([resolved, *rest]) if rest else resolved
         if path.is_absolute():
             continue
         which = shutil.which(cand)
         if which:
-            return f"{which} {rest}".strip()
+            return shlex.join([which, *rest]) if rest else which
     return raw
 
 
-def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
-    """Write main config, record ``build/config_path``, and optionally mirror JSON."""
+def _companion_siblings(name: str, tools_map: Dict[str, Any]) -> List[str]:
+    """Binaries that ship next to an already registered tool."""
+    from samovar.install_ask import ASK_TOOLS
+
+    found: List[str] = []
+    for spec in ASK_TOOLS:
+        if name not in spec.companions:
+            continue
+        parent = tool_entry_path(tools_map.get(spec.name), spec.name)
+        if not parent:
+            continue
+        parent_path = Path(parent).expanduser()
+        found.append(str(parent_path.parent / name))
+        prefix = tool_entry_env_prefix(tools_map.get(spec.name), spec.name)
+        if prefix:
+            found.append(str(Path(prefix).expanduser() / "bin" / name))
+    return found
+
+
+def _exclusive_config(dest: Path):
+    """Queue writers of one file. The same thread may re-enter that file."""
+    local = _exclusive_config.local
+    held = getattr(local, "held", None)
+    if held is None:
+        held = set()
+        local.held = held
+    try:
+        key = str(Path(dest).expanduser().resolve())
+    except OSError:
+        key = str(Path(dest).expanduser())
+    if key in held:
+        yield
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = dest.parent / f".{dest.name}.lock"
+    handle = lock_path.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        held.add(key)
+        try:
+            yield
+        finally:
+            held.discard(key)
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+_exclusive_config = contextmanager(_exclusive_config)
+_exclusive_config.local = threading.local()
+
+
+def _same_config_file(left: Path, right: Path) -> bool:
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except OSError:
+        return str(left.expanduser()) == str(right.expanduser())
+
+
+def _writing_install_config(dest: Path) -> bool:
+    """True when ``dest`` is the recorded user config, not a SAMOVAR_CONFIG override."""
+    override = os.environ.get("SAMOVAR_CONFIG", "").strip()
+    if not override:
+        return True
+    recorded = recorded_config_path()
+    return recorded is not None and _same_config_file(Path(override), recorded)
+
+
+def _merge_existing_config(dest: Path, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold ``data`` into the user config already on disk.
+
+    That file is the install the user already has. A parallel writer adds its
+    keys; it does not replace the file with a new document.
+    """
+    existing = _read_json(dest)
+    if not existing:
+        return data
+    from samovar.main_config import apply_legacy_updates
+
+    return apply_legacy_updates(dict(existing), data)
+
+
+def _publish_text(dest: Path, text: str) -> None:
+    """Queue is the caller. Publish through a checkpoint and a pid tmp, then remove both."""
+    checkpoint = dest.with_name(f".{dest.name}.checkpoint")
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    try:
+        checkpoint.write_text(f"{os.getpid()}\n", encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+        checkpoint.unlink(missing_ok=True)
+
+
+def _write_config_unlocked(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
+    dest = user_config_path()
+    # SAMOVAR_CONFIG names a private file. The shared user config is merged.
+    if _writing_install_config(dest):
+        data = _merge_existing_config(dest, data)
     payload = disk_payload(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
-    dest = user_config_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=2) + "\n"
-    dest.write_text(text, encoding="utf-8")
-    if also_repo_build:
+    _publish_text(dest, text)
+    # An override must not retarget build/config_path for every other process.
+    if also_repo_build and _writing_install_config(dest):
         write_install_config_pointer(dest, root=repo_root())
         try:
             build = repo_root() / "build"
             build.mkdir(parents=True, exist_ok=True)
             mirror = build / "config.json"
-            # Avoid rewriting the primary file if it *is* the mirror.
             try:
-                same = mirror.resolve() == dest.expanduser().resolve()
+                same = _same_config_file(mirror, dest)
             except OSError:
                 same = False
             if not same:
-                mirror.write_text(text, encoding="utf-8")
+                _publish_text(mirror, text)
         except OSError:
-            # Read-only shared checkout: recorded path + primary file are enough.
             pass
     return dest
 
 
+def write_config(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
+    """Write main config, record ``build/config_path``, and optionally mirror JSON."""
+    with _exclusive_config(user_config_path()):
+        return _write_config_unlocked(data, also_repo_build=also_repo_build)
+
+
 def shell_source_install_env_snippet(*, root_expr: str = '"$SAMOVAR_ROOT"') -> str:
-    """Bash fragment: source ``env`` next to the recorded main config."""
-    return f"""# Load install env from the main config location (build/config_path).
+    """Bash: source the selected config's env, honoring an explicit override."""
+    return f"""# Load the explicit config's env, else the recorded install env.
 XDG_CONFIG_HOME="${{XDG_CONFIG_HOME:-$HOME/.config}}"
-_SAMOVAR_CFG=""
-if [ -f {root_expr}/build/config_path ]; then
-  _SAMOVAR_CFG="$(tr -d '[:space:]' < {root_expr}/build/config_path)"
+_SAMOVAR_CALLER_PATH="$PATH"
+_SAMOVAR_CFG="${{SAMOVAR_CONFIG:-}}"
+if [ -z "$_SAMOVAR_CFG" ] && [ -f {root_expr}/build/config_path ]; then
+  _SAMOVAR_CFG="$(cat {root_expr}/build/config_path)"
 fi
 if [ -n "$_SAMOVAR_CFG" ]; then
   export SAMOVAR_CONFIG="$_SAMOVAR_CFG"
@@ -654,11 +784,14 @@ if [ -n "$_SAMOVAR_CFG" ]; then
     # shellcheck disable=SC1090
     . "$(dirname "$_SAMOVAR_CFG")/env"
   fi
+  # An env file may still export the path of an older installation.
+  export SAMOVAR_CONFIG="$_SAMOVAR_CFG"
 elif [ -f "$XDG_CONFIG_HOME/samovar/env" ]; then
   # shellcheck disable=SC1090
   . "$XDG_CONFIG_HOME/samovar/env"
 fi
-unset _SAMOVAR_CFG
+export PATH="$_SAMOVAR_CALLER_PATH"
+unset _SAMOVAR_CFG _SAMOVAR_CALLER_PATH
 """
 
 
@@ -695,6 +828,17 @@ def discover_tools() -> Dict[str, str]:
     wgs = discover_wgsim()
     if wgs:
         found.setdefault("wgsim", wgs)
+    # which_tool asks for these names, not the short config keys.
+    for name in ("anvi-gen-contigs-database", "DAS_Tool", "spades.py"):
+        path = shutil.which(name)
+        if path:
+            found.setdefault(name, path)
+    if found.get("anvi-gen-contigs-database"):
+        found.setdefault("anvio", found["anvi-gen-contigs-database"])
+    if found.get("DAS_Tool"):
+        found.setdefault("dastool", found["DAS_Tool"])
+    if found.get("spades.py"):
+        found.setdefault("spades", found["spades.py"])
     return found
 
 
@@ -710,7 +854,7 @@ def discover_opal() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_OPAL_PATH") or os.environ.get("SAMOVAR_OPAL_BIN"))
     add(str(cfg.get("opal_path") or ""))
@@ -754,7 +898,7 @@ def discover_multiqc() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_MULTIQC_PATH") or os.environ.get("SAMOVAR_MULTIQC_BIN"))
     add(str(cfg.get("multiqc_path") or ""))
@@ -823,6 +967,27 @@ def cxx_compiler() -> Optional[str]:
         if found:
             return found
     return None
+
+
+def cpp_binary_loadable(path: Path) -> bool:
+    """False when a copied binary was linked against a newer glibc than this host."""
+    binary = Path(path)
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        return False
+    try:
+        proc = subprocess.run(
+            [str(binary), "--help"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    text = f"{proc.stdout}\n{proc.stderr}"
+    if "GLIBC_" in text and "not found" in text:
+        return False
+    if "error while loading shared libraries" in text or "Exec format error" in text:
+        return False
+    return True
 
 
 def smoke_test() -> List[str]:
@@ -923,7 +1088,7 @@ def discover_nanosim() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_NANOSIM") or os.environ.get("SAMOVAR_NANOSIM_BIN"))
     add(str(cfg.get("nanosim_path") or ""))
@@ -948,7 +1113,7 @@ def discover_art() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_ART") or os.environ.get("SAMOVAR_ART_ILLUMINA"))
     add(str(cfg.get("art_path") or ""))
@@ -969,7 +1134,7 @@ def discover_wgsim() -> Optional[str]:
     def add(raw: Optional[str]) -> None:
         text = str(raw or "").strip()
         if text:
-            candidates.append(text.split()[0])
+            candidates.append(command_argv(text)[0])
 
     add(os.environ.get("SAMOVAR_WGSIM"))
     add(str(cfg.get("wgsim_path") or ""))
@@ -992,18 +1157,22 @@ def conda_prefix_for_executable(exe: Optional[str]) -> Optional[str]:
         parent = path.resolve().parent
     except OSError:
         return None
+    for ancestor in (parent, *parent.parents):
+        if (ancestor / "conda-meta").is_dir():
+            return str(ancestor)
     if parent.name == "bin" and parent.parent.is_dir():
         return str(parent.parent)
     return None
 
 
 def _first_token(value: Any) -> str:
-    """First whitespace-separated token; empty if ``value`` is blank."""
-    parts = str(value or "").split()
+    """Executable token, preserving a path with spaces; empty for blank values."""
+    parts = command_argv(str(value or ""))
     return parts[0] if parts else ""
 
 
 def _existing_tool(name: str) -> Optional[str]:
+    """Executable from the install config, including another conda env, else PATH."""
     resolved = resolve_executable(name, tool_key=name)
     token = _first_token(resolved)
     if not token:
@@ -1015,6 +1184,41 @@ def _existing_tool(name: str) -> Optional[str]:
     except OSError:
         pass
     return shutil.which(name)
+
+
+# Row label in the status report -> config tool names to resolve.
+_STATUS_TOOL_KEYS = {
+    "snakemake": ("snakemake",),
+    "kraken2": ("kraken2",),
+    "kaiju": ("kaiju",),
+    "metaphlan": ("metaphlan", "metaphlan4"),
+    "centrifuge": ("centrifuge",),
+    "metax": ("metax",),
+    "OPAL": ("opal", "opal.py"),
+    "MultiQC": ("multiqc",),
+    "Nextflow": ("nextflow",),
+    "NanoSim": ("nanosim", "simulator.py"),
+    "ART": ("art", "art_illumina"),
+    "wgsim": ("wgsim",),
+    "seqtk": ("seqtk",),
+    "R": ("R", "Rscript"),
+}
+
+
+def _cuml_marker() -> Optional[str]:
+    """Path of the ``cuml`` wrapper, or the importable ``cuml.ensemble`` module."""
+    recorded = _existing_tool("cuml")
+    if recorded:
+        return recorded
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("cuml.ensemble")
+    except Exception:
+        return None
+    if spec is None or not spec.origin:
+        return None
+    return spec.origin
 
 
 def install_status_rows() -> List[Dict[str, Any]]:
@@ -1100,7 +1304,7 @@ def install_status_rows() -> List[Dict[str, Any]]:
             role="k-mer LCA annotator",
             path=_existing_tool("kraken2"),
             config_key="tools.kraken2 / tool_envs.kraken2",
-            install="conda create -c bioconda -n kraken2 kraken2; set tool_envs.kraken2",
+            install="./install.sh Kraken2",
         ),
         row(
             "kaiju",
@@ -1108,13 +1312,21 @@ def install_status_rows() -> List[Dict[str, Any]]:
             role="protein-level annotator",
             path=_existing_tool("kaiju"),
             config_key="tools.kaiju / tool_envs.kaiju",
-            install="conda create -c bioconda -n kaiju kaiju; set tool_envs.kaiju",
+            install="./install.sh Kaiju",
+        ),
+        row(
+            "SPAdes",
+            required=False,
+            role="short-read / hybrid assembler",
+            path=_existing_tool("spades") or _existing_tool("spades.py"),
+            config_key="tools.spades / tool_envs.spades",
+            install="./install.sh SPAdes",
         ),
         row(
             "metaphlan",
             required=False,
             role="marker-gene profiler",
-            path=shutil.which("metaphlan") or shutil.which("metaphlan4"),
+            path=_existing_tool("metaphlan") or _existing_tool("metaphlan4"),
             config_key="tools.metaphlan / tool_envs.metaphlan",
             install="conda install -c bioconda metaphlan",
         ),
@@ -1122,7 +1334,7 @@ def install_status_rows() -> List[Dict[str, Any]]:
             "centrifuge",
             required=False,
             role="optional annotator",
-            path=shutil.which("centrifuge"),
+            path=_existing_tool("centrifuge"),
             config_key="tools.centrifuge / tool_envs.centrifuge",
             install="conda install -c bioconda centrifuge",
         ),
@@ -1130,7 +1342,7 @@ def install_status_rows() -> List[Dict[str, Any]]:
             "metax",
             required=False,
             role="optional coverage-aware annotator",
-            path=shutil.which("metax"),
+            path=_existing_tool("metax"),
             config_key="tools.metax / tool_envs.metax",
             install="./install.sh Metax",
         ),
@@ -1214,6 +1426,14 @@ def install_status_rows() -> List[Dict[str, Any]]:
             config_key="sparsedossa2 / tools.sparsedossa2-fit",
             install="./install.sh SparseDOSSA2",
         ),
+        row(
+            "cuml",
+            required=False,
+            role="RandomForest on GPU (--gpu)",
+            path=_cuml_marker(),
+            config_key="tools.cuml",
+            install="./install.sh cuml",
+        ),
     ]
     try:
         from samovar.camisim import discover_camisim as _dc
@@ -1258,6 +1478,19 @@ def install_status_rows() -> List[Dict[str, Any]]:
                     )
             elif not item["path"]:
                 item["path"] = str(cfg.get("sparsedossa2_r") or "")
+    # An import into another conda env is not on PATH. Prefer that binary.
+    for item in rows:
+        names = _STATUS_TOOL_KEYS.get(str(item["name"]))
+        if not names:
+            continue
+        found = ""
+        for name in names:
+            found = _existing_tool(name) or ""
+            if found:
+                break
+        if found:
+            item["path"] = found
+            item["found"] = True
     return rows
 
 
@@ -1294,3 +1527,20 @@ def format_install_status() -> str:
         lines.append("")
         lines.append("All required programs are present.")
     return "\n".join(lines)
+
+
+def shell_runtime_exports() -> str:
+    """Shell assignments for configured pipeline executables, without tool PATHs."""
+    return "\n".join(
+        "export " + key + "=" + shlex.quote(value)
+        for key, value in (
+            ("PYTHON_PATH", python_path()),
+            ("SNAKEMAKE", command_argv(resolve_executable("snakemake", tool_key="snakemake"))[0]),
+        )
+    )
+
+
+def shell_runtime_snippet() -> str:
+    """Ask the canonical launcher for runtime selection in generated scripts."""
+    launcher = shlex.quote(str(repo_root() / "bin" / "samovar"))
+    return f'runtime_exports="$({launcher} _runtime-env)"\neval "$runtime_exports"\n'

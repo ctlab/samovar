@@ -282,3 +282,30 @@ def test_format_install_report_keeps_previous_options(tmp_path):
     assert "New / updated options this install:" in text
     assert "API.ncbi_email" in text
     assert "new@e.c" in text
+
+
+def test_resolve_install_database_keeps_config_or_uses_config_dir(tmp_path, monkeypatch):
+    from samovar.main_config import resolve_install_database
+
+    saved = str(tmp_path / "library")
+    assert resolve_install_database(
+        {"genomes": {"samovar_database": saved}},
+        env="",
+        config_dir=tmp_path / "cfg",
+    ) == saved
+    assert resolve_install_database(
+        {"genomes": {"samovar_database": saved}},
+        env=str(tmp_path / "from-env"),
+    ) == str(tmp_path / "from-env")
+    assert resolve_install_database(None, config_dir=tmp_path / "cfg") == str(
+        tmp_path / "cfg" / "genomes"
+    )
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "samovar" / "config.json"))
+    cfg = build_install_config(
+        root=str(tmp_path / "repo"),
+        python_path=str(tmp_path / "python"),
+        version="0",
+    )
+    assert disk_payload(cfg)["genomes"]["samovar_database"] == str(
+        tmp_path / "samovar" / "genomes"
+    )

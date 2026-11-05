@@ -2,11 +2,13 @@
 
 name: Python package
 
+# Checkout is the commit that triggered the run: a push installs that branch
+# (main when the push is to main), a pull request installs the head branch.
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - "**"
   pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -22,6 +24,15 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+        ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    - name: Confirm checkout matches the triggering ref
+      run: |
+        expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+        echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA head=${GITHUB_HEAD_REF:-}"
+        echo "expected=$expected HEAD=$(git rev-parse HEAD)"
+        test "$(git rev-parse HEAD)" = "$expected"
     - uses: conda-incubator/setup-miniconda@v3
       with:
         python-version: ${{ matrix.python-version }}

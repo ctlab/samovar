@@ -21,15 +21,16 @@ We strongly recommend to understand [SAMOVAR main concepts](https://github.com/c
 Python 3.10+; **conda is recommended**.
 
 ```bash
-git clone https://github.com/ctlab/samovar
+git clone --branch main https://github.com/ctlab/samovar
 cd samovar
 conda env create -f environment.yml
 conda activate samovar
 chmod +x install.sh
-./install.sh
+./install.sh full ask
 ```
 
-`install.sh` may ask you some questions, like e-mail for the NCBI API.
+
+`install.sh` may ask you some questions, like e-mail for the NCBI API. If you use `ask` mode, it will also try to import all supported tools with your guides. The first prompt is short (`conda ENV EXEC`, `base EXEC`, or `no`). A failed import asks again with a full example and does not move on. `./install.sh full ask` then launches the program (`--help`, `-h`, `--version`, or with no arguments) and keeps it when there is output; `--no-check` skips that launch.
 
 Some tools are optional but are required for some actions. Install them all with:
 
@@ -47,10 +48,10 @@ Built-in ensemble members (wired through `samovar prepare`):
 
 | Tool | Role in the ensemble |
 |------|----------------------|
-| **Kraken2** | k-mer LCA classifier |
-| **Kaiju** | protein-level (translated) classifier |
-| **Kraken / KrakenUniq** | additional k-mer votes |
-| **MetaPhlAn** | marker-gene profiler |
+| **Kraken2** | k-mer LCA classifier (`full`, or install/import through `ask`) |
+| **Kaiju** | protein-level (translated) classifier (`full`, or install/import through `ask`) |
+| **Kraken / KrakenUniq** | additional k-mer votes (`./install.sh full ask`, not the core install) |
+| **MetaPhlAn** | optional marker-gene profiler (not part of the core install) |
 | **Custom** | extra votes; can be easily additionally implemented for the developers |
 
 Workflow:
@@ -58,7 +59,7 @@ Workflow:
 1. Annotate real or ISS-simulated reads with every configured tool.
 2. Cross-validate taxIDs across tools (CV heatmaps) and against known truth when available (F1 / R²).
 3. Re-simulate a community from the annotation table (annotation2iss).
-4. Re-annotate the synthetic reads and train an ML ensemble (`workflow/ML.py`: RandomForest / AdaBoost) that maps tool votes → corrected taxID.
+4. Re-annotate the synthetic reads and train a RandomForest reprofiler (`workflow/ML.py`; AdaBoost only with `--reprofiler adaboost` or `ensemble`; `--gpu` uses cuML on CUDA for RandomForest and logistic regression) that maps tool votes → corrected taxID.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'primaryColor': '#fff', 'primaryTextColor': '#000', 'primaryBorderColor': '#000', 'lineColor': '#000', 'secondaryColor': '#fff', 'tertiaryColor': '#fff'}}}%%
@@ -114,7 +115,7 @@ samovar exec --output_dir samovar_out
 
 ## R package
 
-The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://github.com/ctlab/samovar/tree/r-package)** branch and is **not** part of this tree. Install it with `./install.sh R-package` (requires R + remotes). That writes a small R driver into `~/.config/samovar/` that only calls exported `samovaR` functions. Then set `regeneration_mode: samovar`.
+The optional R generator (`samovar_boil`) lives on the **[`r-package`](https://github.com/ctlab/samovar/tree/r-package)** branch and is **not** part of this tree. Install it with `./install.sh R-package` (requires R + remotes). That command requires the declared samovaR release, currently 1.0.1, and reinstalls an older package such as 1.0.0. It writes a small R driver into `~/.config/samovar/` that only calls exported `samovaR` functions. Generation with an older package stops and names the required version. Then set `regeneration_mode: samovar`.
 
 ## References
 

@@ -49,6 +49,20 @@ samovar_toy_database_dir() {
   echo "${SAMOVAR}/examples_outdir/toy/.database"
 }
 
+# Path of a catalog database when the install config already names it and the
+# index files are on disk. Empty means the caller should build it.
+# Usage: samovar_catalog_database_path TOOL NAME
+samovar_catalog_database_path() {
+  local tool="$1"
+  local name="$2"
+  python - "$tool" "$name" <<'PY'
+import sys
+from samovar.db_spec import ready_catalog_database
+
+print(ready_catalog_database(sys.argv[1], sys.argv[2]), end="")
+PY
+}
+
 # CI public examples: catalog name phage_test, imported by examples/phage/pipeline.sh.
 # Set SAMOVAR_CI_LIGHT_INDEXES=1 (full-integration examples-public job).
 samovar_light_public_indexes() {
@@ -203,6 +217,20 @@ samovar_ensure_database() {
   local dest="$3"
   local marker="${4:-}"
   local url="${5:-}"
+  if [[ "$tool" == "taxdump" ]]; then
+    local existing
+    existing="$(python - <<'PY'
+from samovar.taxdump import usable_taxdump_dir
+found = usable_taxdump_dir()
+print("" if found is None else found, end="")
+PY
+)"
+    if [[ -n "$existing" && ( -f "$existing/nodes.dmp" || -f "$existing/taxonomy/nodes.dmp" ) ]]; then
+      echo "NCBI taxdump already configured: ${existing}" >&2
+      samovar_import_database "$tool" "$name" "$existing" ""
+      return 0
+    fi
+  fi
   mkdir -p "$dest"
   if [[ -n "$marker" ]] && find -L "$dest" -name "$marker" 2>/dev/null | grep -q .; then
     echo "Database already on disk: ${dest} (${marker})"

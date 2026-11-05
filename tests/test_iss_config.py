@@ -1,18 +1,12 @@
 import os
-import shutil
 import pytest
 import argparse
 from pathlib import Path
 from src.samovar.iss_config import ISSTestConfig, setup_iss_test
 import yaml
 
-def clean_dir(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
-
-def test_iss_config_from_args():
-    test_output_dir = 'tests_outs/test_iss_config_from_args'
-    clean_dir(test_output_dir)
+def test_iss_config_from_args(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(
@@ -36,9 +30,8 @@ def test_iss_config_from_args():
     assert config.seed == 123
     assert config.model == "novaseq"
 
-def test_iss_config_defaults():
-    test_output_dir = 'tests_outs/test_iss_config_defaults'
-    clean_dir(test_output_dir)
+def test_iss_config_defaults(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(
@@ -62,9 +55,8 @@ def test_iss_config_defaults():
     assert config.seed == 42  # default
     assert config.model == "hiseq"  # default
 
-def test_generate_config():
-    test_output_dir = 'tests_outs/test_generate_config'
-    clean_dir(test_output_dir)
+def test_generate_config(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     config = ISSTestConfig(
@@ -92,11 +84,10 @@ def test_generate_config():
         assert config_content['seed'] == 123
         assert config_content['model'] == "novaseq"
         assert config_content['genomes'] == []
-        assert config_content['max_genomes'] == float("inf")
+        assert config_content['max_genomes'] == 100.0
 
-def test_generate_pipeline():
-    test_output_dir = 'tests_outs/test_generate_pipeline'
-    clean_dir(test_output_dir)
+def test_generate_pipeline(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     config = ISSTestConfig(
@@ -111,17 +102,16 @@ def test_generate_pipeline():
     with open(pipeline_path, 'r') as f:
         pipeline_content = f.read()
         assert "set -e" in pipeline_content
-        assert "PYTHON_PATH=" in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
-        assert "snakemake -s " in pipeline_content
+        assert '"$SNAKEMAKE" -s ' in pipeline_content
         assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
         assert "samovar/env" in pipeline_content
-        assert "SAMOVAR_PATH" in pipeline_content
+        assert "_runtime-env" in pipeline_content
 
-def test_setup_iss_test():
-    test_output_dir = 'tests_outs/test_setup_iss_test'
-    clean_dir(test_output_dir)
+def test_setup_iss_test(tmp_path):
+    test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)
     
     args = argparse.Namespace(
@@ -161,9 +151,9 @@ def test_setup_iss_test():
     with open(pipeline_path, 'r') as f:
         pipeline_content = f.read()
         assert "set -e" in pipeline_content
-        assert "PYTHON_PATH=" in pipeline_content
+        assert "_runtime-env" in pipeline_content
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
-        assert "snakemake -s " in pipeline_content
+        assert '"$SNAKEMAKE" -s ' in pipeline_content
         assert '--directory "$out_dir"' in pipeline_content
         assert "workflow/iss_test/Snakefile" in pipeline_content
 
@@ -194,6 +184,13 @@ def test_parse_args_reindex_and_raw_genomes():
     assert args.accessions == ["GCF_000819615.1", "GCF_000840245.1"]
     assert args.reindex == 1
     assert args.raw_genomes == 0
+
+
+def test_parse_args_reindex_defaults_to_database():
+    from samovar.iss_config import parse_args
+
+    args = parse_args(["--output_dir", "out"])
+    assert args.reindex == 1
 
 
 def test_parse_args_genome_skip_and_max_mb():
@@ -267,4 +264,33 @@ def test_parse_args_threads_maps_to_iss_cpus():
         ]
     )
     assert args.cores == 8
-    assert "- - c" not in (args.extra_flags or "") 
+    assert "- - c" not in (args.extra_flags or "")
+
+@pytest.mark.parametrize("field", ["reads_generator", "metagenome_generator"])
+def test_generate_preflight_runs_before_custom_tool_validation(tmp_path, monkeypatch, field):
+    from samovar.iss_config import parse_args
+    import samovar.prepare_import as preflight
+    import samovar.reads_generators as reads
+    import samovar.metagenome_generators as meta
+
+    args = parse_args(["--output_dir", str(tmp_path / "out"),
+                       "--genome_dir", str(tmp_path), "--" + field, "custom_new"])
+    calls = []
+    monkeypatch.setattr(preflight, "offer_prepare_imports", lambda ns: calls.append(("offer", getattr(ns, field))))
+
+    def validate(name):
+        calls.append(("validate", name))
+        raise ValueError("stop after preflight")
+
+    module = reads if field == "reads_generator" else meta
+    monkeypatch.setattr(module, "require_known_" + field, validate)
+    with pytest.raises(ValueError, match="stop after preflight"):
+        setup_iss_test(args)
+    assert calls == [("offer", "custom_new"), ("validate", "custom_new")]
+
+
+def test_generate_autoimport_flag():
+    from samovar.iss_config import parse_args
+
+    assert parse_args(["--output_dir", "out", "--autoimport", "0"]).autoimport == 0
+    assert parse_args(["--output_dir", "out", "--autoimport", "1"]).autoimport == 1

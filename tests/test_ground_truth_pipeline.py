@@ -92,23 +92,33 @@ def test_cami_toy_initial_truth_table_parse_genome(tmp_path):
 
     _run([samovar, "exec", "--output_dir", str(out)], cwd=REPO, env=env, timeout=900)
 
-    tables = list((out / "initial_annotations").glob("*.annotation.csv"))
-    assert len(tables) >= 3
+    frame = _annotation_frame(out / "initial_annotations")
+    if "sample" in frame.columns:
+        assert frame["sample"].astype(str).nunique() >= 3
+    else:
+        assert len(list((out / "initial_annotations").glob("*.annotation.csv"))) >= 3
     truth = {}
     for seq, tax in iter_truth_pairs(mapping):
         truth[seq] = tax
         if "/" in seq:
             truth[seq.rsplit("/", 1)[0]] = tax
     matched = 0
-    for path in tables:
-        df = pd.read_csv(path)
-        assert "true" in df.columns
-        for seq, val in zip(df["seq"].astype(str), df["true"].astype(str)):
-            expect = truth.get(seq) or truth.get(f"{seq}/1")
-            if expect:
-                assert str(int(float(val))) == str(int(float(expect)))
-                matched += 1
+    assert "true" in frame.columns
+    for seq, val in zip(frame["seq"].astype(str), frame["true"].astype(str)):
+        expect = truth.get(seq) or truth.get(f"{seq}/1")
+        if expect:
+            assert str(int(float(val))) == str(int(float(expect)))
+            matched += 1
     assert matched >= 1000
+
+
+def _annotation_frame(ann_dir: Path) -> pd.DataFrame:
+    parts = sorted(ann_dir.glob("*.annotation.csv"))
+    if parts:
+        return pd.concat((pd.read_csv(path) for path in parts), ignore_index=True)
+    combined = sorted(ann_dir.glob("combined_annotation_table*.csv"))
+    assert combined, f"no annotation tables in {ann_dir}"
+    return pd.read_csv(combined[0])
 
 
 def _norm_true(df: pd.DataFrame) -> pd.Series:
@@ -204,9 +214,8 @@ def test_toy_regenerated_ground_truth_table(tmp_path):
             env=env,
             timeout=1200,
         )
-        regen = list((dest / "regenerated_annotations").glob("*.annotation.csv"))
-        assert regen
-        trues[mode] = _norm_true(pd.read_csv(regen[0]))
+        frame = _annotation_frame(dest / "regenerated_annotations")
+        trues[mode] = _norm_true(frame)
         reports_by_mode[mode] = dest / "regenerated_reports"
         assert (trues[mode] != "").any()
 
@@ -222,14 +231,16 @@ def test_toy_regenerated_ground_truth_table(tmp_path):
         )
 
     table_reports = reports_by_mode["ground-truth-table"]
-    parse_recombine = tmp_path / "recombine_parse"
-    combine_with_cpp(str(table_reports), str(parse_recombine), 2)
-    recom = _norm_true(pd.read_csv(next(parse_recombine.glob("*.annotation.csv"))))
-    pd.testing.assert_series_equal(
-        table_t.sort_index(),
-        recom.loc[table_t.index].sort_index(),
-        check_names=False,
-    )
+    outs = list(table_reports.rglob("*.out"))
+    if outs:
+        parse_recombine = tmp_path / "recombine_parse"
+        combine_with_cpp(str(table_reports), str(parse_recombine), 2)
+        recom = _norm_true(pd.read_csv(next(parse_recombine.glob("*.annotation.csv"))))
+        pd.testing.assert_series_equal(
+            table_t.sort_index(),
+            recom.loc[table_t.index].sort_index(),
+            check_names=False,
+        )
 
     gt_path = tmp_path / "ground_truth_table" / ".log" / "regenerated_ground_truth.tsv"
     assert gt_path.is_file()

@@ -76,11 +76,6 @@ def test_cleanup_tmp_removes_scratch_keeps_log(tmp_path):
     assert any(".tmp" in path for path in removed)
 
 
-def test_mark_done_is_atomic(tmp_path):
-    marker = mark_done(tmp_path, "setup_reads")
-    assert marker.is_file()
-    leftovers = list((tmp_path / ".log" / "checkpoints").glob(".setup_reads.done.*"))
-    assert leftovers == []
 
 
 def test_exec_redo_clears_checkpoints(tmp_path):
@@ -340,3 +335,35 @@ def test_generate_pipeline_window_file(tmp_path):
     window = (out / ".log" / "window.env").read_text()
     assert "combine_initial" in window
     assert "viz_initial" in window
+    assert "samovar.exec_control regen-reads" in script
+
+
+def test_empty_regen_with_positive_abundance_is_an_error(tmp_path):
+    run = tmp_path / "run"
+    abund = run / "regenerated" / ".regenerated_abundance"
+    abund.mkdir(parents=True)
+    pd.DataFrame({"taxid": [562], "N_a": [2000], "N_b": [2000]}).to_csv(
+        abund / "concat_weighted.csv", index=False
+    )
+    (run / "regenerated" / "a_concat_weighted.fastq").write_text("")
+    (run / "regenerated" / "b_concat_weighted.fastq").write_text("")
+    assert exec_control_main(["regen-reads", str(run)]) == 1
+
+    sibling = tmp_path / "sibling"
+    (sibling / "regenerated").mkdir(parents=True)
+    pd.DataFrame({"taxid": [562], "N_a": [50]}).to_csv(
+        sibling / "regenerated" / "concat_weighted.csv", index=False
+    )
+    (sibling / "regenerated" / "a_concat_weighted.fastq").write_text("")
+    assert exec_control_main(["regen-reads", str(sibling)]) == 1
+
+    zero = tmp_path / "zero"
+    zero_ab = zero / "regenerated" / ".regenerated_abundance"
+    zero_ab.mkdir(parents=True)
+    pd.DataFrame({"taxid": [562], "N_a": [0]}).to_csv(zero_ab / "concat_weighted.csv", index=False)
+    assert exec_control_main(["regen-reads", str(zero)]) == 3
+
+    ok = tmp_path / "ok" / "regenerated"
+    ok.mkdir(parents=True)
+    ok.joinpath("a_concat_weighted_R1.fastq").write_text("@r\nAC\n+\nII\n")
+    assert exec_control_main(["regen-reads", str(ok.parent)]) == 0

@@ -1,11 +1,14 @@
 import json
 
+import pytest
+
 from samovar.config import PipelineConfig, _expand_indexed_database
 from samovar.db_spec import (
     databases_to_rows,
     iter_database_records,
     lazy_download_for,
     parse_database_record,
+    ready_catalog_database,
 )
 from samovar.genome_index import register_database
 from samovar.paths import write_config, update_config
@@ -91,6 +94,7 @@ def test_prepare_from_args_expands_indexed_db(tmp_path, monkeypatch):
     config = PipelineConfig.from_args(args)
     k2 = next(a for a in config.annotators if a.type == "kraken2")
     assert k2.db_path == str(db.resolve()) or k2.db_path == str(db)
+    assert k2.db_label == "standard_8GB"
     assert "--memory-mapping" in (k2.extra or "")
 
 
@@ -165,6 +169,7 @@ def test_lazy_download_known_url():
     assert "k2_viral_20251015" in viral
 
 
+@pytest.mark.optional
 def test_lazy_download_plain_tar_and_versioned_qiime():
     mpa = lazy_download_for("metaphlan", "jan25", "2025jan")
     assert "mpa_vJan25" in mpa
@@ -193,3 +198,20 @@ def test_two_versions_kept(tmp_path, monkeypatch):
     assert stored["silva-138-99:2024.2"]["path"] == str(a)
     assert stored["silva-138-99:2024.10"]["path"] == str(b)
     assert stored["silva-138-99:2024.10"]["url"].endswith("2024.10/common/silva-138-99-nb-classifier.qza")
+
+
+@pytest.mark.mandatory
+def test_ready_catalog_database_needs_index_files(tmp_path):
+    empty = tmp_path / "kraken2_db"
+    empty.mkdir()
+    cfg = {"databases": {"kraken2": {"toy": {"path": str(empty), "flags": ""}}}}
+    assert ready_catalog_database("kraken2", "toy", cfg) == ""
+    assert ready_catalog_database("kraken2", "missing", cfg) == ""
+    (empty / "hash.k2d").write_text("x")
+    assert ready_catalog_database("kraken2", "toy", cfg) == str(empty)
+    kaiju = tmp_path / "kaiju_db"
+    kaiju.mkdir()
+    cfg["databases"]["kaiju"] = {"toy": {"path": str(kaiju), "flags": ""}}
+    assert ready_catalog_database("kaiju", "toy", cfg) == ""
+    (kaiju / "kaiju_db.fmi").write_text("x")
+    assert ready_catalog_database("kaiju", "toy", cfg) == str(kaiju)

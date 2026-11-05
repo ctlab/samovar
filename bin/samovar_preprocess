@@ -14,7 +14,11 @@ def main():
     # Input source (mutually exclusive)
     input_group = parser.add_mutually_exclusive_group(required=False)
     input_group.add_argument('--input_config', help='Path to input configuration file', required=False)
-    input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
+    input_group.add_argument(
+        '--input_dir', '-i', '--input-dir',
+        help='Directory containing input FASTQ files',
+        required=False,
+    )
     
     # Output
     from samovar.paths import add_output_dir_argument
@@ -24,7 +28,28 @@ def main():
         default=None,
         help='Output directory (default: samovar_out, or from --input_config)',
     )
-    parser.add_argument('--cores', type=int, default=1, help='Number of cores for snakemake / annotator threads')
+    parser.add_argument(
+        '--cores', '-t',
+        type=int,
+        default=1,
+        help='Number of cores for snakemake / annotator threads',
+    )
+    from samovar.memory import add_mem_argument
+
+    add_mem_argument(parser)
+    parser.add_argument(
+        '--autoimport',
+        type=int,
+        choices=(0, 1),
+        default=None,
+        help=(
+            'Omit to ask about tool/database imports and installation of missing tools '
+            '(same dialogue as ./install.sh ask). '
+            '1: record anything that can be resolved (command path, one PATH hit, '
+            'or a conda env of the same name) and ask only about the rest. '
+            '0: import nothing.'
+        ),
+    )
     parser.add_argument(
         '--threads',
         type=int,
@@ -36,14 +61,14 @@ def main():
         dest='max_genomes',
         type=argparse_max_genomes,
         default=None,
-        help='Max taxa for table regenerate and genomes for metagenome generate (default: inf). Alias: --top',
+        help='Max taxa for table regenerate and genomes for metagenome generate (default: 100). Alias: --top',
     )
     parser.add_argument(
         '--max-genome-mb',
         dest='max_genome_mb',
         type=argparse_max_genome_mb,
         default=None,
-        help='Skip new NCBI downloads larger than this many MB (default: inf; 0 unlimited). Already-cached genomes are kept.',
+        help='Skip new NCBI downloads larger than this many MB (default: 100; 0 unlimited). Already-cached genomes are kept.',
     )
     parser.add_argument(
         '--genome-skip-list',
@@ -59,7 +84,7 @@ def main():
     )
     parser.add_argument(
         '--N_reads', '--n_reads', dest='N_reads', type=int, default=None,
-        help='Read depth of each regenerated sample (default: 1000, or N_reads in --input_config)')
+        help='Read depth of each regenerated sample (default: 1000000, or N_reads in --input_config)')
     parser.add_argument(
         '--N',
         dest='regeneration_n',
@@ -75,7 +100,9 @@ def main():
         action='append',
         default=None,
         help=(
-            'Abundance table regenerator: direct|bootstrap|vae|glm|camisim-table|'
+            'Abundance table regenerator (default: concat_weighted, one table, '
+            'shared taxa summed across annotators). '
+            'direct|bootstrap|vae|glm|camisim-table|'
             'concat|concat_weighted|sparsedossa2-fit|sparsedossa2-stool|samovar, '
             'or a name imported with `samovar tools import --type table`. '
             'Repeat to try several methods; the best is chosen with --table-score'
@@ -188,6 +215,14 @@ def main():
             '`none` disables them. Import with `samovar tools import --type scoring`.'
         ),
     )
+    parser.add_argument('--viz-full', action=argparse.BooleanOptionalAction, default=None,
+                        help='Add F1/R2/correlation plots (default: scores only)')
+    parser.add_argument('--viz-opal', action=argparse.BooleanOptionalAction, default=None,
+                        help='Calculate OPAL metrics and enable optional OPAL reports (default: off)')
+    parser.add_argument('--viz-metrics-sample', type=int, default=None,
+                        help='Seeded subset for score metrics; 0 scores all rows (default)')
+    parser.add_argument('--viz-metrics', action='append', default=None,
+                        help='Score column names, comma-separated or repeated; all (default) or none')
     parser.add_argument(
         '--qc',
         dest='qc',
@@ -228,8 +263,17 @@ def main():
         dest='reprofiler',
         default=None,
         help=(
-            'ML reprofiler: ensemble|random_forest|adaboost, or a name imported '
-            'with `samovar tools import --type ml`'
+            'ML reprofiler (default: random_forest). Also ensemble (RandomForest and '
+            'AdaBoost), adaboost, linear, or a name imported with '
+            '`samovar tools import --type ml`'
+        ),
+    )
+    parser.add_argument(
+        '--gpu',
+        action='store_true',
+        help=(
+            'Train ML models on a GPU via cuML (RandomForest and logistic regression). '
+            'AdaBoost stays unsupported: its fit is a CPU stump loop.'
         ),
     )
     parser.add_argument(
@@ -386,6 +430,13 @@ def main():
         help='Do not run MultiQC from exec (stage JSON is still written)',
     )
     parser.add_argument(
+        '--no-incremental-annotations',
+        dest='incremental_annotations',
+        action='store_false',
+        default=None,
+        help='Keep per-read annotator files and combine them in one batch',
+    )
+    parser.add_argument(
         '--startpoint',
         '--start-point',
         dest='startpoint',
@@ -473,7 +524,7 @@ def main():
         '--assembler',
         dest='assembly_assembler',
         default=None,
-        help='Assembly annotator: contig assembler (default megahit)',
+        help='Assembly annotator: contig assembler: megahit (default), flye, spades (hybrid), or imported tool',
     )
     parser.add_argument(
         '--gene-caller',
@@ -518,6 +569,13 @@ def main():
         default=None,
         help='Assembly annotator: MAG abundance (default coverm)',
     )
+    parser.add_argument(
+        '--mag-mode',
+        dest='assembly_mag_mode',
+        default=None,
+        choices=('homology', 'map-initial', 'map_initial'),
+        help='MAG feature: homology (stable tetranucleotide ids) or map-initial (map reads onto the initial MAGs)',
+    )
 
     # Parse known args first to get output_dir
     from samovar.tool_spec import parse_known_with_custom
@@ -537,7 +595,7 @@ def main():
     # flags as annotators if they leak past parse_known_args.
     reserved_cmd = {
         "input_dir", "input_config", "output_dir", "output-dir", "outdir", "directory",
-        "cores", "threads",
+        "cores", "threads", "autoimport",
         "max_genomes", "max-genomes", "top", "max-genome-mb", "max_genome_mb",
         "genome-skip-list", "genome_skip_list",
         "N_reads", "n_reads", "N",
@@ -567,11 +625,13 @@ def main():
         "binner-combine", "binner_combine",
         "mag-taxonomy", "mag_taxonomy",
         "aligner", "mag-quantifier", "mag_quantifier",
+        "mag-mode", "mag_mode",
         "branch",
         "initial-ground-truth-table", "initial-annotation-ground-truth-table",
         "initial_ground_truth_table", "regenerated-metagenomes", "regenerated_metagenomes",
         "to", "to-mpa", "to-cami", "to-kraken2", "to-kreport", "to-abundance",
         "taxdump", "taxonomy",
+        "viz-full", "no-viz-full", "viz-opal", "no-viz-opal", "viz-metrics", "viz-metrics-sample",
     }
     from samovar.tool_spec import load_custom_flags, _norm_flag
 
@@ -594,6 +654,7 @@ def main():
                 print(f"Error: Missing value for argument {remaining[i]}")
                 sys.exit(1)
         else:
+            print(f"Warning: ignoring unknown option {remaining[i]}", file=sys.stderr)
             i += 1
     
     # Add command arguments to args namespace
@@ -615,6 +676,10 @@ def main():
                 counted += 1
         print(f"Indexed {counted} processed genome(s) from --index")
 
+    from samovar.prepare_import import offer_prepare_imports
+
+    args._offer_imports = True
+    offer_prepare_imports(args)
     result = setup_pipeline(args)
     print(f"Generated configs: {result['configs']}")
     print(f"Generated pipeline: {result['pipeline']}")

@@ -56,6 +56,8 @@ DOI_RECORDS: Dict[str, str] = {
     "trimmomatic_bolger2014.bib": "10.1093/bioinformatics/btu170",
     "nanopack2_decoster2023.bib": "10.1093/bioinformatics/btad311",
     "nanopack_decoster2018.bib": "10.1093/bioinformatics/bty149",
+    "spades_bankevich2012.bib": "10.1089/cmb.2012.0021",
+    "hybridspades_antipov2016.bib": "10.1093/bioinformatics/btv688",
     "megahit_li2015.bib": "10.1093/bioinformatics/btv033",
     "prodigal_hyatt2010.bib": "10.1186/1471-2105-11-119",
     "anvio_eren2015.bib": "10.7717/peerj.1319",
@@ -152,9 +154,17 @@ TOOL_FILES: Dict[str, List[str]] = {
     "trimmomatic": ["trimmomatic_bolger2014.bib"],
     "chopper": ["nanopack2_decoster2023.bib"],
     "nanofilt": ["nanopack_decoster2018.bib"],
+    "spades": ["spades_bankevich2012.bib", "hybridspades_antipov2016.bib"],
+    "assembly_hybrid": ["spades_bankevich2012.bib", "hybridspades_antipov2016.bib",
+                        "minimap2_li2018.bib", "samtools_danecek2021.bib", "kraken2_wood2019.bib"],
     "megahit": ["megahit_li2015.bib"],
     "prodigal": ["prodigal_hyatt2010.bib"],
     "anvio": ["anvio_eren2015.bib", "anvio_eren2021.bib"],
+    "anvi-gen-contigs-database": ["anvio_eren2015.bib", "anvio_eren2021.bib"],
+    "anvi-profile": ["anvio_eren2015.bib", "anvio_eren2021.bib"],
+    "anvi-merge": ["anvio_eren2015.bib", "anvio_eren2021.bib"],
+    "anvi-cluster-contigs": ["anvio_eren2015.bib", "anvio_eren2021.bib"],
+    "anvi-summarize": ["anvio_eren2015.bib", "anvio_eren2021.bib"],
     "metabat2": ["metabat2_kang2019.bib"],
     "checkm2": ["checkm2_chklovski2023.bib"],
     "dastool": ["dastool_sieber2018.bib"],
@@ -169,6 +179,15 @@ TOOL_FILES: Dict[str, List[str]] = {
     "nextflow": ["nextflow_ditommaso2017.bib"],
     "assembly": ["samovar_chechenina2023.bib"],
     "assembly_profiling": ["samovar_chechenina2023.bib"],
+    "gc": ["samovar_chechenina2023.bib"],
+    "kmer": ["samovar_chechenina2023.bib"],
+    "kmer2": ["samovar_chechenina2023.bib"],
+    "kmer_encoder": ["samovar_chechenina2023.bib"],
+    "length": ["samovar_chechenina2023.bib"],
+    "concat": ["samovar_chechenina2023.bib"],
+    "concat_weighted": ["samovar_chechenina2023.bib"],
+    "shannon_ks": ["samovar_chechenina2023.bib"],
+    "logistic": ["samovar_chechenina2023.bib"],
     "R": ["r_core_team.bib"],
     "Rscript": ["r_core_team.bib"],
 }
@@ -759,7 +778,7 @@ def selected_prepare_tools(config: Any) -> List[str]:
     names.append(getattr(config, "reads_generator", "") or "iss")
     names.append(getattr(config, "metagenome_generator", "") or "")
 
-    repro = str(getattr(config, "reprofiler", "") or "ensemble")
+    repro = str(getattr(config, "reprofiler", "") or "random_forest")
     try:
         from samovar.reprofilers import resolve_reprofiler
 

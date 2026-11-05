@@ -5,6 +5,7 @@ from tools like Kraken, Kaiju, and MetaPhlAn. It standardizes the output format
 to allow for easy comparison and analysis of results from different tools.
 """
 
+import numpy as np
 import pandas as pd
 import os
 import re
@@ -63,7 +64,7 @@ def extract_true_taxid(seq_id: str, pattern: Optional[str] = None) -> str:
             if token:
                 return token
 
-    match = re.search(r"taxid:([0-9]+)", seq_id, flags=re.IGNORECASE)
+    match = re.search(r"taxid[:|]([0-9]+)", seq_id, flags=re.IGNORECASE)
     if match:
         return match.group(1)
 
@@ -271,7 +272,9 @@ def write_taxid_rank_table(path, mapping: Dict[str, str], rank: str) -> None:
         if dest == "0":
             continue
         rows[src] = dest
-    tmp = table.with_suffix(table.suffix + ".tmp")
+    scratch = table.parent / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = scratch / (table.name + ".tmp")
     with tmp.open("w", encoding="utf-8") as handle:
         handle.write(f"taxid|{col}\n")
         for src in sorted(rows, key=lambda x: (len(x), x)):
@@ -374,8 +377,15 @@ def ensure_taxid_name_map(taxids, cache_path=None) -> Dict[str, str]:
     if missing:
         translated: Dict[int, str] = {}
         try:
-            ids = [int(t) for t in missing]
-            translated = _ncbi_call("get_taxid_translator", ids) or {}
+            from samovar.taxdump import names_dmp, load_scientific_names
+
+            local_names = names_dmp()
+            if local_names:
+                names = load_scientific_names(local_names)
+                translated = {int(t): names[int(t)] for t in missing if int(t) in names}
+            else:
+                ids = [int(t) for t in missing]
+                translated = _ncbi_call("get_taxid_translator", ids) or {}
         except Exception:
             translated = {}
         for key in missing:
@@ -435,7 +445,9 @@ def _write_taxid_name_table(path, mapping: Dict[str, str]) -> None:
         if src == "0" or not value:
             continue
         rows[src] = str(value).replace("|", "/")
-    tmp = table.with_suffix(table.suffix + ".tmp")
+    scratch = table.parent / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = scratch / (table.name + ".tmp")
     with tmp.open("w", encoding="utf-8") as handle:
         handle.write("taxid|name\n")
         for src in sorted(rows, key=lambda x: (len(x), x)):
@@ -465,18 +477,29 @@ def remap_taxid_dataframe(
         unique.update(out[col].dropna().unique())
     mapping = ensure_taxid_rank_map(unique, rank_name, cache_path)
     for col in cols:
-        out[col] = out[col].map(
-            lambda v, m=mapping: m.get(str(v), m.get(canonical_taxid(v), canonical_taxid(v)))
-            if pd.notna(v)
-            else v
+        codes, uniq = pd.factorize(out[col], use_na_sentinel=True)
+        mapped = np.array(
+            [mapping.get(str(v), mapping.get(canonical_taxid(v), canonical_taxid(v))) for v in uniq],
+            dtype=object,
         )
+        vals = np.where(
+            codes >= 0,
+            mapped[np.maximum(codes, 0)] if len(mapped) else None,
+            out[col].to_numpy(dtype=object),
+        )
+        out[col] = pd.Series(vals, index=out.index, dtype=object)
     return out
 
 
 def _get_ncbi() -> "NCBITaxa":
     global ncbi
     if ncbi is None:
-        ncbi = NCBITaxa()
+        # Never let worker processes create/download ETE's private database.
+        # The configured nodes/names dump remains the offline fallback below.
+        database = Path.home() / ".etetoolkit" / "taxa.sqlite"
+        if not database.is_file():
+            raise FileNotFoundError("No local ETE database; using configured taxdump without downloads")
+        ncbi = NCBITaxa(dbfile=str(database), update=False)
     return ncbi
 
 
@@ -919,7 +942,12 @@ def read_custom_raw(file_path: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["seq", "taxID"])
     if df is None or df.empty:
         return pd.DataFrame(columns=["seq", "taxID"])
-    return trim_raw_tool_frame(df)
+    out = trim_raw_tool_frame(df)
+    if "seq" in out.columns:
+        from samovar.seqio import strip_mate_suffix
+
+        out["seq"] = out["seq"].map(lambda value: strip_mate_suffix("" if pd.isna(value) else str(value)))
+    return out
 
 
 # Dictionary mapping tool names to their respective read functions
@@ -951,6 +979,8 @@ READ_FUNCTIONS = {
     "kmer_counter": read_custom_raw,
     "gc": read_custom_raw,
     "gc_content": read_custom_raw,
+    "length": read_custom_raw,
+    "read_length": read_custom_raw,
     "kmer_encoder": read_custom_raw,
     "kmerenc": read_custom_raw,
 }
@@ -965,6 +995,58 @@ def read_tool_output(file_path: str, tool_type: str) -> pd.DataFrame:
         annotator = get_annotator_instance(tool_type, run_config={}, config={})
         frame = annotator.parse_output(file_path)
     return trim_raw_tool_frame(frame)
+
+
+_NATIVE_ANNOTATORS = {
+    "kaiju",
+    "kraken",
+    "kraken1",
+    "kraken2",
+    "krakenuniq",
+    "krakenu",
+    "krakenunique",
+}
+
+
+def _native_annotator(tool_type: str) -> bool:
+    name = str(tool_type or "").split("_")[-1].split(".")[0].lower()
+    return name in _NATIVE_ANNOTATORS
+
+
+def _align_tool_frames(frames: List[pd.DataFrame], native: List[bool]) -> pd.DataFrame:
+    """Outer-join tool tables on read id without dropping duplicate ids.
+
+    A custom table that shares no read id with a native table does not add
+    rows. Duplicate ids stay as separate rows (aligned by occurrence).
+    """
+    if not frames:
+        return pd.DataFrame()
+    anchor = set()
+    for flag, frame in zip(native, frames):
+        if flag:
+            anchor.update(frame.index)
+    if not anchor:
+        anchor.update(frames[0].index)
+    aligned = []
+    for flag, frame in zip(native, frames):
+        ids = set(frame.index)
+        if not flag and anchor and ids.isdisjoint(anchor):
+            warnings.warn(
+                f"custom annotator read ids do not overlap the other tools; "
+                f"{len(frame)} rows were not added",
+                stacklevel=2,
+            )
+            frame = frame.iloc[0:0]
+        if frame.empty:
+            aligned.append(frame)
+            continue
+        work = frame.copy()
+        work["_occ"] = work.groupby(level=0).cumcount()
+        aligned.append(work.set_index("_occ", append=True))
+    out = pd.concat(aligned, axis=1)
+    if isinstance(out.index, pd.MultiIndex):
+        out.index = out.index.droplevel(-1)
+    return out
 
 
 def read_annotation(file_path_type: Dict[str, str], trimmed: bool = True) -> pd.DataFrame:
@@ -1012,18 +1094,20 @@ class Annotation:
         self.abundance_tables = None
         
         # Read and combine all annotation files (taxID_* and/or feat_*)
+        frames = []
+        native = []
         for path, tool_type in file_path_type.items():
             raw = read_tool_output(path, tool_type)
             labeled = prefix_tool_columns(raw, tool_type, self.id)
             if "seq" in labeled.columns:
                 labeled = labeled.set_index("seq")
-            if labeled.index.duplicated().any():
-                labeled = labeled[~labeled.index.duplicated(keep="first")]
-            try:
-                self.DataFrame = pd.concat([self.DataFrame, labeled], axis=1)
-            except Exception as exc:
-                raise ValueError(f"Error concatenating {path}") from exc
+            frames.append(labeled)
+            native.append(_native_annotator(tool_type))
             self.id += 1
+        try:
+            self.DataFrame = _align_tool_frames(frames, native)
+        except Exception as exc:
+            raise ValueError("Error concatenating annotation files") from exc
 
         tax_cols = tax_annotator_columns(self.DataFrame.columns)
         feat_cols = feat_annotator_columns(self.DataFrame.columns)
@@ -1516,6 +1600,8 @@ def match_annotation(annotation_name:str) -> Optional[str]:
         "kmer2": "kmer2",
         "gc": "gc",
         "gc_content": "gc",
+        "length": "length",
+        "read_length": "length",
         "kmer_encoder": "kmer_encoder",
         "kmerenc": "kmer_encoder",
         "encoder": "kmer_encoder",

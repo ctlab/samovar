@@ -74,6 +74,8 @@ TOOL_GROUPS = (
     "mag_quantifier",
     "taxon_quantifier",
     "read_assigner",
+    "mag_homology",
+    "mag_mapping",
     "feature_importance",
     "workflow",
 )
@@ -172,6 +174,10 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "taxon-quantifier": "taxon_quantifier",
     "read_assigner": "read_assigner",
     "read-assigner": "read_assigner",
+    "mag_homology": "mag_homology",
+    "mag-homology": "mag_homology",
+    "mag_mapping": "mag_mapping",
+    "mag-mapping": "mag_mapping",
     "workflow": "workflow",
     "wf": "workflow",
 }
@@ -222,10 +228,16 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "chopper": "qc",
     "nanofilt": "qc",
     "megahit": "assembler",
+    "spades": "assembler",
     "flye": "assembler",
     "metaflye": "assembler",
     "prodigal": "gene_caller",
     "anvio": "binner",
+    "anvi-gen-contigs-database": "binner",
+    "anvi-profile": "binner",
+    "anvi-merge": "binner",
+    "anvi-cluster-contigs": "binner",
+    "anvi-summarize": "binner",
     "metabat2": "binner",
     "checkm2": "binner_qc",
     "dastool": "binner_combine",
@@ -236,6 +248,7 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "coverm": "mag_quantifier",
     "assembly": "annotator",
     "assembly_profiling": "annotator",
+    "assembly_hybrid": "annotator",
     "random_forest": "reprofiler",
     "adaboost": "reprofiler",
     "snakemake": "workflow",
@@ -314,6 +327,41 @@ def _split_dirs(value: Any) -> List[str]:
 
 def tool_group_for(name: str) -> str:
     return TOOL_GROUP_BY_NAME.get(name, TOOL_GROUP_BY_NAME.get(Path(name).name, "runtime"))
+
+
+def mirror_assembly_lookup_keys(cfg: Dict[str, Any]) -> None:
+    """Copy anvio / DAS Tool paths onto the names ``which_tool`` actually calls.
+
+    Ask records ``tools.anvio`` and ``tools.dastool``. The binner calls
+    ``anvi-gen-contigs-database`` and ``DAS_Tool``. Default ``./install.sh full``
+    writes whichever of the pair discovery found.
+    """
+    present: Dict[str, str] = {}
+    for name, spec in iter_tools(cfg).items():
+        path = tool_path(spec, name)
+        if path:
+            present[name] = path
+    pairs = (
+        ("anvio", "anvi-gen-contigs-database"),
+        ("dastool", "DAS_Tool"),
+    )
+    for left, right in pairs:
+        path = present.get(left) or present.get(right)
+        if not path:
+            continue
+        for key in (left, right):
+            if present.get(key):
+                continue
+            env, workflow = infer_tool_env(path)
+            set_tool(
+                cfg,
+                key,
+                path=path,
+                env=env,
+                workflow=workflow,
+                group=tool_group_for(key),
+            )
+            present[key] = path
 
 
 def normalize_tool_group(value: str) -> str:
@@ -953,6 +1001,7 @@ def empty_canonical(*, version: str = "", root: str = "") -> Dict[str, Any]:
         "genomes": {
             "samovar_database": str(Path(root) / "genomes") if root else "",
             "taxdump": "",
+            "taxdump_version": "",
             "gtdb": "",
             "test": [],
             "raw": {},
@@ -1001,7 +1050,7 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
         if key == "genomes":
             if isinstance(value, dict) and any(
                 k in value
-                for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb")
+                for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "taxdump_version", "gtdb")
             ):
                 block = genomes_block(cfg) or empty_canonical()["genomes"]
                 for sub, val in value.items():
@@ -1185,9 +1234,9 @@ def migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
         cfg["API"].update(raw["api"])
     if isinstance(raw.get("genomes"), dict) and any(
         k in raw["genomes"]
-        for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb")
+        for k in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "taxdump_version", "gtdb")
     ):
-        for key in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "gtdb"):
+        for key in ("test", "raw", "processed", "data", "samovar_database", "taxdump", "taxdump_version", "gtdb"):
             if key in raw["genomes"]:
                 cfg["genomes"][key] = raw["genomes"][key]
     if isinstance(raw.get("databases"), dict):
@@ -1385,6 +1434,28 @@ def infer_tool_env(path: str, conda_prefix: str = "") -> Tuple[str, str]:
     return "", "bash"
 
 
+def resolve_install_database(
+    existing: Optional[Dict[str, Any]] = None,
+    *,
+    env: str = "",
+    config_dir: Optional[Path] = None,
+) -> str:
+    """Path written into ``genomes.samovar_database``.
+
+    ``SAMOVAR_DATABASE`` wins. Otherwise the path already in the install
+    config is kept (``install.sh full``, ``samovar update``, ``update --auto``).
+    A first install uses the directory next to the config.
+    """
+    chosen = str(env or "").strip()
+    if not chosen and isinstance(existing, dict):
+        chosen = str((genomes_block(existing) or {}).get("samovar_database") or "").strip()
+    if chosen:
+        return str(Path(chosen).expanduser())
+    from samovar.paths import default_samovar_database_dir
+
+    return str(default_samovar_database_dir(config_dir))
+
+
 def build_install_config(
     *,
     root: str,
@@ -1439,13 +1510,9 @@ def build_install_config(
     genomes["test"] = [test_root]
     db = str(samovar_database or genomes.get("samovar_database") or "").strip()
     if not db:
-        db = str(Path(root) / "genomes")
-    if db and not is_home_path(db):
-        genomes["samovar_database"] = db
-        proc_store = str(Path(db).expanduser() / "processed")
-    else:
-        genomes["samovar_database"] = str(Path(root) / "genomes")
-        proc_store = str(Path(root) / "genomes" / "processed")
+        db = resolve_install_database(existing, config_dir=None)
+    genomes["samovar_database"] = str(Path(db).expanduser())
+    proc_store = str(Path(genomes["samovar_database"]).expanduser() / "processed")
     dump = str(taxdump or genomes.get("taxdump") or "").strip()
     if not dump:
         dump = str(Path(genomes["samovar_database"]).expanduser() / "taxdump")
@@ -1509,6 +1576,7 @@ def build_install_config(
             continue
         env, workflow = infer_tool_env(path, conda_prefix=conda_prefix)
         set_tool(cfg, name, path=path, env=env, workflow=workflow, group=tool_group_for(name))
+    mirror_assembly_lookup_keys(cfg)
 
     # Compilers also as tools
     if compilers.get("python"):
@@ -1563,6 +1631,9 @@ def disk_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
         payload["genomes"] = genomes
     payload["tools"] = _tools_for_disk(canonical)
     payload["databases"] = _databases_for_disk(canonical)
+    from samovar.taxdump import attach_taxdump_catalog
+
+    attach_taxdump_catalog(payload)
     from samovar.tool_spec import custom_flags_from_cfg
 
     payload["custom-flags"] = custom_flags_from_cfg(canonical)
@@ -1593,7 +1664,7 @@ def _tools_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
         if bare == "samovar" and not ver:
             ver = get_version()
         elif not ver and exe.get("path") and bare not in {"samovar"}:
-            ver = probe_tool_version(str(exe.get("path")), bare)
+            ver = probe_tool_version(str(exe.get("path")), bare, cfg=cfg)
         if not rec.get("lazy-install"):
             rec["lazy-install"] = lazy_install_for(bare, ver)
         if not rec.get("flags-translate"):
@@ -1662,6 +1733,7 @@ def install_option_rows(cfg: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
     genomes = payload.get("genomes") if isinstance(payload.get("genomes"), dict) else {}
     add("genomes.samovar_database", genomes.get("samovar_database"))
     add("genomes.taxdump", genomes.get("taxdump"))
+    add("genomes.taxdump_version", genomes.get("taxdump_version"))
     add("genomes.gtdb", genomes.get("gtdb"))
     for name, path in folder_map(genomes.get("raw")).items():
         add(f"genomes.raw.{name}", path)
@@ -1743,3 +1815,31 @@ def format_install_report(
         "(none — this install only reused previous values)",
     )
     return "\n".join(lines)
+
+
+def bootstrap_runtime_exports(config_path: str, fallback_root: str) -> str:
+    """Read runtime selection without importing the SAMOVAR package/dependencies.
+
+    Used by the shell launcher with an OS Python solely to read the install
+    config; every application command uses the configured interpreter.
+    """
+    import json
+    import shlex
+
+    cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    python = Path(compiler_python(cfg)).expanduser()
+    if not compiler_python(cfg) or not python.is_file() or not os.access(python, os.X_OK):
+        raise ValueError("No executable Python in the SAMOVAR install config; run install.sh")
+    root = str(cfg.get("root") or fallback_root)
+    return "\n".join([
+        "export SAMOVAR_ROOT=" + shlex.quote(root),
+        "export PYTHON_PATH=" + shlex.quote(str(python)),
+    ])
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) != 3:
+        raise SystemExit("Usage: main_config.py CONFIG FALLBACK_ROOT")
+    print(bootstrap_runtime_exports(sys.argv[1], sys.argv[2]))

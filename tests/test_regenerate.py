@@ -69,6 +69,7 @@ def _n_matrix(df):
 
 
 def _fake_iss(cmd, **kwargs):
+    """Emit requested pairs with ISS source IDs so composition splitting is realistic."""
     class Result:
         returncode = 0
 
@@ -76,8 +77,17 @@ def _fake_iss(cmd, **kwargs):
         output = cmd[cmd.index("--output") + 1]
         os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
         with open(f"{output}_R1.fastq", "w") as r1, open(f"{output}_R2.fastq", "w") as r2:
-            r1.write("@read/1\nACGT\n+\nIIII\n")
-            r2.write("@read/2\nTGCA\n+\nIIII\n")
+            if "--readcount_file" in cmd:
+                lines = Path(cmd[cmd.index("--readcount_file") + 1]).read_text().splitlines()
+                sources = [(line.split()[0], int(line.split()[1])) for line in lines if line.strip()]
+            else:
+                fasta = Path(cmd[cmd.index("--genomes") + 1])
+                source = next(line[1:].split()[0] for line in fasta.read_text().splitlines() if line.startswith(">"))
+                sources = [(source, int(cmd[cmd.index("--n_reads") + 1]))]
+            for source, total in sources:
+                for i in range(total // 2):
+                    r1.write(f"@{source}_{i}_0/1\nACGT\n+\nIIII\n")
+                    r2.write(f"@{source}_{i}_0/2\nTGCA\n+\nIIII\n")
     return Result()
 
 
@@ -232,6 +242,7 @@ def test_bootstrap_mimics_real_samples_with_error(test_data_dir):
     assert similar
 
 
+@pytest.mark.optional
 def test_vae_produces_n_synthetic_columns(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     tables = regenerate_vae(data, n_samples=3, n_reads=150, seed=2, latent_dim=2)
@@ -251,6 +262,7 @@ def test_glm_python_changes_profile_vs_direct(toy_annotation_dir):
     assert not _n_matrix(direct).equals(_n_matrix(glm))
 
 
+@pytest.mark.optional
 def test_glm_uses_cluster_walk_not_copy(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     glm = regenerate_glm_python(
@@ -543,6 +555,7 @@ def test_process_annotation_tables_samovar_mode_feeds_iss(
         return Result()
 
     with patch("samovar.table2iss._resolve_r_executable", return_value=("R", None)), \
+         patch("samovar.table2iss.require_compatible_samovar_r"), \
          patch("samovar.table2iss.subprocess.run", side_effect=fake_run):
         process_annotation_tables(
             table_paths=[str(p) for p in ann_files],
@@ -592,6 +605,7 @@ def test_bootstrap_seed_reproducible_but_not_constant():
     assert len(profiles) > 1
 
 
+@pytest.mark.optional
 def test_generative_modes_differ_from_each_other_and_direct(toy_annotation_dir):
     data = read_annotation_dir(toy_annotation_dir)
     tables = {
@@ -662,11 +676,19 @@ def test_missing_custom_table_regenerator_errors(tmp_path, monkeypatch, toy_anno
         )
 
 
-def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_dir):
+@pytest.mark.parametrize("input_style", ["directory", "dataframe", "annotation"])
+def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_dir, input_style):
     from samovar.parse_annotators import Annotation
     from samovar.paths import write_config
     from samovar.tools_import import import_tool
 
+    source = toy_annotation_dir / "1.annotation.csv"
+    frame = pd.read_csv(source)
+    unclassified = pd.DataFrame({
+        "seq": ["unclassified_read"], "taxID_kaiju_0": [0],
+        "taxID_kraken2_0": [0], "true": [0],
+    })
+    pd.concat([frame, unclassified], ignore_index=True).to_csv(source, index=False)
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
@@ -676,7 +698,11 @@ def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_d
         "\n"
         "def regenerate(annotation, metadata, config):\n"
         "    assert metadata is None\n"
-        "    assert annotation.DataFrame is not None\n"
+        "    assert not annotation.DataFrame.empty\n"
+        "    assert len(annotation.true_annotation) == len(annotation.DataFrame)\n"
+        "    assert '562' in {str(x) for x in annotation.annotation_list}\n"
+        "    assert (annotation.DataFrame['taxID_kaiju'].astype(str) == '0').any()\n"
+        "    assert all('0' not in set(t.taxid.astype(str)) for t in annotation.abundance_tables.values())\n"
         "    return regenerate_preserve(annotation.DataFrame)\n"
     )
     import_tool(
@@ -692,9 +718,16 @@ def test_custom_python_table_regenerator(tmp_path, monkeypatch, toy_annotation_d
         toy_annotation_dir,
         tmp_path / "out",
         {"regeneration_mode": "myboil"},
+        data={"directory": None, "dataframe": data, "annotation": wrapped}[input_style],
     )
     assert "kaiju" in tables
     assert "taxid" in tables["kaiju"].columns
+    assert wrapped.abundance_tables is None
+    pd.testing.assert_frame_equal(wrapped.DataFrame, data)
+    assert set(tables) == {"kaiju", "kraken2"}
+    for table in tables.values():
+        assert set(table["taxid"].astype(str)) == {"562", "9606"}
+        assert sum(table[c].sum() for c in table if c.startswith("N_")) == 5
 
 
 def test_prepare_rejects_unimported_table_generator(tmp_path, monkeypatch):
@@ -1062,6 +1095,47 @@ def test_concat_only_keeps_single_table(toy_annotation_dir, tmp_path):
     assert list(tables) == ["concat"]
     assert (out / "concat.csv").is_file()
     assert not (out / "kaiju.csv").is_file()
+
+
+@pytest.mark.parametrize("unsupported", [False, True])
+def test_failed_generator_is_recorded_in_table_selection(toy_annotation_dir, tmp_path, monkeypatch, unsupported):
+    import json
+
+    import samovar.regenerate as reg
+
+    real = reg._regenerate_one_mode
+
+    def wrapped(annotation_dir, output_dir, cfg, data):
+        if cfg.get("table_reads_generator") == "bootstrap":
+            from samovar.table_regenerators import UnsupportedTableRegeneratorError
+
+            error = UnsupportedTableRegeneratorError if unsupported else RuntimeError
+            raise error("bootstrap boom")
+        return real(annotation_dir, output_dir, cfg, data)
+
+    monkeypatch.setattr(reg, "_regenerate_one_mode", wrapped)
+    out = tmp_path / "failed_gen"
+    tables = regenerate_annotation_tables(
+        toy_annotation_dir,
+        out,
+        {
+            "table_reads_generators": ["direct", "bootstrap"],
+            "table_score": "shannon_ks",
+            "N": 2,
+            "N_reads": 50,
+            "seed": 1,
+        },
+    )
+    assert tables
+    selection = json.loads((out / "table_selection.json").read_text())
+    assert selection["winner"] == "direct"
+    if unsupported:
+        assert selection["unsupported"] == {"bootstrap": "bootstrap boom"}
+        assert "bootstrap" not in selection.get("generate_errors", {})
+        assert "bootstrap" not in selection.get("failed", [])
+    else:
+        assert selection["failed"] == ["bootstrap"]
+        assert "bootstrap boom" in selection["generate_errors"]["bootstrap"]
 
 
 

@@ -240,19 +240,12 @@ def annotator_fastqs_complete(
     gzip_reads: bool = False,
 ) -> bool:
     """True when every sample already has a non-empty R1 for this annotator."""
-    from samovar.seqio import fastq_has_reads, fastq_pair_paths
+    from samovar.seqio import fastq_has_reads, find_fastq_mate
 
     if not sample_names:
         return False
     for sample in sample_names:
-        r1, _r2 = fastq_pair_paths(
-            Path(output_dir) / f"{sample}_{annotator_name}",
-            gzip_reads=gzip_reads,
-        )
-        alt, _ = fastq_pair_paths(
-            Path(output_dir) / f"{sample}_{annotator_name}",
-            gzip_reads=not gzip_reads,
-        )
-        if not (fastq_has_reads(r1) or fastq_has_reads(alt)):
+        r1 = find_fastq_mate(output_dir, f"{sample}_{annotator_name}")
+        if r1 is None or not fastq_has_reads(r1):
             return False
     return True

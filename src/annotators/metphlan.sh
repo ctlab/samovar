@@ -9,7 +9,7 @@ metaphlan_samovar () {
   local threads="${METAPHLAN_THREADS:-4}"
 
   local R1=($(ls -d "${read_dir}"/[1-9]_*R1* 2>/dev/null || ls -d "${read_dir}"/*R1*))
-  local R2=($(ls -d "${read_dir}"/*R2*))
+  local R2=($(ls -d "${read_dir}"/*R2* 2>/dev/null || true))
 
   mkdir -p "$out_dir"
   for i in "${!R1[@]}"; do

@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.abundance import n_sample_columns, normalize_abundance_table
 from samovar.abundance_correctors import (
+    _logistic_efficiency,
     apply_taxon_efficiency,
     export_logistic,
     fit_taxon_efficiency,
@@ -114,6 +116,16 @@ def test_run_export_off_is_noop(tmp_path):
         pd.DataFrame({"seq": ["a"], "taxID_k_0": ["562"], "sample": ["1"]})
     )
     assert run_export("off", observed, tmp_path / "x", {}) is None
+
+
+def test_logistic_efficiency_arrow_strings():
+    """pandas 3 string columns are ArrowStringArray; .values.reshape is not implemented."""
+    pytest.importorskip("pyarrow")
+    labels = ["562", "562", "9606", "9606"]
+    true = pd.Series(labels, dtype="string[pyarrow]")
+    pred = pd.Series(["562", "9606", "9606", "9606"], dtype="string[pyarrow]")
+    rates = _logistic_efficiency(true, pred, C=1e6, max_iter=200, min_efficiency=0.01)
+    assert rates["562"] < rates["9606"]
 
 
 def test_taxid_true_column_alias():

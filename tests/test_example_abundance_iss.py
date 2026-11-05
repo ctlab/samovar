@@ -116,7 +116,10 @@ def test_abundance2iss_from_phage_otu_without_annotation_csv(tmp_path):
         else:
             (genome_dir / f"{taxid}.fa").write_text(f">{taxid}\n{'ATGC' * 80}\n")
     out = tmp_path / "regenerated"
-    with patch("samovar.reads_generators.simulate_from_sample_tables") as mock_sim:
+    with (
+        patch("samovar.reads_generators.simulate_from_sample_tables") as mock_sim,
+        patch("samovar.table2iss.require_positive_abundance_reads"),
+    ):
         mock_sim.return_value = None
         process_annotation_tables(
             table_paths=[],

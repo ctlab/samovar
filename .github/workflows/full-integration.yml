@@ -1,6 +1,8 @@
 # Full pytest uses ./install.sh full. Example jobs install only what those
 # pipelines call (MultiQC; SparseDOSSA2 only for examples/multiple_tables).
 # Not used on ordinary PR/push (those run python-package.yml / mandatory tests).
+# checkout ref is the triggering commit: workflow_dispatch on a branch installs
+# that branch; a run from main installs main; a release installs the tagged commit.
 
 name: Full integration
 
@@ -33,6 +35,12 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+    - name: Confirm checkout matches the triggering ref
+      run: |
+        echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+        echo "HEAD=$(git rev-parse HEAD)"
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
     - uses: conda-incubator/setup-miniconda@v3
       with:
@@ -41,15 +49,9 @@ jobs:
         activate-environment: samovar
         environment-file: environment.yml
 
-    - name: System + conda deps (SparseDOSSA2 needs Rmpfr/libmpfr)
+    - name: Additional workflow tools
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran
-        conda install -y -c conda-forge -c bioconda \
-          r-base r-essentials openjdk \
-          r-rmpfr r-igraph r-huge r-ks r-mvtnorm r-truncnorm r-magrittr r-future.apply r-remotes \
-          kraken2 kaiju
+        conda install -y -c conda-forge -c bioconda openjdk kraken2 kaiju
 
     - name: Install via install.sh full
       run: |
@@ -94,6 +96,12 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+    - name: Confirm checkout matches the triggering ref
+      run: |
+        echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+        echo "HEAD=$(git rev-parse HEAD)"
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
     - uses: conda-incubator/setup-miniconda@v3
       with:
@@ -145,6 +153,12 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+    - name: Confirm checkout matches the triggering ref
+      run: |
+        echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+        echo "HEAD=$(git rev-parse HEAD)"
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
     - uses: conda-incubator/setup-miniconda@v3
       with:
@@ -158,13 +172,8 @@ jobs:
         # methods.md after prepare:
         #   iss, snakemake, kraken2, kaiju, direct, bootstrap, glm,
         #   sparsedossa2-fit, sparsedossa2-stool, sparsedossa2-cv, logistic
-        # Rmpfr/libmpfr must exist before ./install.sh SparseDOSSA2 or the CRAN build fails.
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          libmpfr-dev libgmp-dev libcurl4-openssl-dev libssl-dev libxml2-dev gfortran
-        conda install -y -c conda-forge -c bioconda \
-          r-base r-rmpfr r-igraph r-huge r-ks r-mvtnorm r-truncnorm r-magrittr r-future.apply r-remotes \
-          kraken2 kaiju
+        # R and binary package dependencies come from environment.yml.
+        conda install -y -c conda-forge -c bioconda kraken2 kaiju
         chmod +x install.sh
         ./install.sh
         ./install.sh MultiQC SparseDOSSA2
@@ -202,6 +211,12 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+    - name: Confirm checkout matches the triggering ref
+      run: |
+        echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+        echo "HEAD=$(git rev-parse HEAD)"
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
     - uses: conda-incubator/setup-miniconda@v3
       with:
@@ -246,6 +261,12 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+    - name: Confirm checkout matches the triggering ref
+      run: |
+        echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+        echo "HEAD=$(git rev-parse HEAD)"
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
     - uses: conda-incubator/setup-miniconda@v3
       with:

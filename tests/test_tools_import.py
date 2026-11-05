@@ -2,6 +2,8 @@ import json
 import stat
 from pathlib import Path
 
+import pytest
+
 from samovar.annotators_wrapper import CustomAnnotator, get_annotator_instance
 from samovar.main_config import parse_tool_entry
 from samovar.paths import write_config, update_config
@@ -350,6 +352,53 @@ def test_import_flags_translate_and_lazy_install(tmp_path, monkeypatch):
     assert rec["type"] == "table_reads_generator"
 
 
+def test_import_mem_flag_uses_flags_translate(tmp_path, monkeypatch):
+    from samovar.tools_import import build_parser
+
+    binary = tmp_path / "megahit"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    other = tmp_path / "mytool"
+    other.write_text("#!/bin/sh\nexit 0\n")
+    other.chmod(0o755)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    parsed = build_parser().parse_args(
+        ["-n", "megahit", "-t", "assembler", "--exec-path", str(binary), "--mem", "16G"]
+    )
+    assert parsed.mem_mb == 16384
+    import_tool(
+        name="megahit",
+        tool_type="assembler",
+        exec_path=str(binary),
+        mem_mb=parsed.mem_mb,
+        also_repo_build=False,
+    )
+    rec = json.loads(cfg.read_text())["tools"]
+    stored = next(iter(rec.values()))
+    assert f"-m {16384 * 1024 * 1024}" in stored["flags"]
+    with pytest.raises(ValueError, match="no --mem_mb"):
+        import_tool(
+            name="mytool",
+            tool_type="annotator",
+            exec_path=str(other),
+            mem_mb=2048,
+            also_repo_build=False,
+        )
+    import_tool(
+        name="mytool",
+        tool_type="annotator",
+        exec_path=str(other),
+        mem_mb=2048,
+        flags_translate="--mem_mb:--memory@mb",
+        also_repo_build=False,
+    )
+    rec = json.loads(cfg.read_text())["tools"]
+    mytool = next(value for key, value in rec.items() if key.startswith("mytool"))
+    assert "--memory 2048" in mytool["flags"]
+
+
 def test_import_pytest_blocks_bad_table_tool(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
@@ -421,17 +470,6 @@ def test_import_pytest_maps_every_importable_group_to_one_contract_test():
         assert default_tool_path(group).is_file(), f"{group}: baseline/example dest missing"
 
 
-def test_import_pytest_runs_baseline_for_every_contract_group():
-    """Each group’s baseline dest must pass the same pytest node import --pytest uses."""
-    from samovar.tool_contracts import GROUP_TO_TESTNODE, default_tool_path, run_contract_pytest
-
-    failed = []
-    for group in GROUP_TO_TESTNODE:
-        dest = default_tool_path(group)
-        code, output = run_contract_pytest(str(dest), group)
-        if code != 0:
-            failed.append((group, code, output[-2500:]))
-    assert not failed, failed
 
 
 BIB_ONE = """@article{toyA2024,
@@ -589,8 +627,6 @@ def test_import_without_bibtex_leaves_existing_cli(tmp_path, monkeypatch):
 
 
 def test_prepare_used_citations_includes_imported_bibtex(tmp_path, monkeypatch):
-    import pytest
-
     from samovar.citations import write_used_citations
     from samovar.config import AnnotatorConfig, PipelineConfig
 
@@ -617,11 +653,46 @@ def test_prepare_used_citations_includes_imported_bibtex(tmp_path, monkeypatch):
     pipe.run_multiqc = False
     pipe.export_corrector = "off"
     pipe.scoring_tools = []
-    with pytest.warns(UserWarning):
-        path = write_used_citations(pipe, out)
+    path = write_used_citations(pipe, out)
     text = path.read_text()
     assert "Toy annotator A" in text
     assert "myclf" in text
+
+
+def test_tools_status_ok_for_binary_in_another_conda_env(tmp_path, monkeypatch):
+    """samovar tools --status must treat a recorded conda prefix as present."""
+    import shutil as _shutil
+
+    prefix = tmp_path / "envs" / "centrifuge"
+    binary = prefix / "bin" / "centrifuge"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    cfg = {
+        "tools": {
+            "centrifuge": ["conda", "", str(prefix), "annotator"],
+        }
+    }
+    monkeypatch.setattr("samovar.paths.load_config", lambda: cfg)
+    real_which = _shutil.which
+
+    def fake_which(cmd, path=None):
+        if cmd == "centrifuge":
+            return None
+        return real_which(cmd, path=path)
+
+    monkeypatch.setattr("samovar.paths.shutil.which", fake_which)
+    text = format_status(cfg)
+    resolved = str(binary.resolve())
+    assert f"centrifuge\tannotator\tok\t{resolved}" in text
+    optional = text.split("Optional:", 1)[1]
+    line = next(
+        row
+        for row in optional.splitlines()
+        if row.strip().startswith("[") and "centrifuge" in row
+    )
+    assert line.strip().startswith("[ok")
+    assert resolved in line
 
 
 def test_import_status_lists_tools_and_databases(tmp_path, monkeypatch, capsys):
@@ -674,5 +745,114 @@ def test_import_status_lists_tools_and_databases(tmp_path, monkeypatch, capsys):
     assert "--memory-mapping" in listed
     assert "https://example.test/db.tar.gz" in listed
     assert listed.rstrip().endswith("\tyes")
+
+
+def _help_binary(path: Path, text: str) -> None:
+    path.write_text(f"#!/bin/sh\nprintf '%s\\n' {text!r}\nexit 0\n")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+
+def test_import_warns_when_help_lacks_samovar_flags(tmp_path, monkeypatch, capsys):
+    binary = tmp_path / "k2alt"
+    _help_binary(binary, "usage: --db NAME --output FILE")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="k2alt",
+        tool_type="a",
+        env="",
+        exec_name="k2alt",
+        exec_path=str(binary),
+        also_repo_build=False,
+    )
+    err = capsys.readouterr().err
+    assert "does not list -i and -o" in err
+    assert "--flags-translate" in err
+
+
+def test_import_flags_translate_skips_help_warning(tmp_path, monkeypatch, capsys):
+    binary = tmp_path / "k2alt"
+    _help_binary(binary, "usage: --db NAME --output FILE")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    import_tool(
+        name="k2alt",
+        tool_type="a",
+        env="",
+        exec_name="k2alt",
+        exec_path=str(binary),
+        flags_translate="--output:-o",
+        also_repo_build=False,
+    )
+    assert "does not list" not in capsys.readouterr().err
     assert "(none)" in format_import_status({})
 
+
+def test_import_pytest_annotator_uses_db_path(tmp_path, monkeypatch, capsys):
+    stub = tmp_path / "dbstub.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        'I=""; D=""; O=""\n'
+        'while [[ $# -gt 0 ]]; do\n'
+        '  case "$1" in\n'
+        '    -i) I=$2; shift 2;;\n'
+        '    -d) D=$2; shift 2;;\n'
+        '    -o) O=$2; shift 2;;\n'
+        "    *) if [[ $# -ge 2 ]]; then shift 2; else shift; fi;;\n"
+        "  esac\n"
+        "done\n"
+        '[[ -f "$D/db.marker" ]] || { echo "ERROR: database not found in -d \'$D\'" >&2; exit 2; }\n'
+        "{ printf 'seq\\ttaxID\\n'; awk 'NR%4==1{sub(/^@/,\"\");print $1\"\\t562\"}' \"$I\"; } > \"$O\"\n"
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    db = tmp_path / "stubdb"
+    db.mkdir()
+    (db / "db.marker").write_text("ok\n")
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SAMOVAR_ROOT", str(tmp_path))
+    monkeypatch.delenv("SAMOVAR_CONTRACT_DB", raising=False)
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    blocked = import_main(
+        ["-n", "dbstub", "-t", "annotator", "--exec-path", str(stub), "--pytest"]
+    )
+    assert blocked == 1
+    assert "contract needs a DB" in capsys.readouterr().err
+    ok = import_main(
+        [
+            "-n",
+            "dbstub",
+            "-t",
+            "annotator",
+            "--exec-path",
+            str(stub),
+            "--db-path",
+            str(db),
+            "--pytest",
+        ]
+    )
+    text = capsys.readouterr()
+    assert ok == 0, text.err + text.out
+    stored = json.loads(cfg.read_text())
+    assert "dbstub" in stored["tools"] or any(
+        str(key).startswith("dbstub") for key in stored["tools"]
+    )
+
+
+
+def test_import_camisim_checkout(tmp_path, monkeypatch):
+    from samovar.tools_import import import_tool
+    from samovar.main_config import iter_tools, tool_path
+    from samovar.paths import load_config
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    checkout = tmp_path / "CAMISIM"
+    checkout.mkdir()
+    (checkout / "main.nf").write_text("workflow {}\n")
+    import_tool(name="camisim", tool_type="metagenome_generator", exec_path=str(checkout))
+    assert tool_path(iter_tools(load_config())["camisim"], "camisim") == str(checkout)

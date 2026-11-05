@@ -15,6 +15,9 @@ from samovar.sparsedossa2 import (
 from samovar.table_regenerators import apply_extra_flags, get_table_regenerator
 from samovar.table_scorers import canonicalize_table_scorer, score_generated_tables
 
+# SparseDOSSA2-specific fitting/CV adapter, not the default regenerator.
+pytestmark = pytest.mark.optional
+
 
 def test_sparsedossa2_mode_aliases():
     assert resolve_regeneration_mode("sd2") == ("builtin", "sparsedossa2-fit")
@@ -169,6 +172,53 @@ def test_sd2_cv_accepts_phyloseq_columns(monkeypatch):
     assert row["n_generated"] == 2
 
 
+@pytest.mark.parametrize("unsupported", [True, False])
+def test_cv_unavailable_uses_one_metric_for_all_methods(monkeypatch, tmp_path, unsupported):
+    import json
+    from samovar.table_scorers import rank_methods_per_annotator, write_table_score_plots
+
+    observed = pd.DataFrame({"taxid": ["562", "9606"], "N_1": [10, 10], "N_2": [8, 8]})
+    tables = {
+        "direct": {"kaiju": observed.assign(N_1=[20, 0], N_2=[16, 0]),
+                   "kraken2": observed.assign(taxid=["111", "222"])},
+        "sparsedossa2-stool": {"kaiju": observed,
+                              "kraken2": observed.assign(taxid=["111", "222"])},
+    }
+
+    def fake_jobs(items, config=None):
+        return {
+            key: ({"status": "unsupported", "error": "too few supported taxa"}
+                  if unsupported else {"error": "R driver failed"})
+            if key == "direct__vs__direct" and "562" in matrix.index.astype(str)
+            else {"cv_goodness_of_fit": 1.0}
+            for key, matrix in items
+        }
+
+    monkeypatch.setattr("samovar.sparsedossa2.fitcv_score_jobs", fake_jobs)
+    if unsupported:
+        with pytest.warns(RuntimeWarning, match="Comparing all candidates with shannon_ks"):
+            result = rank_methods_per_annotator(observed, tables, "sparsedossa2_cv")
+        assert result["scorer"] == "mixed"
+        assert result["metric_name"] == "mixed"
+        assert result["requested_scorer"] == "sparsedossa2_cv"
+        block = result["by_annotator"]["kaiju"]
+        assert "too few supported taxa" in block["fallback_reason"]
+        assert not block["sparsedossa2_cv"]["candidates"][0]["ok"]
+        assert all(row["ok"] and row["scorer"] == "shannon_ks" for row in block["candidates"])
+        write_table_score_plots(result, tmp_path, config={"scoring_tools": ["none"]})
+        mqc = json.loads((tmp_path / "TableScore_quality_scores_mqc.json").read_text())
+        assert "too few supported taxa" in mqc["description"]
+        assert "requested sparsedossa2_cv, used shannon_ks" in mqc["description"]
+    else:
+        result = rank_methods_per_annotator(observed, tables, "sparsedossa2_cv")
+        assert result["scorer"] == "sparsedossa2_cv"
+        assert result["candidates"][0]["error"] == "R driver failed"
+        assert not result["candidates"][0]["ok"]
+    assert result["winner_by_annotator"]["kaiju"] == "sparsedossa2-stool"
+    assert result["by_annotator"]["kraken2"]["scorer"] == "sparsedossa2_cv"
+    assert all(row["ok"] for row in result["by_annotator"]["kraken2"]["candidates"])
+
+
 def test_write_feature_matrix_keeps_taxa_rows_when_fewer_than_samples(tmp_path):
     from samovar.sparsedossa2 import _write_feature_matrix
 
@@ -182,3 +232,20 @@ def test_write_feature_matrix_keeps_taxa_rows_when_fewer_than_samples(tmp_path):
     assert loaded.shape == (2, 5)
     assert list(loaded.index.astype(str)) == ["562", "9606"]
 
+
+
+def test_fit_unsupported_status_is_not_an_r_failure(monkeypatch, tmp_path):
+    import json
+    from samovar.table_regenerators import UnsupportedTableRegeneratorError
+
+    def fake_run(argv, **_kwargs):
+        out = Path(argv[argv.index("--output") + 1])
+        Path(str(out) + ".status.json").write_text(json.dumps({
+            "status": "unsupported", "error": "need at least 4 supported taxa",
+        }))
+        return ""
+
+    monkeypatch.setattr("samovar.sparsedossa2.run_sparsedossa2_r", fake_run)
+    observed = pd.DataFrame({"a": [10, 2], "b": [8, 3]}, index=["562", "9606"])
+    with pytest.raises(UnsupportedTableRegeneratorError, match="4 supported taxa"):
+        simulate_count_matrix(observed, n_sample=2, config={"output_dir": str(tmp_path)})

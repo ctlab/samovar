@@ -18,7 +18,10 @@ from samovar.repro import (
 )
 from samovar.tools_import import import_tool
 
+import pytest
 
+
+@pytest.mark.optional
 def test_load_lazy_install_file_and_command(tmp_path):
     script = tmp_path / "install.sh"
     script.write_text("conda install -y bioconda::kraken2=2.1.3\n")
@@ -27,6 +30,7 @@ def test_load_lazy_install_file_and_command(tmp_path):
     assert "kraken2" in load_lazy_install_text(str(script))
 
 
+@pytest.mark.optional
 def test_import_stores_multiline_lazy(tmp_path, monkeypatch):
     binary = tmp_path / "myclf"
     binary.write_text("#!/bin/sh\nexit 0\n")
@@ -89,6 +93,7 @@ def test_record_and_export_slim(tmp_path, monkeypatch):
     assert code == 0
 
 
+@pytest.mark.optional
 def test_export_full_packs_db_and_lazy_install(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
@@ -155,6 +160,7 @@ def test_export_full_packs_db_and_lazy_install(tmp_path, monkeypatch):
     assert "--lazy-download-file" in script
 
 
+@pytest.mark.optional
 def test_rewrite_output_dir_and_overrides():
     argv = rewrite_output_dir_argv(["--genome_dir", "g", "--output_dir", "old"], "/new")
     assert argv[-1] == "/new"
@@ -166,6 +172,7 @@ def test_rewrite_output_dir_and_overrides():
     assert "generate.threads=4" in ov
 
 
+@pytest.mark.optional
 def test_stages_and_overrides_split():
     from samovar.repro import _stages_and_overrides
 

@@ -10,6 +10,7 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 
 | Example | What it shows |
 |---------|----------------|
+| [smoketest](smoketest/) | Shortest generate → prepare → exec (`./install.sh ask` offers this) |
 | [toy](toy/) | Basic generate → prepare → exec |
 | [scoring](scoring/) | Choosing and comparing annotators |
 | [reprofiling](reprofiling/) | A custom ML reprofiler |
@@ -17,6 +18,7 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 | [multiple_tables](multiple_tables/) | Scoring several abundance-table methods |
 | [phage](phage/) | Named `phage_test` indexes, then `generate` / `prepare` / `exec` twice |
 | [assembly](assembly/) | Assembly annotator: taxID plus Feature `MAG_ID` |
+| [mag_identity](mag_identity/) | Stable MAG ids from tetranucleotide homology, or mapping onto the initial MAGs |
 | [databases_comparison](databases_comparison/) | Same community, several Kraken2 indexes |
 | [realistic](realistic/) | NCBI genomes with public Kraken2 and Kaiju indexes |
 | [all_annotators](all_annotators/) | Kraken2, Kaiju, KrakenUniq, and Kraken 1 on one community |

@@ -1,4 +1,5 @@
 import os
+import shlex
 import re
 import shutil
 import sys
@@ -10,13 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from samovar.exec_control import CHECKPOINT_STEPS, resolve_window
+from samovar.tool_spec import scheduler_threads
 from samovar.paths import (
     absolute_path,
     add_output_dir_argument,
     ncbi_email,
     python_path,
     repo_root,
-    runtime_path_prefix,
+    command_argv,
     shell_outdir_override_snippet,
 )
 from samovar.table_regenerators import (
@@ -55,11 +57,12 @@ from samovar.reprofilers import (
 )
 from samovar.genome_resolve import normalize_reannotation_level
 from samovar.genome_fetcher import (
+    DEFAULT_MAX_GENOME_MB,
     UNLIMITED_GENOME_MB,
     parse_genome_skip_list,
     parse_max_genome_mb,
 )
-from samovar.regenerate import UNLIMITED_MAX_GENOMES, parse_max_genomes
+from samovar.regenerate import DEFAULT_MAX_GENOMES, UNLIMITED_MAX_GENOMES, parse_max_genomes
 from samovar.ground_truth import (
     GROUND_TRUTH_TABLE,
     normalize_regenerated_mode,
@@ -93,7 +96,7 @@ def _default_email() -> str:
 def _cmd_basename(cmd: str) -> str:
     if not cmd:
         return ""
-    return Path(str(cmd).split()[0]).name.split(".")[0]
+    return Path(command_argv(cmd)[0]).name.split(".")[0]
 
 
 def _merge_annotator_launch_flags(
@@ -134,14 +137,17 @@ def _apply_translated_cli_flags(config: "PipelineConfig", args: argparse.Namespa
     }
     canonical.update(dict(getattr(args, "custom_cli_flags", None) or {}))
     cfg = load_config()
-    native = {"kraken2", "kaiju", "kraken", "krakenuniq", "metaphlan", "metaphlan4"}
     for ann in config.annotators or []:
         name = ann.type or ann.run_name
         rec = lookup_tool_record(cfg, name) or lookup_tool_record(cfg, ann.run_name)
-        extra_canon = dict(canonical)
-        if str(ann.type or "").lower() in native:
-            extra_canon.pop("--threads", None)
-            extra_canon.pop("--cores", None)
+        # Every shell command already passes its own -t / -z from the rule's
+        # threads. A second copy from flags-translate used to win and pin the
+        # whole machine (custom.sh saw -t twice; the last value was used).
+        extra_canon = {
+            key: value
+            for key, value in canonical.items()
+            if key not in {"--threads", "--cores"}
+        }
         ann.extra = apply_translated_flags(
             ann.extra or "",
             name=name,
@@ -187,7 +193,7 @@ def _apply_translated_cli_flags(config: "PipelineConfig", args: argparse.Namespa
     config.scoring_tool_flags = named_s or {}
     config.reprofiler_flags = apply_translated_flags(
         config.reprofiler_flags or "",
-        name=config.reprofiler or "ensemble",
+        name=config.reprofiler or "random_forest",
         record=lookup_tool_record(cfg, str(config.reprofiler or "")),
         canonical=canonical,
     ) or None
@@ -197,6 +203,29 @@ def _indent_bash(text: str, spaces: int = 2) -> str:
     pad = " " * spaces
     lines = text.strip("\n").split("\n")
     return "\n".join(pad + line if line.strip() else line for line in lines)
+
+
+def _annotation_combine_bash(
+    batch: str,
+    reports: str,
+    annotations: str,
+    truth_suffix: str,
+    incremental: bool,
+) -> str:
+    """Keep the batch combiner, and finalize when incremental sentinels exist."""
+    if not incremental:
+        return batch
+    final = (
+        '"$PYTHON_PATH" -m samovar.combine_tables finalize \\\n'
+        f'    --annotations "$out_dir/{annotations}"{truth_suffix}'
+    )
+    return (
+        f"if find \"$out_dir/{reports}\" -name '*.ingested' -print -quit | grep -q .; then\n"
+        f"{_indent_bash(final, 2)}\n"
+        "else\n"
+        f"{_indent_bash(batch, 2)}\n"
+        "fi"
+    )
 
 
 def _checkpoint_block(name: str, body: str) -> str:
@@ -212,22 +241,46 @@ def _checkpoint_block(name: str, body: str) -> str:
     )
 
 
+# Shipped as ``python -m samovar.*``. They are not PATH binaries.
+_IN_TREE_ANNOTATOR_MODULES = {
+    "assembly": "samovar.assembly_profiling",
+    "assembly_profiling": "samovar.assembly_profiling",
+    "gc": "samovar.gc",
+    "kmer": "samovar.kmer2",
+    "kmer2": "samovar.kmer2",
+    "kmer_encoder": "samovar.kmer_encoder",
+    "length": "samovar.length",
+    "constant_taxid": "samovar.baselines.constant_taxid",
+    "constant9606": "samovar.baselines.constant_taxid",
+    "dummy": "samovar.baselines.constant_taxid",
+    "dummy9606": "samovar.baselines.constant_taxid",
+}
+
+
 def _portable_annotator_cmd(cmd: str) -> str:
     """Keep PATH names in YAML; exec resolves via PATH / install config.
 
     Absolute binaries the user passed explicitly are stored as-is.
-    Warns (does not fail) if the token is not on PATH and not in config.
+    In-tree modules are stored as ``python -m samovar.<module>``.
+    Warns (does not fail) if some other token is not on PATH and not in config.
     """
     from samovar.paths import resolve_executable
 
     text = (cmd or "").strip()
     if not text:
         return text
-    token = text.split()[0]
+    parts = command_argv(text)
+    if "samovar." in text and parts[0] in {"python", "python3", sys.executable, python_path()}:
+        return shlex.join([python_path(), *parts[1:]])
+    token = parts[0]
+    module = _IN_TREE_ANNOTATOR_MODULES.get(Path(token).name)
+    if module:
+        rest = parts[1:]
+        return shlex.join([python_path(), "-m", module, *rest])
     path = Path(token).expanduser()
     if path.is_file():
         return text
-    resolved = (resolve_executable(token) or "").split()[0]
+    resolved = (command_argv(resolve_executable(token)) or [""])[0]
     if resolved and Path(resolved).expanduser().is_file():
         return text
     if shutil.which(token):
@@ -275,6 +328,20 @@ def _absolute_db_path(db_path: str) -> str:
         return db_path or "."
     return absolute_path(db_path)
 
+
+def _flag_database_label(token: str) -> str:
+    """Database token as the user typed it in the annotator flag.
+
+    A filesystem path contributes its final component. An indexed name such as
+    ``standard_8GB`` is kept as written, even after it is resolved to a directory.
+    """
+    text = (token or "").strip()
+    if not text or text == ".":
+        return ""
+    if "/" in text or text.startswith("~"):
+        return Path(text.rstrip("/")).name
+    return text
+
 @dataclass
 class AnnotatorConfig:
     run_name: str
@@ -282,6 +349,7 @@ class AnnotatorConfig:
     db_path: str
     cmd: str
     db_name: Optional[str] = None
+    db_label: Optional[str] = None
     extra: Optional[str] = None
 
 @dataclass
@@ -294,8 +362,9 @@ class PipelineConfig:
     coverage: int = 30
     email: str = None
     cores: int = 1
-    max_genomes: float = UNLIMITED_MAX_GENOMES
-    regeneration_mode: str = "direct"
+    mem_mb: Optional[int] = None
+    max_genomes: float = DEFAULT_MAX_GENOMES
+    regeneration_mode: str = "concat_weighted"
     regeneration_modes: Optional[List[str]] = None
     table_score: str = "shannon_ks"
     sample_score: str = ""
@@ -313,7 +382,7 @@ class PipelineConfig:
     sample_filter_sd_by_method: Optional[Dict[str, float]] = None
     sample_filter_stage: str = "final"
     regeneration_n: Optional[int] = None
-    regeneration_n_reads: int = 1000
+    regeneration_n_reads: int = 1_000_000
     regeneration_seed: int = 42
     reannotation_level: str = "taxid"
     rescale_abundance: bool = False
@@ -328,15 +397,18 @@ class PipelineConfig:
     reuse_genomes: bool = True
     use_test_genomes: bool = False
     genome_dirs: Optional[List[str]] = None
-    max_genome_mb: float = UNLIMITED_GENOME_MB
+    max_genome_mb: float = DEFAULT_MAX_GENOME_MB
     genome_skip_list: Optional[List[str]] = None
     run_multiqc: Optional[bool] = None
+    incremental_annotations: bool = True
     initial_ground_truth_table: Optional[str] = None
     regenerated_metagenomes: str = "parse-genome"
     scoring_flags: Optional[str] = None
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
-    reprofiler: str = "ensemble"
+    viz: Optional[Dict] = None
+    reprofiler: str = "random_forest"
+    gpu: bool = False
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
     feature_importance: str = "builtin"
@@ -359,6 +431,9 @@ class PipelineConfig:
     export_tool_flags: Optional[Dict[str, str]] = None
 
     def __post_init__(self):
+        from samovar.viz_annotation import normalize_viz_config
+
+        self.viz = normalize_viz_config(self.viz)
         if self.annotators is None:
             self.annotators = []
         if self.genome_dirs is None:
@@ -401,7 +476,14 @@ class PipelineConfig:
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
         config = cls()
+        input_config = {}
         config.cores = getattr(args, 'cores', 1) or 1
+        config.gpu = bool(getattr(args, "gpu", False))
+        requested_mem = getattr(args, "mem_mb", None)
+        if requested_mem is not None and requested_mem is not False:
+            from samovar.memory import parse_mem
+
+            config.mem_mb = parse_mem(requested_mem)
         threads = getattr(args, "threads", None)
         if threads:
             config.cores = int(threads)
@@ -430,6 +512,12 @@ class PipelineConfig:
         if args.input_config:
             with open(args.input_config, 'r') as f:
                 input_config = yaml.safe_load(f)
+                if getattr(args, "_offer_imports", False):
+                    from samovar.prepare_import import offer_prepare_imports
+
+                    refs = dict(input_config)
+                    refs.update({key: value for key, value in vars(args).items() if value is not None})
+                    offer_prepare_imports(argparse.Namespace(**refs))
                 config.input_dir = input_config.get('input_dir')
                 cli_out = getattr(args, "output_dir", None)
                 config.output_dir = cli_out or input_config.get("output_dir") or DEFAULT_OUTPUT_DIR
@@ -647,6 +735,8 @@ class PipelineConfig:
                     config.gzip_genomes = bool(input_config.get('gzip_genomes'))
                 if 'gzip_reads' in input_config:
                     config.gzip_reads = bool(input_config.get('gzip_reads'))
+                if 'incremental_annotations' in input_config:
+                    config.incremental_annotations = bool(input_config.get('incremental_annotations'))
                 yaml_max_g = input_config.get("max_genomes", input_config.get("max-genomes"))
                 if yaml_max_g is not None:
                     config.max_genomes = parse_max_genomes(
@@ -737,7 +827,12 @@ class PipelineConfig:
                         if payload.get("cmd"):
                             payload["cmd"] = _portable_annotator_cmd(payload["cmd"])
                         if "db_path" in payload:
-                            payload["db_path"] = _absolute_db_path(str(payload["db_path"]))
+                            raw_db = str(payload["db_path"])
+                            if not payload.get("db_label"):
+                                label = _flag_database_label(raw_db)
+                                if label:
+                                    payload["db_label"] = label
+                            payload["db_path"] = _absolute_db_path(raw_db)
                         config.annotators.append(AnnotatorConfig(**payload))
         elif args.input_dir:
             config.input_dir = args.input_dir
@@ -748,6 +843,10 @@ class PipelineConfig:
         if config.input_dir:
             config.input_dir = absolute_path(config.input_dir)
         config.output_dir = absolute_path(config.output_dir or DEFAULT_OUTPUT_DIR)
+        if config.input_dir:
+            from samovar.seqio import link_or_copy_reads
+
+            link_or_copy_reads(config.input_dir, Path(config.output_dir) / "initial", validate_only=True)
 
         # Handle command line annotators
         # Get all attributes that start with 'cmd_'
@@ -757,7 +856,7 @@ class PipelineConfig:
             if getattr(args, attr):
                 for cmd_config in getattr(args, attr):
                     # Split the command string into parts (db is optional for dummy/custom tools)
-                    parts = cmd_config[0].split()
+                    parts = shlex.split(cmd_config[0])
                     if len(parts) < 1:
                         raise ValueError(f"Invalid command format for {attr}: {cmd_config[0]}")
                     
@@ -765,7 +864,8 @@ class PipelineConfig:
                     cmd = parts[0]
                     # Second part is the database path or indexed name
                     db_path = parts[1] if len(parts) > 1 else "."
-                    extra = ' '.join(parts[2:]) if len(parts) > 2 else None
+                    db_label = _flag_database_label(db_path)
+                    extra = shlex.join(parts[2:]) if len(parts) > 2 else None
                     db_path, extra = _expand_indexed_database(cmd, db_path, extra)
                     
                     # Extract type from command basename
@@ -793,14 +893,22 @@ class PipelineConfig:
                         or "samovar.kmer2" in cmd_join
                     ):
                         type_name = "kmer2"
-                        cmd = f"{sys.executable} -m samovar.kmer2"
+                        cmd = f"{shlex.quote(python_path())} -m samovar.kmer2"
                     if (
                         run_name.lower().replace("-", "_") in gc_aliases
                         or type_name.lower().replace("-", "_") in gc_aliases
                         or "samovar.gc" in cmd_join
                     ):
                         type_name = "gc"
-                        cmd = f"{sys.executable} -m samovar.gc"
+                        cmd = f"{shlex.quote(python_path())} -m samovar.gc"
+                    length_aliases = {"length", "read_length", "readlen", "read-length"}
+                    if (
+                        run_name.lower().replace("-", "_") in length_aliases
+                        or type_name.lower().replace("-", "_") in length_aliases
+                        or "samovar.length" in cmd_join
+                    ):
+                        type_name = "length"
+                        cmd = f"{shlex.quote(python_path())} -m samovar.length"
                     enc_aliases = {
                         "kmer_encoder",
                         "kmer-encoder",
@@ -814,7 +922,7 @@ class PipelineConfig:
                         or "samovar.kmer_encoder" in cmd_join
                     ):
                         type_name = "kmer_encoder"
-                        cmd = f"{sys.executable} -m samovar.kmer_encoder"
+                        cmd = f"{shlex.quote(python_path())} -m samovar.kmer_encoder"
                     # Konstantaza CLI: --custom-test "metauto /path/to/db"
                     if run_name.lower() in {"custom", "custom-test", "custom_test"}:
                         run_name = type_name
@@ -824,6 +932,7 @@ class PipelineConfig:
                         type=type_name,
                         cmd=_portable_annotator_cmd(cmd),
                         db_path=_absolute_db_path(db_path),
+                        db_label=db_label or None,
                         extra=extra
                     ))
 
@@ -832,7 +941,7 @@ class PipelineConfig:
             if attr in ['kraken2', 'kaiju', 'dummy'] and getattr(args, attr):
                 for cmd_config in getattr(args, attr):
                     # Split the command string into parts (db is optional for dummy)
-                    parts = cmd_config[0].split()
+                    parts = shlex.split(cmd_config[0])
                     if len(parts) < 1:
                         raise ValueError(f"Invalid command format for {attr}: {cmd_config[0]}")
                     
@@ -840,7 +949,8 @@ class PipelineConfig:
                     cmd = parts[0]
                     # Second part is the database path or indexed name
                     db_path = parts[1] if len(parts) > 1 else "."
-                    extra = ' '.join(parts[2:]) if len(parts) > 2 else None
+                    db_label = _flag_database_label(db_path)
+                    extra = shlex.join(parts[2:]) if len(parts) > 2 else None
                     db_path, extra = _expand_indexed_database(cmd, db_path, extra)
                     
                     # Extract type from command basename
@@ -862,6 +972,7 @@ class PipelineConfig:
                         type=type_name,
                         cmd=_portable_annotator_cmd(cmd),
                         db_path=_absolute_db_path(db_path),
+                        db_label=db_label or None,
                         extra=extra
                     ))
 
@@ -888,6 +999,8 @@ class PipelineConfig:
         )
         if getattr(args, "run_multiqc", None) is not None:
             config.run_multiqc = bool(args.run_multiqc)
+        if getattr(args, "incremental_annotations", None) is not None:
+            config.incremental_annotations = bool(args.incremental_annotations)
         extra_dirs = getattr(args, "genome_dirs", None)
         if extra_dirs:
             if isinstance(extra_dirs, str):
@@ -991,6 +1104,50 @@ class PipelineConfig:
             merged_p = dict(getattr(config, by_attr) or {})
             merged_p.update(by_val)
             setattr(config, by_attr, merged_p)
+        # Explicit prepare settings win over the generator recorded by generate.
+        selected_generator = (
+            getattr(args, "reads_generator", None) or getattr(args, "metagenome_generator", None)
+            or input_config.get("reads_generator") or input_config.get("reads-generator")
+            or input_config.get("metagenome_generator")
+        )
+        if not selected_generator:
+            from samovar.reads_generators import has_hybrid_reads
+            from samovar.seqio import list_r1_files
+            from samovar.repro import snapshot_path
+
+            initial = Path(config.input_dir or (Path(config.output_dir) / "initial")).resolve()
+            generated_args = {}
+            if initial.name == "initial":
+                source_run = initial.parent
+                snapshot = snapshot_path(source_run)
+                if snapshot.is_file():
+                    recorded = yaml.safe_load(snapshot.read_text()) or {}
+                    generated_args = (recorded.get("generate") or {}).get("args") or {}
+                # Older runs may only have the editable CAMISIM configuration.
+                generated = source_run / ".generate" / "configs" / "camisim.yaml"
+                if not generated_args.get("reads_generator") and not generated_args.get("metagenome_generator") and generated.is_file():
+                    generated_args = yaml.safe_load(generated.read_text()) or {}
+                    if not generated_args.get("reads_generator") and not generated_args.get("metagenome_generator"):
+                        generated_args["reads_generator"] = "camisim"
+            # Generic CAMISIM can select its actual simulator through --camisim-mode.
+            generator_field = "metagenome_generator" if generated_args.get("metagenome_generator") else "reads_generator"
+            generated_mode = generated_args.get("camisim_mode") or generated_args.get("mode")
+            if generated_args.get(generator_field) == "camisim" and generated_mode:
+                from samovar.camisim import normalize_camisim_mode
+
+                mode = normalize_camisim_mode(generated_mode)
+                if generator_field == "metagenome_generator" and mode in {"illumina", "wgsim"}:
+                    generated_args["metagenome_generator"] = None
+                    generator_field = "reads_generator"
+                generated_args[generator_field] = "camisim" if mode == "table" else mode
+            if generated_args.get("metagenome_generator"):
+                config.metagenome_generator = require_known_metagenome_generator(
+                    generated_args["metagenome_generator"]
+                )
+            elif generated_args.get("reads_generator"):
+                config.reads_generator = require_known_reads_generator(generated_args["reads_generator"])
+            elif config.input_dir and any(has_hybrid_reads(p) for p in list_r1_files(config.input_dir)):
+                config.reads_generator = "hybrid"
         cli_reads = getattr(args, "reads_generator", None)
         if cli_reads:
             config.reads_generator = require_known_reads_generator(cli_reads)
@@ -1250,6 +1407,18 @@ class PipelineConfig:
         config.export_flags = merge_flag_strings(*eflag_parts) or None
         config.export_tool_flags = named_eflags or {}
 
+        from samovar.viz_annotation import normalize_viz_config
+
+        viz = input_config.get("viz", {})
+        if not isinstance(viz, dict):
+            raise ValueError("viz must be a mapping")
+        viz = dict(viz)
+        for key in ("full", "opal", "metrics_sample", "metrics"):
+            value = getattr(args, f"viz_{key}", None)
+            if value is not None:
+                viz[key] = value
+        config.viz = normalize_viz_config(viz)
+
         cli_start = getattr(args, "startpoint", None)
         if cli_start:
             config.startpoint = str(cli_start)
@@ -1291,6 +1460,7 @@ class PipelineConfig:
             mag_taxonomy=getattr(args, "assembly_mag_taxonomy", None) or "",
             aligner=getattr(args, "assembly_aligner", None) or "",
             mag_quantifier=getattr(args, "assembly_mag_quantifier", None) or "",
+            mag_mode=getattr(args, "assembly_mag_mode", None) or "",
         )
         if slot:
             for ann in config.annotators or []:
@@ -1299,6 +1469,10 @@ class PipelineConfig:
                         p for p in (ann.extra, slot) if p
                     ) or None
         _apply_translated_cli_flags(config, args)
+        from samovar.tool_spec import check_external_flags
+
+        for ann in config.annotators or []:
+            check_external_flags(ann.cmd, ann.extra)
         params = {}
         if config.sample_filter_n is not None:
             params["n"] = config.sample_filter_n
@@ -1336,6 +1510,9 @@ class PipelineConfig:
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
         """Generate all necessary config files and return their paths"""
+        from samovar.taxdump import require_metax_taxdump
+
+        require_metax_taxdump(self.annotators)
         base_path = Path(absolute_path(base_dir))
         configs_dir = base_path / '.log' / 'configs'
         configs_dir.mkdir(parents=True, exist_ok=True)
@@ -1346,17 +1523,26 @@ class PipelineConfig:
 
         # Generate initial annotator config
         init_annotator_config = {
+            'mag_catalog_root': str(base_path / 'MAG'),
+            'mag_catalog_phase': 'initial',
             'r1_dir': init_trimmed,
             'r2_dir': init_trimmed,
             'output_dir': str(base_path / 'initial_reports'),
+            'cores': int(self.cores),
+            'mem_mb': int(self.mem_mb or 0),
+            'incremental_annotations': bool(self.incremental_annotations),
+            'annotation_dir': str(base_path / 'initial_annotations'),
+            'split_sample_name': 1,
+            'truth_table': str(self.initial_ground_truth_table or ''),
             'run_config': [
                 {
                     'run_name': ann.run_name,
                     'type': ann.type,
                     'cmd': ann.cmd,
                     'db_path': ann.db_path,
-                    'threads': self.cores,
+                    'threads': scheduler_threads(ann.type or ann.run_name, self.cores),
                     **({'db_name': ann.db_name} if ann.db_name else {}),
+                    **({'db_label': ann.db_label} if ann.db_label else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }
                 for ann in self.annotators
@@ -1436,6 +1622,9 @@ class PipelineConfig:
 
         scoring_config = {
             'output_dir': str(base_path),
+            'viz': self.viz,
+            'seed': self.regeneration_seed,
+            'cores': int(self.cores),
             'scoring_flags': self.scoring_flags or "",
             'scoring_tool_flags': self.scoring_tool_flags or {},
         }
@@ -1470,6 +1659,9 @@ class PipelineConfig:
             'reprofiler': self.reprofiler,
             'reprofiler_flags': self.reprofiler_flags or "",
             'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
+            'cores': int(self.cores),
+            'mem_mb': int(self.mem_mb or 0),
+            'gpu': bool(self.gpu),
             'feature_importance': self.feature_importance or "builtin",
             'feature_importance_all': bool(self.feature_importance_all),
             'feature_importance_flags': self.feature_importance_flags or "",
@@ -1489,6 +1681,8 @@ class PipelineConfig:
             "export_formats": list(self.export_formats or []),
             "export_taxdump": self.export_taxdump or "",
             "export_taxonomy": self.export_taxonomy or "",
+            "cores": int(self.cores),
+            "gpu": bool(self.gpu),
         }
         export_path = configs_dir / "config_export.yaml"
         with open(export_path, "w") as f:
@@ -1497,17 +1691,26 @@ class PipelineConfig:
 
         # Generate reannotate config
         reannotate_config = {
+            'mag_catalog_root': str(base_path / 'MAG'),
+            'mag_catalog_phase': 'regenerated',
             'r1_dir': regen_trimmed,
             'r2_dir': regen_trimmed,
             'output_dir': str(base_path / 'regenerated_reports'),
+            'cores': int(self.cores),
+            'mem_mb': int(self.mem_mb or 0),
+            'incremental_annotations': bool(self.incremental_annotations),
+            'annotation_dir': str(base_path / 'regenerated_annotations'),
+            'split_sample_name': 2,
+            'truth_table': '',
             'run_config': [
                 {
                     'run_name': ann.run_name,
                     'type': ann.type,
                     'cmd': ann.cmd,
                     'db_path': ann.db_path,
-                    'threads': self.cores,
+                    'threads': scheduler_threads(ann.type or ann.run_name, self.cores),
                     **({'db_name': ann.db_name} if ann.db_name else {}),
+                    **({'db_label': ann.db_label} if ann.db_label else {}),
                     **({'extra': ann.extra} if ann.extra else {})
                 }
                 for ann in self.annotators
@@ -1557,7 +1760,7 @@ class PipelineConfig:
         method = shlex.quote(str(self.export_corrector or "logistic"))
         stage_q = shlex.quote(str(stage))
         return (
-            f"\n$PYTHON_PATH -m samovar.abundance_correctors \\\n"
+            f"\n\"$PYTHON_PATH\" -m samovar.abundance_correctors \\\n"
             f'    -i "$out_dir/{src_rel}" -o "$out_dir/exports/{stage}" \\\n'
             f'    --reference "$out_dir/regenerated_annotations" \\\n'
             f'    --model "$out_dir/reprofiled_annotations/trained_model.joblib" \\\n'
@@ -1584,9 +1787,8 @@ class PipelineConfig:
         )
         
         # Get config paths
-        configs = self.generate_configs(base_dir)
+        configs = {key: shlex.quote(value) for key, value in self.generate_configs(base_dir).items()}
         root = repo_root()
-        py = python_path()
         wf = root / "workflow"
         src = root / "src"
         email = self.email or ncbi_email()
@@ -1610,7 +1812,6 @@ class PipelineConfig:
             and (filter_final_on or name != "filter_sample_qc_final")
         ]
         step_names = " ".join(listed_steps)
-        tool_path = runtime_path_prefix()
         extra_genome_dirs = ":".join(self.genome_dirs or [])
         reuse_flag = "1" if self.reuse_genomes else "0"
         test_flag = "1" if self.use_test_genomes else "0"
@@ -1621,7 +1822,10 @@ class PipelineConfig:
         else:
             multiqc_flag = "1" if self.run_multiqc else "0"
 
+        from samovar.paths import shell_runtime_snippet
+
         env_snippet = shell_source_install_env_snippet()
+        runtime_snippet = shell_runtime_snippet()
         input_dir_export = self.input_dir or ""
         regen_mode = normalize_regenerated_mode(self.regenerated_metagenomes)
         inject_taxid = "0" if regen_mode == GROUND_TRUTH_TABLE else "1"
@@ -1631,22 +1835,31 @@ class PipelineConfig:
             gt_initial = f' \\\n    --truth-table "{gt_path}"'
         regen_truth = Path(base_dir) / ".log" / "regenerated_ground_truth.tsv"
         if regen_mode == GROUND_TRUTH_TABLE:
-            combine_regen_body = f"""$PYTHON_PATH -m samovar.ground_truth from-genomes \\
+            gt_regen = f' \\\n    --truth-table "{regen_truth}"'
+            regen_prefix = f""""$PYTHON_PATH" -m samovar.ground_truth from-genomes \\
     --genome-dir "$out_dir/genomes" --output "{regen_truth}" --overwrite
-$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
+"""
+            regen_batch = f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/regenerated_reports" \\
     -o "$out_dir/regenerated_annotations" \\
     -s 2 \\
     --truth-table "{regen_truth}" """
         else:
-            combine_regen_body = f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
+            gt_regen = ""
+            regen_prefix = ""
+            regen_batch = f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/regenerated_reports" \\
     -o "$out_dir/regenerated_annotations" \\
     -s 2"""
+        combine_regen_body = regen_prefix + _annotation_combine_bash(
+            regen_batch,
+            "regenerated_reports",
+            "regenerated_annotations",
+            gt_regen,
+            self.incremental_annotations,
+        )
         combine_regen_body = combine_regen_body + self._annotation_export_bash(
             "regenerated_annotations", "regenerated"
-        ) + self._annotation_export_bash(
-            "initial_annotations", "initial"
         )
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
@@ -1658,16 +1871,18 @@ set -e
 export SAMOVAR_ROOT="{root}"
 export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"
 # Prefer the current install env (other-HPC reinstall) when present.
-{env_snippet}# Baked tool bins from config.json: path[], tools.*, tool_envs.*, python/iss.
-# Override further with SAMOVAR_PATH=dir1:dir2 (prepended).
-export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
-export PYTHONPATH="{src}${{PYTHONPATH:+:$PYTHONPATH}}"
-# Honor env PYTHON_PATH (install.sh writes it); fall back to the prepare-time interpreter.
-PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
-if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
-  PYTHON_PATH="$(command -v python3 || command -v python || true)"
+{env_snippet}{runtime_snippet}export PYTHONPATH="{src}${{PYTHONPATH:+:$PYTHONPATH}}"
+export SAMOVAR_CORES="{int(self.cores)}"
+# --mem from prepare (SLURM --mem, MiB). SAMOVAR_MEM_MB still overrides it.
+PREPARED_MEM="{int(self.mem_mb or 0)}"
+if [ -n "${{SAMOVAR_MEM_MB:-}}" ]; then
+  MEM_MB="$SAMOVAR_MEM_MB"
+elif [ "$PREPARED_MEM" != "0" ]; then
+  MEM_MB="$PREPARED_MEM"
+else
+  MEM_MB="$("$PYTHON_PATH" -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')"
 fi
-PYTHON_PATH="${{PYTHON_PATH:-python3}}"
+export SAMOVAR_MEM_MB="$MEM_MB"
 
 out_dir="{base_dir}"
 {shell_outdir_override_snippet()}
@@ -1676,7 +1891,12 @@ mkdir -p "$CKPT"
 # Checkpoint names: {step_names}
 export SAMOVAR_START="${{SAMOVAR_START:-{start_s}}}"
 export SAMOVAR_END="${{SAMOVAR_END:-{end_s}}}"
-export SAMOVAR_INPUT_DIR="${{SAMOVAR_INPUT_DIR:-{input_dir_export}}}"
+if [ -z "${{SAMOVAR_INPUT_DIR:-}}" ]; then
+  SAMOVAR_INPUT_DIR={shlex.quote(input_dir_export)}
+fi
+export SAMOVAR_INPUT_DIR
+export SAMOVAR_MAG_CATALOG="$out_dir/MAG/catalog.tsv"
+export SAMOVAR_MAG_MODE="${{SAMOVAR_MAG_MODE:-homology}}"
 
 ckpt_skip() {{
   if ! "$PYTHON_PATH" -m samovar.exec_control active "$1"; then
@@ -1709,24 +1929,26 @@ export SAMOVAR_RUN_DIR="$out_dir"
 export SAMOVAR_REGENERATED_METAGENOMES="{regen_mode}"
 export SAMOVAR_INJECT_TAXID="${{SAMOVAR_INJECT_TAXID:-{inject_taxid}}}"
 export SAMOVAR_RUN_GENOMES="$out_dir/genomes"
-# All bulky caches live under outdir — never default to ~/.cache (home quota).
+# Non-genome caches stay under the run dir. Genome downloads use the install
+# library (SAMOVAR_DATABASE / genomes.samovar_database) unless the caller
+# already exported SAMOVAR_GENOMES or SAMOVAR_PROCESSED_GENOMES.
 export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-$out_dir/.cache}}"
-export SAMOVAR_GENOMES="${{SAMOVAR_GENOMES:-$out_dir/.cache/samovar/genomes}}"
-export SAMOVAR_PROCESSED_GENOMES="${{SAMOVAR_PROCESSED_GENOMES:-$out_dir/.cache/samovar/genomes}}"
-mkdir -p "$XDG_CACHE_HOME/samovar/genomes" "$SAMOVAR_RUN_GENOMES"
+mkdir -p "$XDG_CACHE_HOME" "$SAMOVAR_RUN_GENOMES"
 """
 
         setup_reads = _checkpoint_block(
             "setup_reads",
             f"""# Link/copy source reads into output initial/ when input_dir is provided
 # and is not already the destination (generate→preprocess sets input_dir=initial).
-if [ -n "{self.input_dir or ''}" ] && [ -d "{self.input_dir or ''}" ]; then
-    src_dir=$(readlink -f "{self.input_dir or ''}" || realpath "{self.input_dir or ''}")
+if [ -n "$SAMOVAR_INPUT_DIR" ] && [ -d "$SAMOVAR_INPUT_DIR" ]; then
+    src_dir=$(readlink -f "$SAMOVAR_INPUT_DIR" || realpath "$SAMOVAR_INPUT_DIR")
     dst_dir=$(readlink -f "$out_dir/initial" || realpath "$out_dir/initial")
     if [ "$src_dir" != "$dst_dir" ]; then
-        $PYTHON_PATH -c "from samovar.seqio import link_or_copy_reads; link_or_copy_reads('$src_dir', '$dst_dir')"
+        "$PYTHON_PATH" -c 'import sys; from samovar.seqio import link_or_copy_reads; link_or_copy_reads(sys.argv[1], sys.argv[2])' "$src_dir" "$dst_dir"
     fi
-fi""",
+fi
+"$PYTHON_PATH" -c 'import sys; from samovar.seqio import validate_fastq_directory; validate_fastq_directory(sys.argv[1])' "$out_dir/initial"
+""",
         )
 
         qc_initial = _checkpoint_block(
@@ -1737,38 +1959,45 @@ fi""",
 
         annotate_initial = _checkpoint_block(
             "annotate_initial",
-            f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
+            f""""$SNAKEMAKE" -s {shlex.quote(str(wf / 'annotators' / 'Snakefile'))} \\
     --configfile {configs['init_annotator']} \\
     --directory "$out_dir" \\
-    --cores {self.cores}""",
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB""",
         )
 
         combine_initial = _checkpoint_block(
             "combine_initial",
-            f"""$PYTHON_PATH {wf / 'combine_annotation_tables.py'} \\
+            _annotation_combine_bash(
+                f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/initial_reports" \\
-    -o "$out_dir/initial_annotations"{gt_initial}"""
+    -o "$out_dir/initial_annotations"{gt_initial}""",
+                "initial_reports",
+                "initial_annotations",
+                gt_initial,
+                self.incremental_annotations,
+            )
             + self._annotation_export_bash("initial_annotations", "initial"),
         )
 
         viz_initial = _checkpoint_block(
             "viz_initial",
-            f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
+            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
     --annotation_dir "$out_dir/initial_annotations" \\
     --output_dir "$out_dir/initial_annotations_plots" \\
-    --show_top 0
+    --show_top 0 --config {configs['scoring']}
 "$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_initial \\
     --config {configs['scoring']}""",
         )
 
         abundance_tables = _checkpoint_block(
             "abundance_tables",
-            """$PYTHON_PATH -m samovar.abundance materialize --output_dir "$out_dir\"""",
+            """"$PYTHON_PATH" -m samovar.abundance materialize --output_dir "$out_dir\"""",
         )
 
         regenerate_tables = _checkpoint_block(
             "regenerate_tables",
-            f"""$PYTHON_PATH -m samovar.regenerate tables \\
+            f""""$PYTHON_PATH" -m samovar.regenerate tables \\
     --output_dir "$out_dir" \\
     --config {configs['annotation2iss']}""",
         )
@@ -1780,14 +2009,14 @@ fi""",
         if sample_qc_on:
             score_sample_qc_full = _checkpoint_block(
                 "score_sample_qc_full",
-                f"""$PYTHON_PATH -m samovar.sample_scorers stage \\
+                f""""$PYTHON_PATH" -m samovar.sample_scorers stage \\
     --output_dir "$out_dir" \\
     --config {configs['annotation2iss']} \\
     --phase full""",
             )
             score_sample_qc_final = _checkpoint_block(
                 "score_sample_qc_final",
-                f"""$PYTHON_PATH -m samovar.sample_scorers stage \\
+                f""""$PYTHON_PATH" -m samovar.sample_scorers stage \\
     --output_dir "$out_dir" \\
     --config {configs['annotation2iss']} \\
     --phase final""",
@@ -1795,7 +2024,7 @@ fi""",
         if filter_full_on:
             filter_sample_qc_full = _checkpoint_block(
                 "filter_sample_qc_full",
-                f"""$PYTHON_PATH -m samovar.sample_filters stage \\
+                f""""$PYTHON_PATH" -m samovar.sample_filters stage \\
     --output_dir "$out_dir" \\
     --config {configs['annotation2iss']} \\
     --phase full""",
@@ -1803,7 +2032,7 @@ fi""",
         if filter_final_on:
             filter_sample_qc_final = _checkpoint_block(
                 "filter_sample_qc_final",
-                f"""$PYTHON_PATH -m samovar.sample_filters stage \\
+                f""""$PYTHON_PATH" -m samovar.sample_filters stage \\
     --output_dir "$out_dir" \\
     --config {configs['annotation2iss']} \\
     --phase final""",
@@ -1811,7 +2040,7 @@ fi""",
 
         score_regenerated_tables = _checkpoint_block(
             "score_regenerated_tables",
-            f"""$PYTHON_PATH -m samovar.table_scorers stage \\
+            f""""$PYTHON_PATH" -m samovar.table_scorers stage \\
     --output_dir "$out_dir" \\
     --config {configs['annotation2iss']}""",
         )
@@ -1828,25 +2057,32 @@ mkdir -p "$out_dir/genomes"
 
         regenerate_reads = _checkpoint_block(
             "regenerate_reads",
-            f"""snakemake -s {wf / 'abundance2iss' / 'Snakefile'} \\
+            f""""$SNAKEMAKE" -s {shlex.quote(str(wf / 'abundance2iss' / 'Snakefile'))} \\
     --configfile {configs['abundance2iss']} \\
     --directory "$out_dir" \\
-    --cores {self.cores}
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB
 "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )
 
         early_exit = """if "$PYTHON_PATH" -m samovar.exec_control needs-regen; then
-if ! $PYTHON_PATH -c "from samovar.seqio import has_r1_reads; raise SystemExit(0 if has_r1_reads('$out_dir/regenerated') else 1)"; then
-    echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
-    cleanup_tmp_if_requested
-    exit 0
-fi
+  if "$PYTHON_PATH" -m samovar.exec_control regen-reads "$out_dir"; then
+    :
+  else
+    rc=$?
+    if [ "$rc" -eq 3 ]; then
+      echo "No regenerated reads were produced; skipping re-annotation and reprofiling."
+      cleanup_tmp_if_requested
+      exit 0
+    fi
+    exit "$rc"
+  fi
 fi
 """
 
         sort_reads = _checkpoint_block(
             "sort_reads",
-            f"""{root / 'bin' / 'samovar'} tools --sort --output_dir "$out_dir\"""",
+            f"""{shlex.quote(str(root / 'bin' / 'samovar'))} tools --sort --output_dir "$out_dir\"""",
         )
 
         qc_generated = _checkpoint_block(
@@ -1857,10 +2093,11 @@ fi
 
         annotate_regenerated = _checkpoint_block(
             "annotate_regenerated",
-            f"""snakemake -s {wf / 'annotators' / 'Snakefile'} \\
+            f""""$SNAKEMAKE" -s {shlex.quote(str(wf / 'annotators' / 'Snakefile'))} \\
     --configfile {configs['reannotate']} \\
     --directory "$out_dir" \\
-    --cores {self.cores}""",
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB""",
         )
 
         combine_regenerated = _checkpoint_block(
@@ -1870,45 +2107,46 @@ fi
 
         viz_regenerated = _checkpoint_block(
             "viz_regenerated",
-            f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
+            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
     --annotation_dir "$out_dir/regenerated_annotations" \\
     --output_dir "$out_dir/regenerated_annotations_plots" \\
     --csv "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
-    --show_top 0
+    --show_top 0 --config {configs['scoring']}
 "$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_regenerated \\
     --config {configs['scoring']}""",
         )
 
+        gpu_line = " \\\n    --gpu" if self.gpu else ""
         reprofile = _checkpoint_block(
             "reprofile",
             f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
-    $PYTHON_PATH -c "from samovar.seqio import concat_r1_fastqs; concat_r1_fastqs('$out_dir/initial_trimmed', '$out_dir/combined_temporary_R1.fastq')"
-    $PYTHON_PATH {src / 'annotators' / 'fastq_annotator.py'} "$out_dir/combined_temporary_R1.fastq" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}
-    rm -f "$out_dir/combined_temporary_R1.fastq"
-    FEATURE_ARG="--features $out_dir/features.tsv"
+    "$PYTHON_PATH" {shlex.quote(str(src / 'annotators' / 'fastq_annotator.py'))} "$out_dir/initial_trimmed" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}
+    FEATURE_ARG=(--features "$out_dir/features.tsv")
 else
-    FEATURE_ARG=""
+    FEATURE_ARG=()
 fi
-$PYTHON_PATH {wf / 'ML.py'} \\
+"$PYTHON_PATH" {shlex.quote(str(wf / 'ML.py'))} \\
     --reprofiling_dir "$out_dir/initial_annotations" \\
     --validation_file "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
     --ground-truth "$out_dir/regenerated/.regenerated_abundance" \\
     --output_dir "$out_dir/reprofiled_annotations" \\
     --reprofiler {self.reprofiler} \\
     --config {configs['reprofiling']} \\
+    --cores {self.cores} --mem-mb "$MEM_MB"{gpu_line} \\
     --seed {self.regeneration_seed} \\
-    $FEATURE_ARG"""
+    "${{FEATURE_ARG[@]}}"
+"""
             + self._annotation_export_bash("reprofiled_annotations", "reprofiled"),
         )
 
         viz_reprofiled = _checkpoint_block(
             "viz_reprofiled",
-            f"""$PYTHON_PATH {wf / 'compare_annotations.py'} \\
+            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
     --annotation_dir "$out_dir/reprofiled_annotations" \\
     --output_dir "$out_dir/reprofiled_annotations_plots" \\
     --csv "$out_dir/reprofiled_annotations/combined_annotation_table.csv" \\
-    --show_top 0
+    --show_top 0 --config {configs['scoring']}
 "$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_reprofiled \\
     --config {configs['scoring']}""",
         )
@@ -1965,7 +2203,11 @@ def parse_args() -> argparse.Namespace:
     # Input source (mutually exclusive)
     input_group = parser.add_mutually_exclusive_group(required=False)
     input_group.add_argument('--input_config', help='Path to input configuration file', required=False)
-    input_group.add_argument('--input_dir', help='Directory containing input FASTQ files', required=False)
+    input_group.add_argument(
+        '--input_dir', '-i', '--input-dir',
+        help='Directory containing input FASTQ files',
+        required=False,
+    )
     
     # Output
     add_output_dir_argument(
@@ -2038,6 +2280,13 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         remember_prepare_genome_paths(extra_dirs=config.genome_dirs)
     except OSError as exc:
         print(f"Warning: could not update genome cache config: {exc}", file=sys.stderr)
+    if getattr(args, "_offer_imports", False):
+        from samovar.prepare_import import offer_prepare_imports
+
+        refs = dict(vars(config), autoimport=getattr(args, "autoimport", None),
+                    _offered_tools=getattr(args, "_offered_tools", set()),
+                    table_reads_generator=config.regeneration_modes, workflow="snakemake")
+        offer_prepare_imports(argparse.Namespace(**refs))
     configs = config.generate_configs(config.output_dir)
     pipeline_path = config.generate_pipeline(config.output_dir, script_name=script_name)
     if added:
@@ -2072,6 +2321,7 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             config.output_dir,
             args=args,
             argv=record_argv,
+            extra={"viz": config.viz},
         )
     except Exception as exc:
         print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)

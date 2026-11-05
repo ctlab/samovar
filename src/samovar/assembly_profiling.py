@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -18,11 +20,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from samovar.paths import resolve_executable
+from samovar.main_config import imported_flags_for_names, iter_tools
+from samovar.paths import command_argv, load_config, resolve_executable
+from samovar.seqio import assembly_read_libraries
 
 MAG_SUFFIXES = (".fa", ".fna", ".fasta", ".fa.gz", ".fna.gz")
 BINARY_NAMES = {
     "megahit": "megahit",
+    "spades": "spades.py",
     "flye": "flye",
     "metaflye": "flye",
     "meta-flye": "flye",
@@ -61,15 +66,43 @@ def as_path(value: Any) -> Path:
     return Path(str(value)).expanduser()
 
 
+def _resolved_executable(token: str, tool_key: str) -> str:
+    """Absolute executable from config, or empty when the token was not resolved."""
+    resolved = command_argv(resolve_executable(token, tool_key=tool_key) or "")
+    first = resolved[0] if resolved else ""
+    if not first:
+        return ""
+    path = Path(first).expanduser()
+    try:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+    except OSError:
+        return ""
+    return ""
+
+
 def which_tool(name: str, default: str = "") -> str:
     binary = BINARY_NAMES.get(name, name)
     raw = default or binary
-    resolved = resolve_executable(raw, tool_key=name) or resolve_executable(
-        binary, tool_key=binary
-    )
-    first = str(resolved).split()[0] if resolved else ""
-    if first and Path(first).expanduser().is_file() and os.access(first, os.X_OK):
-        return first
+    # resolve_executable returns the original token when nothing matches, so each
+    # key has to be checked on its own. anvio stores anvi-gen-contigs-database;
+    # dastool stores DAS_Tool.
+    keys = [name, binary, raw]
+    if str(binary).startswith("anvi-"):
+        keys.append("anvio")
+    if binary == "DAS_Tool":
+        keys.append("dastool")
+    seen = set()
+    for key in keys:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        hit = _resolved_executable(binary, key)
+        if not hit:
+            continue
+        if key in {"anvio", "dastool"} and Path(hit).name != binary:
+            continue
+        return hit
     from samovar.paths import sidecar_envs_dir
 
     envs = sidecar_envs_dir()
@@ -138,6 +171,7 @@ def assembly_slot_extra(
     mag_taxonomy: str = "",
     aligner: str = "",
     mag_quantifier: str = "",
+    mag_mode: str = "",
 ) -> str:
     parts: List[str] = []
     if assembler:
@@ -157,6 +191,8 @@ def assembly_slot_extra(
         parts.extend(["--aligner", str(aligner)])
     if mag_quantifier:
         parts.extend(["--mag-quantifier", str(mag_quantifier)])
+    if mag_mode:
+        parts.extend(["--mag-mode", str(mag_mode)])
     return " ".join(parts)
 
 
@@ -207,6 +243,14 @@ def parse_slot_extra(extra: str) -> Dict[str, Any]:
             out["read_assigner"] = nxt
             i += 2
             continue
+        if tok in {"--mag-mode", "--mag_mode"} and nxt:
+            out["mag_mode"] = nxt
+            i += 2
+            continue
+        if tok in {"--keep-candidate-vector", "--keep_candidate_vector"}:
+            out["keep_candidate_vector"] = True
+            i += 1
+            continue
         i += 1
     return out
 
@@ -214,6 +258,9 @@ def parse_slot_extra(extra: str) -> Dict[str, Any]:
 def _run(cmd: Sequence[str], **kwargs: Any) -> None:
     env = dict(kwargs.pop("env", None) or os.environ)
     env.setdefault("PYTHONNOUSERSITE", "1")
+    executable = Path(str(cmd[0]))
+    if executable.is_absolute():
+        env["PATH"] = str(executable.parent) + os.pathsep + env.get("PATH", "")
     subprocess.check_call([str(c) for c in cmd], env=env, **kwargs)
 
 
@@ -234,12 +281,21 @@ def _is_mag_fasta(path: Path) -> bool:
 
 
 def _fasta_has_records(path: Path) -> bool:
+    """True when the FASTA has a header and at least one sequence base.
+
+    A header with an empty sequence is not a MAG. GTDB-Tk divides by genome
+    length, and minimap2 writes ``LN:0``, which samtools sort rejects.
+    """
     src = as_path(path)
     if not src.is_file() or src.stat().st_size == 0:
         return False
+    in_record = False
     with src.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if line.startswith(">"):
+                in_record = True
+                continue
+            if in_record and line.strip():
                 return True
     return False
 
@@ -296,6 +352,58 @@ def _touch_empty_fasta(dest: Path) -> None:
     dest.write_text("", encoding="utf-8")
 
 
+# Threads for one step inside an assembly job. MegaHIT / Flye: the k-mer table,
+# not the core count, is the limit. Prodigal is one thread per genome, so the
+# cap is how many genomes are called at once. GTDB-Tk's pplacer is RAM-bound.
+ASSEMBLY_STAGE_CAP = {
+    "megahit": 16,
+    "spades": 16,
+    "flye": 16,
+    "metaflye": 16,
+    "prodigal": 8,
+    "anvio": 8,
+    "metabat2": 8,
+    "metabat": 8,
+    "gtdbtk": 8,
+    "gtdb": 8,
+    "minimap2": 8,
+    "coverm": 4,
+    "checkm2": 4,
+    "dastool": 4,
+}
+
+
+def assembly_stage_threads(stage: str, budget: int) -> int:
+    """Threads for one assembly step, given the job budget."""
+    allowed = max(1, int(budget or 1))
+    key = str(stage or "").strip().lower().replace("-", "_")
+    cap = ASSEMBLY_STAGE_CAP.get(key)
+    if cap is None:
+        return allowed
+    return max(1, min(allowed, cap))
+
+
+def _job_threads(stage: str, threads: int) -> int:
+    return assembly_stage_threads(stage, threads)
+
+
+def _mem_argv(name: str, threads: int, existing: Sequence[str]) -> List[str]:
+    """``-m`` / ``--asm-coverage`` from flags-translate, skipped when already set."""
+    from samovar.memory import translated_mem_flag
+
+    token = translated_mem_flag(
+        name, threads, existing=" ".join(str(x) for x in (existing or []))
+    )
+    return shlex.split(token) if token else []
+
+
+def _imported_tool_flags(name: str) -> List[str]:
+    """Flags stored by ``samovar tools import --flags`` / ``--mem``."""
+    from samovar.paths import load_config
+
+    return shlex.split(imported_flags_for_names(iter_tools(load_config()), name))
+
+
 def run_megahit(
     r1: str,
     r2: str = "",
@@ -305,16 +413,19 @@ def run_megahit(
     exe: str = "",
 ) -> Path:
     """Assemble paired (or single) FASTQ with MegaHIT; write contig FASTA to dest."""
+    threads = _job_threads("megahit", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".megahit")
     if work.exists():
         shutil.rmtree(work)
     cmd = [which_tool("megahit", exe), "-t", str(int(threads)), "-o", str(work), "-f"]
+    stage_flags = _imported_tool_flags("megahit") + [str(x) for x in (extra or [])]
+    cmd.extend(_mem_argv("megahit", threads, stage_flags))
     if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size > 0:
         cmd.extend(["-1", str(r1), "-2", str(r2)])
     else:
         cmd.extend(["-r", str(r1)])
-    cmd.extend(str(x) for x in (extra or []))
+    cmd.extend(stage_flags)
     _run(cmd)
     contigs = work / "final.contigs.fa"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -323,6 +434,29 @@ def run_megahit(
     else:
         _touch_empty_fasta(out)
     return out
+
+
+class FlyeMemoryError(RuntimeError):
+    """Flye was killed for lack of RAM. No contig FASTA is written."""
+
+
+def _flye_out_of_memory(returncode: int, log: str) -> bool:
+    # Python reports a killed child as -9. A shell reports the same SIGKILL as 137.
+    if returncode == -9 or returncode == 137:
+        return True
+    return "Looks like the system ran out of memory" in log
+
+
+def _flye_memory_error(returncode: int, log_path: Path) -> FlyeMemoryError:
+    return FlyeMemoryError(
+        f"Flye ran out of memory (exit {returncode}) and wrote no contig FASTA. "
+        "Flye 2.9.6 benchmarks use about 2 GB for an E. coli isolate and "
+        "72 GB (HMP mock), 76 GB (Zymo log, ONT), and 129 GB (Zymo even, ONT) "
+        "for metagenomes. A 15 GB machine without swap is below those metagenome rows. "
+        "Pass Flye's --asm-coverage and --genome-size to lower the peak; "
+        "40x of the longest reads is its usual disjointig coverage. "
+        f"See {log_path}."
+    )
 
 
 def run_metaflye(
@@ -336,28 +470,100 @@ def run_metaflye(
     """Assemble FASTQ with metaFlye (``flye --meta``); write contig FASTA to dest.
 
     Same shape as ``run_megahit``: native Flye CLI, contig FASTA copied to the
-    assembler-contract ``-o``. ONT R10 uses ``--nano-hq`` unless ``extra``
-    already names a read type. A non-empty R2 is a second file of that type.
+    assembler-contract ``-o``. Default to noisy ONT (``--nano-raw``); read-mode
+    flags in ``extra`` override imported Flye flags. A non-empty R2 is another
+    file of the same type. Flye's explicit no-assembly outcome yields empty FASTA.
+    An out-of-memory kill raises ``FlyeMemoryError`` instead.
     """
+    threads = _job_threads("flye", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".metaflye")
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True, exist_ok=True)
+    read_modes = {
+        "--nano-raw", "--nano-hq", "--nano-corr", "--pacbio-raw",
+        "--pacbio-corr", "--pacbio-hifi", "--subassemblies",
+    }
+    imported = shlex.split(imported_flags_for_names(
+        iter_tools(load_config()), "flye", "metaflye", "meta-flye"
+    ))
     extra_args = [str(x) for x in (extra or [])]
+    if any(arg in read_modes for arg in extra_args):
+        imported = [arg for arg in imported if arg not in read_modes]
+    extra_args = imported + extra_args
+    selected_modes = {arg for arg in extra_args if arg in read_modes}
+    if len(selected_modes) > 1:
+        raise ValueError("Flye requires exactly one read mode")
+    read_mode = next(iter(selected_modes), "--nano-raw")
+    extra_args = [arg for arg in extra_args if arg not in read_modes]
     cmd = [which_tool("flye", exe), "--meta", "-o", str(work), "-t", str(int(threads))]
-    if not any(
-        arg.startswith("--nano-") or arg.startswith("--pacbio-") for arg in extra_args
-    ):
-        cmd.append("--nano-hq")
+    cmd.extend(_mem_argv("flye", threads, extra_args))
+    cmd.extend(extra_args)
+    # Flye's read-mode option takes the following filenames (nargs='+').
+    cmd.append(read_mode)
     cmd.append(str(r1))
     if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size > 0:
         cmd.append(str(r2))
-    cmd.extend(extra_args)
-    _run(cmd)
+    try:
+        _run(cmd)
+    except subprocess.CalledProcessError as exc:
+        log_path = work / "flye.log"
+        log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        if _flye_out_of_memory(exc.returncode, log):
+            raise _flye_memory_error(exc.returncode, log_path) from exc
+        if exc.returncode != 1 or not any(message in log for message in (
+            "No contigs were assembled",
+            "No disjointigs were assembled",
+            "No reads above minimum length threshold",
+        )):
+            raise
+        logging.getLogger(__name__).warning("Flye assembled no contigs; writing empty FASTA (see %s)", log_path)
+        _touch_empty_fasta(out)
+        return out
     contigs = work / "assembly.fasta"
     out.parent.mkdir(parents=True, exist_ok=True)
     if contigs.is_file() and contigs.stat().st_size > 0:
+        shutil.copy2(contigs, out)
+    else:
+        _touch_empty_fasta(out)
+    return out
+
+
+def run_spades(r1, r2, ont, dest, threads=1, extra=None):
+    """Assemble short reads with an optional ONT library through native SPAdes."""
+    if not r1:
+        raise ValueError("SPAdes hybrid assembly requires short reads")
+    threads = _job_threads("spades", threads)
+    out = as_path(dest)
+    work = out.parent / (out.stem + ".spades")
+    if work.exists():
+        shutil.rmtree(work)
+    cmd = [which_tool("spades"), "--only-assembler", "-t", str(int(threads)), "-o", str(work)]
+    stage_flags = _imported_tool_flags("spades") + [str(x) for x in (extra or [])]
+    cmd.extend(_mem_argv("spades", threads, stage_flags))
+    if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size:
+        cmd.extend(["-1", r1, "-2", r2])
+    else:
+        cmd.extend(["-s", r1])
+    if ont:
+        cmd.extend(["--nanopore", ont])
+    cmd.extend(stage_flags)
+    try:
+        _run(cmd)
+    except subprocess.CalledProcessError:
+        log_path = work / "spades.log"
+        log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        if "Invalid kmer coverage histogram" not in log:
+            raise
+        logging.getLogger(__name__).warning(
+            "SPAdes assembled no contigs; writing empty FASTA (see %s)", log_path
+        )
+        _touch_empty_fasta(out)
+        return out
+    contigs = work / "contigs.fasta"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if contigs.is_file() and contigs.stat().st_size:
         shutil.copy2(contigs, out)
     else:
         _touch_empty_fasta(out)
@@ -380,10 +586,17 @@ def run_assembler(
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         _main(["-i", str(r1), "-I", str(r2 or ""), "-o", str(dest_path), "-t", str(int(threads))])
         return dest_path
-    if key in {"megahit", "assembler", ""}:
-        return run_megahit(r1, r2, dest, threads=threads, extra=extra)
-    if key in {"metaflye", "flye", "meta-flye"}:
-        return run_metaflye(r1, r2, dest, threads=threads, extra=extra)
+    if key in {"megahit", "assembler", "", "metaflye", "flye", "meta-flye", "spades"}:
+        with assembly_read_libraries(r1, r2) as (short, mate, ont, typed):
+            if key == "spades":
+                return run_spades(short, mate, ont, dest, threads=threads, extra=extra)
+            if key in {"metaflye", "flye", "meta-flye"}:
+                if typed and not ont:
+                    raise ValueError("Flye requires long reads; this sample contains only short reads")
+                return run_metaflye(ont or r1, "" if typed else r2, dest, threads=threads, extra=extra)
+            if not short:
+                raise ValueError("MEGAHIT requires short reads; this sample contains only ONT reads")
+            return run_megahit(short, mate, dest, threads=threads, extra=extra)
     exe = which_tool(name)
     out = as_path(dest)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -406,15 +619,22 @@ def run_prodigal(
     extra: Optional[Sequence[str]] = None,
     exe: str = "",
 ) -> Path:
-    """Call genes with Prodigal; write ``*.faa`` and ``*.gff`` under dest."""
-    del threads  # Prodigal is single-threaded
+    """Call genes with Prodigal; write ``*.faa`` and ``*.gff`` under dest.
+
+    Prodigal itself has no thread flag. ``threads`` is how many genomes are
+    called at once, each in its own process.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = _job_threads("prodigal", threads)
     out = as_path(dest)
     out.mkdir(parents=True, exist_ok=True)
     prodigal = which_tool("prodigal", exe)
     files = _fasta_inputs(as_path(contigs))
     if not files and as_path(contigs).is_file():
         files = [as_path(contigs)]
-    for fasta in files:
+
+    def _one(fasta: Path) -> None:
         stem = fasta.stem
         faa = out / f"{stem}.faa"
         gff = out / f"{stem}.gff"
@@ -433,6 +653,13 @@ def run_prodigal(
         ]
         cmd.extend(str(x) for x in (extra or []))
         _run(cmd)
+
+    if len(files) <= 1 or workers <= 1:
+        for fasta in files:
+            _one(fasta)
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(files))) as pool:
+            list(pool.map(_one, files))
     return out
 
 
@@ -511,8 +738,10 @@ def run_anvio_binner(
     Internal contig mapping still runs. ``anvi-cluster-contigs`` needs a merged
     profile (two or more samples). With one sample, clustering is skipped and the
     assembly is written as ``mag1.fa``. Extra FASTQ pairs in ``additional_reads``
-    are profiled, merged, and clustered.
+    are profiled, merged, and clustered. FASTA headers are simplified only inside
+    anvi'o; exported MAGs retain the assembler's identifiers.
     """
+    threads = _job_threads("anvio", threads)
     mag_dir = as_path(dest)
     mag_dir.mkdir(parents=True, exist_ok=True)
     work = mag_dir / ".anvio"
@@ -520,17 +749,19 @@ def run_anvio_binner(
         shutil.rmtree(work)
     work.mkdir(parents=True, exist_ok=True)
     simple = work / "contigs.fa"
+    original_names = {}
     i = 0
     lines = []
     for line in as_path(contigs).read_text(encoding="utf-8", errors="replace").splitlines():
         if line.startswith(">"):
             i += 1
+            original_names[f"c{i}"] = line[1:].split()[0]
             lines.append(f">c{i}")
         else:
             lines.append(line)
     simple.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if not _fasta_has_records(simple):
-        return _write_identity_mag(simple, mag_dir)
+        return _write_identity_mag(as_path(contigs), mag_dir)
     db = work / "CONTIGS.db"
     gen = which_tool("anvi-gen-contigs-database")
     gen_cmd = [
@@ -555,7 +786,7 @@ def run_anvio_binner(
         try:
             _run(gen_cmd + ["--skip-gene-calling"])
         except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-            return _write_identity_mag(simple, mag_dir)
+            return _write_identity_mag(as_path(contigs), mag_dir)
     bam = work / "contigs.bam"
     pairs: List[Tuple[str, str]] = []
     if r1 and as_path(r1).is_file():
@@ -663,7 +894,7 @@ def run_anvio_binner(
     elif want_cluster and len(profile_dbs) == 1:
         clustered = False
     if not clustered:
-        return _write_identity_mag(simple, mag_dir)
+        return _write_identity_mag(as_path(contigs), mag_dir)
     summary = work / "summary"
     try:
         _run(
@@ -685,9 +916,17 @@ def run_anvio_binner(
     if summary.is_dir():
         bins_fasta = [p for p in summary.rglob("*") if p.is_file() and _is_mag_fasta(p)]
     if not bins_fasta:
-        return _write_identity_mag(simple, mag_dir)
+        return _write_identity_mag(as_path(contigs), mag_dir)
     for i, fasta in enumerate(bins_fasta, start=1):
-        _copy_fasta(fasta, mag_dir / f"mag{i}.fa")
+        # anvi-summarize keeps local names, optionally adding _partial_START_END.
+        # Restore assembly IDs so other binners and DAS Tool see the same contigs.
+        restored = []
+        for line in fasta.read_text(encoding="utf-8").splitlines():
+            if line.startswith(">"):
+                name, separator, suffix = line[1:].split()[0].partition("_partial_")
+                line = f">{original_names[name]}{separator}{suffix}"
+            restored.append(line)
+        (mag_dir / f"mag{i}.fa").write_text("\n".join(restored) + "\n", encoding="utf-8")
     return mag_dir
 
 
@@ -733,6 +972,7 @@ def run_binner(
             additional_reads=additional_reads,
         )
     if key in {"metabat2", "metabat"}:
+        threads = _job_threads("metabat2", threads)
         exe = which_tool("metabat2")
         mag_dir = as_path(dest)
         mag_dir.mkdir(parents=True, exist_ok=True)
@@ -769,6 +1009,7 @@ def run_checkm2(
     threads: int = 1,
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
+    threads = _job_threads("checkm2", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".checkm2")
     work.mkdir(parents=True, exist_ok=True)
@@ -853,6 +1094,7 @@ def run_dastool_combine(
     threads: int = 1,
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
+    threads = _job_threads("dastool", threads)
     mag_dir = as_path(dest)
     mag_dir.mkdir(parents=True, exist_ok=True)
     dirs = [as_path(d) for d in mag_dirs if as_path(d).exists()]
@@ -956,7 +1198,9 @@ def run_gtdbtk(
     db: str = "",
     threads: int = 1,
     extra: Optional[Sequence[str]] = None,
+    require_markers: bool = False,
 ) -> Path:
+    threads = _job_threads("gtdbtk", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".gtdbtk")
     env = os.environ.copy()
@@ -992,7 +1236,15 @@ def run_gtdbtk(
         "fa",
     ]
     cmd.extend(str(x) for x in (extra or []))
+    if require_markers and "--keep_intermediates" not in cmd:
+        cmd.append("--keep_intermediates")
     _run(cmd, env=env)
+    # ANI can classify all MAGs without identifying genes. We need its valid
+    # classification plus marker evidence, not an unnecessary pplacer rerun.
+    if require_markers and not any(work.rglob("*markers_summary.tsv")):
+        _run([which_tool("gtdbtk"), "identify", "--genome_dir", str(mag_dir),
+              "--out_dir", str(work), "--cpus", str(int(threads)),
+              "--extension", "fa"], env=env)
     rows = ["mag_id\ttaxid\tlineage"]
     for summary in work.rglob("*summary.tsv"):
         with summary.open(newline="") as handle:
@@ -1002,6 +1254,17 @@ def run_gtdbtk(
                 lineage = rec.get("classification") or rec.get("fastani_taxonomy") or ""
                 taxid = _gtdb_taxid_from_lineage(lineage)
                 rows.append(f"{mag}\t{taxid}\t{lineage}")
+    # GTDB-Tk exposes summaries through both root links and subdirectories;
+    # an empty auxiliary/other-domain row must not overwrite a classification.
+    merged = {}
+    for row in rows[1:]:
+        mag, taxid, lineage = row.split("\t", 2)
+        if not mag:
+            continue
+        rank = (taxid != "0", bool(lineage), len(lineage))
+        if mag not in merged or rank > merged[mag][0]:
+            merged[mag] = (rank, row)
+    rows = [rows[0]] + [merged[mag][1] for mag in sorted(merged)]
     if len(rows) == 1:
         for fasta in _iter_mag_fastas(as_path(mag_dir)):
             rows.append(f"{fasta.stem}\t0\t")
@@ -1017,6 +1280,7 @@ def run_mag_taxonomy(
     threads: int = 1,
     name: str = "gtdbtk",
     extra: Optional[Sequence[str]] = None,
+    require_markers: bool = False,
 ) -> Path:
     key = str(name or "gtdbtk").lower().replace("-", "_")
     if key in {"identity", "constant", "baseline", "dummy", "constant_mag_taxonomy"}:
@@ -1038,7 +1302,7 @@ def run_mag_taxonomy(
         )
         return dest_path
     if key in {"gtdbtk", "gtdb", "mag_taxonomy", ""}:
-        return run_gtdbtk(mag_dir, dest, db=db, threads=threads, extra=extra)
+        return run_gtdbtk(mag_dir, dest, db=db, threads=threads, extra=extra, require_markers=require_markers)
     exe = which_tool(name)
     out = as_path(dest)
     cmd = [exe, "-c", str(mag_dir), "-d", str(db or ""), "-o", str(out), "-t", str(int(threads))]
@@ -1052,42 +1316,81 @@ def contig_to_mag_map(mag_dir: Path) -> Dict[str, str]:
     for fasta in _iter_mag_fastas(mag_dir):
         mag = fasta.stem
         try:
-            text = fasta.read_text(encoding="utf-8", errors="replace")
+            handle = fasta.open("r", encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for line in text.splitlines():
-            if line.startswith(">"):
-                contig = line[1:].split()[0]
-                out[contig] = mag
-                out[f"{mag}~{contig}"] = mag
+        with handle:
+            for line in handle:
+                if line.startswith(">"):
+                    contig = line[1:].split()[0]
+                    out[contig] = mag
+                    out[f"{mag}~{contig}"] = mag
     return out
 
 
 def _concat_mag_fasta(mag_dir: Path, dest: Path) -> Path:
+    """Stream MAG FASTAs into one reference. Do not hold the assemblies in RAM."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    parts = []
-    for fasta in _iter_mag_fastas(mag_dir):
-        mag = fasta.stem
-        try:
-            text = fasta.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            if line.startswith(">"):
-                contig = line[1:].split()[0]
-                if contig.startswith(f"{mag}~"):
-                    parts.append(f">{contig}")
-                else:
-                    parts.append(f">{mag}~{contig}")
-            else:
-                parts.append(line)
-        if parts and parts[-1] != "":
-            parts.append("")
-    dest.write_text("\n".join(parts) + ("\n" if parts else ""), encoding="utf-8")
+    with dest.open("w", encoding="utf-8") as out:
+        for fasta in _iter_mag_fastas(mag_dir):
+            if not _fasta_has_records(fasta):
+                continue
+            mag = fasta.stem
+            header = ""
+            seq: list[str] = []
+
+            def flush() -> None:
+                if header and any(piece.strip() for piece in seq):
+                    out.write(header + "\n")
+                    out.write("\n".join(seq) + "\n")
+
+            try:
+                handle = fasta.open("r", encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            with handle:
+                for line in handle:
+                    line = line.rstrip("\n")
+                    if line.startswith(">"):
+                        flush()
+                        contig = line[1:].split()[0]
+                        if contig.startswith(f"{mag}~"):
+                            header = f">{contig}"
+                        else:
+                            header = f">{mag}~{contig}"
+                        seq = []
+                    else:
+                        seq.append(line)
+                flush()
     return dest
 
 
-def run_minimap2(
+def run_minimap2(r1, r2, reference, dest, threads=1, preset="sr", extra=None):
+    """Map each technology with its preset, then combine the alignments."""
+    threads = _job_threads("minimap2", threads)
+    with assembly_read_libraries(r1, r2) as (short, mate, ont, typed):
+        if not ont:
+            if typed and not short:
+                raise ValueError("No non-empty read libraries to map")
+            return _run_minimap2(short, mate, reference, dest, threads, preset, extra)
+        if not short:
+            return _run_minimap2(ont, "", reference, dest, threads, "map-ont", extra)
+        out = as_path(dest)
+        short_bam = out.with_suffix(".short.bam")
+        long_bam = out.with_suffix(".ont.bam")
+        _run_minimap2(short, mate, reference, str(short_bam), threads, preset, extra)
+        _run_minimap2(ont, "", reference, str(long_bam), threads, "map-ont", extra)
+        samtools = which_tool("samtools")
+        _run([samtools, "merge", "-f", "-@", str(int(threads)), str(out), str(short_bam), str(long_bam)])
+        _run([samtools, "index", str(out)])
+        short_bam.unlink(missing_ok=True)
+        long_bam.unlink(missing_ok=True)
+        short_bam.with_suffix(".bam.bai").unlink(missing_ok=True)
+        long_bam.with_suffix(".bam.bai").unlink(missing_ok=True)
+        return out
+
+
+def _run_minimap2(
     r1: str,
     r2: str,
     reference: str,
@@ -1096,6 +1399,7 @@ def run_minimap2(
     preset: str = "sr",
     extra: Optional[Sequence[str]] = None,
 ) -> Path:
+    threads = _job_threads("minimap2", threads)
     out = as_path(dest)
     out.parent.mkdir(parents=True, exist_ok=True)
     ref = as_path(reference)
@@ -1107,15 +1411,27 @@ def run_minimap2(
     if r2 and as_path(r2).is_file() and as_path(r2).stat().st_size > 0:
         cmd.append(str(r2))
     cmd.extend(str(x) for x in (extra or []))
-    gen = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-    sort = subprocess.Popen(
-        [samtools, "sort", "-@", str(int(threads)), "-o", str(out)],
-        stdin=gen.stdout,
-    )
-    if gen.stdout:
-        gen.stdout.close()
-    if sort.wait() != 0 or gen.wait() != 0:
-        raise subprocess.CalledProcessError(sort.returncode or gen.returncode, cmd)
+    err_path = out.with_suffix(".minimap2.log")
+    with err_path.open("w", encoding="utf-8") as err:
+        gen = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err)
+        sort = subprocess.Popen(
+            [samtools, "sort", "-@", str(int(threads)), "-o", str(out)],
+            stdin=gen.stdout,
+        )
+        if gen.stdout:
+            gen.stdout.close()
+        sort_code = sort.wait()
+        gen_code = gen.wait()
+    if sort_code != 0 or gen_code != 0:
+        tail = ""
+        try:
+            lines = err_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = "\n".join(lines[-20:])
+        except OSError:
+            tail = ""
+        raise subprocess.CalledProcessError(
+            sort_code or gen_code, cmd, output=tail
+        )
     try:
         _run([samtools, "index", str(out)])
     except Exception:
@@ -1378,7 +1694,8 @@ def _alignment_needs_samtools(path: Path) -> bool:
     """
     if not path.is_file():
         return False
-    head = path.read_bytes()[:4]
+    with path.open("rb") as handle:
+        head = handle.read(4)
     if head == b"BAM\x01" or head[:4] == b"CRAM" or head[:2] == b"\x1f\x8b":
         return True
     return path.suffix.lower() == ".cram"
@@ -1405,7 +1722,13 @@ def _iter_sam_alignments(bam: Path) -> Iterable[Tuple[str, str]]:
         yield parts[0], parts[2]
 
 
-def run_read_assigner(bam: str, taxonomy: str, dest: str, mag_dir: str = "") -> Path:
+def run_read_assigner(
+    bam: str,
+    taxonomy: str,
+    dest: str,
+    mag_dir: str = "",
+    feature: str = "MAG_ID",
+) -> Path:
     """Write Annotation + Feature table: ``seq``, ``taxID``, ``MAG_ID``.
 
     Headered TSV so the combine step labels tax as ``taxID_<tool>_<n>`` and
@@ -1415,7 +1738,7 @@ def run_read_assigner(bam: str, taxonomy: str, dest: str, mag_dir: str = "") -> 
     mapping = contig_to_mag_map(as_path(mag_dir)) if mag_dir else {}
     dest_path = as_path(dest)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = ["seq\ttaxID\tMAG_ID"]
+    rows = [f"seq\ttaxID\t{feature}"]
     for seq, rname in _iter_sam_alignments(as_path(bam)):
         if rname in {"*", ""}:
             continue
@@ -1442,6 +1765,8 @@ def run_assembly_annotator(
     aligner: str = "minimap2",
     mag_quantifier: str = "coverm",
     work_dir: str = "",
+    mag_mode: str = "",
+    keep_candidate_vector: bool = False,
 ) -> Path:
     """Full nested pipeline; writes headered seq/taxID/MAG_ID TSV at dest."""
     out = as_path(dest)
@@ -1468,11 +1793,35 @@ def run_assembly_annotator(
     if slots.get("mag_quantifier"):
         mag_quantifier = str(slots["mag_quantifier"])
     contigs = work / "contigs.fa"
+    from samovar.MAG.homology import catalog_fasta_dir as _catalog_fasta_dir
+
+    mode_early = str(
+        slots.get("mag_mode") or mag_mode or os.environ.get("SAMOVAR_MAG_MODE") or "homology"
+    ).lower().replace("_", "-")
+    catalog_early = Path(os.environ.get("SAMOVAR_MAG_CATALOG") or (work / "mag_catalog.tsv"))
+    phase = os.environ.get("SAMOVAR_MAG_PHASE", "map")
+    if mode_early == "map-initial" and phase != "build":
+        from samovar.MAG.homology import validate_mapping_catalog
+        from samovar.MAG.mapping import write_mapping_table
+
+        validate_mapping_catalog(catalog_early)
+        return write_mapping_table(r1, r2, str(_catalog_fasta_dir(catalog_early)),
+                                   str(catalog_early.parent / "taxonomy.tsv"), str(out),
+                                   threads=threads, markers=str(catalog_early.parent / "markers.tsv"),
+                                   keep_vector=bool(keep_candidate_vector or slots.get("keep_candidate_vector")))
+    selected = work / "bins_selected"
     run_assembler(r1, r2, str(contigs), threads=threads, name=assembler)
+    if not _fasta_has_records(contigs):
+        feature = "MAG_ID"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(f"seq\ttaxID\t{feature}\n", encoding="utf-8")
+        return out
     genes = work / "genes"
     try:
         run_gene_caller(str(contigs), str(genes), threads=threads, name=gene_caller)
     except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+        if mode_early == "map-initial":
+            raise
         genes.mkdir(parents=True, exist_ok=True)
     bin_dirs = []
     for name in names:
@@ -1480,16 +1829,19 @@ def run_assembly_annotator(
         try:
             run_binner(str(contigs), str(folder), r1=r1, r2=r2, threads=threads, name=name)
         except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+            if mode_early == "map-initial":
+                raise
             _write_identity_mag(contigs, folder)
         bin_dirs.append(str(folder))
         qc_path = work / "bins_qc" / f"{name}.tsv"
         try:
             run_binner_qc(str(folder), str(qc_path), db="", threads=threads, name=binner_qc)
         except (FileNotFoundError, subprocess.CalledProcessError):
+            if mode_early == "map-initial":
+                raise
             dummy_qc = as_path(qc_path)
             dummy_qc.parent.mkdir(parents=True, exist_ok=True)
             dummy_qc.write_text("mag_id\tcompleteness\tcontamination\tscore\n", encoding="utf-8")
-    selected = work / "bins_selected"
     try:
         run_binner_combine(
             bin_dirs,
@@ -1499,12 +1851,34 @@ def run_assembly_annotator(
             name=binner_combine,
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
+        if mode_early == "map-initial":
+            raise
         run_binner_combine(bin_dirs, str(selected), name="identity")
+    if mode_early == "map-initial" and phase == "build":
+        from samovar.MAG.homology import stabilize_mags
+
+        stabilize_mags(selected, catalog_early, work / "bins_stable", preserve_contigs=True)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("seq\ttaxID\tMAG_ID\n")
+        return out
     mag_genes = work / "mag_genes"
     try:
         run_gene_caller(str(selected), str(mag_genes), threads=threads, name=gene_caller)
     except (FileNotFoundError, subprocess.CalledProcessError, OSError):
         mag_genes.mkdir(parents=True, exist_ok=True)
+    dest_path = as_path(out)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    from samovar.MAG.homology import stabilize_mags
+
+    catalog = Path(os.environ.get("SAMOVAR_MAG_CATALOG") or (work / "mag_catalog.tsv"))
+    feature = "MAG_ID"
+    stable = work / "bins_stable"
+    stabilize_mags(selected, catalog, stable)
+    reference_mags = stable
+    if not any(_fasta_has_records(p) for p in _iter_mag_fastas(reference_mags)):
+        dest_path.write_text(f"seq\ttaxID\t{feature}\n", encoding="utf-8")
+        return dest_path
+    selected = reference_mags
     tax_table = work / "mag_taxonomy.tsv"
     try:
         run_mag_taxonomy(str(selected), str(tax_table), db=db, threads=threads, name=mag_taxonomy)
@@ -1513,18 +1887,15 @@ def run_assembly_annotator(
         for fasta in _iter_mag_fastas(selected):
             rows.append(f"{fasta.stem}\t0\t")
         tax_table.write_text("\n".join(rows) + "\n", encoding="utf-8")
-    dest_path = as_path(out)
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    if not any(_fasta_has_records(p) for p in _iter_mag_fastas(selected)):
-        dest_path.write_text("seq\ttaxID\tMAG_ID\n", encoding="utf-8")
-        return dest_path
     bam = work / "reads_to_mag.bam"
     run_aligner(r1, r2, str(selected), str(bam), threads=threads, name=aligner)
     mag_abund = work / "mag_abundance.tsv"
     run_mag_quantifier(str(bam), str(selected), str(mag_abund), name=mag_quantifier)
     taxon_abund = work / "taxon_abundance.tsv"
     run_taxon_quantifier(str(mag_abund), str(tax_table), str(taxon_abund))
-    return run_read_assigner(str(bam), str(tax_table), str(out), mag_dir=str(selected))
+    return run_read_assigner(
+        str(bam), str(tax_table), str(out), mag_dir=str(selected), feature=feature
+    )
 
 
 def _stage_parser() -> argparse.ArgumentParser:
@@ -1549,6 +1920,8 @@ def _stage_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mag-taxonomy", dest="mag_taxonomy", default="gtdbtk")
     parser.add_argument("--aligner", default="minimap2")
     parser.add_argument("--mag-quantifier", dest="mag_quantifier", default="coverm")
+    parser.add_argument("--mag-mode", dest="mag_mode", default="")
+    parser.add_argument("--keep-candidate-vector", dest="keep_candidate_vector", action="store_true")
     parser.add_argument("--work-dir", dest="work_dir", default="")
     return parser
 
@@ -1600,6 +1973,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             aligner=args.aligner,
             mag_quantifier=args.mag_quantifier,
             work_dir=args.work_dir,
+            mag_mode=args.mag_mode,
+            keep_candidate_vector=args.keep_candidate_vector,
         )
     return 0
 

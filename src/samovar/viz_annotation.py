@@ -37,6 +37,43 @@ PALETTE_F1 = [
 ]
 
 
+def normalize_viz_config(settings=None) -> dict:
+    """Validate the shared prepare/workflow visualization settings."""
+    from samovar.scores import SCORE_COLUMNS
+
+    out = dict(full=False, opal=False, metrics_sample=0, metrics=None)
+    if settings is not None:
+        if not isinstance(settings, dict):
+            raise ValueError("viz must be a mapping")
+        unknown = set(settings) - set(out)
+        if unknown:
+            raise ValueError(f"Unknown viz setting(s): {', '.join(sorted(unknown))}")
+        out.update(settings)
+    for key in ("full", "opal"):
+        if not isinstance(out[key], bool):
+            raise ValueError(f"viz.{key} must be true or false")
+    n = out["metrics_sample"]
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError("viz.metrics_sample must be a nonnegative integer (0 = all rows)")
+    metrics = out["metrics"]
+    if metrics is not None:
+        if isinstance(metrics, str):
+            metrics = [metrics]
+        if not isinstance(metrics, (list, tuple)):
+            raise ValueError("viz.metrics must be a list or comma-separated names")
+        names = list(dict.fromkeys(token for value in metrics
+                                   for token in re.split(r"[,\s]+", str(value).strip()) if token))
+        if names == ["all"]:
+            names = None
+        elif names == ["none"]:
+            names = []
+        elif set(names) - (set(SCORE_COLUMNS) - {"annotator"}):
+            unknown = set(names) - (set(SCORE_COLUMNS) - {"annotator"})
+            raise ValueError(f"Unknown viz metrics: {', '.join(sorted(unknown))}")
+        out["metrics"] = names
+    return out
+
+
 def _use_agg_backend() -> None:
     import matplotlib
 
@@ -95,9 +132,34 @@ def normalize_taxon_token(x) -> str:
     return text
 
 
+def normalize_series(values) -> pd.Series:
+    """Vectorized ``normalize_taxon_token``: map each unique value once."""
+    s = values if isinstance(values, pd.Series) else pd.Series(list(values), dtype=object)
+    if isinstance(s.dtype, pd.CategoricalDtype):
+        tokens = [normalize_taxon_token(u) for u in s.cat.categories] + ["0", "other"]
+        mapped, categories = pd.factorize(np.asarray(tokens, dtype=object))
+        codes = s.cat.codes.to_numpy()
+        codes = mapped[np.where(codes >= 0, codes, len(tokens) - 2)]
+        return pd.Series(pd.Categorical.from_codes(codes, categories), index=s.index)
+    codes, uniq = pd.factorize(s, use_na_sentinel=False)
+    mapped = np.array([normalize_taxon_token(u) for u in uniq] + ["0"], dtype=object)
+    return pd.Series(mapped[codes], index=s.index, dtype=object)
+
+
+def special_mask(values) -> np.ndarray:
+    """Vectorized ``is_special_taxon`` over a Series or iterable."""
+    s = values if isinstance(values, pd.Series) else pd.Series(list(values), dtype=object)
+    if isinstance(s.dtype, pd.CategoricalDtype):
+        flags = np.array([is_special_taxon(u) for u in s.cat.categories] + [True], dtype=bool)
+        return flags[s.cat.codes.to_numpy()]
+    codes, uniq = pd.factorize(s, use_na_sentinel=False)
+    flags = np.array([is_special_taxon(u) for u in uniq] + [True], dtype=bool)
+    return flags[codes]
+
+
 def fpc_taxon_order(freq_df: pd.DataFrame, col_x: str, col_y: str, freq_col: str = "Freq") -> List[str]:
-    x = freq_df[col_x].map(normalize_taxon_token)
-    y = freq_df[col_y].map(normalize_taxon_token)
+    x = normalize_series(freq_df[col_x])
+    y = normalize_series(freq_df[col_y])
     f = pd.to_numeric(freq_df[freq_col], errors="coerce").fillna(0)
     core = [t for t in pd.unique(pd.concat([x, y], ignore_index=True)) if not is_special_taxon(t)]
     if len(core) <= 1:
@@ -179,16 +241,16 @@ def _annotator_names(df: pd.DataFrame) -> List[str]:
 
 
 def _collapse_other(pred: pd.Series, true: pd.Series) -> pd.Series:
-    allowed = set(true.map(normalize_taxon_token)) | {"0"}
-    out = pred.map(normalize_taxon_token)
+    allowed = set(pd.unique(normalize_series(true))) | {"0"}
+    out = normalize_series(pred)
     return out.where(out.isin(allowed), "other")
 
 
 def _confusion_counts(true: pd.Series, pred: pd.Series) -> pd.DataFrame:
     tmp = pd.DataFrame(
         {
-            "true": true.map(normalize_taxon_token),
-            "pred": pred.map(normalize_taxon_token),
+            "true": normalize_series(true),
+            "pred": normalize_series(pred),
         }
     )
     return tmp.value_counts().rename("Freq").reset_index()
@@ -577,6 +639,11 @@ def viz_annotation(
     use_names: bool = True,
     reord: str = "fpc",
     spearman_full: Optional[bool] = None,
+    opal: bool = False,
+    metrics_sample: int = 0,
+    metrics: Optional[Sequence[str]] = None,
+    seed: int = 42,
+    threads: Optional[int] = None,
 ) -> dict:
     """Mirror ``viz_annotation()`` in R: F1 / R2 / CV / confidence / scores plots."""
     results: dict = {}
@@ -631,7 +698,7 @@ def viz_annotation(
     if use_names:
         ids = []
         for col in annotators + (["true"] if "true" in work.columns else []):
-            ids.extend(work[col].dropna().astype(str).tolist())
+            ids.extend(pd.unique(work[col].dropna().astype(str)).tolist())
         name_cache = str(out_dir / "taxid_names.tsv") if out_dir else None
         try:
             name_map = ensure_taxid_name_map(ids, cache_path=name_cache)
@@ -668,7 +735,9 @@ def viz_annotation(
             score_annotators,
         )
 
-        scores_table = score_annotators(work, annotators)
+        scores_table = score_annotators(
+            work, annotators, opal=opal, metrics_sample=metrics_sample, metrics=metrics, seed=seed
+        )
         results["scores"] = scores_table
         if out_dir and not scores_table.empty:
             scores_table.to_csv(out_dir / "quality_scores.csv", index=False)
@@ -679,19 +748,20 @@ def viz_annotation(
                 title=f"Annotation quality{caption_rank}",
             )
             save_scores_altair(scores_table, out_dir / "scores.html")
-            save_scores_barplot(
-                scores_table,
-                out_dir / "opal_scores.png",
-                title=f"OPAL-style profile metrics{caption_rank}",
-                display=OPAL_DISPLAY,
-                ymax=2.0,
-            )
-            save_scores_altair(
-                scores_table,
-                out_dir / "opal_scores.html",
-                display=OPAL_DISPLAY,
-            )
-            if truth_frame is not None:
+            if opal:
+                save_scores_barplot(
+                    scores_table,
+                    out_dir / "opal_scores.png",
+                    title=f"OPAL-style profile metrics{caption_rank}",
+                    display=OPAL_DISPLAY,
+                    ymax=2.0,
+                )
+                save_scores_altair(
+                    scores_table,
+                    out_dir / "opal_scores.html",
+                    display=OPAL_DISPLAY,
+                )
+            if truth_frame is not None and (metrics is None or set(metrics) & {"accuracy_purity", "f1_purity"}):
                 taxon_frames = []
                 tools = tool_annotators(annotators)
                 seen = set()
@@ -720,12 +790,13 @@ def viz_annotation(
                 plot_names = [
                     n for n in scores_table["annotator"].astype(str) if n in work.columns
                 ]
-                maybe_run_opal(
-                    work,
-                    plot_names,
-                    out_dir,
-                    rank=rank_used or "genus",
-                )
+                if opal:
+                    maybe_run_opal(
+                        work,
+                        plot_names,
+                        out_dir,
+                        rank=rank_used or "genus",
+                    )
             except Exception as exc:
                 import logging
 
@@ -739,7 +810,7 @@ def viz_annotation(
         f1_work = truth_frame
         for name in annotators:
             pred = _collapse_other(f1_work[name], f1_work["true"])
-            true = f1_work["true"].map(normalize_taxon_token)
+            true = normalize_series(f1_work["true"])
             counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
             if reord == "fpc":
                 fpc_core = fpc_taxon_order(counts, "pred", "true")
@@ -784,7 +855,7 @@ def viz_annotation(
                     continue
                 for name in annotators:
                     pred = _collapse_other(sub[name], sub["true"])
-                    true = sub["true"].map(normalize_taxon_token)
+                    true = normalize_series(sub["true"])
                     counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
                     if counts.empty:
                         continue
@@ -819,7 +890,7 @@ def viz_annotation(
         r2_work = truth_frame
         for name in annotators:
             pred = _collapse_other(r2_work[name], r2_work["true"])
-            true = r2_work["true"].map(normalize_taxon_token)
+            true = normalize_series(r2_work["true"])
             table, r2 = _r2_table(true, pred)
             if np.isnan(r2):
                 continue
@@ -847,7 +918,7 @@ def viz_annotation(
                     continue
                 for name in annotators:
                     pred = _collapse_other(sub[name], sub["true"])
-                    true = sub["true"].map(normalize_taxon_token)
+                    true = normalize_series(sub["true"])
                     table, r2 = _r2_table(true, pred)
                     if np.isnan(r2):
                         continue
@@ -865,12 +936,12 @@ def viz_annotation(
 
         if out_dir:
             matrix = plot_spearman_annotation_correlation(
-                work, out_dir, importance_dir=out_dir, full_table=spearman_full
+                work, out_dir, importance_dir=out_dir, full_table=spearman_full, threads=threads
             )
         else:
             from samovar.annotation_correlation import spearman_annotation_correlation
 
-            matrix = spearman_annotation_correlation(work, full_table=spearman_full)
+            matrix = spearman_annotation_correlation(work, full_table=spearman_full, threads=threads)
         if matrix is not None and not matrix.empty:
             results["correlation"] = matrix
             if out_dir and len(platform_types) >= 2 and "read_type" in work.columns:
@@ -884,6 +955,7 @@ def viz_annotation(
                         read_type=rt,
                         importance_dir=out_dir,
                         full_table=spearman_full,
+                        threads=threads,
                     )
 
     conf_cols = [c for c in work.columns if str(c).endswith("_conf") or "_conf" in str(c)]
@@ -910,10 +982,15 @@ def compare_annotations(
     output_dir: Optional[str] = None,
     csv_file: Optional[str] = None,
     show_top: int = 0,
-    types: Sequence[str] = ("f1", "R2", "cv", "scores"),
+    types: Sequence[str] = ("scores",),
     rank: str = "genus",
     split: bool = False,
     spearman_full: Optional[bool] = None,
+    opal: bool = False,
+    metrics_sample: int = 0,
+    metrics: Optional[Sequence[str]] = None,
+    seed: int = 42,
+    threads: Optional[int] = None,
 ) -> pd.DataFrame:
     """CLI analog of ``workflow/compare_annotations.R``."""
     from samovar.annotation_correlation import (
@@ -959,6 +1036,11 @@ def compare_annotations(
         split=split,
         rank=rank,
         spearman_full=spearman_full,
+        opal=opal,
+        metrics_sample=metrics_sample,
+        metrics=metrics,
+        seed=seed,
+        threads=threads,
     )
     if csv_file:
         Path(csv_file).parent.mkdir(parents=True, exist_ok=True)

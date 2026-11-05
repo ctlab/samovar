@@ -230,6 +230,69 @@ def step_in_window(
     return CHECKPOINT_STEPS.index(start_s) <= idx <= CHECKPOINT_STEPS.index(end_s)
 
 
+def _abundance_requests_reads(directory: Path) -> bool:
+    """True when a CSV under ``directory`` asks for a positive number of reads.
+
+    ``N_*`` columns count even if the rest of the table looks like an annotation.
+    Other numeric columns count only after the abundance normalizer accepts them.
+    """
+    from samovar.abundance import (
+        abundance_csv_paths,
+        is_abundance_table,
+        n_sample_columns,
+        normalize_abundance_table,
+    )
+    import pandas as pd
+
+    if not directory.is_dir():
+        return False
+    for path in abundance_csv_paths(directory):
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            continue
+        frame = frame.rename(columns=lambda name: str(name).strip().rstrip("\r"))
+        cols = n_sample_columns(frame)
+        if not cols and is_abundance_table(frame):
+            frame = normalize_abundance_table(frame)
+            cols = n_sample_columns(frame)
+        if not cols:
+            continue
+        total = float(pd.to_numeric(frame[cols].stack(), errors="coerce").fillna(0).sum())
+        if total > 0:
+            return True
+    return False
+
+
+def regen_reads_status(output_dir: PathLike) -> int:
+    """0 when regenerated FASTQ exists.
+
+    3 when it does not and the abundance table is empty or all zero (later
+    stages may be skipped). 1 when the table requests reads and the FASTQ is
+    empty: that is a failed simulation, not a successful pipeline.
+    """
+    from samovar.seqio import has_r1_reads
+
+    root = as_path(output_dir)
+    if (root / "regenerated").is_dir():
+        reads_dir = root / "regenerated"
+        abund_dir = reads_dir / ".regenerated_abundance"
+    else:
+        reads_dir = root
+        abund_dir = root / ".regenerated_abundance"
+    if has_r1_reads(reads_dir):
+        return 0
+    if _abundance_requests_reads(abund_dir) or (
+        reads_dir != abund_dir and _abundance_requests_reads(reads_dir)
+    ):
+        print(
+            f"Error: abundance under {abund_dir} requests reads but {reads_dir} has no FASTQ.",
+            file=sys.stderr,
+        )
+        return 1
+    return 3
+
+
 def needs_regen_early_exit(
     start: Optional[str] = None,
     end: Optional[str] = None,
@@ -244,7 +307,10 @@ def needs_regen_early_exit(
 def _has_out_reports(directory: Path) -> bool:
     if not directory.is_dir():
         return False
-    return any(path.is_file() for path in directory.rglob("*.out"))
+    for pattern in ("*.out", "*.ingested"):
+        if any(path.is_file() for path in directory.rglob(pattern)):
+            return True
+    return False
 
 
 def _has_csv_tables(directory: Path) -> bool:
@@ -583,6 +649,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     regen.add_argument("--start", default=None)
     regen.add_argument("--end", default=None)
+    reads = sub.add_parser(
+        "regen-reads",
+        help="Exit 1 when abundance requests reads but regenerated FASTQ is empty",
+    )
+    reads.add_argument("output_dir")
     steps = sub.add_parser("steps", help="Print canonical checkpoint names")
     return parser
 
@@ -647,6 +718,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 2
+    if args.command == "regen-reads":
+        return regen_reads_status(args.output_dir)
     if args.command == "steps":
         for name in CHECKPOINT_STEPS:
             print(name)

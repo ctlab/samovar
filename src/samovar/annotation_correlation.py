@@ -294,12 +294,14 @@ def _spearman_binary() -> Path:
 
 def ensure_spearman_binary() -> Path:
     """Build ``bin/samovar_spearman`` when the source is newer. OpenMP when the compiler allows it."""
-    from samovar.paths import cxx_compiler, repo_root
+    from samovar.paths import cpp_binary_loadable, cxx_compiler, repo_root
 
     binary = _spearman_binary()
     source = repo_root() / "src" / "cpp" / "spearman.cpp"
     if not source.is_file():
         raise FileNotFoundError(f"Spearman source not found: {source}")
+    if binary.is_file() and not cpp_binary_loadable(binary):
+        binary.unlink()
     needs = (not binary.is_file()) or source.stat().st_mtime > binary.stat().st_mtime
     if not needs:
         return binary
@@ -480,9 +482,10 @@ def spearman_annotation_correlation(
         by_sample.update(matrices)
     if len(ordered) == 1:
         only = ordered[0].reindex(index=selected, columns=selected)
-        only = only.astype(float)
-        np.fill_diagonal(only.values, 1.0)
-        return only.fillna(0.0)
+        # reindex can hand back a read-only block; fill_diagonal needs a copy.
+        values = np.array(only.to_numpy(), dtype=float, copy=True)
+        np.fill_diagonal(values, 1.0)
+        return pd.DataFrame(values, index=list(only.index), columns=list(only.columns)).fillna(0.0)
     return _fisher_mean(ordered, selected)
 
 

@@ -39,6 +39,9 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "TSV with seq plus one or more taxID columns and/or feature columns. "
         "Combined tables label tax as taxID_<tool>_<n>[_id] and features as "
         "feat_<tool>_<n>[_id]. A tool may emit only tax, only features, or both. "
+        "taxID cells must be non-negative integers, unclassified, or GTDB tokens. "
+        "Other columns are features only when named feat_*, length, GC, MAG_ID, "
+        "an ACGT k-mer id, or z<n>; any other column is an error. "
         "--type feature is an alias of annotator (seq2feature).",
     },
     "table_reads_generator": {
@@ -143,6 +146,21 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "in": "BAM -b, MAG taxonomy -x, TSV -o.",
         "out": "Headered TSV seq, taxID, MAG_ID (Annotation tax + Feature MAG_ID).",
     },
+    "mag_homology": {
+        "in": "Query MAG directory -c, optional reference catalog or MAG directory -r, "
+        "assignment table -o. Optional --fasta-out and --catalog.",
+        "out": "TSV query, mag_id, reference, rms_z, match. mag_id is stable across "
+        "assemblies when the tetranucleotide profiles agree within the normal-model error.",
+    },
+    "mag_mapping": {
+        "in": "FASTQ -i/-I, initial MAG directory -r, frozen MAG taxonomy -x, TSV -o, -t threads. Optional --markers TSV (zero-based half-open GTDB marker coordinates).",
+        "out": "Headered TSV seq, taxID, MAG_ID, identical to initial annotation. "
+        "Unmapped/conflicting reads have taxID=0 and empty MAG_ID (shared taxon retained for tied MAGs). "
+        "Sidecars .candidates.sqlite and .mapping.json retain reported alignments and conflict counts. "
+        "Optional --keep-candidate-vector adds MAG_vector, the share of alignment score "
+        "across classified MAG candidates (empty when none compete). "
+        "No invented mappings or identity fallback.",
+    },
     "feature_importance": {
         "in": "score_feature_importance(model, annotation, initial_abundance, "
         "regenerated_abundance, config). model is the selected estimator "
@@ -176,6 +194,8 @@ GROUP_TO_TESTNODE = {
     "mag_quantifier": "tests/test_tool_contracts.py::test_mag_quantifier_contract",
     "taxon_quantifier": "tests/test_tool_contracts.py::test_taxon_quantifier_contract",
     "read_assigner": "tests/test_tool_contracts.py::test_read_assigner_contract",
+    "mag_homology": "tests/test_tool_contracts.py::test_mag_homology_contract",
+    "mag_mapping": "tests/test_tool_contracts.py::test_mag_mapping_contract",
     "feature_importance": "tests/test_tool_contracts.py::test_feature_importance_contract",
 }
 
@@ -218,6 +238,7 @@ def run_contract_pytest(
     tool_type: str,
     *,
     extra_args: Optional[list] = None,
+    db_path: str = "",
 ) -> Tuple[int, str]:
     """Run the matching contract test. Return (returncode, combined output)."""
     group = normalize_tool_group(tool_type)
@@ -241,18 +262,24 @@ def run_contract_pytest(
     env["PYTHONPATH"] = src + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["SAMOVAR_CONTRACT_TOOL"] = str(Path(tool_path).resolve())
     env["SAMOVAR_CONTRACT_TYPE"] = group
+    db = str(db_path or "").strip()
+    if db:
+        env["SAMOVAR_CONTRACT_DB"] = db
     cmd = [
         sys.executable,
         "-m",
         "pytest",
         pytest_node,
         "-q",
+        "-rs",
         "--tb=short",
         "--tool",
         str(Path(tool_path).resolve()),
         "--tool-type",
         group,
     ]
+    if db:
+        cmd.extend(["--db-path", db])
     if extra_args:
         cmd.extend(extra_args)
     proc = subprocess.run(

@@ -22,13 +22,23 @@ kraken2_samovar () {
     concat=$(basename "${R1[i]}" | sed 's/_.*//g')
     echo -e "\n" "$concat" "\n"
 
-    kraken2 \
-      --use-names \
-      --db "$DB" \
-      --threads "$threads" \
-      --paired "${R1[i]}" "${R2[i]}" \
-      --report "$out_dir/$concat.report" \
-      --output "$out_dir/$concat.out"
+    if [[ -s "${R2[i]:-}" ]]; then
+      kraken2 \
+        --use-names \
+        --db "$DB" \
+        --threads "$threads" \
+        --paired "${R1[i]}" "${R2[i]}" \
+        --report "$out_dir/$concat.report" \
+        --output "$out_dir/$concat.out"
+    else
+      kraken2 \
+        --use-names \
+        --db "$DB" \
+        --threads "$threads" \
+        "${R1[i]}" \
+        --report "$out_dir/$concat.report" \
+        --output "$out_dir/$concat.out"
+    fi
   done
 }
 

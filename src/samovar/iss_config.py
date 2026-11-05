@@ -1,4 +1,5 @@
 import os
+import shlex
 import yaml
 import argparse
 from typing import Any, Dict, List, Optional, Sequence
@@ -8,7 +9,7 @@ import sys
 
 from samovar.genome_fetcher import argparse_max_genome_mb
 from samovar.paths import add_output_dir_argument
-from samovar.regenerate import UNLIMITED_MAX_GENOMES, argparse_max_genomes, parse_max_genomes
+from samovar.regenerate import argparse_max_genomes, parse_max_genomes
 
 
 def parse_genome_tokens(values: Optional[Sequence[Any]]) -> List[str]:
@@ -203,7 +204,8 @@ def _materialize_generate_accessions(args):
     accessions = list(getattr(args, "accessions", None) or [])
     if not accessions:
         return
-    reindex_mode = int(getattr(args, "reindex", 0) or 0)
+    raw_mode = getattr(args, "reindex", 1)
+    reindex_mode = 1 if raw_mode is None else int(raw_mode)
     keep_raw = bool(int(getattr(args, "raw_genomes", 0) or 0))
     paths = materialize_accessions(
         accessions,
@@ -234,9 +236,9 @@ class ISSTestConfig:
     reads_generator: str = "iss"
     metagenome_generator: str = ""
     abundance_table: str = ""
-    max_genome_mb: float = float("inf")
+    max_genome_mb: float = 100.0
     genome_skip_list: str = ""
-    max_genomes: float = UNLIMITED_MAX_GENOMES
+    max_genomes: float = 100.0
     locked_genomes: Optional[List[str]] = None
 
     @classmethod
@@ -332,7 +334,7 @@ class ISSTestConfig:
 
     def generate_pipeline(self, base_dir: str) -> str:
         """Generate the ISS test pipeline script and return its path"""
-        from samovar.paths import absolute_path, python_path, repo_root, runtime_path_prefix
+        from samovar.paths import absolute_path, repo_root
         from samovar.paths import shell_outdir_override_snippet
 
         base_dir = absolute_path(base_dir)
@@ -347,32 +349,30 @@ class ISSTestConfig:
         
         # Generate pipeline script
         root = repo_root()
-        py = python_path()
-        tool_path = runtime_path_prefix()
         snakefile = root / "workflow" / "iss_test" / "Snakefile"
         from samovar.paths import shell_source_install_env_snippet
 
+        from samovar.paths import shell_runtime_snippet
+
         env_snippet = shell_source_install_env_snippet()
+        runtime_snippet = shell_runtime_snippet()
         pipeline_content = f"""# Setup
 set -e
 export SAMOVAR_ROOT="{root}"
-{env_snippet}export PATH="${{SAMOVAR_PATH:+$SAMOVAR_PATH:}}{tool_path}:{root}/bin:$PATH"
-export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
-PYTHON_PATH="${{PYTHON_PATH:-{py}}}"
-if [ -z "$PYTHON_PATH" ] || [ ! -x "$PYTHON_PATH" ]; then
-  PYTHON_PATH="$(command -v python3 || command -v python || true)"
-fi
-PYTHON_PATH="${{PYTHON_PATH:-python3}}"
+{env_snippet}{runtime_snippet}export PYTHONPATH="{root / 'src'}${{PYTHONPATH:+:$PYTHONPATH}}"
 
 out_dir="{base_dir}"
 {shell_outdir_override_snippet()}
 mkdir -p "$out_dir"
 
 # Generate reads with InSilicoSeq
-snakemake -s {snakefile} \\
-    --configfile {config_path} \\
+MEM_MB="${{SAMOVAR_MEM_MB:-$("$PYTHON_PATH" -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')}}"
+export SAMOVAR_MEM_MB="$MEM_MB"
+"$SNAKEMAKE" -s {shlex.quote(str(snakefile))} \\
+    --configfile {shlex.quote(config_path)} \\
     --directory "$out_dir" \\
-    --cores {self.cores}
+    --cores {self.cores} \\
+    --resources mem_mb=$MEM_MB
 """
         
         with open(pipeline_path, 'w') as f:
@@ -384,7 +384,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='SamovaR ISS Test Configuration')
     
     # Required arguments
-    parser.add_argument('--genome_dir', required=False, default=None,
+    parser.add_argument('--genome_dir', '-g', required=False, default=None,
                        help='Directory containing reference genomes')
     add_output_dir_argument(
         parser,
@@ -402,9 +402,9 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument(
         '--reindex',
         type=int,
-        default=0,
+        default=1,
         choices=(0, 1, 2),
-        help='0: download to $out/.genomes (no index); 1: samovar_database + index; '
+        help='0: download to $out/.genomes (no index); 1 (default): samovar_database + index; '
              '2: $out/.genomes + index',
     )
     parser.add_argument(
@@ -429,7 +429,12 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
                        help='Random seed for reproducibility')
     parser.add_argument('--model', default="hiseq",
                        help='Sequencing model to use')
-    parser.add_argument('--cores', type=int, default=1,
+    parser.add_argument(
+        '--autoimport', type=int, choices=(0, 1), default=None,
+        help='Omit to ask about importing or installing required tools; '
+             '1: autoimport available tools, ask about the rest; 0: import nothing',
+    )
+    parser.add_argument('--cores', '-t', type=int, default=1,
                        help='Number of cores for snakemake')
     parser.add_argument(
         '--threads',
@@ -500,7 +505,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         dest='max_genomes',
         type=argparse_max_genomes,
         default=None,
-        help='Keep this many genomes from genome_dir (default: inf). The chosen files are written to Hydra.',
+        help='Keep this many genomes from genome_dir (default: 100). The chosen files are written to Hydra.',
     )
     parser.add_argument(
         '--genomes',
@@ -513,7 +518,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         dest='max_genome_mb',
         type=argparse_max_genome_mb,
         default=None,
-        help='Skip new NCBI downloads larger than this many MB (default: inf). Cached genomes are kept.',
+        help='Skip new NCBI downloads larger than this many MB (default: 100). Cached genomes are kept.',
     )
     parser.add_argument(
         '--genome-skip-list',
@@ -568,12 +573,15 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         write_custom_generate_script,
     )
 
+    from samovar.prepare_import import offer_prepare_imports
+
     meta_raw = getattr(args, "metagenome_generator", None)
     if meta_raw:
         mkind, mcanon = resolve_metagenome_generator(meta_raw)
+        args.metagenome_generator = mcanon
+        offer_prepare_imports(args)
         if mkind == "custom":
             require_known_metagenome_generator(mcanon)
-        args.metagenome_generator = mcanon
         flag_parts = [getattr(args, "extra_flags", None)]
         for item in getattr(args, "tool_flags", None) or []:
             if not item or len(item) < 2:
@@ -585,6 +593,9 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             mcanon, {"extra_flags": merge_flag_strings(*flag_parts)}
         )
         args.extra_flags = merged.get("extra_flags") or ""
+        _materialize_generate_accessions(args)
+        if not getattr(args, "genome_dir", None):
+            raise SystemExit("generate: --genome_dir or --accessions is required")
         mapped_mode = camisim_mode_for_reads_generator(mcanon, getattr(args, "camisim_mode", None))
         if mkind == "builtin" and mapped_mode is not None:
             from samovar.camisim import setup_camisim_generate
@@ -603,9 +614,6 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
                 data["metagenome_generator"] = mcanon
                 Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
             return _finish_generate(args, result)
-        _materialize_generate_accessions(args)
-        if not getattr(args, "genome_dir", None):
-            raise SystemExit("generate: --genome_dir or --accessions is required")
         config = ISSTestConfig.from_args(args)
         config_path = config.generate_config(config.output_dir)
         pipeline_path = write_custom_generate_script(
@@ -630,9 +638,10 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         else:
             raw_name = "iss"
     kind, canon = resolve_reads_generator(raw_name)
+    args.reads_generator = canon
+    offer_prepare_imports(args)
     if kind == "custom":
         require_known_reads_generator(canon)
-    args.reads_generator = canon
 
     flag_parts = [getattr(args, "extra_flags", None)]
     for item in getattr(args, "tool_flags", None) or []:
@@ -643,6 +652,10 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             flag_parts.append(flags)
     merged = attach_reads_flags(canon, {"extra_flags": merge_flag_strings(*flag_parts)})
     args.extra_flags = merged.get("extra_flags") or ""
+
+    _materialize_generate_accessions(args)
+    if not getattr(args, "genome_dir", None):
+        raise SystemExit("generate: --genome_dir or --accessions is required")
 
     mapped_mode = camisim_mode_for_reads_generator(canon, camisim_mode)
     if mapped_mode is not None:
@@ -668,10 +681,6 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
                 data["abundance_table"] = absolute_path(args.abundance_table)
             Path(yaml_path).write_text(yaml.dump(data), encoding="utf-8")
         return _finish_generate(args, result)
-
-    _materialize_generate_accessions(args)
-    if not getattr(args, "genome_dir", None):
-        raise SystemExit("generate: --genome_dir or --accessions is required")
 
     config = ISSTestConfig.from_args(args)
     config_path = config.generate_config(config.output_dir)

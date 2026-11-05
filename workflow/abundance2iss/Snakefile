@@ -3,6 +3,7 @@ import logging
 import os
 
 from samovar.abundance import load_abundance_dir, n_sample_columns
+from samovar.memory import job_mem_mb
 from samovar.regenerate import resolve_regeneration_mode, sample_names_from_abundance_columns, synthetic_sample_names
 from samovar.table2iss import process_annotation_tables
 
@@ -153,6 +154,10 @@ rule process_abundance:
         tables = get_process_inputs()
     output:
         DONE_MARKER
+    threads:
+        CORES
+    resources:
+        mem_mb=job_mem_mb(CORES, CORES, int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None),
     params:
         genome_dir = GENOME_DIR,
         output_dir = OUTPUT_DIR,
@@ -160,7 +165,6 @@ rule process_abundance:
         model = MODEL,
         read_length = READ_LENGTH,
         max_genomes = MAX_GENOMES,
-        cpus = CORES,
         annotation_dir = ANNOTATION_DIR,
         abundance_dir = ABUNDANCE_DIR,
         regeneration_config = REGENERATION_CONFIG,
@@ -178,7 +182,7 @@ rule process_abundance:
                 model=params.model,
                 read_length=params.read_length,
                 max_genomes=params.max_genomes,
-                cpus=params.cpus,
+                cpus=threads,
                 seed=params.seed,
                 annotation_dir=params.annotation_dir or None,
                 abundance_dir=params.abundance_dir,

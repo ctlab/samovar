@@ -270,7 +270,9 @@ def _annotators(init: Mapping[str, Any]) -> List[Dict[str, str]]:
         rows.append(
             {
                 "tool": tool,
-                "database": db_label(item.get("db_path"), item.get("db_name")),
+                "database": db_label(
+                    item.get("db_path"), item.get("db_label") or item.get("db_name")
+                ),
                 "cmd": str(item.get("cmd") or ""),
                 "extra": str(item.get("extra") or ""),
             }
@@ -347,7 +349,7 @@ def collect_stage_rows(outdir: Path) -> List[Dict[str, Any]]:
     qc_initial = str(qc.get("qc_initial") or qc.get("qc") or "").strip()
     qc_generated = str(qc.get("qc_generated") or qc.get("qc") or "").strip()
     scoring_tools = _as_list(scoring.get("scoring_tools"))
-    reprofiler = str(repro.get("reprofiler") or "ensemble").strip()
+    reprofiler = str(repro.get("reprofiler") or "random_forest").strip()
     fi = str(repro.get("feature_importance") or "").strip()
     export_name = str(export.get("export") or export.get("export_corrector") or "").strip()
     export_formats = _as_list(export.get("export_formats"))

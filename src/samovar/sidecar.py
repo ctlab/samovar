@@ -35,6 +35,18 @@ from samovar.paths import (
 from samovar.main_config import set_tool
 
 SIDECARS = {
+    "kraken2": {
+        "python": None, "packages": ["kraken2"], "runtime_modules": (),
+        "runtime_versions": {}, "binary": "kraken2", "tool_keys": ("kraken2",),
+        "companions": ("kraken2-build", "kraken2-inspect"), "group": "annotator",
+        "hint": "Core ensemble annotator (./install.sh Kraken2; included in full).",
+    },
+    "kaiju": {
+        "python": None, "packages": ["kaiju"], "runtime_modules": (),
+        "runtime_versions": {}, "binary": "kaiju", "tool_keys": ("kaiju",),
+        "companions": ("kaiju-mkbwt", "kaiju-mkfmi", "kaiju-multi"), "group": "annotator",
+        "hint": "Core ensemble annotator (./install.sh Kaiju; included in full).",
+    },
     "nanosim": {
         "python": "3.8",
         "packages": [
@@ -87,6 +99,17 @@ SIDECARS = {
         "tool_keys": ("flye",),
         "group": "assembler",
         "hint": "Optional Flye / metaFlye assembler (./install.sh metaFlye).",
+    },
+    "spades": {
+        "python": None,
+        "packages": ["spades"],
+        "runtime_modules": (),
+        "runtime_versions": {},
+        "binary": "spades.py",
+        "config_path_key": "spades_path",
+        "tool_keys": ("spades",),
+        "group": "assembler",
+        "hint": "Optional SPAdes / metaSPAdes assembler (./install.sh SPAdes; included in full).",
     },
     "metax": {
         "python": None,
@@ -313,7 +336,7 @@ def env_has_versions(prefix: Path, versions: dict) -> bool:
 
 def sidecar_is_healthy(name: str, prefix: Path) -> bool:
     spec = SIDECARS[name]
-    return env_has_binary(prefix, str(spec["binary"])) and env_has_runtime(
+    return all(env_has_binary(prefix, binary) for binary in (str(spec["binary"]), *spec.get("companions", ()))) and env_has_runtime(
         prefix, tuple(spec.get("runtime_modules") or ())
     ) and env_has_versions(prefix, dict(spec.get("runtime_versions") or {}))
 
@@ -408,6 +431,10 @@ def record_sidecar(name: str, prefix: Path, binary_path: str) -> None:
                 path=binary_path,
                 group=group,
             )
+    for companion in spec.get("companions", ()):
+        set_tool(cfg, companion, env="conda", workflow=name,
+                 path=str((prefix / "bin" / companion).resolve()),
+                 group=str(spec.get("group") or "annotator"))
     write_config(cfg)
 
 
@@ -421,6 +448,9 @@ def install_named(name: str) -> Path:
         "gtdb_tk": "gtdbtk",
         "mega-hit": "megahit",
         "metaflye": "flye",
+        "metaspades": "spades",
+        "meta-spades": "spades",
+        "metaspades.py": "spades",
         "metax": "metax",
         "meta-flye": "flye",
         "metflye": "flye",
@@ -436,7 +466,11 @@ def install_named(name: str) -> Path:
     elif key == "art":
         existing = discover_art()
     else:
-        existing = shutil.which(str(spec["binary"]))
+        if key in {"kraken2", "kaiju"}:
+            from samovar.paths import _existing_tool
+            existing = _existing_tool(key)
+        else:
+            existing = shutil.which(str(spec["binary"]))
     if existing:
         prefix = Path(conda_prefix_for_executable(existing) or sidecar_prefix(key))
         ensure_sidecar_compat(key, prefix)

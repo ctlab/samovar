@@ -32,7 +32,7 @@ from samovar.main_config import (
     tool_path,
 )
 from samovar.paths import load_config
-from samovar.seqio import concat_fastq_files, fastq_pair_paths, is_fastq_name
+from samovar.seqio import concat_fastq_files, fastq_pair_paths, find_fastq_mate, is_fastq_name, open_text
 from samovar.table_regenerators import extra_flags_argv
 
 READS_GENERATOR_GROUPS = ("reads_generator", "metagenome_generator")
@@ -508,15 +508,13 @@ def alias_fastq_with_extra_ids(
             tag_fastq_file(r1, r1, read_type, "")
         if r2.is_file():
             tag_fastq_file(r2, r2, read_type, "")
-    stem = str(r1)
-    for suffix in ("_R1.fastq.gz", "_R1.fastq"):
-        if stem.endswith(suffix):
-            prefix = stem[: -len(suffix)]
-            break
-    else:
-        prefix = str(r1.with_name(r1.name.split("_R1")[0]))
+    from samovar.seqio import sample_name_from_r1
+
+    prefix = str(r1.parent / sample_name_from_r1(r1))
     for eid in extra_ids:
         dest_r1, dest_r2 = fastq_pair_paths(f"{prefix}_{eid}", gzip_reads=gzip_reads)
+        if not r2.is_file():
+            dest_r1 = f"{prefix}_{eid}.fastq" + (".gz" if gzip_reads else "")
         if Path(primary_r1).is_file() and dest_r1 != str(primary_r1):
             shutil.copy2(primary_r1, dest_r1)
             written.append(dest_r1)
@@ -529,6 +527,103 @@ def alias_fastq_with_extra_ids(
         if tag and Path(dest_r2).is_file():
             tag_fastq_file(dest_r2, dest_r2, tag, "")
     return written
+
+
+def has_hybrid_reads(path: Union[str, Path]) -> bool:
+    """Recognize explicitly tagged short + ONT reads in one canonical FASTQ."""
+    from samovar.camisim import extract_read_type
+    from samovar.seqio import iter_fastq_records
+
+    kinds = set()
+    if not Path(path).is_file():
+        return False
+    for header, *_ in iter_fastq_records(path):
+        tech = extract_read_type(header)
+        if not tech:
+            return False  # Untagged input needs an explicit generator selection.
+        if tech in {"ont", "nanosim3"}:
+            kinds.add("long")
+        elif tech in {"illumina", "art", "wgsim", "bgi", "mgi"}:
+            kinds.add("short")
+        if len(kinds) == 2:
+            return True
+    return False
+
+
+def _simulate_camisim_sample(
+    name, counts, available_genomes, output_dir, sample, annotator, *,
+    model, cpus, seed, gzip_reads, flags, ids, config,
+):
+    """Sequence the regenerated community with the selected CAMISIM backend."""
+    import yaml
+
+    from samovar.camisim import default_generate_config, run_from_config
+    from samovar.seqio import FASTQ_R1_SUFFIXES, list_r1_files, sample_name_from_r1
+
+    work = Path(output_dir).resolve() / ".camisim" / annotator / sample
+    work.mkdir(parents=True, exist_ok=True)
+    cfg = default_generate_config(
+        genome_dir=str(work), output_dir=str(work), host_genome="",
+        n_samples=1, total_reads=sum(counts.values()), host_fraction="0",
+        seed=seed, model=model, cores=cpus,
+        mode=camisim_mode_for_reads_generator(name, config.get("camisim_mode")),
+    )
+    cfg["genome_rows"] = [
+        {"genome_ID": taxid, "NCBI_ID": taxid, "OTU": taxid,
+         "path": str(Path(available_genomes[taxid]).resolve()),
+         "novelty_category": "known_strain", "host": "0"}
+        for taxid in counts
+    ]
+    total = sum(counts.values())
+    cfg["communities"] = [{taxid: amount / total for taxid, amount in counts.items()}]
+    cfg["extra_flags"] = shlex.join(flags)
+    config_path = work / "camisim.yaml"
+    config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    run_from_config(str(config_path))
+    r1 = find_fastq_mate(work / "initial", "1_full")
+    if r1 is None or not r1.stat().st_size:
+        raise RuntimeError(f"{name} produced no regenerated reads for {sample}/{annotator}")
+    if name == "hybrid" and not has_hybrid_reads(r1):
+        raise RuntimeError(f"hybrid regeneration needs both short and ONT reads for {sample}/{annotator}")
+    p1, p2 = fastq_pair_paths(
+        str(Path(output_dir) / f"{sample}_{annotator}"), gzip_reads=gzip_reads
+    )
+    previous = find_fastq_mate(output_dir, f"{sample}_{annotator}")
+    if previous is not None and not previous.name.endswith(FASTQ_R1_SUFFIXES):
+        p1 = str(previous)
+    for mate, dest in zip(("R1", "R2"), (Path(p1), Path(p2))):
+        src = find_fastq_mate(work / "initial", "1_full", mate)
+        if src is not None:
+            with open_text(src) as source, open_text(dest, "wt") as target:
+                shutil.copyfileobj(source, target)
+        else:
+            dest.unlink(missing_ok=True)
+    # A stale short-only cache may have used the other compression format.
+    for alternate in fastq_pair_paths(
+        str(Path(output_dir) / f"{sample}_{annotator}"), gzip_reads=not gzip_reads
+    ):
+        if alternate not in (p1, p2):
+            Path(alternate).unlink(missing_ok=True)
+    # Preserve the original libraries alongside the classifier's merged R1.
+    if cfg.get("mode") == "hybrid":
+        for library in list_r1_files(work / "initial", include_libraries=True):
+            stem = sample_name_from_r1(library)
+            if stem == "1_full":
+                continue
+            for mate in ("R1", "R2"):
+                src = find_fastq_mate(work / "initial", stem, mate)
+                if src is None:
+                    continue
+                dest = Path(output_dir) / (f"{sample}_{annotator}_" + src.name[2:] + (".gz" if gzip_reads else ""))
+                previous = find_fastq_mate(output_dir, f"{sample}_{annotator}_{stem[2:]}", mate)
+                with open_text(src) as source, open_text(dest, "wt") as target:
+                    shutil.copyfileobj(source, target)
+                if previous is not None and previous != dest:
+                    previous.unlink()
+                alternate = dest.with_suffix("") if gzip_reads else Path(str(dest) + ".gz")
+                alternate.unlink(missing_ok=True)
+    if ids:
+        alias_fastq_with_extra_ids(p1, p2, ids, gzip_reads=gzip_reads)
 
 
 def simulate_from_sample_tables(
@@ -550,7 +645,7 @@ def simulate_from_sample_tables(
     config: Optional[Dict[str, Any]] = None,
     genome_dir: str = "",
 ) -> None:
-    """ISS (or custom) mix from per-sample abundance tables (prepare/regenerate)."""
+    """Simulate per-sample abundance tables with the selected reads generator."""
     from samovar.table2iss import (
         _annotator_from_n_col,
         _emit_empty_for_annotators,
@@ -560,7 +655,9 @@ def simulate_from_sample_tables(
         split_metagenome_to_samples,
     )
 
-    cfg = attach_reads_flags(reads_generator, dict(config or {}))
+    cfg = dict(config or {})
+    if not cfg.get("metagenome_generator"):
+        cfg = attach_reads_flags(reads_generator, cfg)
     sample_names = list(sample_tables)
     annotators = list(annotator_cols.keys()) or ["any"]
     meta_name = cfg.get("metagenome_generator")
@@ -642,11 +739,10 @@ def simulate_from_sample_tables(
         return
 
     os_makedirs(output_dir, exist_ok=True)
-    pool_dir = os_path.join(output_dir, ".iss_full")
-    os_makedirs(pool_dir, exist_ok=True)
+    pool_dir = os_path.join(output_dir, ".tmp", "iss")
+    if canon == "iss":
+        os_makedirs(pool_dir, exist_ok=True)
     read_type = _READ_TYPE_FOR.get(canon, "") if kind == "builtin" else ""
-    # ISS keeps taxid: in combined-genome headers; ART/wgsim/NanoSim prepare
-    # uses the same mixer and then stamps read_type: + extra filename ids.
     with iss_cli_extra_flags(flags):
         for annotator_name in annotators:
             sample_source_counts: Dict[str, Dict[str, int]] = {}
@@ -685,13 +781,34 @@ def simulate_from_sample_tables(
 
             from samovar.add_annotator import annotator_fastqs_complete
 
-            if annotator_fastqs_complete(
+            cached = annotator_fastqs_complete(
                 output_dir, sample_names, annotator_name, gzip_reads=gzip_reads
-            ):
+            )
+            if cached and canon == "hybrid":
+                cached = all(has_hybrid_reads(
+                    find_fastq_mate(output_dir, f"{sample}_{annotator_name}") or ""
+                ) for sample in sample_names)
+            if cached:
                 logger.info(
-                    "Skipping ISS for %s: regenerated FASTQs already present",
+                    "Skipping %s for %s: regenerated FASTQs already present",
+                    canon,
                     annotator_name,
                 )
+                continue
+
+            if canon != "iss":
+                for sample_index, (sample_name, counts) in enumerate(sample_source_counts.items()):
+                    if not counts:
+                        _emit_empty_for_annotators(
+                            output_dir, [sample_name], [annotator_name], gzip_reads=gzip_reads
+                        )
+                        continue
+                    _simulate_camisim_sample(
+                        canon, counts, available_genomes, output_dir, sample_name,
+                        annotator_name, model=model, cpus=cpus,
+                        seed=seed + annotators.index(annotator_name) + sample_index,
+                        gzip_reads=gzip_reads, flags=flags, ids=ids, config=cfg,
+                    )
                 continue
 
             r1_full, r2_full = generate_reads_metagenome(
@@ -728,7 +845,8 @@ def simulate_from_sample_tables(
                         gzip_reads=gzip_reads,
                         read_type=read_type if read_type != "hybrid" else "",
                     )
-    rmtree(pool_dir, ignore_errors=True)
+    if canon == "iss":
+        rmtree(pool_dir, ignore_errors=True)
 
 
 def _write_annotator_abundance_csv(

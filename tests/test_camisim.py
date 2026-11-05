@@ -54,6 +54,12 @@ def test_extract_and_tag_read_type():
     assert extract_read_type(tagged) == "illumina"
     assert parse_extract_read_type("x|read_type:ont|taxid:9606") == "ont"
     assert extract_read_type("plain") == ""
+    paired = tag_read_id("@contig-1/1 comment", "illumina", "562")
+    assert paired == "@contig-1|taxid:562|read_type:illumina/1 comment"
+    assert tag_read_id(paired, "illumina", "562") == paired
+    assert tag_read_id("@contig-1/2|taxid:562|read_type:illumina", "illumina", "562") == (
+        "@contig-1|taxid:562|read_type:illumina/2"
+    )
 
 
 def test_write_editable_camisim_config(tmp_path):
@@ -342,6 +348,28 @@ def test_table_mode_iss_from_distributions(tmp_path, monkeypatch):
     assert calls
 
 
+def test_camisim_success_with_missing_sample_is_an_error(tmp_path, monkeypatch):
+    import pytest
+    from samovar import camisim as cam
+
+    monkeypatch.setattr(cam, "available_camisim_types", lambda root: ["nanosim3"])
+    cfg = default_generate_config(
+        genome_dir=str(META), host_genome="", output_dir=str(tmp_path),
+        n_samples=2, total_reads=20, mode="ont",
+    )
+    config = tmp_path / "camisim.yaml"
+    config.write_text(yaml.safe_dump(cfg))
+
+    def missing_sample(cfg, work, cam_type, dest):
+        dest.mkdir(parents=True)
+        (dest / "sample_0.fq").write_text("@562c1_0\nACGT\n+\nIIII\n")
+        return True
+
+    monkeypatch.setattr(cam, "_run_camisim_reads", missing_sample)
+    with pytest.raises(RuntimeError, match=r"empty sample\(s\) 2"):
+        run_from_config(str(config))
+
+
 def test_camisim_config_overlay_keeps_nested_template(tmp_path):
     template = tmp_path / "user.yaml"
     template.write_text(
@@ -437,8 +465,8 @@ def test_harvest_prefers_pooled_mates(tmp_path):
 
     raw = tmp_path / "raw" / "camisim_raw" / "sample_0" / "reads" / "fastq"
     raw.mkdir(parents=True)
-    (raw / "sample_0_01.fq").write_text("@p1\nAC\n+\nII\n")
-    (raw / "sample_0_02.fq").write_text("@p2\nGT\n+\nII\n")
+    (raw / "sample_0_01.fq").write_text("@p1|taxid:562\nAC\n+\nII\n")
+    (raw / "sample_0_02.fq").write_text("@p2|taxid:562\nGT\n+\nII\n")
     (raw / "sample0_5621.fq").write_text("@g1\nAA\n+\nII\n")
     (raw / "sample0_5622.fq").write_text("@g2\nTT\n+\nII\n")
     rows = [{"genome_ID": "562", "NCBI_ID": "562"}]
@@ -450,6 +478,58 @@ def test_harvest_prefers_pooled_mates(tmp_path):
     assert "p1" in r1 and "g1" not in r1
     assert "p2" in r2 and "g2" not in r2
     assert written
+
+
+def test_ont_truth_recovers_normalized_ids_in_hybrid(tmp_path):
+    from samovar.camisim import _harvest_camisim_reads, _merge_hybrid_reads
+    from samovar.parse_annotators import extract_true_taxid
+    from samovar.seqio import iter_fastq_records
+
+    rows = [
+        {"genome_ID": "GCA_035764635.1", "NCBI_ID": "2681611"},
+        {"genome_ID": "562_2", "NCBI_ID": "562"},
+    ]
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "sample_0.fq").write_text(
+        "@GCA0357646351c1_0_aligned\nACGT\n+\nIIII\n"
+        "@5622c1_1_aligned|taxid:sample_0\nACGT\n+\nIIII\n"
+    )
+    out = tmp_path / "initial"
+    _harvest_camisim_reads(raw, out, rows, "ont", 1)
+    records = list(iter_fastq_records(out / "1_ont_R1.fastq"))
+    assert [extract_true_taxid(rec[0]) for rec in records] == ["2681611", "562"]
+    assert all("taxid:sample" not in rec[0] for rec in records)
+    art = tmp_path / "art"
+    art.mkdir()
+    for mate in (1, 2):
+        (art / f"sample_0_0{mate}.fq").write_text(f"@5622c1-1/{mate}\nACGT\n+\nIIII\n")
+    _harvest_camisim_reads(art, out, rows, "illumina", 1)
+    _merge_hybrid_reads({"illumina": [], "ont": []}, out, 1)
+    truth = [extract_true_taxid(rec[0]) for rec in iter_fastq_records(out / "1_full_R1.fastq")]
+    assert truth == ["562", "562", "2681611", "562"]
+    assert not (out / "1_full_R2.fastq").exists()
+
+
+def test_camisim_rejects_unknown_truth_and_normalization_collisions(tmp_path):
+    import pytest
+    from samovar.camisim import _harvest_camisim_reads, stage_genomes_for_camisim
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "sample_0.fq").write_text("@unknown\nACGT\n+\nIIII\n")
+    rows = [{"genome_ID": "562", "NCBI_ID": "562"}]
+    with pytest.raises(ValueError, match="Cannot resolve ground-truth"):
+        _harvest_camisim_reads(raw, tmp_path / "out", rows, "ont", 1)
+    with pytest.raises(ValueError, match="positive numeric taxid"):
+        tag_read_id("@read", "ont", "sample_0")
+    genome = tmp_path / "562.fna"
+    genome.write_text(">contig\nACGT\n")
+    with pytest.raises(ValueError, match="Ambiguous CAMISIM genome ID"):
+        stage_genomes_for_camisim(
+            [{"genome_ID": gid, "path": str(genome)} for gid in ("562_2", "5622")],
+            tmp_path / "staged",
+        )
 
 
 def test_promote_removes_tech_fastq_copies(tmp_path):
@@ -470,6 +550,7 @@ def test_promote_removes_tech_fastq_copies(tmp_path):
 
 def test_hybrid_flattens_paired_and_single_end_reads(tmp_path):
     from samovar.camisim import _merge_hybrid_reads
+    from samovar.seqio import assembly_read_libraries, canonicalize_single_end_fastqs, list_fastq_samples
 
     out = tmp_path / "initial"
     out.mkdir()
@@ -478,9 +559,20 @@ def test_hybrid_flattens_paired_and_single_end_reads(tmp_path):
     (out / "1_nanosim3_R1.fastq").write_text("@n1\nAAAA\n+\nIIII\n")
     (out / "1_nanosim3_R2.fastq").write_text("")
 
-    _merge_hybrid_reads({"art": [], "nanosim3": []}, out, 1)
+    for _ in range(2):
+        _merge_hybrid_reads({"art": [], "nanosim3": []}, out, 1)
+        canonicalize_single_end_fastqs(out)
 
-    full_r1 = (out / "1_full_R1.fastq").read_text()
+    full_r1 = (out / "1_full.fastq").read_text()
     assert "@a1" in full_r1 and "@a2" in full_r1 and "@n1" in full_r1
-    assert (out / "1_full_R2.fastq").read_text() == ""
+    assert not (out / "1_full_R2.fastq").exists()
+    assert (out / "1_nanosim3.fastq").is_file()
+    assert (out / "1_art_R1.fastq").is_file()
+    assert (out / "1_art_R2.fastq").is_file()
+    assert list_fastq_samples(out) == ["1_full"]
+    with assembly_read_libraries(out / "1_full.fastq") as (r1, r2, ont, typed):
+        assert typed
+        assert Path(r1).name == "1_art_R1.fastq"
+        assert Path(r2).name == "1_art_R2.fastq"
+        assert Path(ont).name == "1_nanosim3.fastq"
 

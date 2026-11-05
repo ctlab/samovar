@@ -212,7 +212,7 @@ def classify_taxid_token(
     if ncbi_ids:
         if digits in ncbi_ids or int(digits) in ncbi_ids:
             return TAXID_NCBI
-        return TAXID_GTDB
+        return TAXID_UNKNOWN
     return TAXID_NCBI
 
 
@@ -242,12 +242,70 @@ def _ncbi_taxid_membership() -> set:
         return _NCBI_ID_CACHE
 
 
+def regeneration_taxid_error(value: Any) -> Optional[str]:
+    """Return the token when it must not be sent to genome regeneration.
+
+    Allowed: unclassified/empty, non-negative integers (``562`` or ``562.0``),
+    and GTDB tokens (``d__Bacteria``). Names such as ``Ecoli`` and negatives
+    are rejected. This is not the feature-column allowlist.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float):
+        import math
+
+        if math.isnan(value):
+            return None
+    text = str(value).strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    lowered = text.lower()
+    if lowered in {
+        "",
+        "0",
+        "unclassified",
+        "unclassified_root",
+        "nan",
+        "none",
+        "na",
+        "<na>",
+        "null",
+        "other",
+    }:
+        return None
+    if "__" in text:
+        return None
+    if text.isdigit():
+        return None
+    return text
+
+
+def require_regeneration_taxids(values: Iterable[Any], *, source: str = "annotation") -> None:
+    """Stop before regeneration when a tax column holds a non-taxid."""
+    bad: List[str] = []
+    seen = set()
+    for raw in values:
+        token = regeneration_taxid_error(raw)
+        if token is None or token in seen:
+            continue
+        seen.add(token)
+        bad.append(token)
+        if len(bad) >= 5:
+            break
+    if bad:
+        shown = ", ".join(repr(item) for item in bad)
+        raise ValueError(
+            f"Invalid taxid {shown} in {source}. "
+            "Taxonomy values must be non-negative integers, unclassified, or GTDB tokens."
+        )
+
+
 def infer_taxid_type(
     values: Iterable[Any],
     *,
     ncbi_ids: Optional[Any] = None,
 ) -> str:
-    """Majority taxID namespace for a column (ignores unclassified)."""
+    """Namespace evidence for a column; missing numeric IDs do not imply GTDB."""
     seen = set()
     membership = ncbi_ids
     for raw in values:
@@ -257,6 +315,8 @@ def infer_taxid_type(
         seen.add(kind)
     if not seen:
         return TAXID_UNCLASSIFIED
+    if seen & {TAXID_NCBI, TAXID_GTDB}:
+        seen.discard(TAXID_UNKNOWN)
     if len(seen) > 1:
         return TAXID_MIXED
     return next(iter(seen))
