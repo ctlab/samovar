@@ -754,6 +754,7 @@ def regenerate_annotation_tables(
     under ``.table_candidates/`` and the first success is copied to ``output_dir``.
     """
     from samovar.table_regenerators import (
+        UnsupportedTableRegeneratorError,
         apply_concat_choose_best_policy,
         canonical_regeneration_modes,
     )
@@ -795,6 +796,7 @@ def regenerate_annotation_tables(
     candidates_root = out / ".table_candidates"
     tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
     generate_errors: Dict[str, str] = {}
+    unsupported: Dict[str, str] = {}
     for mode in modes:
         cand = candidates_root / re.sub(r"[^A-Za-z0-9._-]+", "_", mode)
         one = dict(cfg)
@@ -804,6 +806,12 @@ def regenerate_annotation_tables(
         one["output_dir"] = str(cand)
         try:
             tables_by_mode[mode] = _regenerate_one_mode(annotation_dir, cand, one, data)
+        except UnsupportedTableRegeneratorError as exc:
+            tables_by_mode[mode] = {}
+            unsupported[mode] = str(exc)
+            import warnings
+
+            warnings.warn(f"Table regenerator '{mode}' unsupported: {exc}", UserWarning, stacklevel=2)
         except Exception as exc:
             tables_by_mode[mode] = {}
             generate_errors[mode] = str(exc)
@@ -821,12 +829,13 @@ def regenerate_annotation_tables(
             "No table_reads_generator produced abundance tables. "
             f"Tried: {', '.join(modes)}"
             + (f" Errors: {generate_errors}" if generate_errors else "")
+            + (f" Unsupported: {unsupported}" if unsupported else "")
         )
 
     if not select_best:
         _write_abundance_tables(out, mixed)
         selected = next(mode for mode in modes if tables_by_mode.get(mode))
-        payload = {"winner": selected, "generate_errors": generate_errors}
+        payload = {"winner": selected, "generate_errors": generate_errors, "unsupported": unsupported}
         if generate_errors:
             payload["failed"] = list(generate_errors)
         write_table_selection(out / "table_selection.json", payload)
@@ -837,7 +846,8 @@ def regenerate_annotation_tables(
 
     try:
         ranked = rank_methods_per_annotator(
-            data, tables_by_mode, scorer, config=cfg, modes=modes
+            data, tables_by_mode, scorer, config=cfg,
+            modes=[mode for mode in modes if mode not in unsupported]
         )
     except Exception as exc:
         ranked = {
@@ -855,6 +865,7 @@ def regenerate_annotation_tables(
             ],
             "tables": {},
         }
+    ranked["unsupported"] = unsupported
     for mode, err in generate_errors.items():
         ranked.setdefault("generate_errors", {})[mode] = err
     if generate_errors:
@@ -872,6 +883,7 @@ def regenerate_annotation_tables(
             "No table_reads_generator produced abundance tables. "
             f"Tried: {', '.join(modes)}"
             + (f" Errors: {generate_errors}" if generate_errors else "")
+            + (f" Unsupported: {unsupported}" if unsupported else "")
         )
     _write_abundance_tables(out, mixed)
     payload = {k: v for k, v in ranked.items() if k != "tables"}

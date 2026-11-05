@@ -940,7 +940,10 @@ def write_table_score_plots(
         want_html = False
 
     all_rows: List[Dict[str, Any]] = []
-    fallback_notes: List[str] = []
+    fallback_notes: List[str] = [
+        f"Unsupported table generator {mode}: {reason}."
+        for mode, reason in (payload.get("unsupported") or {}).items()
+    ]
     for annotator, block in by_annotator.items():
         if block.get("fallback_reason"):
             fallback_notes.append(
@@ -1074,11 +1077,11 @@ def write_table_score_plots(
     return written
 
 
-def _candidate_generation_errors(dest: Path) -> Dict[str, str]:
+def _candidate_generation_status(dest: Path) -> Dict[str, Any]:
     selection = dest / ".table_candidates" / "table_selection.json"
     if not selection.is_file():
         return {}
-    return json.loads(selection.read_text(encoding="utf-8")).get("generate_errors") or {}
+    return json.loads(selection.read_text(encoding="utf-8"))
 
 
 def load_tables_by_mode_from_run(output_dir: PathLike) -> Dict[str, Dict[str, pd.DataFrame]]:
@@ -1086,9 +1089,10 @@ def load_tables_by_mode_from_run(output_dir: PathLike) -> Dict[str, Dict[str, pd
 
     dest = regenerated_abundance_dir(output_dir)
     candidates = dest / ".table_candidates"
+    status = _candidate_generation_status(dest)
     failed = {
         re.sub(r"[^A-Za-z0-9._-]+", "_", mode)
-        for mode in _candidate_generation_errors(dest)
+        for mode in {**(status.get("generate_errors") or {}), **(status.get("unsupported") or {})}
     }
     tables_by_mode: Dict[str, Dict[str, pd.DataFrame]] = {}
     if candidates.is_dir():
@@ -1136,7 +1140,9 @@ def stage_score_regenerated_tables(
     )
     mixed = ranked.get("tables") or {}
     dest = regenerated_abundance_dir(root)
-    ranked["generate_errors"] = _candidate_generation_errors(dest)
+    status = _candidate_generation_status(dest)
+    ranked["generate_errors"] = status.get("generate_errors") or {}
+    ranked["unsupported"] = status.get("unsupported") or {}
     if mixed:
         write_abundance_dir(dest, mixed)
     payload = {k: v for k, v in ranked.items() if k != "tables"}

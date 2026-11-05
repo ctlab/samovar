@@ -267,3 +267,20 @@ def test_table_score_heatmap_png_keeps_grid_and_opaque_background(tmp_path):
     # Failed cells stay in the grid: more than one color, not a flat square.
     flat = img.reshape(-1, img.shape[-1])
     assert len(np.unique(np.round(flat, 2), axis=0)) > 8
+
+
+def test_unsupported_generator_does_not_reuse_stale_candidate(tmp_path):
+    import json
+    from samovar.table_scorers import load_tables_by_mode_from_run
+
+    dest = tmp_path / "regenerated" / ".regenerated_abundance"
+    candidates = dest / ".table_candidates"
+    for mode in ("direct", "sparsedossa2-fit"):
+        folder = candidates / mode
+        folder.mkdir(parents=True)
+        (folder / "toy.csv").write_text("taxid,N_1\n562,10\n")
+    (candidates / "table_selection.json").write_text(json.dumps({
+        "unsupported": {"sparsedossa2-fit": "too few supported taxa"},
+        "generate_errors": {},
+    }))
+    assert set(load_tables_by_mode_from_run(tmp_path)) == {"direct"}

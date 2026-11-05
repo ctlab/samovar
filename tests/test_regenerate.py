@@ -1097,7 +1097,8 @@ def test_concat_only_keeps_single_table(toy_annotation_dir, tmp_path):
     assert not (out / "kaiju.csv").is_file()
 
 
-def test_failed_generator_is_recorded_in_table_selection(toy_annotation_dir, tmp_path, monkeypatch):
+@pytest.mark.parametrize("unsupported", [False, True])
+def test_failed_generator_is_recorded_in_table_selection(toy_annotation_dir, tmp_path, monkeypatch, unsupported):
     import json
 
     import samovar.regenerate as reg
@@ -1106,7 +1107,10 @@ def test_failed_generator_is_recorded_in_table_selection(toy_annotation_dir, tmp
 
     def wrapped(annotation_dir, output_dir, cfg, data):
         if cfg.get("table_reads_generator") == "bootstrap":
-            raise RuntimeError("bootstrap boom")
+            from samovar.table_regenerators import UnsupportedTableRegeneratorError
+
+            error = UnsupportedTableRegeneratorError if unsupported else RuntimeError
+            raise error("bootstrap boom")
         return real(annotation_dir, output_dir, cfg, data)
 
     monkeypatch.setattr(reg, "_regenerate_one_mode", wrapped)
@@ -1125,8 +1129,13 @@ def test_failed_generator_is_recorded_in_table_selection(toy_annotation_dir, tmp
     assert tables
     selection = json.loads((out / "table_selection.json").read_text())
     assert selection["winner"] == "direct"
-    assert selection["failed"] == ["bootstrap"]
-    assert "bootstrap boom" in selection["generate_errors"]["bootstrap"]
+    if unsupported:
+        assert selection["unsupported"] == {"bootstrap": "bootstrap boom"}
+        assert "bootstrap" not in selection.get("generate_errors", {})
+        assert "bootstrap" not in selection.get("failed", [])
+    else:
+        assert selection["failed"] == ["bootstrap"]
+        assert "bootstrap boom" in selection["generate_errors"]["bootstrap"]
 
 
 

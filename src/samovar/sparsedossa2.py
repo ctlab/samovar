@@ -33,7 +33,7 @@ from samovar.regenerate import (
     _taxid_columns,
     coerce_seed,
 )
-from samovar.table_regenerators import apply_extra_flags
+from samovar.table_regenerators import UnsupportedTableRegeneratorError, apply_extra_flags
 
 PathLike = Union[str, Path]
 
@@ -333,6 +333,11 @@ def simulate_count_matrix(
         timeout=int(cfg.get("timeout") or 7200),
         config=cfg,
     )
+    status_path = Path(str(outp) + ".status.json")
+    if status_path.is_file():
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        if status.get("status") == "unsupported":
+            raise UnsupportedTableRegeneratorError(status["error"])
     simulated = _read_simulated_csv(outp)
     return remap_simulated_features(simulated, ranked)
 
@@ -459,7 +464,10 @@ def regenerate(
         mat = _filter_taxa(mat, threshold, n_reads, rescale=False, max_genomes=cfg.get("max_genomes"))
         if mat.empty:
             continue
-        simulated = simulate_count_matrix(mat, mode=mode, n_sample=n_samples, config=cfg)
+        try:
+            simulated = simulate_count_matrix(mat, mode=mode, n_sample=n_samples, config=cfg)
+        except UnsupportedTableRegeneratorError as exc:
+            raise UnsupportedTableRegeneratorError(f"{name}: {exc}") from exc
         simulated.columns = [str(c) for c in simulated.columns]
         simulated = _apply_abundance_scale(simulated, n_reads, rescale)
         result[name] = _abundance_table_from_matrix(simulated, name)

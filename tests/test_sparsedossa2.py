@@ -232,3 +232,20 @@ def test_write_feature_matrix_keeps_taxa_rows_when_fewer_than_samples(tmp_path):
     assert loaded.shape == (2, 5)
     assert list(loaded.index.astype(str)) == ["562", "9606"]
 
+
+
+def test_fit_unsupported_status_is_not_an_r_failure(monkeypatch, tmp_path):
+    import json
+    from samovar.table_regenerators import UnsupportedTableRegeneratorError
+
+    def fake_run(argv, **_kwargs):
+        out = Path(argv[argv.index("--output") + 1])
+        Path(str(out) + ".status.json").write_text(json.dumps({
+            "status": "unsupported", "error": "need at least 4 supported taxa",
+        }))
+        return ""
+
+    monkeypatch.setattr("samovar.sparsedossa2.run_sparsedossa2_r", fake_run)
+    observed = pd.DataFrame({"a": [10, 2], "b": [8, 3]}, index=["562", "9606"])
+    with pytest.raises(UnsupportedTableRegeneratorError, match="4 supported taxa"):
+        simulate_count_matrix(observed, n_sample=2, config={"output_dir": str(tmp_path)})

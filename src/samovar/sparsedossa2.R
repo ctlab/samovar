@@ -204,11 +204,23 @@ patch_degenerate_fit <- function() {
   invisible(NULL)
 }
 
-require_fit_size <- function(mat) {
-  n_feature <- sum(rowSums(mat) > 0)
-  n_sample <- sum(colSums(mat) > 0)
-  if (n_feature < 2L || n_sample < 2L) {
-    stop("too few features/samples for SparseDOSSA2 fit", call. = FALSE)
+fit_support <- function(mat) {
+  supported <- rowSums(mat > 0) >= 2L
+  c(features = sum(supported),
+    samples = sum(colSums(mat[supported, , drop = FALSE]) > 0))
+}
+
+require_fit_size <- function(mat, output) {
+  # fit_F estimates a three-dimensional parameter density after filtering taxa.
+  support <- fit_support(mat)
+  if (support[["features"]] < 4L || support[["samples"]] < 2L) {
+    write_json(paste0(output, ".status.json"), list(
+      status = "unsupported",
+      error = paste0("SparseDOSSA2 fit unsupported: need at least 4 taxa observed ",
+                     "in at least 2 samples and at least 2 nonempty samples; got ",
+                     support[["features"]], " taxa and ", support[["samples"]], " samples")
+    ))
+    quit(save = "no", status = 0)
   }
 }
 
@@ -333,9 +345,9 @@ if (opts$command %in% c("fitcv", "cv", "score")) {
   # Its all-zero filter drops taxa observed fewer than twice. A handful of
   # surviving taxa cannot identify that density; namespace numeric patches
   # must not turn such a table into a seemingly valid model comparison.
-  supported <- rowSums(mat > 0) >= 2L
-  n_supported <- sum(supported)
-  n_supported_samples <- sum(colSums(mat[supported, , drop = FALSE]) > 0)
+  support <- fit_support(mat)
+  n_supported <- support[["features"]]
+  n_supported_samples <- support[["samples"]]
   if (n_supported < 4L || n_supported_samples < 4L) {
     write_json(opts$output, list(
       cv_goodness_of_fit = NA_real_,
@@ -376,7 +388,7 @@ new_features <- opts$new_features
 if (identical(opts$mode, "fit") || identical(tolower(opts$template), "fit")) {
   if (is.null(opts$input)) stop("--input is required for fit mode")
   mat <- read_feature_matrix(opts$input)
-  require_fit_size(mat)
+  require_fit_size(mat, opts$output)
   setup_parallel(opts$workers, cv = FALSE, seed = opts$seed)
   if (!is.null(opts$seed) && !is.na(opts$seed)) set.seed(opts$seed)
   if (is.na(new_features)) new_features <- FALSE

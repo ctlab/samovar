@@ -45,6 +45,10 @@ from samovar.regenerate import (
 TABLE_READS_GENERATOR_GROUP = "table_reads_generator"
 
 
+class UnsupportedTableRegeneratorError(ValueError):
+    """The requested method cannot fit the supplied data; no table is generated."""
+
+
 class MissingTableRegeneratorError(ValueError):
     """``tools.<name>`` is missing or is not a ``table_reads_generator``."""
 
