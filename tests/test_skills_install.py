@@ -200,5 +200,3 @@ def test_unlisted_skills_are_not_distributed(harness):
     assert not (project / "samovar-harness/skills/private").exists()
     installed = project / "samovar-harness/skills/samovar/.samovar-harness.json"
     assert json.loads(installed.read_text())["format_version"] == 1
-
-

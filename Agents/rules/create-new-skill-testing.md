@@ -15,6 +15,14 @@ real SAMOVAR pipeline behavior. Mark unrun cases explicitly; do not fabricate
 PASS records. Stage skills are ready only after their relevant real runs pass.
 Do not commit these run records or require their presence in the source checkout.
 
+When agent-behavior evaluation is authorized, use fresh subagents with the
+installed bundle, natural-language intent and actual input locations. Do not
+give them the expected CLI recipe or let them copy an existing example script.
+Compare their derived commands and real artifacts against the intended result.
+After correcting ambiguous guidance, rerun with a fresh evaluator that has not
+seen the diagnosis. Report a stopped or partial trial as such; a corrected
+recipe executed by its author is not independent behavioral validation.
+
 Test installer behavior offline in temporary projects: correct discovery paths,
 bundled references, repeated installation, preserved user edits, noninteractive
 behavior and paths with spaces. No bioinformatics environment install is needed

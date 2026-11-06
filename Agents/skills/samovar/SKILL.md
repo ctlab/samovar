@@ -13,6 +13,15 @@ SAMOVAR run. Read the bundled conditional rules before acting:
 
 These files travel with the skill; the user does not install rules separately.
 
+Before asking for parameters, read the user-referenced project context and any
+`agents.md` or `AGENTS.md` in the working example directory. A concise profile
+can supply the data, output location and approved choices for a bare `/samovar`
+request. Apply the user's overrides. Use the bundled stage skills and existing
+SAMOVAR hooks/bins for execution rather than reimplementing their steps.
+An explicit request to use installed/documented defaults approves unspecified
+settings; inspect and record their resolved values instead of asking again.
+Ask only for material choices that remain unresolved by the request/profile.
+
 Establish the requested analysis, actual input files, output directory, required
 annotators/databases, and resource limits from the request and existing run
 configuration. Check files and installed tools; do not invent paths or taxonomic
@@ -52,3 +61,9 @@ per-annotator outputs and regenerated data, before reporting completion. Report
 partial, empty or failed stages explicitly; a zero exit code alone is insufficient.
 Return artifact paths and the actual validation performed. Use the run's
 citations/methods outputs when describing the analysis.
+
+For an authorized run, use an owned working directory under its output tree and
+absolute input/config paths for CLI discovery and execution. Some installed
+wrappers may stage files even during help inspection; keep such staging inside
+the run's `.tmp`, not the repository or the directory containing this profile.
+Respect a supplied `SAMOVAR_CONFIG`; do not mutate another installation/catalog.

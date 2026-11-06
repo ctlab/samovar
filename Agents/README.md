@@ -35,6 +35,13 @@ IDE automatically discovers the same directory. Discovery paths follow the
 [Cursor](https://cursor.com/docs/skills) and
 [Claude Code](https://code.claude.com/docs/en/skills) documentation.
 
+In the SAMOVAR source checkout, open `example/agentic-phage/agents.md` as context
+or work in its directory, then invoke `/samovar`. The skill reads that profile and
+derives the public CLI workflow; no `pipeline.sh` or copied command recipe is
+needed. The profile pins reference membership, initial depth/resources and the
+reprofiler while approving installed defaults for the remaining settings.
+This optional source-checkout example is not required by the portable installer.
+
 `install.sh full` attempts this installation when an IDE session is detected;
 it skips CI and unknown terminals. `install.sh ask` (including `full ask`) asks
 which target to install; noninteractive ask skips it. The destination is the

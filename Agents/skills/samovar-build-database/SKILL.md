@@ -33,6 +33,12 @@ or prepared config; do not invent a schema. Add `--index` only when registering
 the result is authorized. Do not overwrite another reference under that name.
 Programs and taxonomy must resolve from SAMOVAR's install config.
 
+The current build YAML requires `input_dir` (a list of reference genome
+directories), `output_dir` (owned preprocessing directory), `mutation_rate` and
+`include_percent`. For an unchanged reference, use zero mutation and 100 percent
+inclusion. Write that small configuration as data, then let the existing build
+command preprocess and index it; do not copy its Snakefile or builder logic.
+
 After the build, check return status and type-specific index artifacts and
 registration when requested. Record source genomes, taxonomy and omissions in
 the run audit. On a second request, inspect and reuse a suitable completed index
