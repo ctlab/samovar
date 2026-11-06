@@ -42,6 +42,16 @@ Already-installed extras are reused and written into the install config. More de
 
 The tool main config layout is described in [config wiki](https://github.com/ctlab/samovar/wiki/Configs-&-data).
 
+### Harness
+
+Simply install the new portable SAMOVAR analysis bundle into your current project or ask agent to just do it:
+
+```bash
+bash /path/to/samovar/skills_install.sh --ide auto
+```
+
+Use `--ide codex`, `cursor`, or `claude` if your IDE terminal is not detected.
+
 ## Ensemble annotation
 
 Built-in ensemble members (wired through `samovar prepare`):

@@ -1,6 +1,7 @@
 *.pyc
 __pycache__/
 .pytest_cache/
+/Agents/skill-and-hook-testing/
 .coverage
 .coverage*
 
@@ -98,3 +99,4 @@ contex.ignore
 .cursor/rules/*
 !.cursor/rules/agents.mdc
 .cursor/rules/agents.mdc
+build/.config_path.lock

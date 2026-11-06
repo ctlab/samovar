@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import tempfile
 from pathlib import Path
 
 from samovar.seqio import (
@@ -21,12 +22,20 @@ def read_fastq_records(path: Path):
 
 
 def write_fastq_records(path: Path, records):
-    with open_text(path, "wt") as fh:
-        for _, h, s, p, q in records:
-            fh.write(h)
-            fh.write(s)
-            fh.write(p)
-            fh.write(q)
+    scratch = path.parent / ".tmp"
+    scratch.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="sort_reads_", dir=scratch) as temporary:
+        pending = Path(temporary) / path.name  # Retain .gz for open_text.
+        pending.touch(mode=0o600)
+        with open_text(pending, "wt") as fh:
+            for _, h, s, p, q in records:
+                fh.write(h)
+                fh.write(s)
+                fh.write(p)
+                fh.write(q)
+        # Replace the run's directory entry, never follow a symlink or mutate a
+        # shared hardlink inode. A failed write leaves the previous file intact.
+        pending.replace(path)
 
 
 def sort_paired_files(r1_path: Path, r2_path: Path):
@@ -59,7 +68,7 @@ def _r1_files(out_dir: Path):
         if not directory.is_dir():
             continue
         for r1 in list_r1_files(directory):
-            key = str(r1.resolve())
+            key = str(r1.absolute())
             if key not in seen:
                 seen.add(key)
                 files.append(r1)
@@ -67,7 +76,7 @@ def _r1_files(out_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sort paired FASTQ files by read ID")
+    parser = argparse.ArgumentParser(description="Sort paired or single-end FASTQ files by read ID")
     from samovar.paths import add_output_dir_argument
 
     add_output_dir_argument(parser, default=".", help="Directory with FASTQ files")
@@ -93,7 +102,7 @@ def _sort_output_dir(out_dir: Path):
         r2_path = r2_for_r1(r1_path)
         if r2_path.is_file() and r2_path.stat().st_size > 0:
             sort_paired_files(r1_path, r2_path)
-        elif "regenerated" in r1_path.parts:
+        else:
             sort_single_file(r1_path)
 
 
