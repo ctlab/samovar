@@ -50,7 +50,7 @@ def run_command(cmd: List[str], check: bool = True) -> subprocess.CompletedProce
 
         resolved = command_argv(resolve_executable(argv[0]) or "")
         if resolved and resolved[0]:
-            argv[0] = resolved[0]
+            argv = [*resolved, *argv[1:]]
     logger.info(f"Running command: {' '.join(argv)}")
     return subprocess.run(argv, check=check, text=True)
 
@@ -853,6 +853,8 @@ def build_database_from_config(
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    if db_type == "metaphlan":
+        return build_database_metaphlan(config, db_path, threads)
     
     # Process input directories
     input_dirs = config['input_dir']
@@ -1000,3 +1002,54 @@ def build_database_from_config(
         logger.info("k-mer encoder model written to %s", dest)
     else:
         raise ValueError(f"Unknown database type: {db_type}")
+
+
+def build_database_metaphlan(config, db_path, threads=1):
+    """Index a matched MetaPhlAn marker FASTA/metadata pair, not arbitrary ORFs."""
+    import bz2
+    import hashlib
+    import json
+    import pickle
+    source = Path(config.get("marker_fasta", ""))
+    info = Path(config.get("marker_metadata", ""))
+    if not source.is_file() or not info.is_file():
+        raise ValueError("MetaPhlAn build needs marker_fasta and matching native marker_metadata (.pkl); genome FASTA alone is not a marker database")
+    with bz2.open(info, "rb") as handle:
+        data = pickle.load(handle)
+    if not isinstance(data.get("taxonomy"), dict) or not isinstance(data.get("markers"), dict) or not data["markers"]:
+        raise ValueError("Invalid MetaPhlAn marker metadata")
+    name = str(config.get("index_name") or info.stem)
+    if Path(name).name != name:
+        raise ValueError("MetaPhlAn index_name must be a filename prefix")
+    dest = Path(db_path)
+    dest.mkdir(parents=True, exist_ok=True)
+    fasta = dest / (name + ".fna")
+    if fasta.resolve() == source.resolve():
+        raise ValueError("Build destination must not overwrite the marker source")
+    seen = set()
+    opener = bz2.open if source.suffix == ".bz2" else open_text
+    with opener(source, "rt") as handle, fasta.open("w") as output:
+        for rec in SeqIO.parse(handle, "fasta"):
+            if rec.id in seen or rec.id not in data["markers"]:
+                raise ValueError(f"Duplicate or undocumented MetaPhlAn marker: {rec.id}")
+            if len(rec.seq) != int(data["markers"][rec.id]["len"]):
+                raise ValueError(f"Marker length does not match metadata: {rec.id}")
+            seen.add(rec.id)
+            SeqIO.write(rec, output, "fasta")
+    if seen != set(data["markers"]):
+        raise ValueError("Marker FASTA is incomplete relative to MetaPhlAn metadata")
+    shutil.copyfile(info, dest / (name + ".pkl"))
+    # MetaPhlAn's DB completeness check requires .bt2l even for tiny fixtures.
+    run_command(["bowtie2-build", "--threads", str(max(1, int(threads))), "--large-index", str(fasta), str(dest / name)])
+    suffix = "bt2l" if (dest / (name + ".1.bt2l")).is_file() else "bt2"
+    if not all((dest / f"{name}.{part}.{suffix}").is_file() for part in ("1", "2", "3", "4", "rev.1", "rev.2")):
+        raise RuntimeError("bowtie2-build did not write a complete MetaPhlAn index")
+    def digest(path):
+        sha = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                sha.update(block)
+        return sha.hexdigest()
+    (dest / "metaphlan.manifest.json").write_text(json.dumps(dict(
+        index=name, marker_count=len(seen), source_fasta=str(source.resolve()), source_metadata=str(info.resolve()),
+        fasta_sha256=digest(source), metadata_sha256=digest(info)), indent=2) + "\n")

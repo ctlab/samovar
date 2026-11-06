@@ -68,6 +68,14 @@ def main(argv=None) -> int:
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
+    from samovar.profile_pipeline import score
+    from samovar.annotation_io import read_annotation_dir
+    root = Path(args.annotation_dir).parent
+    stage = Path(args.annotation_dir).name.removesuffix("_annotations")
+    has_profiles = score(root, stage, {**config, "viz": viz})
+    if has_profiles and read_annotation_dir(args.annotation_dir).empty:
+        return 0
+
     compare_annotations(
         annotation_dir=args.annotation_dir,
         output_dir=args.output_dir,

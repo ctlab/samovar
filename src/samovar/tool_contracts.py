@@ -33,6 +33,11 @@ def _contract_repo_root() -> Path:
     return repo_root()
 
 CONTRACTS: Dict[str, Dict[str, str]] = {
+    "profiler": {
+        "in": "FASTQ -i/-I, database -d, profile CSV -o, threads -t (same launcher as annotators). Native MetaPhlAn uses the registered profile adapter.",
+        "out": "taxid + N_<sample> CSV and <output>.profile.json metadata: kind, unit, basis, taxonomy, rank, normalization. "
+               "No seq or fabricated per-read assignments. Empty profiles retain explicit sample columns.",
+    },
     "annotator": {
         "in": "FASTQ R1/R2 via CLI -i/-I, -d DB, -o out, -t threads "
         "(or Python parse_output(path) on a TSV). Feature extractors use the same CLI.",
@@ -172,6 +177,7 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
 }
 
 GROUP_TO_TESTNODE = {
+    "profiler": "tests/test_tool_contracts.py::test_profiler_contract",
     "annotator": "tests/test_tool_contracts.py::test_annotator_contract",
     "table_reads_generator": "tests/test_tool_contracts.py::test_table_regenerator_contract",
     "table_scoring": "tests/test_tool_contracts.py::test_table_scoring_contract",

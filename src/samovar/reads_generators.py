@@ -576,6 +576,19 @@ def _simulate_camisim_sample(
     ]
     total = sum(counts.values())
     cfg["communities"] = [{taxid: amount / total for taxid, amount in counts.items()}]
+    if cfg["mode"] != "table":
+        # Canonical regeneration tables contain read counts. CAMISIM accepts
+        # organism abundance and applies genome lengths itself.
+        from samovar.profiles import change_basis, metadata
+        from samovar.seqio import fasta_handle
+        lengths = {}
+        for taxid in counts:
+            with fasta_handle(available_genomes[taxid]) as handle:
+                lengths[taxid] = sum(len(line.strip()) for line in handle if not line.startswith(">"))
+        community = pd.DataFrame({"taxid": list(counts), "N_sample": list(counts.values())})
+        organisms, conversion = change_basis(community, metadata(), "organisms", lengths)
+        cfg["communities"] = [dict(zip(organisms.taxid, organisms.N_sample))]
+        cfg["abundance_conversion"] = conversion
     cfg["extra_flags"] = shlex.join(flags)
     config_path = work / "camisim.yaml"
     config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")

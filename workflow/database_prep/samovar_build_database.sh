@@ -11,7 +11,8 @@ show_usage() {
     echo "Usage: samovar build_database [options]"
     echo ""
     echo "Options:"
-    echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique, centrifuge)"
+    echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique, centrifuge, metaphlan)"
+    echo "                    MetaPhlAn YAML requires marker_fasta + matching marker_metadata (.pkl)"
     echo "  --config_path PATH Path to config YAML file"
     echo "  --db_path PATH    Path to store the database"
     echo "  --index NAME      Record this database in the install config"
@@ -89,8 +90,8 @@ if [ -z "$type" ] || [ -z "$config_path" ] || [ -z "$db_path" ]; then
 fi
 
 # Validate database type
-if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ] && [ "$type" != "krakenunique" ] && [ "$type" != "centrifuge" ]; then
-    echo "Error: --type must be 'kaiju', 'kraken2', 'kraken', 'krakenunique', or 'centrifuge'"
+if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ] && [ "$type" != "krakenunique" ] && [ "$type" != "centrifuge" ] && [ "$type" != "metaphlan" ]; then
+    echo "Error: --type must be 'kaiju', 'kraken2', 'kraken', 'krakenunique', 'centrifuge', or 'metaphlan'"
     show_usage
     exit 1
 fi

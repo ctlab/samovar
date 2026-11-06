@@ -52,6 +52,7 @@ PathLike = Union[str, Path]
 EXPORT_GROUP = "export"
 
 _BUILTIN_ALIASES = {
+    "profile_ratio": "profile_ratio",
     "logistic": "logistic",
     "logit": "logistic",
     "logreg": "logistic",
@@ -308,6 +309,7 @@ def as_annotation(data: Any) -> Annotation:
         if not frame.empty:
             obj = Annotation.from_long_table(frame)
             obj.abundance_tables = getattr(data, "abundance_tables", None)
+            obj.profile_metadata = dict(getattr(data, "profile_metadata", {}))
             return obj
         return data
     if isinstance(data, pd.DataFrame):
@@ -319,6 +321,7 @@ def as_annotation(data: Any) -> Annotation:
     if not frame.empty:
         obj = Annotation.from_long_table(frame)
         obj.abundance_tables = getattr(loaded, "abundance_tables", None)
+        obj.profile_metadata = dict(getattr(loaded, "profile_metadata", {}))
         return obj
     return loaded
 
@@ -476,7 +479,6 @@ def apply_taxon_efficiency(
         if not rates:
             corrected[name] = work
             continue
-        cols = n_sample_columns(work)
         default = float(rates.get("__default__", 1.0))
         scale = []
         for tax in work["taxid"].map(_taxid_str):
@@ -487,10 +489,83 @@ def apply_taxon_efficiency(
             scale.append(max(eff, min_efficiency))
         denom = np.array(scale, dtype=float)
         denom[denom <= 0] = min_efficiency
-        for col in cols:
-            work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0) / denom
+        work = apply_abundance_factors(work, dict(zip(work["taxid"].astype(str), 1 / denom)))
         corrected[name] = work.reset_index(drop=True)
     return corrected
+
+
+def apply_abundance_factors(table, factors):
+    """Shared multiplicative correction; unknown taxa keep their observed mass."""
+    work = table.copy()
+    scale = work["taxid"].astype(str).map(factors).fillna(1).to_numpy(float)
+    if not np.isfinite(scale).all() or (scale < 0).any():
+        raise ValueError("Abundance correction factors must be finite and nonnegative")
+    for col in n_sample_columns(work):
+        work[col] = pd.to_numeric(work[col], errors="raise").to_numpy(float) * scale
+    return work
+
+
+def export_profile_ratio(annotation, dest, config=None):
+    """Fit/apply independent abundance ratios through the existing export API."""
+    import json
+    from samovar.profiles import fractions, metadata, compatible, write_profiles
+    from samovar.profile_pipeline import align_truth
+    cfg = dict(config or {})
+    ann = as_annotation(annotation)
+    tables = input_to_abundance_tables(ann)
+    metas = {name: metadata(getattr(ann, "profile_metadata", {}).get(name, {"rank": "taxid"})) for name in tables}
+    reference = cfg.get("reference")
+    model_path = Path(cfg.get("profile_model") or (Path(dest) / "profile_ratio.json"))
+    model = dict(version=1, method="profile_ratio", profiles={})
+    if reference is not None:
+        if cfg.get("reference_truth") is None:
+            raise ValueError("Profile ratio requires explicit regenerated reference_truth")
+        truth, tm = cfg["reference_truth"]
+        ref = as_annotation(reference)
+        training = input_to_abundance_tables(ref)
+        for name, table in training.items():
+            rm = metadata(getattr(ref, "profile_metadata", {}).get(name, {"rank": "taxid"}))
+            pred, pm, gold, gm = align_truth(table, rm, truth, tm, cfg.get("run_root", "."), cfg)
+            compatible(pm, gm)
+            if gm["kind"] != "abundance":
+                raise ValueError("Presence truth cannot train quantitative profile correction")
+            if set(n_sample_columns(pred)) != set(n_sample_columns(gold)):
+                raise ValueError("Correction training profile/truth samples differ")
+            x = fractions(pred, pm).query("taxid != '0'").set_index("taxid")[n_sample_columns(pred)].sum(axis=1)
+            y = fractions(gold, gm).query("taxid != '0'").set_index("taxid")[n_sample_columns(gold)].sum(axis=1)
+            factors = {str(tax): float(y.get(tax, 0) / value) for tax, value in x.items() if value > 0}
+            model["profiles"][name] = dict(metadata=pm, factors=factors)
+    elif model_path.is_file():
+        model = json.loads(model_path.read_text())
+        if model.get("version") != 1 or model.get("method") != "profile_ratio":
+            raise ValueError("Incompatible profile-ratio model; retrain")
+    else:
+        raise ValueError("Profile ratio needs a trained model or regenerated reference")
+    corrected, output_meta = {}, {}
+    from samovar.profiles import at_rank
+    for name, table in tables.items():
+        saved = model["profiles"].get(name)
+        if saved is None:
+            raise ValueError(f"No regenerated training profile for {name}")
+        pm = metas[name]
+        table, pm = at_rank(table, pm, saved["metadata"]["rank"], cfg.get("taxdump"))
+        compatible(pm, saved["metadata"])
+        if pm.get("database") != saved["metadata"].get("database"):
+            raise ValueError(f"Training/prediction database differs for profile {name}")
+        table = fractions(table, pm).query("taxid != '0'")
+        work = apply_abundance_factors(table, saved["factors"])
+        cols = n_sample_columns(work)
+        # Preserve the observed classified mass; correction must not reassign
+        # unknown/unclassified mass to the surviving taxa.
+        mass = table[cols].sum()
+        work[cols] = work[cols].div(work[cols].sum().replace(0, np.nan)).mul(mass).fillna(0)
+        identity = name + "_profile_ratio"
+        corrected[identity] = work
+        output_meta[identity] = {**pm, "unit": "fraction", "method": "profile_ratio", "source_identity": name}
+    write_profiles(dest, corrected, output_meta)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_text(json.dumps(model, indent=2, allow_nan=False) + "\n")
+    return Path(dest)
 
 
 def maybe_attach_samovar_reference(reference: Annotation, model_path: Optional[PathLike]) -> Annotation:
@@ -648,20 +723,25 @@ def _custom_export(annotation: Annotation, dest: Path, config: Dict[str, Any], s
     frame = annotation_frame(annotation)
     if not frame.empty:
         frame.to_csv(tmp_in, index=False)
-    cmd = [str(path), "-i", str(tmp_in if tmp_in.is_file() else dest), "-o", str(dest)]
+    typed_input = dest / ".input_profiles"
+    if getattr(annotation, "profile_metadata", None):
+        dump_builtin(annotation, typed_input, "abundance")
+    cmd = [str(path), "-i", str(typed_input if typed_input.is_dir() else tmp_in if tmp_in.is_file() else dest), "-o", str(dest)]
     reference = config.get("reference")
     if reference is not None:
         ref_path = Path(str(getattr(reference, "path", "") or ""))
         if not ref_path.is_file() and not ref_path.is_dir():
             ref_dir = dest / ".reference"
             ref_ann = as_annotation(reference)
-            write_abundance_dir(ref_dir, input_to_abundance_tables(ref_ann) or {})
+            dump_builtin(ref_ann, ref_dir, "abundance")
             frame = annotation_frame(ref_ann)
             if not frame.empty:
                 csv = ref_dir / "combined_annotation_table.csv"
                 csv.parent.mkdir(parents=True, exist_ok=True)
                 frame.to_csv(csv, index=False)
                 cmd.extend(["-r", str(csv)])
+            else:
+                cmd.extend(["-r", str(ref_dir)])
         else:
             cmd.extend(["-r", str(ref_path)])
     extra = list(config.get("extra_argv") or extra_flags_argv(config.get("extra_flags")))
@@ -686,6 +766,8 @@ def run_export(
         return export_identity(ann, dest_path, cfg)
     if kind == "builtin" and canon == "logistic":
         return export_logistic(ann, dest_path, cfg)
+    if kind == "builtin" and canon == "profile_ratio":
+        return export_profile_ratio(ann, dest_path, cfg)
     spec = lookup_export(canon)
     return _custom_export(ann, dest_path, cfg, spec, canon)
 

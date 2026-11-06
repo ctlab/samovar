@@ -1092,6 +1092,7 @@ class Annotation:
         self.id = 0
         self.DataFrame = pd.DataFrame()
         self.abundance_tables = None
+        self.profile_metadata = {}
         
         # Read and combine all annotation files (taxID_* and/or feat_*)
         frames = []
@@ -1170,10 +1171,11 @@ class Annotation:
         obj.true_annotation_list = cls.list2set(obj.true_annotation)
         obj.rank_list = cls.list2set([*obj.annotation_list, *obj.true_annotation_list])
         obj.abundance_tables = None
+        obj.profile_metadata = {}
         return obj
 
     @classmethod
-    def from_abundance_tables(cls, tables: Dict[str, pd.DataFrame]) -> "Annotation":
+    def from_abundance_tables(cls, tables: Dict[str, pd.DataFrame], metadata=None) -> "Annotation":
         """Wrap taxa×sample count tables (``taxid``, ``N_<sample>``)."""
         from samovar.abundance import normalize_abundance_table
 
@@ -1183,7 +1185,23 @@ class Annotation:
             for name, table in (tables or {}).items()
             if table is not None
         }
+        if metadata is not None:
+            from samovar.profiles import validate
+            obj.profile_metadata = {}
+            for name, table in tables.items():
+                obj.abundance_tables[str(name)], obj.profile_metadata[str(name)] = validate(table, metadata.get(name))
         return obj
+
+    def add_profiles(self, tables, metadata):
+        """Attach independent profiles without inventing per-read assignments."""
+        from samovar.profiles import validate
+        stored = dict(self.abundance_tables or {})
+        for name, table in tables.items():
+            if name in stored:
+                raise ValueError(f"Duplicate profile identity: {name}")
+            stored[name], self.profile_metadata[name] = validate(table, metadata.get(name))
+        self.abundance_tables = stored
+        return self
 
     @classmethod
     def from_annotation_dir(
@@ -1193,9 +1211,14 @@ class Annotation:
     ) -> "Annotation":
         from samovar.annotation_io import read_annotation_dir
 
-        return cls.from_long_table(
+        obj = cls.from_long_table(
             read_annotation_dir(path, sample_name_position=sample_name_position)
         )
+        from samovar.profiles import read_profiles
+        tables, meta = read_profiles(path)
+        if not tables and Path(path).name.endswith("_annotations"):
+            tables, meta = read_profiles(Path(path).with_name(Path(path).name.replace("_annotations", "_profiles")))
+        return obj.add_profiles(tables, meta) if tables else obj
 
     def true_annotation_unique(self) -> set:
         """Get unique true annotations."""

@@ -146,7 +146,14 @@ def read_annotation_dir(
     """
     data_dir = Path(data_dir)
     frames = []
+    profile_files = set()
+    manifest = data_dir / ".profiles.json"
+    if manifest.is_file():
+        import json
+        profile_files = {f"{name}.csv" for name in json.loads(manifest.read_text())["profiles"]}
     for path in sorted(data_dir.glob("*.csv")):
+        if path.name in profile_files:
+            continue
         if path.name.startswith("combined_annotation_table"):
             continue
         parts = path.name.split(".")
@@ -154,6 +161,8 @@ def read_annotation_dir(
         tmp = _read_annotation_csv(path)
         if tmp is None:
             continue
+        if manifest.is_file() and "seq" not in tmp and "taxid" in tmp and any(str(c).startswith("N_") for c in tmp):
+            continue  # An older profile CSV is not a per-read annotation.
         tmp["sample"] = sample_name
         frames.append(tmp)
     if not frames:

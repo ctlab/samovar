@@ -1,13 +1,18 @@
 import gzip
+import bz2
+import json
 import os
+import pickle
 from pathlib import Path
 from unittest.mock import patch
+import pytest
 
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from samovar.build_database import (
+    build_database_from_config,
     find_local_proteome_or_gff,
     kaiju_protein_id,
     nucleotide_to_orf_records,
@@ -15,6 +20,38 @@ from samovar.build_database import (
     process_fasta_kraken2,
     translate_cds_from_gff,
 )
+
+
+def test_metaphlan_build_checks_marker_pair_and_indexes_via_shared_runner(tmp_path, monkeypatch):
+    import yaml
+    fasta = tmp_path / "markers.fna"
+    fasta.write_text(">SGB1__gene\nACGT\n")
+    info = tmp_path / "markers.pkl"
+    with bz2.open(info, "wb") as handle:
+        pickle.dump({"taxonomy": {"s__example": ("562", 4)},
+                     "markers": {"SGB1__gene": {"len": 4}}}, handle)
+    cfg = tmp_path / "build.yaml"
+    cfg.write_text(yaml.safe_dump(dict(marker_fasta=str(fasta), marker_metadata=str(info))))
+    dest = tmp_path / "db with spaces"
+    calls = []
+
+    def build(cmd):
+        calls.append(cmd)
+        assert cmd[:3] == ["bowtie2-build", "--threads", "2"]
+        assert Path(cmd[-2]).read_text() == fasta.read_text()
+        for part in ("1", "2", "3", "4", "rev.1", "rev.2"):
+            Path(f"{cmd[-1]}.{part}.bt2l").write_bytes(b"index")
+
+    monkeypatch.setattr("samovar.build_database.run_command", build)
+    build_database_from_config(str(cfg), db_type="metaphlan", db_path=str(dest), threads=2)
+    manifest = json.loads((dest / "metaphlan.manifest.json").read_text())
+    assert manifest["marker_count"] == 1 and len(manifest["fasta_sha256"]) == 64
+    assert (dest / "markers.pkl").read_bytes() == info.read_bytes()
+    assert len(calls) == 1
+    fasta.write_text(">SGB1__gene\nAC\n")
+    with pytest.raises(ValueError, match="length"):
+        build_database_from_config(str(cfg), db_type="metaphlan", db_path=str(dest), threads=2)
+    assert len(calls) == 1
 
 
 def test_kaiju_protein_id_puts_taxid_last():

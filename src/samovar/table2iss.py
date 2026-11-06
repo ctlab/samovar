@@ -356,8 +356,8 @@ def _read_fasta_concat(path: str) -> str:
     return CONTIG_SPACER.join(seqs)
 
 
-def _scale_amounts(amount: Sequence[int], total_amount: Optional[int]) -> List[int]:
-    scaled = [max(0, int(n)) for n in amount]
+def _scale_amounts(amount: Sequence[int], total_amount: Optional[int], *, fractional: bool = False) -> List[int]:
+    scaled = [max(0, float(n) if fractional else int(n)) for n in amount]
     total = sum(scaled)
     if total_amount is not None and total > 0:
         target = max(0, int(total_amount))
@@ -865,6 +865,8 @@ def _resolve_genomes_for_taxids(
     from samovar.genome_resolve import resolve_genome_file
 
     available = {}
+    pins_path = Path(genome_dir) / ".profile_references.json"
+    pins = json.loads(pins_path.read_text()) if pins_path.is_file() else {}
     from samovar.regenerate import finite_max_genomes
     from samovar.taxonomy import require_regeneration_taxids
 
@@ -876,6 +878,14 @@ def _resolve_genomes_for_taxids(
             break
         taxid = str(taxid).split(".")[0]
         if taxid.lower() in SKIP_TAXIDS or taxid in available:
+            continue
+        if taxid in pins:
+            record = pins[taxid]
+            path = Path(record["path"])
+            stat = path.stat()
+            if stat.st_size != record["size"] or stat.st_mtime_ns != record["mtime_ns"]:
+                raise ValueError(f"Selected profile reference changed for taxid {taxid}: {path}; rebuild dependent profiles")
+            available[taxid] = str(path)
             continue
         genome_file = resolve_genome_file(
             taxid,

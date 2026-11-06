@@ -628,7 +628,7 @@ def main(argv: Optional[list] = None) -> int:
             db = str(getattr(args, "db_path", "") or "").strip()
             if not db:
                 db = os.environ.get("SAMOVAR_CONTRACT_DB", "").strip()
-            if not db and group == "annotator":
+            if not db and group in {"annotator", "profiler"}:
                 db = _imported_database_path(args.name)
             try:
                 code, output = run_contract_pytest(dest, group, db_path=db)

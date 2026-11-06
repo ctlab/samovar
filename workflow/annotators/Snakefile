@@ -148,6 +148,31 @@ rule all:
     input:
         get_all_expected_outputs()
 
+rule profile_tool:
+    wildcard_constraints:
+        sample = "(?:" + "|".join(re.escape(s) for s in SAMPLES) + ")",
+        run_name = "(?:" + "|".join(re.escape(n) for n, a in ANNOTATORS.items() if type(a).__name__ == "ProfileAnnotator") + ")"
+    input:
+        r1 = r1_input,
+        r2 = r2_input
+    output:
+        profile = config["output_dir"] + "/{sample}_{run_name}.profile.csv",
+        metadata = config["output_dir"] + "/{sample}_{run_name}.profile.csv.profile.json"
+    threads:
+        lambda wildcards: THREADS[wildcards.run_name]
+    resources:
+        mem_mb=rule_mem
+    log:
+        config["output_dir"] + "/logs/{sample}_{run_name}.profile.log"
+    params:
+        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [output.profile, output.metadata])
+    shell:
+        """
+        mkdir -p "$(dirname {output.profile:q})" "$(dirname {log:q})"
+        ( {params.cmd} ) 2> {log:q}
+        """
+
 # ==========================================
 # UNIVERSAL RULE FOR ALL CUSTOM TOOLS
 # ==========================================

@@ -324,15 +324,17 @@ def test_regeneration_simulator_failure_does_not_fall_back_to_iss(tmp_path, monk
     from samovar.reads_generators import simulate_from_sample_tables
 
     monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
-    monkeypatch.setattr(camisim, "default_generate_config", lambda **kwargs: {})
+    monkeypatch.setattr(camisim, "default_generate_config", lambda **kwargs: {"mode": kwargs["mode"]})
 
     def fail(config):
         raise RuntimeError("NanoSim failed")
 
     monkeypatch.setattr(camisim, "run_from_config", fail)
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">contig\nACGT\n")
     with pytest.raises(RuntimeError, match="NanoSim failed"):
         simulate_from_sample_tables(
             {"sample": pd.DataFrame({"taxid": ["562"], "N_kaiju": [10]})},
-            {"562": "genome.fna"}, str(tmp_path / "regenerated"),
+            {"562": str(genome)}, str(tmp_path / "regenerated"),
             annotator_cols={"kaiju": "N_kaiju"}, reads_generator="nanosim",
         )

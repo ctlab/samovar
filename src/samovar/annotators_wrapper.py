@@ -4,6 +4,7 @@ import re
 import shlex
 import sqlite3
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -174,6 +175,64 @@ class BaseAnnotator:
         raise NotImplementedError(
             "Method parse_output must be implemented in child class"
         )
+
+
+@lru_cache(maxsize=32)
+def _metaphlan_modern_cli(command):
+    import subprocess
+    result = subprocess.run(command_argv(command) + ["--help"], check=True, capture_output=True, text=True)
+    return "--db_dir" in result.stdout
+
+
+class ProfileAnnotator(BaseAnnotator):
+    """Sample-level contract, sharing tool lookup/resources with annotators."""
+
+    @property
+    def default_cmd(self):
+        return self.run_config["type"]
+
+    def get_expected_outputs(self, sample, output_dir):
+        out = os.path.join(output_dir, f"{sample}_{self.run_name}.profile.csv")
+        return [out, out + ".profile.json"]
+
+    def get_snakemake_shell_cmd(self, input_r1, input_r2, outputs):
+        out = outputs[0]
+        native = Path(command_argv(self.cmd)[-1]).name.lower().startswith("metaphlan")
+        native = native or str(self.run_config["type"]).lower() in {"metaphlan", "metaphlan4", "mpa", "mp4"}
+        sample = Path(out).name[:-len(f"_{self.run_name}.profile.csv")]
+        py = shlex.quote(python_path())
+        ingest = (f"{py} -m samovar.profiles ingest --output {shlex.quote(out)} "
+                  f"--sample {shlex.quote(sample)} --identity {shlex.quote(self.run_name)} "
+                  f"--database {shlex.quote(self.db_path)}")
+        if native:
+            db = Path(self.db_path)
+            modern = _metaphlan_modern_cli(self.cmd)
+            db_flag, map_flag = ("--db_dir", "--mapout") if modern else ("--bowtie2db", "--bowtie2out")
+            extra_parts = shlex.split(self.extra or "")
+            extra_parts = [db_flag if p == "--bowtie2db" else p for p in extra_parts]
+            if db_flag in extra_parts:
+                at = extra_parts.index(db_flag)
+                if at + 1 >= len(extra_parts) or Path(extra_parts[at + 1]) != db:
+                    raise ValueError("MetaPhlAn database flags disagree with selected database")
+                del extra_parts[at:at + 2]
+            extra = shlex.join(extra_parts)
+            if not any(p == "--bowtie2_exe" or p.startswith("--bowtie2_exe=") for p in extra_parts):
+                from samovar.paths import resolve_executable
+                extra += " --bowtie2_exe " + shlex.quote(resolve_executable("bowtie2", tool_key="bowtie2"))
+            if "--index" not in shlex.split(extra):
+                prefixes = sorted({p.name.split(".1.bt2")[0] for p in db.glob("*.1.bt2*") if ".rev.1.bt2" not in p.name})
+                if len(prefixes) != 1:
+                    raise ValueError("MetaPhlAn profiler needs a pinned --index or exactly one installed Bowtie2 index")
+                extra += " --index " + shlex.quote(prefixes[0])
+            raw = out + ".raw"
+            reads = ",".join(p for p in (str(input_r1), str(input_r2 or "")) if p)
+            run = (f"{self.cmd} {shlex.quote(reads)} --input_type fastq --nproc {int(self.threads)} "
+                   f"{db_flag} {shlex.quote(self.db_path)} {map_flag} {shlex.quote(out + '.bowtie2.bz2')} "
+                   f"-o {shlex.quote(raw)} {extra}")
+            return skip_empty_reads_cmd(input_r1, [raw], run) + f" && {ingest} --source {shlex.quote(raw)} --format metaphlan"
+        run = (f"{self.cmd} -i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+               f"-d {shlex.quote(self.db_path)} -o {shlex.quote(out)} -t {int(self.threads)} {self.extra or ''}")
+        return run + f" && {ingest} --source {shlex.quote(out)} --format abundance"
 
 
 class Kraken2Annotator(BaseAnnotator):
@@ -931,6 +990,8 @@ def get_annotator_instance(
 ) -> BaseAnnotator:
     """Factory function to instantiate the correct annotator class."""
     tool = tool_type.lower()
+    if run_config.get("output_level") == "profile":
+        return ProfileAnnotator(run_config, config)
 
     native_tools = {
         "kraken2": Kraken2Annotator,

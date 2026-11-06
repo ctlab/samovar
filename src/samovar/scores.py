@@ -17,6 +17,46 @@ import pandas as pd
 from samovar.annotation_columns import is_feat_column, select_scoring_annotators
 
 
+def profile_scores(predicted, reference, predicted_metadata, reference_metadata):
+    """Sample-level metrics without manufacturing paired read labels or TNs."""
+    from samovar.profiles import compatible, fractions, validate
+    from samovar.abundance import n_sample_columns
+    predicted, pm = validate(predicted, predicted_metadata)
+    reference, rm = validate(reference, reference_metadata)
+    compatible(pm, rm)
+    if set(n_sample_columns(predicted)) != set(n_sample_columns(reference)):
+        raise ValueError("Profile and gold standard sample identities differ")
+    pred = predicted.set_index("taxid").drop(index="0", errors="ignore")
+    ref = reference.set_index("taxid").drop(index="0", errors="ignore")
+    if any(str(t).startswith("unmapped:") for t in set(pred.index) | set(ref.index)):
+        raise ValueError("Profile contains unresolved taxa; supply a taxonomy mapping before benchmarking")
+    ids = pred.index.union(ref.index)
+    pred, ref = pred.reindex(ids, fill_value=0), ref.reindex(ids, fill_value=0)
+    quantitative = rm["kind"] == "abundance"
+    if quantitative:
+        px = fractions(predicted, pm).set_index("taxid").drop(index="0", errors="ignore").reindex(ids, fill_value=0)
+        ry = fractions(reference, rm).set_index("taxid").drop(index="0", errors="ignore").reindex(ids, fill_value=0)
+    def ratio(a, b):
+        return float(a / b) if b else float("nan")
+    rows = []
+    for col in n_sample_columns(predicted):
+        p, r = pred[col] > 0, ref[col] > 0
+        tp, fp, fn = int((p & r).sum()), int((p & ~r).sum()), int((~p & r).sum())
+        row = dict(sample=col[2:], tp=tp, fp=fp, fn=fn, precision=ratio(tp, tp + fp),
+                   recall=ratio(tp, tp + fn), f1=ratio(2 * tp, 2 * tp + fp + fn),
+                   jaccard=ratio(tp, tp + fp + fn), l1_norm=float("nan"), bray_curtis=float("nan"),
+                   reason="undefined ratios have zero denominator")
+        if quantitative and px[col].sum() > 0 and ry[col].sum() > 0:
+            l1 = float((px[col] - ry[col]).abs().sum())
+            row.update(l1_norm=l1, bray_curtis=l1 / float(px[col].sum() + ry[col].sum()), reason="")
+        elif not quantitative:
+            row["reason"] = "presence gold standard; quantitative metrics not defined"
+        else:
+            row["reason"] = "empty abundance has no quantitative composition"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _taxon_helpers():
     from samovar.viz_annotation import is_special_taxon, normalize_taxon_token  # noqa: F401
 

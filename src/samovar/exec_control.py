@@ -307,13 +307,18 @@ def needs_regen_early_exit(
 def _has_out_reports(directory: Path) -> bool:
     if not directory.is_dir():
         return False
-    for pattern in ("*.out", "*.ingested"):
+    for pattern in ("*.out", "*.ingested", "*.profile.csv"):
         if any(path.is_file() for path in directory.rglob(pattern)):
             return True
     return False
 
 
 def _has_csv_tables(directory: Path) -> bool:
+    if directory.name.endswith("_annotations"):
+        from samovar.profiles import read_profiles
+        profiles = directory.with_name(directory.name.removesuffix("_annotations") + "_profiles")
+        if read_profiles(profiles)[0]:
+            return True
     if not directory.is_dir():
         return False
     return any(path.is_file() and path.suffix == ".csv" for path in directory.glob("*.csv"))
@@ -331,6 +336,17 @@ def startpoint_gaps(
 
     src = input_dir if input_dir not in (None, "") else os.environ.get("SAMOVAR_INPUT_DIR")
     gaps: List[str] = []
+    initial_config = root / ".log" / "configs" / "config_init.yaml"
+    if start_s in {"setup_reads", "qc_initial", "annotate_initial", "combine_initial"} and initial_config.is_file():
+        import yaml
+        settings = yaml.safe_load(initial_config.read_text()) or {}
+        supplied = settings.get("profile_inputs") or {}
+        if supplied:
+            from samovar.profiles import load_profile
+            for info in supplied.values():
+                load_profile(info["path"], info)
+            if not any(run.get("output_level", "read") == "read" for run in settings.get("run_config", [])):
+                return []
     if start_s == "setup_reads":
         generate_sh = root / ".generate" / "generate.sh"
         if not (

@@ -13,6 +13,7 @@ _DIR = Path(__file__).resolve().parent
 
 # group → baseline script (package-relative)
 BASELINE_TOOLS: Dict[str, Path] = {
+    "profiler": _DIR / "constant_profile.py",
     "annotator": _DIR / "constant_taxid.py",
     "table_reads_generator": _DIR / "identity_table.py",
     "sample_scoring": _DIR / "constant_sample_score.py",

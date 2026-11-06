@@ -48,7 +48,7 @@ from samovar.table_regenerators import extra_flags_argv
 
 PathLike = Union[str, Path]
 
-BUILTIN_FORMATS = ("annotation", "abundance", "kraken2", "kraken2_mpa", "cami")
+BUILTIN_FORMATS = ("annotation", "abundance", "kraken2", "kraken2_mpa", "cami", "metaphlan")
 FORMAT_ALIASES = {
     "annotation": "annotation",
     "annot": "annotation",
@@ -73,6 +73,7 @@ FORMAT_ALIASES = {
     "camiprofile": "cami",
     "bioboxes": "cami",
     "profiling": "cami",
+    "metaphlan": "metaphlan",
 }
 CONVERTER_GROUP = "annotation_converter"
 
@@ -116,6 +117,8 @@ def annotation_to_abundance(
     *,
     n_reads: Optional[int] = None,
 ) -> Dict[str, pd.DataFrame]:
+    if n_reads and getattr(annotation, "profile_metadata", None):
+        raise ValueError("Typed profile rescaling needs explicit abundance conversion at the generator boundary; export without n_reads")
     tables = input_to_abundance_tables(annotation)
     tables = rescale_abundance_tables(tables, n_reads)
     annotation.abundance_tables = tables
@@ -249,6 +252,18 @@ def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> 
         tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
         if not tables:
             return _write_empty_abundance(dest)
+        if getattr(annotation, "profile_metadata", None):
+            import json
+            from samovar.profiles import metadata, write_profiles
+            meta = {key: metadata(annotation.profile_metadata.get(key, {"rank": "taxid"})) for key in tables}
+            target = Path(dest)
+            if target.suffix.lower() in {".csv", ".tsv"} and len(tables) == 1:
+                key, table = next(iter(tables.items()))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                table.to_csv(target, sep="\t" if target.suffix == ".tsv" else ",", index=False)
+                Path(str(target) + ".profile.json").write_text(json.dumps(meta[key], indent=2) + "\n")
+                return target
+            return write_profiles(target, tables, meta)
         return write_abundance(dest, tables)
     if name == "annotation":
         frame = annotation_long_table(annotation)
@@ -273,8 +288,29 @@ def dump_builtin(annotation: Annotation, dest: PathLike, fmt: str, **kwargs) -> 
         tables = annotation_to_abundance(annotation, n_reads=kwargs.get("n_reads"))
         if not tables:
             return _write_empty_abundance(dest)
+        if getattr(annotation, "profile_metadata", None):
+            import json
+            from samovar.profiles import fractions, metadata
+            from samovar.cami_profile import counts_to_cami_flat, write_cami_profiles, _safe_token
+            reports, infos = {}, {}
+            for key, table in tables.items():
+                info = metadata(annotation.profile_metadata.get(key, {"rank": "taxid"}))
+                if info["kind"] == "presence":
+                    raise ValueError("CAMI quantitative export cannot represent presence truth; use abundance")
+                values = fractions(table, info)
+                reports[key] = {col[2:]: counts_to_cami_flat(
+                    dict(zip(values.taxid, values[col])), col[2:], info["rank"], total=1,
+                    taxonomy=info["taxonomy"]) for col in n_sample_columns(values)}
+                infos[key] = {**info, "unit": "percent", "identity": key}
+            written = write_cami_profiles(dest, reports)
+            for key in reports:
+                path = written if written.is_file() else written / f"{_safe_token(key)}.profile"
+                Path(str(path) + ".profile.json").write_text(json.dumps(infos[key], indent=2) + "\n")
+            return written
         _mpa, taxdump, taxonomy = _kreport_options(name, kwargs)
         return dump_cami(tables, dest, taxdump=taxdump, taxonomy=taxonomy)
+    if name == "metaphlan":
+        raise ValueError("Native MetaPhlAn format is input-only; export as abundance or cami")
     raise UnknownFormatError(fmt)
 
 
@@ -297,7 +333,12 @@ def detect_format(path: PathLike) -> str:
 
 def load_builtin(path: PathLike, fmt: str = "") -> Annotation:
     name = normalize_format(fmt) or detect_format(path)
-    if name in {"kraken2", "kraken2_mpa", "cami"}:
+    if name in {"cami", "metaphlan"}:
+        from samovar.profiles import load_profile
+        table, meta = load_profile(path, {"format": name})
+        identity = meta.get("identity", Path(path).stem)
+        return Annotation.from_abundance_tables({identity: table}, {identity: meta})
+    if name in {"kraken2", "kraken2_mpa"}:
         raise ValueError(
             f"{name}-style reports are export-only; use --from annotation or abundance"
         )
