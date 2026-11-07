@@ -43,6 +43,7 @@ DEFAULT_LAZY_INSTALL: Dict[str, str] = {
     "krakenuniq": "conda install -y bioconda::krakenuniq",
     "metaphlan": "conda install -y bioconda::metaphlan",
     "sylph": "./install.sh Sylph",
+    "bracken": "./install.sh Bracken",
     "metaphlan4": "conda install -y bioconda::metaphlan",
     "centrifuge": "conda install -y bioconda::centrifuge",
     "metax": "conda install -y -c zldeng metax=0.9.23=beta_0",

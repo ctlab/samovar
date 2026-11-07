@@ -11,7 +11,7 @@ show_usage() {
     echo "Usage: samovar build_database [options]"
     echo ""
     echo "Options:"
-    echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique, centrifuge, metaphlan, sylph)"
+    echo "  --type TYPE       Type of database to build (kaiju, kraken2, kraken, krakenunique, centrifuge, metaphlan, sylph, bracken)"
     echo "                    MetaPhlAn YAML requires marker_fasta + matching marker_metadata (.pkl)"
     echo "  --config_path PATH Path to config YAML file"
     echo "  --db_path PATH    Path to store the database"
@@ -90,7 +90,7 @@ if [ -z "$type" ] || [ -z "$config_path" ] || [ -z "$db_path" ]; then
 fi
 
 # Validate database type
-if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ] && [ "$type" != "krakenunique" ] && [ "$type" != "centrifuge" ] && [ "$type" != "metaphlan" ] && [ "$type" != "sylph" ]; then
+if [ "$type" != "kaiju" ] && [ "$type" != "kraken2" ] && [ "$type" != "kraken" ] && [ "$type" != "krakenunique" ] && [ "$type" != "centrifuge" ] && [ "$type" != "metaphlan" ] && [ "$type" != "sylph" ] && [ "$type" != "bracken" ]; then
     echo "Error: unsupported database type: $type"
     show_usage
     exit 1
@@ -102,7 +102,7 @@ if ! [[ "$threads" =~ ^[0-9]+$ ]] || [ "$threads" -lt 1 ]; then
     exit 1
 fi
 
-if [ "$type" != "sylph" ]; then
+if [ "$type" != "sylph" ] && [ "$type" != "bracken" ]; then
     "$SNAKEMAKE" -s "$SCRIPT_DIR/Snakefile" \
         --configfile "$config_path" \
         --cores "$threads"

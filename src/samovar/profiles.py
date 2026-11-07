@@ -74,6 +74,8 @@ def load_profile(path, settings=None):
     fmt = meta.get("format", "auto")
     with path.open() as handle:
         lines = handle.readlines()
+    if fmt == "auto" and any("taxonomy_id\ttaxonomy_lvl\t" in x and "new_est_reads" in x for x in lines):
+        fmt = "bracken"
     if fmt == "auto" and any(x.startswith("Sample_file\t") and "Taxonomic_abundance" in x for x in lines):
         fmt = "sylph"
     if fmt == "auto":
@@ -81,6 +83,18 @@ def load_profile(path, settings=None):
             "metaphlan" if any("clade_name" in x and "relative_abundance" in x for x in lines) else "abundance")
     if fmt == "abundance":
         table = pd.read_csv(path, sep="\t" if path.suffix == ".tsv" else ",", dtype={"taxid": str})
+    elif fmt == "bracken":
+        raw = pd.read_csv(path, sep="\t", dtype={"taxonomy_id": str})
+        required = {"taxonomy_id", "taxonomy_lvl", "new_est_reads"}
+        if not required <= set(raw) or raw[list(required)].isna().any().any():
+            raise ValueError("Expected Bracken abundance TSV with taxonomy_id, taxonomy_lvl, new_est_reads")
+        if not raw.taxonomy_id.map(lambda value: value.isdigit() and int(value) > 0).all():
+            raise ValueError("Bracken requires positive NCBI taxids")
+        if not raw.taxonomy_lvl.eq("S").all():
+            raise ValueError("Bracken profiler currently requires species (-l S)")
+        table = raw[["taxonomy_id", "new_est_reads"]].rename(columns={
+            "taxonomy_id": "taxid", "new_est_reads": "N_" + str(meta.get("sample", path.stem))})
+        meta.update(kind="abundance", unit="counts", basis="reads", taxonomy="ncbi", rank="species", normalization="classified")
     elif fmt == "sylph":
         if meta["taxonomy"] != "ncbi" or meta["kind"] != "abundance":
             raise ValueError("Sylph genome mapping requires an NCBI abundance profile")
@@ -728,22 +742,51 @@ def report_profiles(annotation, dest, stage, config=None, *, annotators="all"):
     return rows
 
 
+
+def run_bracken(report, database, raw_output, read_length=100, threshold=10):
+    """Run the native estimator via configured Python; empty eligible sets are valid."""
+    import subprocess
+    from samovar.paths import command_argv, python_path, resolve_executable
+    distribution = Path(database) / f"database{read_length}mers.kmer_distrib"
+    if not distribution.is_file() or not distribution.stat().st_size:
+        raise FileNotFoundError(distribution)
+    eligible = False
+    for line in Path(report).read_text().splitlines():
+        fields = line.split("\t")
+        if len(fields) != 6 or not fields[1].strip().isdigit():
+            raise ValueError("Malformed Kraken2 report for Bracken")
+        if fields[3] == "S" and int(fields[1]) > 0 and int(fields[1]) >= threshold:
+            eligible = True
+    if not eligible:
+        Path(raw_output).write_text("taxonomy_id\ttaxonomy_lvl\tnew_est_reads\n")
+        return
+    script = resolve_executable("est_abundance.py", tool_key="est_abundance.py")
+    subprocess.run([python_path(), *command_argv(script), "-i", str(report), "-o", str(raw_output),
+                    "-k", str(distribution), "-l", "S", "-t", str(threshold)], check=True)
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["ingest", "collect", "materialize", "correct"])
+    parser.add_argument("action", choices=["ingest", "bracken", "collect", "materialize", "correct"])
     parser.add_argument("--source")
     parser.add_argument("--output")
     parser.add_argument("--sample")
     parser.add_argument("--identity")
     parser.add_argument("--database", default="")
     parser.add_argument("--genome-taxonomy")
+    parser.add_argument("--kraken-report")
+    parser.add_argument("--read-length", type=int, default=100)
+    parser.add_argument("--threshold", type=int, default=10)
     parser.add_argument("--format", default="auto")
     parser.add_argument("--output-dir")
     parser.add_argument("--stage", default="initial")
     parser.add_argument("--config")
     args = parser.parse_args(argv)
-    if args.action == "ingest":
+    if args.action == "bracken":
+        run_bracken(args.kraken_report, args.database, args.source, args.read_length, args.threshold)
+        args.format = "bracken"
+    if args.action in {"ingest", "bracken"}:
         if args.format == "abundance" and not Path(str(args.source) + ".profile.json").is_file():
             raise ValueError("Profiler contract requires an output .profile.json sidecar")
         settings = {"format": args.format, "sample": args.sample}
@@ -755,6 +798,8 @@ def main(argv=None):
             raise ValueError("Profiler execution must produce one sample")
         table = table.rename(columns={cols[0]: "N_" + args.sample})
         meta.update(identity=args.identity, database=args.database, source=str(args.source))
+        if args.action == "bracken":
+            meta.update(read_length=args.read_length, threshold=args.threshold)
         table.to_csv(args.output, index=False)
         Path(args.output + ".profile.json").write_text(json.dumps(meta, indent=2) + "\n")
         return 0

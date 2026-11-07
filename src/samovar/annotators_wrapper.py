@@ -204,6 +204,27 @@ class ProfileAnnotator(BaseAnnotator):
         ingest = (f"{py} -m samovar.profiles ingest --output {shlex.quote(out)} "
                   f"--sample {shlex.quote(sample)} --identity {shlex.quote(self.run_name)} "
                   f"--database {shlex.quote(self.db_path)}")
+        if str(self.run_config["type"]).lower() == "bracken" or Path(command_argv(self.cmd)[-1]).name == "bracken":
+            import argparse
+            options = argparse.ArgumentParser(add_help=False)
+            options.add_argument("-r", type=int)
+            options.add_argument("-l", choices=["S"], default="S")
+            options.add_argument("-t", type=int, default=10)
+            opts = options.parse_args(shlex.split(self.extra or ""))
+            lengths = [int(p.name[len("database"):-len("mers.kmer_distrib")])
+                       for p in Path(self.db_path).glob("database*mers.kmer_distrib")
+                       if p.name[len("database"):-len("mers.kmer_distrib")].isdigit()]
+            length = opts.r if opts.r is not None else (lengths[0] if len(lengths) == 1 else 100)
+            if length < 1 or opts.t < 0:
+                raise ValueError("Bracken needs positive -r read length and nonnegative -t threshold")
+            if not (Path(self.db_path) / f"database{length}mers.kmer_distrib").is_file():
+                raise FileNotFoundError(f"Bracken distribution for -r {length} missing; build --type bracken or select -r")
+            kraken = Kraken2Annotator({**self.run_config, "type": "kraken2", "cmd": "kraken2", "extra": ""}, self.config)
+            reports = kraken.get_expected_outputs(sample, str(Path(out).parent))
+            command = kraken.get_snakemake_shell_cmd(input_r1, input_r2, reports)
+            native_profile = ingest.replace("samovar.profiles ingest", "samovar.profiles bracken")
+            return command + (f" && {native_profile} --source {shlex.quote(out + '.bracken.tsv')} "
+                              f"--kraken-report {shlex.quote(reports[0])} --read-length {length} --threshold {opts.t}")
         if str(self.run_config["type"]).lower() == "sylph" or Path(command_argv(self.cmd)[-1]).name.lower() == "sylph":
             db = Path(self.db_path)
             if db.is_dir():

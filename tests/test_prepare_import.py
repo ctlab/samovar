@@ -235,3 +235,12 @@ def test_explicit_no_opal_does_not_offer_yaml_opal():
 def test_unknown_sparsedossa_named_custom_tool_keeps_its_import_name():
     _recorded, asked, _db = _offer(argparse.Namespace(table_reads_generator=["sparsedossa2_custom"]))
     assert asked == ["sparsedossa2_custom"]
+
+def test_bracken_prepare_includes_kraken2_dependency():
+    from samovar.prepare_import import iter_prepare_refs
+    from samovar.config import AnnotatorConfig
+    refs = iter_prepare_refs(argparse.Namespace(cmd_bracken_test=[['bracken toy']]))
+    assert any(program and program[0] == 'kraken2' for program, _ in refs)
+    refs = iter_prepare_refs(argparse.Namespace(annotators=[AnnotatorConfig(
+        run_name='kb', type='bracken', cmd='bracken', db_path='toy', output_level='profile')]))
+    assert {'bracken', 'kraken2'} <= {program[0] for program, _ in refs if program}

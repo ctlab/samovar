@@ -78,6 +78,9 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
         companions=("krakenuniq-build", "jellyfish"),
     ),
     AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
+    AskTool("bracken", ("bracken",), "profiler", "optional:bracken",
+            companions=("bracken-build", "est_abundance.py", "kmer2read_distr", "generate_kmer_distribution.py"),
+            probes=(("-v",),)),
     AskTool("sylph", ("sylph",), "profiler", "optional:sylph"),
     AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),
     AskTool(
@@ -581,12 +584,13 @@ def conda_layout(path: str) -> Tuple[str, str]:
 
 
 def sibling_executable(primary_path: str, name: str) -> str:
-    candidate = Path(primary_path).parent / name
-    try:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate.resolve())
-    except OSError:
-        return ""
+    for folder in (Path(primary_path).parent, Path(primary_path).parent / "src"):
+        candidate = folder / name
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate.resolve())
+        except OSError:
+            continue
     return ""
 
 

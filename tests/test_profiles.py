@@ -282,3 +282,51 @@ def test_profile_input_prepare_does_not_create_per_read_model(tmp_path):
     imported.endpoint = "viz_initial"
     script = Path(imported.generate_pipeline(imported.output_dir)).read_text()
     assert "Using supplied sample profiles" in script
+
+def test_bracken_profile_uses_estimated_read_counts(tmp_path):
+    raw = tmp_path / 'sample.bracken.tsv'
+    header = 'name\ttaxonomy_id\ttaxonomy_lvl\tnew_est_reads\tfraction_total_reads\n'
+    raw.write_text(header + 'Ecoli\t562\tS\t25\t0.9\nYeast\t4932\tS\t75\t0.1\n')
+    frame, info = load_profile(raw, {'sample': 'original'})
+    assert frame.to_dict('list') == {'taxid': ['562', '4932'], 'N_original': [25., 75.]}
+    assert (info['unit'], info['basis'], info['rank']) == ('counts', 'reads', 'species')
+    raw.write_text(header)
+    frame, _ = load_profile(raw, {'format': 'bracken', 'sample': 'original'})
+    assert frame.empty and list(frame) == ['taxid', 'N_original']
+    raw.write_text(header + 'Ecoli\t562\tS\t-1\t0.9\n')
+    with pytest.raises(ValueError, match='nonnegative'):
+        load_profile(raw, {'format': 'bracken'})
+    raw.write_text(header + 'Ecoli\t562\tG\t1\t0.9\n')
+    with pytest.raises(ValueError, match='species'):
+        load_profile(raw, {'format': 'bracken'})
+
+
+def test_bracken_estimator_configured_python_empty_threshold_and_failure(tmp_path, monkeypatch):
+    import subprocess
+    from samovar.profiles import run_bracken
+    from samovar.paths import python_path
+    report = tmp_path / 'sample report.txt'
+    report.write_text('100\t12\t0\tR\t1\troot\n100\t12\t12\tS\t562\t  Ecoli\n')
+    (tmp_path / 'database126mers.kmer_distrib').write_text('distribution')
+    output = tmp_path / 'raw.tsv'
+    script = str(tmp_path / 'program with spaces.py')
+    Path(script).touch()
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: script)
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs['check']
+        raise subprocess.CalledProcessError(2, argv)
+    monkeypatch.setattr(subprocess, 'run', run)
+    with pytest.raises(subprocess.CalledProcessError):
+        run_bracken(report, tmp_path, output, 126, 10)
+    assert calls[0][:2] == [python_path(), script]
+    assert calls[0][calls[0].index('-i')+1] == str(report)
+    calls.clear()
+    run_bracken(report, tmp_path, output, 126, 13)
+    assert not calls and load_profile(output, {'format': 'bracken'})[0].empty
+    report.write_text('broken report\n')
+    with pytest.raises(ValueError, match='Malformed'):
+        run_bracken(report, tmp_path, output, 126)
+    with pytest.raises(FileNotFoundError):
+        run_bracken(report, tmp_path, output, 100)

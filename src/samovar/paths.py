@@ -50,6 +50,7 @@ KNOWN_TOOLS = (
     "metaphlan",
     "metaphlan4",
     "sylph",
+    "bracken",
     "centrifuge",
     "metax",
     "iss",
@@ -653,6 +654,7 @@ def _companion_siblings(name: str, tools_map: Dict[str, Any]) -> List[str]:
             continue
         parent_path = Path(parent).expanduser()
         found.append(str(parent_path.parent / name))
+        found.append(str(parent_path.parent / "src" / name))
         prefix = tool_entry_env_prefix(tools_map.get(spec.name), spec.name)
         if prefix:
             found.append(str(Path(prefix).expanduser() / "bin" / name))
@@ -1194,6 +1196,7 @@ _STATUS_TOOL_KEYS = {
     "kaiju": ("kaiju",),
     "metaphlan": ("metaphlan", "metaphlan4"),
     "sylph": ("sylph",),
+    "bracken": ("bracken",),
     "centrifuge": ("centrifuge",),
     "metax": ("metax",),
     "OPAL": ("opal", "opal.py"),
@@ -1331,6 +1334,11 @@ def install_status_rows() -> List[Dict[str, Any]]:
             path=_existing_tool("metaphlan") or _existing_tool("metaphlan4"),
             config_key="tools.metaphlan / tool_envs.metaphlan",
             install="conda install -c bioconda metaphlan",
+        ),
+        row(
+            "bracken", required=False, role="Kraken2 abundance profiler / distribution builder",
+            path=_existing_tool("bracken"), config_key="tools.bracken / tool_envs.bracken",
+            install="./install.sh Bracken",
         ),
         row(
             "sylph",

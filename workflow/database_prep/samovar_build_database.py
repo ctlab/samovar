@@ -4,9 +4,9 @@ import argparse
 from samovar.build_database import build_database_from_config
 
 def main():
-    parser = argparse.ArgumentParser(description='Build Kaiju, Kraken2, KrakenUniq, Centrifuge, or MetaPhlAn database from config file')
-    parser.add_argument('--type', choices=['kaiju', 'kraken2', 'kraken', 'krakenunique', 'centrifuge', 'metaphlan', 'sylph'], required=True,
-                      help='Type of database to build (kaiju, kraken2, kraken, krakenunique, centrifuge, or metaphlan)')
+    parser = argparse.ArgumentParser(description='Build annotator/profiler database from config file')
+    parser.add_argument('--type', choices=['kaiju', 'kraken2', 'kraken', 'krakenunique', 'centrifuge', 'metaphlan', 'sylph', 'bracken'], required=True,
+                      help='Type of annotator/profiler database')
     parser.add_argument('--config_path', required=True,
                       help='Path to config YAML file')
     parser.add_argument('--db_path', required=True,

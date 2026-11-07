@@ -188,7 +188,8 @@ def build_database_kraken2(
     kmer_len: int = 35,
     minimizer_len: int = 31,
     minimizer_spaces: int = 7,
-    skip_maps: bool = True
+    skip_maps: bool = True,
+    clean: bool = True,
 ) -> None:
     """Build a custom Kraken2 database from the library of sequences.
     
@@ -231,8 +232,9 @@ def build_database_kraken2(
     run_command(build_cmd)
     
     # Clean up intermediate files
-    clean_cmd = ["kraken2-build", "--clean", "--db", db_path]
-    run_command(clean_cmd)
+    if clean:
+        clean_cmd = ["kraken2-build", "--clean", "--db", db_path]
+        run_command(clean_cmd)
     
     logger.info(f"Database successfully built at {db_path}")
 
@@ -828,6 +830,7 @@ def build_database_from_config(
     example_omit: Optional[bool] = None,
     threads: int = 1,
     minimizer_len: Optional[int] = None,
+    keep_library: bool = False,
 ):
     """
     Build database from config file.
@@ -853,6 +856,13 @@ def build_database_from_config(
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    if db_type == "bracken":
+        if config.get("input_dir"):
+            if int(config.get("kmer_len", 35)) != 35:
+                raise ValueError("New Kraken2 indexes use kmer_len=35; a different Bracken k requires a matching prebuilt index")
+            build_database_from_config(config_path, "kraken2", db_path,
+                                       False if example_omit is None else example_omit, threads, keep_library=True)
+        return build_database_bracken(config, db_path, threads)
     if db_type == "metaphlan":
         return build_database_metaphlan(config, db_path, threads)
     
@@ -943,7 +953,8 @@ def build_database_from_config(
                 kmer_len=35,
                 minimizer_len=31,
                 minimizer_spaces=7,
-                skip_maps=True,
+                skip_maps=not keep_library,
+                clean=not keep_library,
             )
             if final_dir is not None:
                 install_kraken2_db(work_dir, final_dir)
@@ -1006,6 +1017,51 @@ def build_database_from_config(
     else:
         raise ValueError(f"Unknown database type: {db_type}")
 
+
+
+def build_database_bracken(config, db_path, threads=1):
+    """Build native read-length distributions on an existing Kraken2 library."""
+    import json
+    from samovar.paths import python_path, resolve_executable
+    from samovar.seqio import fasta_handle
+    dest = Path(db_path).resolve()
+    for name in ("hash.k2d", "opts.k2d", "taxo.k2d", "seqid2taxid.map", "taxonomy/nodes.dmp"):
+        if not (dest / name).is_file():
+            raise FileNotFoundError(f"Bracken requires a complete Kraken2 DB with library: {dest / name}")
+    genomes = sorted(p for p in (dest / "library").rglob("*") if p.is_file() and
+                     p.name.endswith((".fa", ".fna", ".fasta", ".fa.gz", ".fna.gz", ".fasta.gz")))
+    if not genomes:
+        raise ValueError("Bracken build requires the original Kraken2 nucleotide library")
+    lengths = sorted({int(n) for n in config.get("read_lengths", [100])})
+    k = int(config.get("kmer_len", 35))
+    if not lengths or k < 1 or any(n < k for n in lengths):
+        raise ValueError("Bracken read_lengths must be nonempty and >= positive kmer_len")
+    work_root = dest / ".tmp"
+    work_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=work_root, prefix="bracken-") as work:
+        work = Path(work)
+        joined = work / "genomes.fna"
+        with joined.open("w") as output:
+            for genome in genomes:
+                with fasta_handle(genome) as source:
+                    shutil.copyfileobj(source, output)
+                output.write("\n")
+        classified = work / "database.kraken"
+        run_command(["kraken2", "--db", str(dest), "--threads", str(threads), "--memory-mapping",
+                     "--output", str(classified), str(joined)])
+        for length in lengths:
+            counts = work / f"database{length}mers.kraken"
+            result = work / f"database{length}mers.kmer_distrib"
+            run_command(["kmer2read_distr", "--seqid2taxid", str(dest / "seqid2taxid.map"),
+                         "--taxonomy", str(dest / "taxonomy"), "--kraken", str(classified),
+                         "--output", str(counts), "-k", str(k), "-l", str(length), "-t", str(threads)])
+            run_command([python_path(), resolve_executable("generate_kmer_distribution.py", tool_key="generate_kmer_distribution.py"),
+                         "-i", str(counts), "-o", str(result)])
+            if not result.is_file() or not result.stat().st_size:
+                raise RuntimeError("Bracken did not create a read-length distribution")
+        for length in lengths:
+            (work / f"database{length}mers.kmer_distrib").replace(dest / f"database{length}mers.kmer_distrib")
+    (dest / "bracken.manifest.json").write_text(json.dumps(dict(version=1, read_lengths=lengths, kmer_len=k), indent=2) + "\n")
 
 def build_database_sylph(file_taxid_map, db_path, threads=1, config=None):
     """Sketch complete genome FASTAs and publish their explicit NCBI mapping."""

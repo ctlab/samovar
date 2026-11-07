@@ -35,6 +35,12 @@ from samovar.paths import (
 from samovar.main_config import set_tool
 
 SIDECARS = {
+    "bracken": {
+        "python": None, "packages": ["bracken"], "runtime_modules": (),
+        "runtime_versions": {}, "binary": "bracken", "tool_keys": ("bracken",),
+        "companions": ("bracken-build",), "group": "profiler",
+        "hint": "Kraken2 + Bracken sample-level profiler (./install.sh Bracken).",
+    },
     "sylph": {
         "python": None, "packages": ["sylph>=0.6"], "runtime_modules": (),
         "runtime_versions": {}, "binary": "sylph", "tool_keys": ("sylph",),

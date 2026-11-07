@@ -220,3 +220,24 @@ def test_process_fasta_kraken2_keeps_all_contigs(tmp_path):
     assert len(recs) == 2
     assert recs[0].id == "seq0|kraken:taxid|562"
     assert recs[1].id == "seq1|kraken:taxid|562"
+
+def test_bracken_build_uses_configured_native_steps_and_publishes_distribution(tmp_path, monkeypatch):
+    from samovar.build_database import build_database_bracken
+    for name in ('hash.k2d', 'taxo.k2d', 'opts.k2d', 'seqid2taxid.map', 'taxonomy/nodes.dmp', 'library/genome.fna'):
+        p = tmp_path / name; p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('>seq|kraken:taxid|562\nACGTACGT\n' if p.suffix == '.fna' else 'fixture')
+    calls = []
+    def run(argv):
+        calls.append(argv)
+        if '-o' in argv:
+            Path(argv[argv.index('-o') + 1]).write_text('distribution')
+    monkeypatch.setattr('samovar.build_database.run_command', run)
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: '/configured/generate_kmer_distribution.py')
+    build_database_bracken(dict(read_lengths=[100, 126]), tmp_path, threads=3)
+    assert len(calls) == 5 and calls[0][:2] == ['kraken2', '--db']
+    assert calls[0][calls[0].index('--threads') + 1] == '3'
+    assert calls[1][0] == 'kmer2read_distr' and calls[1][-4:] == ['-l', '100', '-t', '3']
+    assert calls[2][1] == '/configured/generate_kmer_distribution.py'
+    assert (tmp_path / 'database126mers.kmer_distrib').read_text() == 'distribution'
+    assert not list((tmp_path / '.tmp').iterdir())
+    assert json.loads((tmp_path / 'bracken.manifest.json').read_text())['read_lengths'] == [100, 126]

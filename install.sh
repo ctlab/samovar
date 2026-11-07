@@ -25,6 +25,7 @@
 #   ./install.sh SPAdes          optional SPAdes / metaSPAdes assembler (sidecar; included in full)
 #   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
 #   ./install.sh Metax          optional Metax profiler (sidecar; custom.sh -p metax)
+#   ./install.sh Bracken        optional Kraken2 + Bracken profiler and distribution builder
 #   ./install.sh Sylph          optional sample-level profiler and sketch builder (sidecar)
 #   ./install.sh Prodigal        optional Prodigal gene caller (sidecar)
 #   ./install.sh minimap2        optional minimap2 + samtools (sidecar)
@@ -58,6 +59,7 @@
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
 #   SAMOVAR_INSTALL_SPADES=1   also sidecar-conda SPAdes (included in full; same as ./install.sh SPAdes)
+#   SAMOVAR_INSTALL_BRACKEN=1  also sidecar-conda Bracken (included in full)
 #   SAMOVAR_INSTALL_SYLPH=1    also sidecar-conda Sylph (included in full)
 #   SAMOVAR_INSTALL_CUML=1     also install cuML (same as ./install.sh cuml)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
@@ -728,6 +730,7 @@ normalize_optional_arg() {
         sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
         metax) echo "metax" ;;
         sylph) echo "sylph" ;;
+        bracken) echo "bracken" ;;
         cuml) echo "cuml" ;;
         full|all|everything) echo "full" ;;
         ask) echo "ask" ;;
@@ -779,6 +782,7 @@ run_optional_named() {
         cuml) install_cuml ;;
         metax) "$PYTHON_PATH" -m samovar.sidecar metax ;;
         sylph) "$PYTHON_PATH" -m samovar.sidecar sylph ;;
+        bracken) "$PYTHON_PATH" -m samovar.sidecar bracken ;;
         *) return 1 ;;
     esac
 }
@@ -813,6 +817,7 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_SPARSEDOSSA2=1
     export SAMOVAR_INSTALL_METAX=1
     export SAMOVAR_INSTALL_SYLPH=1
+    export SAMOVAR_INSTALL_BRACKEN=1
     export SAMOVAR_INSTALL_SPADES=1
 }
 
@@ -1137,6 +1142,12 @@ if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then
     "$PYTHON_PATH" -m samovar.sidecar metax || echo "Warning: optional Metax sidecar install did not complete."
 else
     echo "Skipping Metax (not required). Use ./install.sh Metax for the custom.sh annotator."
+fi
+
+if [ "${SAMOVAR_INSTALL_BRACKEN:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar bracken || echo "Warning: optional Bracken install did not complete."
+else
+    echo "Skipping Bracken (not required). Use ./install.sh Bracken for Kraken2 abundance profiles."
 fi
 
 if [ "${SAMOVAR_INSTALL_SYLPH:-0}" != "0" ]; then

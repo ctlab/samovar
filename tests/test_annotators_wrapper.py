@@ -275,3 +275,28 @@ def test_sylph_profile_command_uses_config_and_quoted_paths(tmp_path, monkeypatc
     assert r1 in command and ("-2" in command) == paired
     assert command[command.index("--sample") + 1] == "original_sample"
     assert command[command.index("--format") + 1] == "sylph"
+
+@pytest.mark.parametrize('paired', [False, True])
+def test_bracken_profile_uses_kraken_contract_threads_and_quoted_paths(tmp_path, monkeypatch, paired):
+    import shlex
+    from samovar.annotators_wrapper import ProfileAnnotator
+    db = tmp_path / 'database with spaces'
+    db.mkdir()
+    (db / 'database126mers.kmer_distrib').write_text('distribution')
+    exe = tmp_path / 'programs with spaces' / 'bracken'
+    exe.parent.mkdir(); exe.touch()
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda cmd, **k: str(exe) if cmd == str(exe) else cmd)
+    tool = ProfileAnnotator(dict(type='bracken', cmd=str(exe), run_name='kb', db_path=str(db), threads=3, extra='-t 0'), {})
+    r1, r2 = str(tmp_path / 'read 1.fastq'), str(tmp_path / 'read 2.fastq') if paired else None
+    output = tool.get_expected_outputs('original_sample', str(tmp_path))
+    lexer = shlex.shlex(tool.get_snakemake_shell_cmd(r1, r2, output), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    argv = list(lexer)
+    assert argv[argv.index('--threads') + 1] == '3'
+    assert argv[argv.index('--read-length') + 1] == '126'
+    assert argv[argv.index('--threshold') + 1] == '0'
+    assert argv[argv.index('--sample') + 1] == 'original_sample'
+    assert r1 in argv and ('--paired' in argv) == paired
+    assert 'samovar.profiles' in argv and 'bracken' in argv
+    with pytest.raises(FileNotFoundError, match='distribution'):
+        ProfileAnnotator({**tool.run_config, 'extra': '-r 150'}, {}).get_snakemake_shell_cmd(r1, r2, output)

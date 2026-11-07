@@ -65,6 +65,8 @@ def should_apply_example_omit(
     directories: Sequence[str],
     explicit: Optional[bool] = None,
 ) -> bool:
+    if explicit is False:
+        return False
     if example_omit_requested(explicit):
         return True
     return input_dirs_look_like_test_genomes(directories)
