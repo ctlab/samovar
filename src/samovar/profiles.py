@@ -397,6 +397,95 @@ def alpha_metrics(table, info):
     return rows
 
 
+BETA_METRICS = ("bray_curtis",)
+BETA_PREPROCESSING = (
+    "full column fractions; every taxon, including taxid 0 and unmapped; "
+    "zero-mass samples omitted rather than given distance 0; no top-N; no rarefaction"
+)
+
+
+def classical_pcoa(distance):
+    """Classical PCoA. Negative eigenvalues stay negative and are not axes."""
+    matrix = np.asarray(distance, dtype=float)
+    size = matrix.shape[0]
+    centered = -0.5 * matrix ** 2
+    scale = np.full((size, size), 1.0 / size)
+    gram = centered - scale @ centered - centered @ scale + scale @ centered @ scale
+    values, vectors = np.linalg.eigh(gram)
+    order = np.argsort(values)[::-1]
+    values = values[order]
+    vectors = vectors[:, order]
+    scale = max(1e-10, 1e-8 * float(np.max(np.abs(values))) if values.size else 1e-10)
+    positive = values > scale
+    negative = values < -scale
+    coordinates = {}
+    explained = []
+    positive_sum = float(values[positive].sum()) if positive.any() else 0.0
+    for axis, index in enumerate(np.where(positive)[0], start=1):
+        coordinates[f"PC{axis}"] = (vectors[:, index] * np.sqrt(values[index])).tolist()
+        explained.append(float(values[index] / positive_sum) if positive_sum else 0.0)
+    return {
+        "eigenvalues": [float(value) for value in values],
+        "negative_eigenvalues": [float(value) for value in values[negative]],
+        "explained_variance": explained,
+        "coordinates": coordinates,
+    }
+
+
+def beta_diversity(table, info, metric="bray_curtis"):
+    """Distance matrix and PCoA for one profile. Samples are not pooled across profiles."""
+    if metric not in BETA_METRICS:
+        raise ValueError(f"Unknown beta metric {metric!r}. Known metrics: {', '.join(BETA_METRICS)}")
+    result = {
+        "metric": metric,
+        "preprocessing": BETA_PREPROCESSING,
+        "rank": info.get("rank", ""),
+        "unit": info.get("unit", ""),
+        "basis": info.get("basis", ""),
+        "normalization": info.get("normalization", ""),
+        "sample_ids": [],
+        "omitted_sample_ids": [],
+        "matrix": None,
+        "eigenvalues": [],
+        "negative_eigenvalues": [],
+        "explained_variance": [],
+        "coordinates": {},
+        "status": None,
+    }
+    full = composition_fractions(table, info)
+    if full is None:
+        result["status"] = "presence"
+        return result
+    included, vectors = [], []
+    for column in n_sample_columns(full):
+        sample = column[2:]
+        vector = full[column].to_numpy(dtype=float)
+        if float(np.nansum(vector)) <= 0:
+            result["omitted_sample_ids"].append(sample)
+            continue
+        included.append(sample)
+        vectors.append(vector)
+    result["sample_ids"] = included
+    if len(included) < 2:
+        result["status"] = "fewer than two samples with positive mass"
+        return result
+    from samovar.sample_scorers import bray_curtis_distance
+
+    size = len(included)
+    matrix = np.zeros((size, size))
+    for left in range(size):
+        for right in range(left + 1, size):
+            distance = float(bray_curtis_distance(vectors[left], vectors[right]))
+            matrix[left, right] = matrix[right, left] = distance
+    result["matrix"] = matrix.tolist()
+    result.update(classical_pcoa(matrix))
+    if float(matrix.max()) <= 1e-12 or not result["explained_variance"]:
+        result["status"] = "degenerate distances"
+    elif len(result["explained_variance"]) < 2:
+        result["status"] = "one positive eigenvalue"
+    return result
+
+
 def compatible(pred, truth):
     for field in ("taxonomy", "rank"):
         if pred[field] != truth[field]:

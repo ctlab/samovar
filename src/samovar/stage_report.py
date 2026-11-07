@@ -1761,6 +1761,121 @@ def _write_alpha_tables(
     return written
 
 
+def _write_beta_plots(
+    dest: Path,
+    phase: str,
+    tables: Dict[str, Any],
+    metas: Dict[str, Any],
+    *,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    order: int,
+) -> List[Path]:
+    """Distance matrix and ordinary PCoA for each saved profile."""
+    import pandas as pd
+
+    from samovar.profiles import beta_diversity
+
+    written: List[Path] = []
+    folder = dest / "beta" / phase
+    for name, table in tables.items():
+        info = dict(metas.get(name) or {})
+        result = beta_diversity(table, info)
+        slug = _slug(str(name)) or "profile"
+        stem = f"{order:02d}_{phase}_beta_{slug}"
+        identity = str(info.get("identity") or name)
+        result["profile"] = identity
+        result["tool"] = str(info.get("tool") or "")
+        result["run_name"] = str(info.get("run_name") or "")
+        result["database"] = str(info.get("database") or "")
+        result["method"] = str(info.get("method") or info.get("representation") or "")
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{slug}.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        if result["matrix"] is not None:
+            pd.DataFrame(
+                result["matrix"], index=result["sample_ids"], columns=result["sample_ids"]
+            ).to_csv(folder / f"{slug}.csv")
+        if result["coordinates"]:
+            pd.DataFrame(result["coordinates"], index=result["sample_ids"]).to_csv(
+                folder / f"{slug}_coordinates.csv"
+            )
+        detail = (
+            f"rank {result['rank']}; unit {result['unit']}; basis {result['basis']}; "
+            f"normalization {result['normalization']}; metric {result['metric']}; "
+            f"preprocessing {result['preprocessing']}"
+        )
+        if result["method"]:
+            detail += f"; method {result['method']}"
+        variance = ", ".join(
+            f"PC{index} {100 * share:.1f}%"
+            for index, share in enumerate(result["explained_variance"], start=1)
+        )
+        if variance:
+            detail += f". Explained variance: {variance}"
+        if result["negative_eigenvalues"]:
+            shown = ", ".join(f"{value:.6g}" for value in result["negative_eigenvalues"])
+            detail += (
+                f". Negative eigenvalues ({shown}) are not axes and are not replaced with zero. "
+                "Bray–Curtis can be non-Euclidean; the map is then a projection."
+            )
+        title = f"{parent_name} — {identity} beta diversity"
+        payload = _normalize_mqc_json(
+            {
+                "section_name": f"{title} summary",
+                "plot_type": "table",
+                "description": detail + (f". {result['status']}." if result["status"] else "."),
+                "data": {"0": {
+                    "profile": identity,
+                    "tool": result["tool"],
+                    "run_name": result["run_name"],
+                    "database": result["database"],
+                    "metric": result["metric"],
+                    "status": result["status"] or "ok",
+                    "sample_ids": ", ".join(result["sample_ids"]),
+                    "omitted_sample_ids": ", ".join(result["omitted_sample_ids"]),
+                    "explained_variance": variance,
+                    "negative_eigenvalues": ", ".join(f"{value:.6g}" for value in result["negative_eigenvalues"]),
+                }},
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_summary",
+        )
+        path = dest / f"{stem}_summary_mqc.json"
+        _emit_mqc(payload, path)
+        written.append(path)
+        if result["status"] in {None, "one positive eigenvalue"} and result["matrix"] is not None:
+            frame = pd.DataFrame(
+                result["matrix"], index=result["sample_ids"], columns=result["sample_ids"]
+            )
+            path = dest / f"{stem}_heatmap_mqc.json"
+            write_heatmap_mqc(
+                frame, path,
+                section_name=title,
+                description=detail + ". Distances use the full profile."
+                + (f" {result['status']}." if result["status"] else ""),
+                xlab="Sample", ylab="Sample",
+                parent_id=parent_id, parent_name=parent_name,
+            )
+            written.append(path)
+            if len(result["explained_variance"]) >= 2:
+                points = pd.DataFrame({
+                    "sample": result["sample_ids"],
+                    "x": result["coordinates"]["PC1"],
+                    "y": result["coordinates"]["PC2"],
+                })
+                path = dest / f"{stem}_pcoa_mqc.json"
+                write_scatter_mqc(
+                    points, path,
+                    section_name=f"{title} PCoA",
+                    description=detail,
+                    xlab="PC1", ylab="PC2", x="x", y="y", label="sample",
+                    parent_id=parent_id, parent_name=parent_name,
+                )
+                written.append(path)
+    return written
+
+
 def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = None) -> Path:
     """Materialize ``*_mqc.*`` custom content from plot folders and run options.
 
@@ -1838,7 +1953,7 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
             encoding="utf-8",
         )
         _copy_plot_assets(folder, dest, stage, i)
-        if stage != "feature_importance" and ({"profiles", "composition", "alpha"} & enabled):
+        if stage != "feature_importance" and ({"profiles", "composition", "alpha", "beta"} & enabled):
             from samovar.profile_pipeline import stage_annotation
             from samovar.profiles import read_profiles, report_profiles
 
@@ -1854,7 +1969,7 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], stem="profile_inventory")
                 _emit_mqc(payload, dest / f"{i:02d}_{phase}_profile_inventory_mqc.json")
-            if "composition" in enabled or "alpha" in enabled:
+            if {"composition", "alpha", "beta"} & enabled:
                 tables, metas = read_profiles(dest / "profiles" / phase)
             else:
                 tables, metas = {}, {}
@@ -1866,6 +1981,12 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                 )
             if "alpha" in enabled:
                 _write_alpha_tables(
+                    dest, phase, tables, metas,
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], order=i,
+                )
+            if "beta" in enabled:
+                _write_beta_plots(
                     dest, phase, tables, metas,
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], order=i,
