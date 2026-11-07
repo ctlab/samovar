@@ -263,7 +263,7 @@ def validate_profile_settings(config):
     corrector = config.get("profile_corrector", "profile_ratio")
     if corrector not in {"profile_ratio", "none"}:
         from samovar.abundance_correctors import require_known_export
-        require_known_export(corrector)
+        corrector = require_known_export(corrector)
     return inputs, truth, corrector
 
 

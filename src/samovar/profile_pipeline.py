@@ -218,6 +218,7 @@ def correct(root, config):
     reference_truth = ground_truth(root, "regenerated", config)
     if reference_truth is None:
         raise ValueError("Profile correction needs actual regenerated truth")
+    model_name = "profile_joint.json" if method == "profile_joint" else "profile_ratio.json"
     cfg = {**config, "reference": reference, "reference_truth": reference_truth,
-           "run_root": str(root), "profile_model": str(root / "reprofiled_profiles" / "profile_ratio.json")}
+           "run_root": str(root), "profile_model": str(root / "reprofiled_profiles" / model_name)}
     return run_export(method, stage_annotation(root, "initial"), root / "reprofiled_profiles", cfg)

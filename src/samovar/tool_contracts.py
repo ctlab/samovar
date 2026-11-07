@@ -98,8 +98,9 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "Files at dest (dump) or an Annotation (load). convert(src, dest, config) is also accepted.",
     },
     "export": {
-        "in": "Annotation (per-read taxID_* / seq) plus dest and config. "
+        "in": "Annotation (per-read taxID_* / seq and/or independent typed sample profiles) plus dest and config. "
         "config may include reference (Annotation with taxID_true / true), "
+        "reference_truth (typed regenerated profile GT) and profile_model for profile_ratio/profile_joint, "
         "to (abundance|kraken2|cami|…), extra_argv. "
         "export(annotation, dest, config).",
         "out": "Abundance-like tables at dest (taxid + N_<sample>, or kraken2/cami reports).",

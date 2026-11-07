@@ -52,6 +52,7 @@ PathLike = Union[str, Path]
 EXPORT_GROUP = "export"
 
 _BUILTIN_ALIASES = {
+    "profile_joint": "profile_joint",
     "profile_ratio": "profile_ratio",
     "logistic": "logistic",
     "logit": "logistic",
@@ -768,6 +769,9 @@ def run_export(
         return export_logistic(ann, dest_path, cfg)
     if kind == "builtin" and canon == "profile_ratio":
         return export_profile_ratio(ann, dest_path, cfg)
+    if kind == "builtin" and canon == "profile_joint":
+        from samovar.profile_joint import export
+        return export(ann, dest_path, cfg)
     spec = lookup_export(canon)
     return _custom_export(ann, dest_path, cfg, spec, canon)
 
