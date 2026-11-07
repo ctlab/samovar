@@ -271,6 +271,21 @@ def _filter_payload(payload: Dict[str, Any], annotators: Sequence[str]) -> Optio
                 }
         return payload
     data = payload.get("data")
+    labels = (payload.get("pconfig") or {}).get("data_labels")
+    if isinstance(data, list) and isinstance(labels, list) and len(labels) == len(data):
+        kept_data = []
+        kept_labels = []
+        for series, label in zip(data, labels):
+            if _matches(str(label), annotators):
+                kept_data.append(series)
+                kept_labels.append(label)
+        if not kept_data:
+            if title and not _matches(title, annotators):
+                return None
+            return payload
+        payload["data"] = kept_data
+        payload["pconfig"]["data_labels"] = kept_labels
+        return payload
     if isinstance(data, dict) and data and all(isinstance(value, dict) for value in data.values()):
         if all(str(key).isdigit() for key in data):
             rows = {}

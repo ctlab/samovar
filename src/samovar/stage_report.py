@@ -1771,6 +1771,7 @@ def _write_beta_plots(
     parent_name: str,
     parent_description: str,
     order: int,
+    config: Optional[Dict[str, Any]] = None,
 ) -> List[Path]:
     """Distance matrix and ordinary PCoA for each saved profile."""
     import pandas as pd
@@ -1779,6 +1780,7 @@ def _write_beta_plots(
 
     written: List[Path] = []
     folder = dest / "beta" / phase
+    scored = []
     for name, table in tables.items():
         info = dict(metas.get(name) or {})
         result = beta_diversity(table, info)
@@ -1790,6 +1792,7 @@ def _write_beta_plots(
         result["run_name"] = str(info.get("run_name") or "")
         result["database"] = str(info.get("database") or "")
         result["method"] = str(info.get("method") or info.get("representation") or "")
+        scored.append((identity, info, result))
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{slug}.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         if result["matrix"] is not None:
@@ -1877,6 +1880,11 @@ def _write_beta_plots(
         dest, phase, tables, metas, folder,
         parent_id=parent_id, parent_name=parent_name,
         parent_description=parent_description, order=order,
+    ))
+    written.extend(_write_concordance(
+        dest, phase, scored, folder,
+        parent_id=parent_id, parent_name=parent_name,
+        parent_description=parent_description, order=order, config=config,
     ))
     return written
 
@@ -1977,9 +1985,9 @@ def _write_grouped_beta(
         _emit_mqc(payload, path)
         written.append(path)
         if space["status"] is None and "PC2" in space["coordinates"]:
-            data = {}
+            series: Dict[str, Dict[str, Dict[str, Any]]] = {}
             for point in space["points"]:
-                data.setdefault(point["profile"], {})[f"{point['sample']} | {point['profile']}"] = {
+                series.setdefault(point["profile"], {})[f"{point['sample']} | {point['profile']}"] = {
                     "x": point["PC1"],
                     "y": point["PC2"],
                     "name": " | ".join(
@@ -1991,8 +1999,13 @@ def _write_grouped_beta(
                     "section_name": title,
                     "plot_type": "scatter",
                     "description": detail + " Colour is the profile.",
-                    "pconfig": {"title": title, "xlab": "PC1", "ylab": "PC2"},
-                    "data": data,
+                    "pconfig": {
+                        "title": title,
+                        "xlab": "PC1",
+                        "ylab": "PC2",
+                        "data_labels": list(series),
+                    },
+                    "data": list(series.values()),
                 },
                 parent_id=parent_id, parent_name=parent_name,
                 parent_description=parent_description, stem=f"{stem}_pcoa",
@@ -2000,6 +2013,113 @@ def _write_grouped_beta(
             path = dest / f"{stem}_pcoa_mqc.json"
             _emit_mqc(payload, path)
             written.append(path)
+    return written
+
+
+def _write_concordance(
+    dest, phase, scored, folder, *,
+    parent_id, parent_name, parent_description, order, config=None,
+):
+    """Pairwise concordance for one stage. The scorer name comes from config."""
+    import pandas as pd
+
+    from samovar.concordance import score_concordance
+
+    cfg = dict(config or {})
+    names = [name for name, _, _ in scored]
+    pairs = []
+    for left in range(len(scored)):
+        for right in range(left + 1, len(scored)):
+            left_name, left_info, left_result = scored[left]
+            right_name, right_info, right_result = scored[right]
+            row = {
+                "profile_a": left_name,
+                "profile_b": right_name,
+                "tool": " ".join(part for part in (str(left_info.get("tool") or ""), str(right_info.get("tool") or "")) if part),
+                "run_name": " ".join(part for part in (str(left_info.get("run_name") or ""), str(right_info.get("run_name") or "")) if part),
+                "database": " ".join(part for part in (str(left_info.get("database") or ""), str(right_info.get("database") or "")) if part),
+                "stage": phase,
+            }
+            same = all(
+                left_result.get(field) == right_result.get(field)
+                for field in ("metric", "rank", "basis", "normalization")
+            )
+            if not same or not left_result.get("matrix") or not right_result.get("matrix"):
+                row.update(method=str(cfg.get("concordance") or "mantel"), statistic=None, pvalue=None,
+                           status="incompatible profiles" if not same else "no distance matrix",
+                           reason="rank, basis, normalization, or metric differ" if not same else "a profile has no distance matrix",
+                           n_samples=0, omitted_samples="")
+                pairs.append(row)
+                continue
+            left_frame = pd.DataFrame(left_result["matrix"], index=left_result["sample_ids"], columns=left_result["sample_ids"])
+            right_frame = pd.DataFrame(right_result["matrix"], index=right_result["sample_ids"], columns=right_result["sample_ids"])
+            scored_pair = score_concordance(left_frame, right_frame, cfg)
+            row.update(scored_pair)
+            row["omitted_samples"] = ", ".join(scored_pair.get("omitted_samples") or [])
+            pairs.append(row)
+    folder.mkdir(parents=True, exist_ok=True)
+    payload = {"scorer": str(cfg.get("concordance") or "mantel"), "stage": phase, "pairs": pairs}
+    (folder / "concordance.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    stem = f"{order:02d}_{phase}_beta_concordance"
+    title = f"{parent_name} — beta concordance"
+    detail = (
+        f"Scorer {payload['scorer']}. P-values are raw, one per annotator pair, "
+        "and are not adjusted for the number of pairs. "
+        "Shared samples only; a sample missing from one profile is omitted, not filled with zeros."
+    )
+    rows = {}
+    for pair in pairs:
+        rows[str(len(rows))] = {
+            "profile": f"{pair['profile_a']} {pair['profile_b']}",
+            "tool": pair.get("tool") or "",
+            "run_name": pair.get("run_name") or "",
+            "database": pair.get("database") or "",
+            "method": pair.get("method") or "",
+            "statistic": None if pair.get("statistic") is None else round(float(pair["statistic"]), 6),
+            "pvalue": None if pair.get("pvalue") is None else round(float(pair["pvalue"]), 6),
+            "n_samples": pair.get("n_samples") or 0,
+            "seed": pair.get("seed"),
+            "permutations": pair.get("permutations"),
+            "status": pair.get("status") or "ok",
+            "omitted_samples": pair.get("omitted_samples") or "",
+            "pvalue_policy": "raw, not adjusted across pairs",
+        }
+    if not rows:
+        rows = {"0": {"profile": "", "status": "fewer than two profiles", "method": payload["scorer"]}}
+    written = []
+    table = _normalize_mqc_json(
+        {
+            "section_name": f"{title} table",
+            "plot_type": "table",
+            "description": detail,
+            "data": rows,
+        },
+        parent_id=parent_id, parent_name=parent_name,
+        parent_description=parent_description, stem=f"{stem}_table",
+    )
+    path = dest / f"{stem}_table_mqc.json"
+    _emit_mqc(table, path)
+    written.append(path)
+    labels = list(dict.fromkeys([*names, *[pair["profile_b"] for pair in pairs]]))
+    grid = pd.DataFrame(index=labels, columns=labels, dtype=float)
+    for pair in pairs:
+        if pair.get("statistic") is None:
+            continue
+        grid.loc[pair["profile_a"], pair["profile_b"]] = float(pair["statistic"])
+        grid.loc[pair["profile_b"], pair["profile_a"]] = float(pair["statistic"])
+    if grid.notna().any().any():
+        path = dest / f"{stem}_heatmap_mqc.json"
+        write_heatmap_mqc(
+            grid,
+            path,
+            section_name=title,
+            description=detail,
+            xlab="Profile", ylab="Profile",
+            parent_id=parent_id, parent_name=parent_name,
+            min_value=-1,
+            max_value=1,
+        )
+        written.append(path)
     return written
 
 
@@ -2113,10 +2233,17 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                     parent_description=spec["description"], order=i,
                 )
             if "beta" in enabled:
+                scorer_config = dict(config or {})
+                if "concordance" not in scorer_config:
+                    scorer_config["concordance"] = (
+                        _load_yaml(root / ".log" / "configs" / "config_init.yaml").get("concordance")
+                        or "mantel"
+                    )
                 _write_beta_plots(
                     dest, phase, tables, metas,
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], order=i,
+                    config=scorer_config,
                 )
 
     if "qc" in enabled:

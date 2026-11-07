@@ -64,6 +64,14 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "(score_annotator(...) or score_table(observed, generated, config)).",
         "out": "dict with rank_value (and usually ok, pvalue, scorer).",
     },
+    "concordance": {
+        "in": "Two square distance matrices indexed by sample id "
+        "(score(left, right, config)). config carries the scorer name, seed, "
+        "permutations, and the profile metric, rank, basis, normalization, stage, and tool identity.",
+        "out": "dict with method, version, statistic, pvalue when defined, n_samples, "
+        "seed, permutations, and status/reason when the comparison does not apply. "
+        "Extra numeric fields are kept.",
+    },
     "sample_scoring": {
         "in": "Generated abundance table plus a reference/predicted table "
         "(score_samples(generated, reference, config)). config may carry extra method fields.",
@@ -186,6 +194,7 @@ GROUP_TO_TESTNODE = {
     "annotator": "tests/test_tool_contracts.py::test_annotator_contract",
     "table_reads_generator": "tests/test_tool_contracts.py::test_table_regenerator_contract",
     "table_scoring": "tests/test_tool_contracts.py::test_table_scoring_contract",
+    "concordance": "tests/test_tool_contracts.py::test_concordance_contract",
     "sample_scoring": "tests/test_tool_contracts.py::test_sample_scoring_contract",
     "sample_filtering": "tests/test_tool_contracts.py::test_sample_filtering_contract",
     "scoring": "tests/test_tool_contracts.py::test_scoring_contract",

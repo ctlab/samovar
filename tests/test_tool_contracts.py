@@ -224,6 +224,22 @@ def test_table_scoring_contract(request):
         assert "rank_value" in block or "ks_statistic" in block
 
 
+def test_concordance_contract(request):
+    _skip_if_other_type(request, "concordance")
+    path = _tool_path(request, "concordance")
+    module = load_python_module(path, "contract_concordance")
+    fn = getattr(module, "score", None)
+    assert callable(fn), f"{path} must define score(left, right, config)"
+    ids = ["a", "b", "c"]
+    values = [[0.0, 0.2, 0.4], [0.2, 0.0, 0.6], [0.4, 0.6, 0.0]]
+    left = pd.DataFrame(values, index=ids, columns=ids)
+    block = fn(left, left, {"permutations": 19, "seed": 1})
+    assert isinstance(block, dict)
+    assert "statistic" in block
+    assert block.get("status") in {None, ""}
+    assert block["statistic"] == pytest.approx(1.0)
+
+
 def test_sample_scoring_contract(request):
     _skip_if_other_type(request, "sample_scoring")
     path = _tool_path(request, "sample_scoring")

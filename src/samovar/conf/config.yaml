@@ -18,6 +18,9 @@ viz:
 # Report sections are separate from viz (per-read metrics) and from visual style.
 # CLI on `samovar multiqc` overrides this block. Names: qc, benchmark, correction,
 # mag, profiles, composition, alpha, beta, feature_importance, table_scores.
+# Beta-diversity concordance scorer. mantel is built in; a concordance tool name or a .py path replaces it.
+concordance: mantel
+
 multiqc:
   sections: all
   include: []

@@ -142,8 +142,8 @@ def test_grouped_pcoa_is_one_space_and_names_missing_samples(tmp_path):
     own = json.loads(next(staged.glob("*initial_beta_mpa_a_pcoa_mqc.json")).read_text())
     shared = json.loads(next(staged.glob("*initial_beta_grouped_pcoa_mqc.json")).read_text())
     assert set(own["data"]) == {"a", "b", "c"}
-    assert set(shared["data"]) == {"mpa_a", "mpa_b"}
-    assert set(shared["data"]["mpa_a"]) == {"a | mpa_a", "b | mpa_a"}
+    assert shared["pconfig"]["data_labels"] == ["mpa_a", "mpa_b"]
+    assert set(shared["data"][0]) == {"a | mpa_a", "b | mpa_a"}
     summary = json.loads(next(staged.glob("*initial_beta_grouped_summary_mqc.json")).read_text())
     omitted = [row for row in summary["data"].values() if row["status"] != "ok"]
     assert omitted[0]["sample"] == "c" and omitted[0]["profile"] == "mpa_a"

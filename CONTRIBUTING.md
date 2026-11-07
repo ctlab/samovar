@@ -18,6 +18,13 @@ If a pipeline stage is defined by a clear contract and is intended to be interch
 
 When introducing a new contract, first check whether existing modules already compose or execute such contracts. Extend or refactor those modules instead of creating parallel mechanisms. `samovar tools import … --pytest` normalizes `--type`, looks it up in `GROUP_TO_TESTNODE`, and runs that one `tests/test_tool_contracts.py::test_*_contract` against `--exec-path` (via `--tool` / `--tool-type`) before writing config; for a new type, document in/out in `CONTRACTS`, map the group, add one `test_*_contract` that calls `_skip_if_other_type` and exercises the dest from `_tool_path`, and ship a baseline that passes it.
 
+Put each piece in the directory that already holds that role:
+
+* The inbuilt tool is one script in `src/samovar/baselines/`, plus one row in the existing `BASELINE_TOOLS` dict in `baselines/__init__.py`. Do not add a package or a second registry. That script is what `import --pytest` executes. A small contract may implement the whole tool there. A contract whose algorithm and import choice live in a stage module (`*scorers.py`, `feature_importance.py`, `concordance.py`) keeps a script here that calls that module, the same way `native_feature_importance.py` does.
+* The stage module selects that inbuilt script or an imported tool of the same group. Do not add another loader.
+* The contract check is the one `test_*_contract` in `tests/test_tool_contracts.py`.
+* Further behavior goes in `tests/test_<group>.py`, next to the other `tests/test_*scorers.py` modules. A custom tool used only to show that configuration selects another implementation goes in `tests/data/`.
+
 ## 2. Reuse before duplication
 
 Before implementing new functionality, search for existing modules that already provide the required behavior.

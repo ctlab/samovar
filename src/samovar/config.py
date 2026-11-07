@@ -371,6 +371,7 @@ class PipelineConfig:
     regeneration_mode: str = "concat_weighted"
     regeneration_modes: Optional[List[str]] = None
     table_score: str = "shannon_ks"
+    concordance: str = "mantel"
     sample_score: str = ""
     sample_score_by_annotator: Optional[Dict[str, str]] = None
     sample_score_by_method: Optional[Dict[str, str]] = None
@@ -544,6 +545,9 @@ class PipelineConfig:
                 )
                 if yaml_score:
                     config.table_score = str(yaml_score)
+                yaml_concordance = input_config.get("concordance")
+                if yaml_concordance:
+                    config.concordance = str(yaml_concordance)
                 yaml_sample, yaml_sample_by, yaml_sample_method = ingest_sample_score_settings(
                     input_config.get("sample_score")
                     or input_config.get("sample-score")
@@ -1587,6 +1591,7 @@ class PipelineConfig:
             'regeneration_mode': self.regeneration_mode,
             'table_reads_generator': self.regeneration_mode,
             'table_score': self.table_score,
+            'concordance': self.concordance,
             'sample_score': self.sample_score or "",
             'sample_score_by_annotator': dict(self.sample_score_by_annotator or {}),
             'sample_score_by_method': dict(self.sample_score_by_method or {}),
