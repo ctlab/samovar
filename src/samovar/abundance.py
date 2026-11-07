@@ -54,6 +54,27 @@ def n_sample_columns(frame: pd.DataFrame) -> List[str]:
     return [c for c in frame.columns if str(c).startswith("N_")]
 
 
+def generation_sample_names(table, n_samples=None):
+    """Literal safe IDs for generate --abundance; never sanitize or renumber."""
+    if isinstance(table, pd.DataFrame):
+        columns = list(table.columns)
+    else:
+        import csv
+        with Path(table).open(encoding="utf-8-sig", newline="") as handle:
+            columns = next(csv.reader(handle), [])
+    if len(columns) != len(set(columns)):
+        raise ValueError("Duplicate abundance columns; sample identities must be unique")
+    names = [str(c)[2:] for c in columns if str(c).startswith("N_")]
+    if "taxid" not in columns or not names:
+        raise ValueError("generate --abundance requires taxid and N_<sample> columns")
+    for name in names:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+            raise ValueError(f"Invalid abundance sample ID {name!r}; use letters/digits, underscores and hyphens, starting with a letter/digit")
+    if n_samples is not None and int(n_samples) != len(names):
+        raise ValueError(f"n_samples={n_samples} differs from the {len(names)} abundance samples")
+    return names
+
+
 def _id_column(frame: pd.DataFrame) -> Optional[str]:
     lower = {str(c).strip().lower(): c for c in frame.columns}
     for alias in _ID_ALIASES:

@@ -200,7 +200,7 @@ def test_regenerated_abundance_matches_iss_contract(gp_table, tmp_path, monkeypa
         genome_dir=str(tmp_path),
         host_genome="",
         output_dir=str(tmp_path / "fq"),
-        n_samples=1,
+        n_samples=len(n_sample_columns(iss_shape)),
         total_reads=10,
         abundance_table=iss_shape,
     )

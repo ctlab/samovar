@@ -1271,7 +1271,7 @@ def generate_iss_test_samples(
     genome_dir: str,
     host_genome: str,
     output_dir: str,
-    n_samples: int = 10,
+    n_samples: Optional[int] = None,
     total_reads: int = 2000,
     host_fraction: Union[str, float] = "RANDOM",
     seed: int = 42,
@@ -1288,15 +1288,18 @@ def generate_iss_test_samples(
     from samovar.regenerate import coerce_seed
     from samovar.genome_index import numeric_taxid_from_fasta
 
+    has_table = isinstance(abundance_table, pd.DataFrame) or abundance_table not in (None, "", False)
+    if has_table:
+        from samovar.abundance import generation_sample_names
+        n_samples = len(generation_sample_names(abundance_table, n_samples))
+    elif n_samples is None:
+        n_samples = 10
     if int(n_samples) <= 0 or int(total_reads) <= 0:
         raise ValueError("n_samples and total_reads must be positive")
     if host_genome and not os.path.isfile(host_genome):
         raise FileNotFoundError(f"Host genome does not exist: {host_genome}")
     os.makedirs(output_dir, exist_ok=True)
     seed = coerce_seed(seed)
-    has_table = isinstance(abundance_table, pd.DataFrame) or (
-        abundance_table not in (None, "", False)
-    )
     if has_table:
         with iss_cli_extra_flags(extra_flags):
             return generate_iss_from_abundance_table(
@@ -1431,14 +1434,16 @@ def generate_iss_from_abundance_table(
     from samovar.genome_index import numeric_taxid_from_fasta
 
     annotator_name = str(annotator_name or "full")
+    from samovar.abundance import generation_sample_names
 
-    if isinstance(table, str):
+    if isinstance(table, (str, os.PathLike)):
         abundance = pd.read_csv(table)
     else:
         abundance = table.copy()
     from samovar.abundance import normalize_abundance_table
 
     abundance = normalize_abundance_table(abundance)
+    sample_names = generation_sample_names(abundance)
     from samovar.regenerate import cap_abundance_table, finite_max_genomes
 
     abundance = cap_abundance_table(abundance, max_genomes)
@@ -1446,12 +1451,6 @@ def generate_iss_from_abundance_table(
         raise ValueError("abundance table must have a taxid column")
     abundance["taxid"] = abundance["taxid"].astype(str).str.split(".").str[0]
     n_cols = _n_columns(abundance)
-    sample_names = []
-    for col in n_cols:
-        name = str(col)
-        if name.lower().startswith("n_"):
-            name = name[2:]
-        sample_names.append(name or str(col))
     if not n_cols:
         raise ValueError("Abundance table has no sample columns for read generation")
 
