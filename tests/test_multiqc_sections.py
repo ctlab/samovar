@@ -75,8 +75,9 @@ def test_rebuild_drops_disabled_section_and_keeps_upstream(tmp_path):
     assert any("quality_scores" in path.name for path in subset.glob("*_mqc.json"))
     text = (subset / "98_report_status_mqc.html").read_text()
     assert "mag" not in text
-    assert "alpha" in text
+    assert "beta" in text
     assert any("composition" in path.name for path in subset.glob("*_mqc.json"))
+    assert any("alpha" in path.name for path in subset.glob("*_mqc.json"))
 
     narrowed = bundle_multiqc(
         tmp_path,

@@ -369,6 +369,34 @@ def composition_display(fractions_table, top_n=COMPOSITION_TOP_N):
     return shown
 
 
+def alpha_metrics(table, info):
+    """Observed richness and Shannon for one profile, one sample at a time.
+
+    Shannon is the existing ``shannon_entropy`` (natural log, nats) on positive
+    biological taxa. Taxid 0 and ``unmapped:`` stay out of both metrics.
+    Presence profiles have no abundance and return None.
+    """
+    full = composition_fractions(table, info)
+    if full is None:
+        return None
+    from samovar.table_scorers import shannon_entropy
+
+    labels = full.taxid.astype(str)
+    biological = ~(labels.eq("0") | labels.str.startswith("unmapped:"))
+    rows = []
+    for column in n_sample_columns(full):
+        bio = full.loc[biological, column].to_numpy(dtype=float)
+        positive = bio[np.isfinite(bio) & (bio > 0)]
+        rows.append({
+            "sample": column[2:],
+            "richness": int(positive.size),
+            "shannon": float(shannon_entropy(positive)),
+            "unclassified": float(full.loc[labels.eq("0"), column].sum()) if labels.eq("0").any() else 0.0,
+            "unresolved": float(full.loc[labels.str.startswith("unmapped:"), column].sum()) if labels.str.startswith("unmapped:").any() else 0.0,
+        })
+    return rows
+
+
 def compatible(pred, truth):
     for field in ("taxonomy", "rank"):
         if pred[field] != truth[field]:

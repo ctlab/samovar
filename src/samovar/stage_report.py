@@ -1673,6 +1673,94 @@ def _write_composition_plots(
     return written
 
 
+def _write_alpha_tables(
+    dest: Path,
+    phase: str,
+    tables: Dict[str, Any],
+    metas: Dict[str, Any],
+    *,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    order: int,
+) -> List[Path]:
+    """Per-sample richness and Shannon for each saved profile."""
+    import pandas as pd
+
+    from samovar.profiles import alpha_metrics
+
+    written: List[Path] = []
+    folder = dest / "alpha" / phase
+    for name, table in tables.items():
+        info = dict(metas.get(name) or {})
+        metrics = alpha_metrics(table, info)
+        slug = _slug(str(name)) or "profile"
+        stem = f"{order:02d}_{phase}_alpha_{slug}"
+        identity = str(info.get("identity") or name)
+        detail = (
+            f"rank {info.get('rank', '')}; unit {info.get('unit', '')}; "
+            f"basis {info.get('basis', '')}; normalization {info.get('normalization', '')}"
+        )
+        if info.get("method") or info.get("representation"):
+            detail += f"; method {info.get('method') or info.get('representation')}"
+        if info.get("database"):
+            detail += f"; database {info.get('database')}"
+        title = f"{parent_name} — {identity} alpha diversity"
+        formula = (
+            " Observed richness counts biological taxa with positive mass. "
+            "Shannon is nats (natural log) on those taxa only. "
+            "Taxid 0 and unresolved taxa are separate shares, not taxa. "
+            "No rarefaction, pseudocount, or group test."
+        )
+        if metrics is None:
+            payload = _normalize_mqc_json(
+                {
+                    "section_name": title,
+                    "plot_type": "table",
+                    "description": detail + ". Presence profiles have no abundance alpha diversity.",
+                    "data": {"0": {"profile": identity, "status": "presence"}},
+                },
+                parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_table",
+            )
+            path = dest / f"{stem}_table_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(metrics).to_csv(folder / f"{slug}.csv", index=False)
+        rows = {}
+        for index, row in enumerate(metrics):
+            rows[str(index)] = {
+                "sample": row["sample"],
+                "profile": identity,
+                "tool": str(info.get("tool") or ""),
+                "run_name": str(info.get("run_name") or ""),
+                "database": str(info.get("database") or ""),
+                "rank": str(info.get("rank") or ""),
+                "basis": str(info.get("basis") or ""),
+                "normalization": str(info.get("normalization") or ""),
+                "richness": row["richness"],
+                "shannon": round(float(row["shannon"]), 6),
+                "unclassified": round(float(row["unclassified"]), 6),
+                "unresolved": round(float(row["unresolved"]), 6),
+            }
+        payload = _normalize_mqc_json(
+            {
+                "section_name": title,
+                "description": detail + "." + formula,
+                "plot_type": "table",
+                "data": rows,
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_table",
+        )
+        path = dest / f"{stem}_table_mqc.json"
+        _emit_mqc(payload, path)
+        written.append(path)
+    return written
+
+
 def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = None) -> Path:
     """Materialize ``*_mqc.*`` custom content from plot folders and run options.
 
@@ -1750,7 +1838,7 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
             encoding="utf-8",
         )
         _copy_plot_assets(folder, dest, stage, i)
-        if stage != "feature_importance" and ({"profiles", "composition"} & enabled):
+        if stage != "feature_importance" and ({"profiles", "composition", "alpha"} & enabled):
             from samovar.profile_pipeline import stage_annotation
             from samovar.profiles import read_profiles, report_profiles
 
@@ -1766,9 +1854,18 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], stem="profile_inventory")
                 _emit_mqc(payload, dest / f"{i:02d}_{phase}_profile_inventory_mqc.json")
-            if "composition" in enabled:
+            if "composition" in enabled or "alpha" in enabled:
                 tables, metas = read_profiles(dest / "profiles" / phase)
+            else:
+                tables, metas = {}, {}
+            if "composition" in enabled:
                 _write_composition_plots(
+                    dest, phase, tables, metas,
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], order=i,
+                )
+            if "alpha" in enabled:
+                _write_alpha_tables(
                     dest, phase, tables, metas,
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], order=i,
