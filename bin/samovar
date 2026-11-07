@@ -74,7 +74,7 @@ show_usage() {
     echo "              Optional --startpoint / --endpoint slice the run (same names as prepare)"
     echo "  checkup     Verify outdir has inputs for --start-point (does not run the pipeline)"
     echo "  branch      Copy a run up to --start-point; prepare in the copy continues from there"
-    echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
+    echo "  multiqc     Rebuild the report from a finished run (--sections/--exclude/--stages/--annotators; MultiQC flags after --)"
     echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
     echo "  tools       import a binary; --sort reads; --status (same as import status)"
     echo "  import      Alias of tools import"

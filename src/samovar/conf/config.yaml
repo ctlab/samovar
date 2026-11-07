@@ -15,6 +15,15 @@ viz:
   opal: false
   metrics_sample: 0
   metrics: null
+# Report sections are separate from viz (per-read metrics) and from visual style.
+# CLI on `samovar multiqc` overrides this block. Names: qc, benchmark, correction,
+# mag, profiles, composition, alpha, beta, feature_importance, table_scores.
+multiqc:
+  sections: all
+  include: []
+  exclude: []
+  stages: all
+  annotators: all
 
 env: {}
 tools: {}

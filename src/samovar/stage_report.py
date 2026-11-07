@@ -1339,7 +1339,7 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
     return written
 
 
-def _run_options_html(output_dir: PathLike, hidden_ids: Sequence[str]) -> str:
+def _run_options_html(output_dir: PathLike, hidden_ids: Sequence[str], settings: Optional[Dict[str, Any]] = None) -> str:
     wiki = "https://github.com/ctlab/samovar/wiki"
     rows = collect_run_options(output_dir)
     parts = [
@@ -1352,6 +1352,21 @@ def _run_options_html(output_dir: PathLike, hidden_ids: Sequence[str]) -> str:
         f'(pipeline overview, <a href="{wiki}/Home">Home</a>).</p>',
         "<p>Options used for this SAMOVAR run:</p>",
     ]
+    if settings:
+        from samovar.multiqc_report import settings_document
+
+        document = settings_document(settings)
+        parts.append(
+            "<p>MultiQC sections: <strong>"
+            + html.escape(", ".join(document["sections"]) or "(none)")
+            + "</strong>. Stages: "
+            + html.escape(", ".join(document["stages"]) or "(none)")
+            + ". Annotators: "
+            + html.escape(document["annotators"] if isinstance(document["annotators"], str) else ", ".join(document["annotators"]))
+            + ". "
+            + html.escape(document["priority"])
+            + ".</p>"
+        )
     if rows:
         parts.append('<dl class="dl-horizontal" style="margin-top:0.75em">')
         for label, value in rows:
@@ -1511,6 +1526,8 @@ def _write_multiqc_config(dest: Path, hidden_ids: Sequence[str]) -> Path:
         for hid in hidden_ids:
             if hid.startswith(spec["id"] + "_"):
                 order.append(hid)
+    order.append("samovar_correction")
+    order.append("samovar_report_status")
     order.append("samovar_conclusion")
     lines = [
         f'title: "SAMOVAR"',
@@ -1528,38 +1545,61 @@ def _write_multiqc_config(dest: Path, hidden_ids: Sequence[str]) -> Path:
     return cfg
 
 
-def bundle_multiqc(output_dir: PathLike) -> Path:
-    """Materialize ``*_mqc.*`` custom content from plot folders and run options."""
-    root = as_path(output_dir)
-    write_overview_report(root)
-    from samovar.MAG.report import write_mag_mapping_plots
+def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = None) -> Path:
+    """Materialize ``*_mqc.*`` custom content from plot folders and run options.
 
-    write_mag_mapping_plots(root)
+    ``settings`` selects sections, stages, and annotators. The staged directory
+    is replaced, so a section that was turned off does not keep its previous plot.
+    Annotation, regeneration, and training outputs are not rebuilt.
+    """
+    from samovar.multiqc_report import (
+        apply_selection,
+        correction_sources,
+        missing_sections,
+        qc_sources,
+        resolve_settings,
+        settings_document,
+    )
+
+    root = as_path(output_dir)
+    if settings is None:
+        settings = resolve_settings(root)
+    enabled = set(settings["sections"])
+    stages = set(settings["stages"])
+    write_overview_report(root)
+    if "mag" in enabled:
+        from samovar.MAG.report import write_mag_mapping_plots
+
+        write_mag_mapping_plots(root)
     dest = multiqc_stage_dir(root)
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
     plots = root / REPORT_SECTION["viz_regenerated"]["folder"]
-    if not plots.is_dir() or not any(plots.glob("TableScore_*_mqc.json")):
+    if "table_scores" in enabled and "regenerated" in stages and (
+        not plots.is_dir() or not any(plots.glob("TableScore_*_mqc.json"))
+    ):
         for candidate in (
             root / "regenerated" / ".regenerated_abundance" / "table_selection.json",
             root / "regenerated" / "table_selection.json",
         ):
             if candidate.is_file():
-                try:
-                    from samovar.table_scorers import write_table_score_plots
+                from samovar.table_scorers import write_table_score_plots
 
-                    write_table_score_plots(
-                        json.loads(candidate.read_text(encoding="utf-8")),
-                        plots,
-                    )
-                except Exception:
-                    pass
+                write_table_score_plots(
+                    json.loads(candidate.read_text(encoding="utf-8")),
+                    plots,
+                )
                 break
 
     for i, stage in enumerate(REPORT_STAGES, start=1):
         spec = REPORT_SECTION[stage]
+        if stage == "feature_importance":
+            if "feature_importance" not in enabled:
+                continue
+        elif stage.removeprefix("viz_") not in stages:
+            continue
         folder = root / spec["folder"]
         if stage == "feature_importance" and not (
             folder.is_dir() and any(folder.glob("*_mqc.json"))
@@ -1582,7 +1622,7 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
             encoding="utf-8",
         )
         _copy_plot_assets(folder, dest, stage, i)
-        if stage != "feature_importance":
+        if stage != "feature_importance" and "profiles" in enabled:
             from samovar.profile_pipeline import stage_annotation
             from samovar.profiles import report_profiles
 
@@ -1599,6 +1639,48 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
                     parent_description=spec["description"], stem="profile_inventory")
                 _emit_mqc(payload, dest / f"{i:02d}_{phase}_profile_inventory_mqc.json")
 
+    if "qc" in enabled:
+        qc_dir = dest / "qc"
+        for source in qc_sources(root):
+            qc_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, qc_dir / source.name)
+    corrections = correction_sources(root) if "correction" in enabled else []
+    if corrections:
+        payload = {
+            "id": "samovar_correction",
+            "section_name": "Correction",
+            "description": "Saved correction artifact. The model is not retrained.",
+            "plot_type": "table",
+            "pconfig": {"id": "samovar_correction_table", "title": "Correction", "col1_header": "Artifact"},
+            "headers": {"present": {"title": "Present", "format": "{:.0f}"}},
+            "data": {name: {"present": 1} for name in corrections},
+        }
+        _emit_mqc(payload, dest / "correction_artifacts_mqc.json")
+    produced = apply_selection(dest, settings)
+    if corrections:
+        produced.add("correction")
+    missing = missing_sections(settings, produced)
+    if missing:
+        items = "".join(f"<li><strong>{html.escape(name)}</strong>: {html.escape(reason)}</li>" for name, reason in missing)
+        status = dest / "98_report_status_mqc.html"
+        status.write_text(
+            _html_comment(
+                {
+                    "id": "samovar_report_status",
+                    "section_name": "Report status",
+                    "description": "Selected sections with nothing to plot in this run.",
+                    "plot_type": "html",
+                }
+            )
+            + "<p>These selected sections have no saved data in this run. Nothing was recomputed from reads or databases.</p><ul>"
+            + items
+            + "</ul>\n",
+            encoding="utf-8",
+        )
+    (dest / "report_settings.json").write_text(
+        json.dumps(settings_document(settings), indent=2) + "\n",
+        encoding="utf-8",
+    )
     hidden_ids = _hidden_parent_ids(dest)
     options_html = dest / "00_run_options_mqc.html"
     options_html.write_text(
@@ -1610,7 +1692,7 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
                 "plot_type": "html",
             }
         )
-        + _run_options_html(root, hidden_ids)
+        + _run_options_html(root, hidden_ids, settings)
         + "\n",
         encoding="utf-8",
     )
@@ -1632,25 +1714,32 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
     return dest
 
 
-def run_multiqc(output_dir: PathLike, extra_args: Optional[Sequence[str]] = None) -> int:
+def run_multiqc(
+    output_dir: PathLike,
+    extra_args: Optional[Sequence[str]] = None,
+    settings: Optional[Dict[str, Any]] = None,
+) -> int:
     """Invoke the real MultiQC CLI on staged ``*_mqc`` files.
 
-    Extra args are passed through (after an optional ``--``), so you can do
-    ``samovar multiqc --output_dir RUN -- --export --module custom_content``.
+    Report flags (``--sections``, ``--exclude``, ``--stages``, ``--annotators``,
+    ``--config``) are read before ``--``. Everything after ``--`` is passed to
+    MultiQC, for example ``samovar multiqc --output_dir RUN -- --export``.
     Native Plotly plots (heatmap / scatter / bar / table) show MultiQC's
     in-report export checkboxes; ``--export`` / ``-p`` writes png/svg/pdf.
     """
     import subprocess
 
+    from samovar.multiqc_report import parse_cli, resolve_settings
     from samovar.paths import discover_multiqc
 
-    staged = bundle_multiqc(output_dir)
+    cli, extra = parse_cli(list(extra_args or []))
+    if settings is None:
+        config_path = Path(cli["config"]) if cli.get("config") else None
+        settings = resolve_settings(as_path(output_dir), cli, config_path)
+    staged = bundle_multiqc(output_dir, settings)
     out = as_path(output_dir) / "multiqc"
     out.mkdir(parents=True, exist_ok=True)
     cfg = staged / "multiqc_config.yaml"
-    extra = list(extra_args or [])
-    if extra and extra[0] == "--":
-        extra = extra[1:]
     exe = discover_multiqc()
     if exe:
         cmd = [exe, str(staged), "-o", str(out), "-f", "-c", str(cfg)]
@@ -1688,25 +1777,53 @@ def _parser() -> argparse.ArgumentParser:
     overview.add_argument("output_dir")
     bundle = sub.add_parser("bundle", help="Stage *_mqc files for MultiQC")
     bundle.add_argument("output_dir")
+    bundle.add_argument("--sections", default=None, help="Comma-separated section names, or all")
+    bundle.add_argument("--include", default=None)
+    bundle.add_argument("--exclude", default=None)
+    bundle.add_argument("--stages", default=None, help="initial, regenerated, reprofiled, or all")
+    bundle.add_argument("--annotators", default=None)
+    bundle.add_argument("--config", default=None, help="YAML with a multiqc block; overrides .hydra")
     render = sub.add_parser("multiqc", help="Bundle and run the MultiQC CLI")
     render.add_argument("output_dir")
-    render.add_argument("multiqc_args", nargs=argparse.REMAINDER, help="Passed to multiqc (use -- first)")
+    render.add_argument("--sections", default=None, help="Comma-separated section names, or all")
+    render.add_argument("--include", default=None)
+    render.add_argument("--exclude", default=None)
+    render.add_argument("--stages", default=None, help="initial, regenerated, reprofiled, or all")
+    render.add_argument("--annotators", default=None)
+    render.add_argument("--config", default=None, help="YAML with a multiqc block; overrides .hydra")
+    render.add_argument("multiqc_args", nargs=argparse.REMAINDER, help="Passed to multiqc after --")
     return parser
 
 
+def _report_command(raw: Sequence[str]) -> Optional[int]:
+    """Parse report flags ourselves. argparse REMAINDER would swallow them."""
+    if not raw or raw[0] not in {"bundle", "multiqc"} or (len(raw) > 1 and raw[1] in {"-h", "--help"}):
+        return None
+    if len(raw) < 2:
+        raise ValueError(f"{raw[0]} needs an output directory")
+    from samovar.multiqc_report import parse_cli, resolve_settings
+
+    cli, extra = parse_cli(raw[2:])
+    config_path = Path(cli["config"]) if cli.get("config") else None
+    settings = resolve_settings(Path(raw[1]), cli, config_path)
+    if raw[0] == "bundle":
+        bundle_multiqc(raw[1], settings)
+        return 0
+    return run_multiqc(raw[1], extra_args=["--", *extra], settings=settings)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = _parser().parse_args(list(argv) if argv is not None else None)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    handled = _report_command(raw)
+    if handled is not None:
+        return handled
+    args = _parser().parse_args(raw)
     if args.command == "emit":
         write_stage_report(args.output_dir, args.stage)
         return 0
     if args.command == "overview":
         write_overview_report(args.output_dir)
         return 0
-    if args.command == "bundle":
-        bundle_multiqc(args.output_dir)
-        return 0
-    if args.command == "multiqc":
-        return run_multiqc(args.output_dir, extra_args=getattr(args, "multiqc_args", None))
     return 2
 
 
