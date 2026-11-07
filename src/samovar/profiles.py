@@ -469,14 +469,7 @@ def beta_diversity(table, info, metric="bray_curtis"):
     if len(included) < 2:
         result["status"] = "fewer than two samples with positive mass"
         return result
-    from samovar.sample_scorers import bray_curtis_distance
-
-    size = len(included)
-    matrix = np.zeros((size, size))
-    for left in range(size):
-        for right in range(left + 1, size):
-            distance = float(bray_curtis_distance(vectors[left], vectors[right]))
-            matrix[left, right] = matrix[right, left] = distance
+    matrix = _distance_matrix(vectors, metric)
     result["matrix"] = matrix.tolist()
     result.update(classical_pcoa(matrix))
     if float(matrix.max()) <= 1e-12 or not result["explained_variance"]:
@@ -484,6 +477,127 @@ def beta_diversity(table, info, metric="bray_curtis"):
     elif len(result["explained_variance"]) < 2:
         result["status"] = "one positive eigenvalue"
     return result
+
+
+GROUPED_PREPROCESSING = (
+    BETA_PREPROCESSING
+    + "; one matrix for sample × profile points that share taxonomy, rank, basis, and normalization; "
+    "common samples are the intersection of positive-mass samples; "
+    "a sample missing from one profile is excluded, not filled with zeros; "
+    "a taxon missing from one profile is zero after alignment"
+)
+
+
+def _positive_fraction_series(table, info):
+    full = composition_fractions(table, info)
+    if full is None:
+        return None
+    labels = full.taxid.astype(str)
+    series = {}
+    for column in n_sample_columns(full):
+        values = pd.Series(full[column].to_numpy(dtype=float), index=labels)
+        if float(values.sum()) <= 0:
+            continue
+        series[column[2:]] = values
+    return series
+
+
+def _distance_matrix(vectors, metric):
+    if metric != "bray_curtis":
+        raise ValueError(f"Unknown beta metric {metric!r}. Known metrics: {', '.join(BETA_METRICS)}")
+    from samovar.sample_scorers import bray_curtis_distance
+
+    size = len(vectors)
+    matrix = np.zeros((size, size))
+    for left in range(size):
+        for right in range(left + 1, size):
+            distance = float(bray_curtis_distance(vectors[left], vectors[right]))
+            matrix[left, right] = matrix[right, left] = distance
+    return matrix
+
+
+def grouped_beta(tables, metas, metric="bray_curtis"):
+    """One distance matrix and PCoA per compatible set of profiles.
+
+    The group is the profile identity. Stages are not mixed here; pass one stage.
+    """
+    if metric not in BETA_METRICS:
+        raise ValueError(f"Unknown beta metric {metric!r}. Known metrics: {', '.join(BETA_METRICS)}")
+    classes = {}
+    excluded = []
+    for name, table in tables.items():
+        info = dict(metas.get(name) or {})
+        vectors = _positive_fraction_series(table, info)
+        if vectors is None:
+            excluded.append({"profile": str(name), "reason": "presence"})
+            continue
+        key = (
+            str(info.get("taxonomy") or ""),
+            str(info.get("rank") or ""),
+            str(info.get("basis") or ""),
+            str(info.get("normalization") or ""),
+        )
+        classes.setdefault(key, []).append((str(name), info, vectors))
+    spaces = []
+    for key, members in classes.items():
+        common = set.intersection(*(set(vectors) for _, _, vectors in members))
+        omitted = [
+            {"profile": name, "sample": sample, "reason": "not in every compatible profile"}
+            for name, _, vectors in members
+            for sample in sorted(set(vectors) - common)
+        ]
+        points = []
+        for name, info, vectors in sorted(members, key=lambda item: item[0]):
+            for sample in sorted(common):
+                points.append({
+                    "sample": sample,
+                    "profile": name,
+                    "tool": str(info.get("tool") or ""),
+                    "run_name": str(info.get("run_name") or ""),
+                    "database": str(info.get("database") or ""),
+                    "vector": vectors[sample],
+                })
+        space = {
+            "metric": metric,
+            "preprocessing": GROUPED_PREPROCESSING,
+            "taxonomy": key[0],
+            "rank": key[1],
+            "basis": key[2],
+            "normalization": key[3],
+            "profiles": [name for name, _, _ in members],
+            "excluded_profiles": list(excluded),
+            "omitted_samples": omitted,
+            "points": [],
+            "matrix": None,
+            "eigenvalues": [],
+            "negative_eigenvalues": [],
+            "explained_variance": [],
+            "coordinates": {},
+            "status": None,
+        }
+        if len(points) < 2:
+            space["points"] = [{key: point[key] for key in ("sample", "profile", "tool", "run_name", "database")} for point in points]
+            space["status"] = "fewer than two points"
+            spaces.append(space)
+            continue
+        taxa = sorted(set().union(*(set(point["vector"].index) for point in points)))
+        aligned = [point["vector"].reindex(taxa, fill_value=0.0).to_numpy(dtype=float) for point in points]
+        matrix = _distance_matrix(aligned, metric)
+        space["matrix"] = matrix.tolist()
+        space.update(classical_pcoa(matrix))
+        if float(matrix.max()) <= 1e-12 or not space["explained_variance"]:
+            space["status"] = "degenerate distances"
+        elif len(space["explained_variance"]) < 2:
+            space["status"] = "one positive eigenvalue"
+        exported = []
+        for index, point in enumerate(points):
+            row = {key: point[key] for key in ("sample", "profile", "tool", "run_name", "database")}
+            for axis, values in space["coordinates"].items():
+                row[axis] = values[index]
+            exported.append(row)
+        space["points"] = exported
+        spaces.append(space)
+    return {"spaces": spaces, "excluded_profiles": excluded}
 
 
 def compatible(pred, truth):

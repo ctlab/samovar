@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from samovar.multiqc_report import effective_settings
-from samovar.profiles import beta_diversity, classical_pcoa, metadata, write_profiles
+from samovar.profiles import beta_diversity, classical_pcoa, grouped_beta, metadata, write_profiles
 from samovar.stage_report import bundle_multiqc
 
 
@@ -94,7 +94,62 @@ def test_bundle_beta_keeps_profiles_separate(tmp_path):
     saved = json.loads((staged / "beta" / "initial" / "mpa_a.json").read_text())
     assert saved["matrix"][0][1] == 1.0
     assert "profile_ratio" in (staged / "beta" / "reprofiled" / "mpa_a.json").read_text()
+    grouped = json.loads((staged / "beta" / "initial" / "grouped_0.json").read_text())
+    assert grouped["profiles"] == ["mpa_a"]
+    assert "mpa_b" not in grouped["profiles"]
     off = bundle_multiqc(tmp_path, effective_settings([{"sections": ["profiles"], "exclude": ["beta"]}]))
     assert not list(off.glob("*beta*"))
     assert list(off.glob("*profile_inventory*"))
     assert not np.isnan(saved["explained_variance"]).any()
+
+
+def test_grouped_pcoa_is_one_space_and_names_missing_samples(tmp_path):
+    organisms = _info(basis="organisms", tool="metaphlan", run_name="mpa", database="toy")
+    left = pd.DataFrame({
+        "taxid": ["1", "2", "3"],
+        "N_a": [1.0, 0.0, 0.0],
+        "N_b": [0.0, 1.0, 0.0],
+        "N_c": [0.0, 0.0, 1.0],
+    })
+    right = pd.DataFrame({
+        "taxid": ["1", "2", "3"],
+        "N_a": [0.5, 0.5, 0.0],
+        "N_b": [0.0, 0.0, 1.0],
+    })
+    genus = pd.DataFrame({"taxid": ["1", "2"], "N_a": [1.0, 0.0], "N_b": [0.0, 1.0], "N_c": [0.5, 0.5]})
+    result = grouped_beta(
+        {"mpa_a": left, "mpa_b": right, "genus": genus},
+        {"mpa_a": organisms, "mpa_b": organisms, "genus": _info(rank="genus", basis="organisms")},
+    )
+    species = next(space for space in result["spaces"] if space["rank"] == "species")
+    assert species["profiles"] == ["mpa_a", "mpa_b"]
+    assert species["status"] is None
+    labels = [(point["sample"], point["profile"]) for point in species["points"]]
+    assert ("c", "mpa_a") not in labels and ("c", "mpa_b") not in labels
+    assert species["omitted_samples"] == [
+        {"profile": "mpa_a", "sample": "c", "reason": "not in every compatible profile"}
+    ]
+    left_index = labels.index(("a", "mpa_a"))
+    right_index = labels.index(("a", "mpa_b"))
+    assert species["matrix"][left_index][right_index] == 0.5
+    assert {point["profile"] for point in species["points"]} == {"mpa_a", "mpa_b"}
+    assert next(space for space in result["spaces"] if space["rank"] == "genus")["profiles"] == ["genus"]
+    same = pd.DataFrame({"taxid": ["1"], "N_a": [1.0], "N_b": [1.0]})
+    degenerate = grouped_beta({"mpa_a": same, "mpa_b": same}, {"mpa_a": organisms, "mpa_b": organisms})
+    assert degenerate["spaces"][0]["status"] == "degenerate distances"
+    write_profiles(tmp_path / "initial_profiles", {"mpa_a": left, "mpa_b": right}, {"mpa_a": organisms, "mpa_b": organisms})
+    staged = bundle_multiqc(tmp_path, effective_settings([{"sections": ["beta"]}]))
+    own = json.loads(next(staged.glob("*initial_beta_mpa_a_pcoa_mqc.json")).read_text())
+    shared = json.loads(next(staged.glob("*initial_beta_grouped_pcoa_mqc.json")).read_text())
+    assert set(own["data"]) == {"a", "b", "c"}
+    assert set(shared["data"]) == {"mpa_a", "mpa_b"}
+    assert set(shared["data"]["mpa_a"]) == {"a | mpa_a", "b | mpa_a"}
+    summary = json.loads(next(staged.glob("*initial_beta_grouped_summary_mqc.json")).read_text())
+    omitted = [row for row in summary["data"].values() if row["status"] != "ok"]
+    assert omitted[0]["sample"] == "c" and omitted[0]["profile"] == "mpa_a"
+    saved = json.loads((staged / "beta" / "initial" / "grouped.json").read_text())
+    assert saved["points"][0]["tool"] == "metaphlan"
+    assert "database" in saved["points"][0]
+    off = bundle_multiqc(tmp_path, effective_settings([{"exclude": ["beta"]}]))
+    assert not list(off.glob("*beta*"))
+    assert not list(off.glob("beta/*"))

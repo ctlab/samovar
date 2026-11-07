@@ -1873,6 +1873,133 @@ def _write_beta_plots(
                     parent_id=parent_id, parent_name=parent_name,
                 )
                 written.append(path)
+    written.extend(_write_grouped_beta(
+        dest, phase, tables, metas, folder,
+        parent_id=parent_id, parent_name=parent_name,
+        parent_description=parent_description, order=order,
+    ))
+    return written
+
+
+def _write_grouped_beta(
+    dest, phase, tables, metas, folder, *,
+    parent_id, parent_name, parent_description, order,
+):
+    """One PCoA for compatible profiles. Colour is the profile, not a metadata group."""
+    import pandas as pd
+
+    from samovar.profiles import grouped_beta
+
+    written = []
+    grouped = grouped_beta(tables, metas)
+    spaces = grouped["spaces"] or [{
+        "profiles": [],
+        "excluded_profiles": grouped["excluded_profiles"],
+        "omitted_samples": [],
+        "points": [],
+        "rank": "",
+        "basis": "",
+        "normalization": "",
+        "taxonomy": "",
+        "metric": "bray_curtis",
+        "preprocessing": "",
+        "matrix": None,
+        "explained_variance": [],
+        "negative_eigenvalues": [],
+        "status": "no compatible abundance profiles",
+        "eigenvalues": [],
+        "coordinates": {},
+    }]
+    for index, space in enumerate(spaces):
+        slug = "grouped" if len(spaces) == 1 else f"grouped_{index}"
+        stem = f"{order:02d}_{phase}_beta_{slug}"
+        names = ", ".join(space["profiles"]) or "none"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{slug}.json").write_text(json.dumps(space, indent=2) + "\n", encoding="utf-8")
+        if space["points"]:
+            pd.DataFrame(space["points"]).to_csv(folder / f"{slug}_coordinates.csv", index=False)
+        title = f"{parent_name} — grouped beta PCoA ({names})"
+        variance = ", ".join(
+            f"PC{number} {100 * share:.1f}%"
+            for number, share in enumerate(space["explained_variance"], start=1)
+        )
+        detail = (
+            f"rank {space['rank']}; basis {space['basis']}; normalization {space['normalization']}; "
+            f"metric {space['metric']}. {space['preprocessing']}"
+        )
+        if variance:
+            detail += f" Explained variance: {variance}."
+        if space["negative_eigenvalues"]:
+            shown = ", ".join(f"{value:.6g}" for value in space["negative_eigenvalues"])
+            detail += f" Negative eigenvalues ({shown}) are not axes and are not replaced with zero."
+        if space["status"]:
+            detail += f" {space['status']}."
+        rows = {}
+        for point in space["points"]:
+            rows[str(len(rows))] = {
+                "sample": point["sample"],
+                "profile": point["profile"],
+                "tool": point.get("tool", ""),
+                "run_name": point.get("run_name", ""),
+                "database": point.get("database", ""),
+                "status": space["status"] or "ok",
+                **{axis: round(float(point[axis]), 6) for axis in ("PC1", "PC2") if axis in point},
+            }
+        for omitted in space["omitted_samples"]:
+            rows[str(len(rows))] = {
+                "sample": omitted["sample"],
+                "profile": omitted["profile"],
+                "tool": "",
+                "run_name": "",
+                "database": "",
+                "status": omitted["reason"],
+            }
+        for excluded in space["excluded_profiles"]:
+            rows[str(len(rows))] = {
+                "sample": "",
+                "profile": excluded["profile"],
+                "tool": "",
+                "run_name": "",
+                "database": "",
+                "status": excluded["reason"],
+            }
+        payload = _normalize_mqc_json(
+            {
+                "section_name": f"{title} summary",
+                "plot_type": "table",
+                "description": detail,
+                "data": rows or {"0": {"profile": names, "status": space["status"] or "ok"}},
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_summary",
+        )
+        path = dest / f"{stem}_summary_mqc.json"
+        _emit_mqc(payload, path)
+        written.append(path)
+        if space["status"] is None and "PC2" in space["coordinates"]:
+            data = {}
+            for point in space["points"]:
+                data.setdefault(point["profile"], {})[f"{point['sample']} | {point['profile']}"] = {
+                    "x": point["PC1"],
+                    "y": point["PC2"],
+                    "name": " | ".join(
+                        part for part in (point["sample"], point.get("tool", ""), point.get("run_name", ""), point.get("database", "")) if part
+                    ),
+                }
+            payload = _normalize_mqc_json(
+                {
+                    "section_name": title,
+                    "plot_type": "scatter",
+                    "description": detail + " Colour is the profile.",
+                    "pconfig": {"title": title, "xlab": "PC1", "ylab": "PC2"},
+                    "data": data,
+                },
+                parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_pcoa",
+            )
+            path = dest / f"{stem}_pcoa_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
     return written
 
 
