@@ -51,6 +51,7 @@ KNOWN_TOOLS = (
     "metaphlan4",
     "sylph",
     "bracken",
+    "kmcp",
     "centrifuge",
     "metax",
     "iss",
@@ -1197,6 +1198,7 @@ _STATUS_TOOL_KEYS = {
     "metaphlan": ("metaphlan", "metaphlan4"),
     "sylph": ("sylph",),
     "bracken": ("bracken",),
+    "kmcp": ("kmcp",),
     "centrifuge": ("centrifuge",),
     "metax": ("metax",),
     "OPAL": ("opal", "opal.py"),
@@ -1334,6 +1336,11 @@ def install_status_rows() -> List[Dict[str, Any]]:
             path=_existing_tool("metaphlan") or _existing_tool("metaphlan4"),
             config_key="tools.metaphlan / tool_envs.metaphlan",
             install="conda install -c bioconda metaphlan",
+        ),
+        row(
+            "kmcp", required=False, role="per-read taxonomic annotator / index builder",
+            path=_existing_tool("kmcp"), config_key="tools.kmcp / tool_envs.kmcp",
+            install="./install.sh KMCP",
         ),
         row(
             "bracken", required=False, role="Kraken2 abundance profiler / distribution builder",

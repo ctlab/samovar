@@ -106,9 +106,14 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
         db = _annotator_db(request)
         if db is None:
             pytest.skip("contract needs a DB (pass --db-path or SAMOVAR_CONTRACT_DB)")
-        subprocess.check_call(
-            [str(path), "-i", str(r1), "-I", str(r2), "-d", str(db), "-o", str(out), "-t", "1"]
-        )
+        if path.name.lower() == "kmcp":
+            from samovar.annotators_wrapper import KMCPAnnotator
+            native = KMCPAnnotator(dict(run_name="clf", type="kmcp", cmd=str(path), db_path=str(db), threads=1), {})
+            subprocess.run(["bash", "-e", "-c", native.get_snakemake_shell_cmd(str(r1), str(r2), [str(out)])], check=True)
+        else:
+            subprocess.check_call(
+                [str(path), "-i", str(r1), "-I", str(r2), "-d", str(db), "-o", str(out), "-t", "1"]
+            )
         from samovar.annotators_wrapper import CustomAnnotator
 
         inst = CustomAnnotator(

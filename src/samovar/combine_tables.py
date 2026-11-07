@@ -267,6 +267,7 @@ def ingest_annotator(
     sentinel: Path,
     *,
     split_n: int = 1,
+    sample: Optional[str] = None,
     truth_table: Optional[str] = None,
     chunk_rows: int = 500000,
 ) -> Path:
@@ -278,7 +279,9 @@ def ingest_annotator(
     out_file = Path(out_file)
     annotation_dir = Path(annotation_dir)
     sentinel = Path(sentinel)
-    sample = sample_name_from(out_file.name, split_n)
+    # The workflow knows the sample; guessing from the last underscore loses
+    # its identity when a named tool itself contains underscores.
+    sample = sample if sample is not None else sample_name_from(out_file.name, split_n)
     csv_path = annotation_csv_path(annotation_dir, sample)
     annotation_dir.mkdir(parents=True, exist_ok=True)
     sentinel.parent.mkdir(parents=True, exist_ok=True)
@@ -361,6 +364,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ingest.add_argument("--annotations", required=True)
     ingest.add_argument("--sentinel", required=True)
     ingest.add_argument("--split", type=int, default=1)
+    ingest.add_argument("--sample", help="Explicit sample ID supplied by the workflow")
     ingest.add_argument("--truth-table", default="")
     ingest.add_argument("--chunk-rows", type=int, default=500000)
 
@@ -378,6 +382,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             Path(args.annotations),
             Path(args.sentinel),
             split_n=args.split,
+            sample=args.sample,
             truth_table=args.truth_table or None,
             chunk_rows=args.chunk_rows,
         )

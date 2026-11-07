@@ -35,6 +35,11 @@ from samovar.paths import (
 from samovar.main_config import set_tool
 
 SIDECARS = {
+    "kmcp": {
+        "python": None, "packages": ["kmcp>=0.9.5"], "runtime_modules": (),
+        "runtime_versions": {}, "binary": "kmcp", "tool_keys": ("kmcp",),
+        "group": "annotator", "hint": "Native KMCP read annotator (./install.sh KMCP).",
+    },
     "bracken": {
         "python": None, "packages": ["bracken"], "runtime_modules": (),
         "runtime_versions": {}, "binary": "bracken", "tool_keys": ("bracken",),

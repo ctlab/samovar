@@ -277,6 +277,28 @@ class ProfileAnnotator(BaseAnnotator):
         return run + f" && {ingest} --source {shlex.quote(out)} --format abundance"
 
 
+class KMCPAnnotator(BaseAnnotator):
+    """Read-level native KMCP search → profile -B through the shared contract."""
+
+    @property
+    def default_cmd(self):
+        return "kmcp"
+
+    def get_expected_outputs(self, sample, output_dir):
+        # Reuse the universal annotation/ingestion rule for seq + taxID tools.
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.custom_kmcp.out")]
+
+    def get_snakemake_shell_cmd(self, input_r1, input_r2, outputs):
+        return (f"{shlex.quote(python_path())} -m samovar.kmcp "
+                f"-i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+                f"-d {shlex.quote(str(self.db_path))} -o {shlex.quote(outputs[0])} "
+                f"-t {int(self.threads)} --exec-path {shlex.quote(self.cmd)} {self.extra or ''}")
+
+    def parse_output(self, file_path):
+        from samovar.parse_annotators import read_custom_raw
+        return read_custom_raw(file_path)
+
+
 class Kraken2Annotator(BaseAnnotator):
     """Annotator class for Kraken2 taxonomic classifier."""
 
@@ -1037,6 +1059,7 @@ def get_annotator_instance(
 
     native_tools = {
         "kraken2": Kraken2Annotator,
+        "kmcp": KMCPAnnotator,
         "kaiju": KaijuAnnotator,
         "metaphlan": MetaPhlanAnnotator,
         "metaphlan4": MetaPhlanAnnotator,
@@ -1068,6 +1091,9 @@ def get_annotator_instance(
         "kmerencoder": KmerEncoderAnnotator,
     }
 
+    parts = command_argv(run_config.get("cmd") or "")
+    if parts and Path(parts[-1]).name == "kmcp":
+        return KMCPAnnotator(run_config, config)
     if tool in CONSTANT_TAXID_TOOL_NAMES:
         return ConstantTaxidAnnotator(run_config, config, tool_name=tool_type)
 

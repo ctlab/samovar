@@ -919,6 +919,8 @@ def build_database_from_config(
             "This flag is only for toy tests; use --no-example-omit for a full index."
         )
 
+    if db_type == "kmcp":
+        return build_database_kmcp(file_taxid_map, db_path, threads, config)
     if db_type == "sylph":
         return build_database_sylph(file_taxid_map, db_path, threads, config)
 
@@ -1063,19 +1065,71 @@ def build_database_bracken(config, db_path, threads=1):
             (work / f"database{length}mers.kmer_distrib").replace(dest / f"database{length}mers.kmer_distrib")
     (dest / "bracken.manifest.json").write_text(json.dumps(dict(version=1, read_lengths=lengths, kmer_len=k), indent=2) + "\n")
 
-def build_database_sylph(file_taxid_map, db_path, threads=1, config=None):
-    """Sketch complete genome FASTAs and publish their explicit NCBI mapping."""
+
+def build_database_kmcp(file_taxid_map, db_path, threads=1, config=None):
+    """Native compute→index, explicit reference map, and an owned NCBI taxdump."""
+    import hashlib
     import json
-    import pandas as pd
     from samovar.seqio import fasta_handle
     config = dict(config or {})
-    compression = int(config.get("compression", 200))
-    if compression < 1:
-        raise ValueError("Sylph compression must be positive")
+    rows = nucleotide_genome_rows(file_taxid_map)
+    k, chunks, overlap = (int(config.get(key, default)) for key, default in (
+        ("kmer_len", 21), ("chunks", 10), ("overlap", 150)))
+    fpr, hashes = float(config.get("false_positive_rate", 0.3)), int(config.get("num_hashes", 1))
+    if not 1 <= k <= 64 or chunks < 1 or overlap < 0 or not 0 < fpr < 1 or hashes < 1:
+        raise ValueError("Invalid KMCP compute/index parameters")
+    dest = Path(db_path).resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    if (dest / "index").exists():
+        raise FileExistsError("KMCP index already exists; choose a fresh database directory")
+    work_root = dest / ".tmp"
+    work_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=work_root, prefix="kmcp-build-") as work:
+        work = Path(work)
+        refs = work / "references"
+        refs.mkdir()
+        mapping = []
+        for number, row in enumerate(sorted(rows, key=lambda row: row["Genome_file"])):
+            # Distinct genomes of one taxon must remain distinct references.
+            ref = f"ref_{row['taxid']}_{number}"
+            with fasta_handle(row["Genome_file"]) as source, (refs / (ref + ".fna")).open("w") as output:
+                shutil.copyfileobj(source, output)
+            mapping.append(f"{ref}\t{row['taxid']}\n")
+        compute = ["kmcp", "compute", "-I", str(refs), "-O", str(work / "compute"),
+                   "-k", str(k), "-n", str(chunks), "-l", str(overlap), "-j", str(threads)]
+        index = ["kmcp", "index", "-I", str(work / "compute"), "-O", str(work / "index"),
+                 "-f", str(fpr), "-n", str(hashes), "-j", str(threads)]
+        run_command(compute)
+        run_command(index)
+        if not any((work / "index").rglob("__db.yml")) or not any((work / "index").rglob("*.uniki")):
+            raise RuntimeError("KMCP did not create a complete index")
+        get_taxonomy_db(str(work / "taxdump"), config.get("taxdump"))
+        for name in ("nodes.dmp", "names.dmp"):
+            if not (work / "taxdump" / name).is_file():
+                raise RuntimeError(f"KMCP taxdump missing {name}")
+        checksums = {}
+        for name in ("nodes.dmp", "names.dmp"):
+            digest = hashlib.sha256()
+            with (work / "taxdump" / name).open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            checksums[name] = digest.hexdigest()
+        (work / "taxid.map").write_text("".join(mapping))
+        (work / "index").replace(dest / "index")
+        (work / "taxdump").replace(dest / "taxdump")
+        (work / "taxid.map").replace(dest / "taxid.map")
+    (dest / "kmcp.manifest.json").write_text(json.dumps(dict(
+        version=1, genomes=rows, compute=compute, index=index, taxdump_sha256=checksums,
+        parameters=dict(kmer_len=k, chunks=chunks, overlap=overlap, false_positive_rate=fpr, num_hashes=hashes)), indent=2) + "\n")
+
+
+def nucleotide_genome_rows(file_taxid_map):
+    """Validated nucleotide references shared by genome-sketch builders."""
+    from samovar.seqio import fasta_handle
     rows = []
     for filename, taxid in file_taxid_map.items():
         if not str(taxid).isdigit() or int(taxid) <= 0:
-            raise ValueError(f"Sylph builder requires a resolved positive NCBI taxid: {filename}: {taxid}")
+            raise ValueError(f"Reference builder requires a resolved positive NCBI taxid: {filename}: {taxid}")
         path = Path(filename).resolve()
         valid, count = True, 0
         with fasta_handle(path) as handle:
@@ -1088,9 +1142,21 @@ def build_database_sylph(file_taxid_map, db_path, threads=1, config=None):
             continue  # existing input discovery also finds proteomes
         rows.append({"Genome_file": str(path), "taxid": str(taxid)})
     if not rows:
-        raise ValueError("No nucleotide genomes to sketch for Sylph")
+        raise ValueError("No nucleotide genomes to sketch")
     if len({row["Genome_file"] for row in rows}) != len(rows):
-        raise ValueError("One genome path cannot have multiple Sylph taxids")
+        raise ValueError("One genome path cannot have multiple taxids")
+    return rows
+
+
+def build_database_sylph(file_taxid_map, db_path, threads=1, config=None):
+    """Sketch complete genome FASTAs and publish their explicit NCBI mapping."""
+    import json
+    import pandas as pd
+    config = dict(config or {})
+    compression = int(config.get("compression", 200))
+    if compression < 1:
+        raise ValueError("Sylph compression must be positive")
+    rows = nucleotide_genome_rows(file_taxid_map)
     dest = Path(db_path)
     dest.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=dest, prefix=".sylph-build-") as work:

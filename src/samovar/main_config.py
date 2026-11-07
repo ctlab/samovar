@@ -209,6 +209,7 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "metaphlan4": "annotator",
     "sylph": "profiler",
     "bracken": "profiler",
+    "kmcp": "annotator",
     "centrifuge": "annotator",
     "metax": "annotator",
     "iss": "reads_generator",

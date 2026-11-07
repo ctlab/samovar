@@ -137,6 +137,8 @@ def warn_direct_samovar_flags(path: str, *, name: str, flags_translate: str) -> 
     if str(flags_translate or "").strip():
         return
     exe = Path(path).expanduser()
+    if exe.name == "kmcp":
+        return  # Native search/profile adapter owns the SAMOVAR CLI contract.
     if not (exe.is_file() and os.access(exe, os.X_OK)):
         return
     try:

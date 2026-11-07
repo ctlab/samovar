@@ -129,6 +129,7 @@ def ingest_shell(wildcards, suffix):
         f"--out {shlex.quote(written)} "
         f"--annotations {shlex.quote(ANN_DIR)} "
         f"--sentinel {shlex.quote(sentinel)} "
+        f"--sample {shlex.quote(wildcards.sample)} "
         f"--split {SPLIT} "
         f"--truth-table {shlex.quote(TRUTH)}"
     )
@@ -177,6 +178,9 @@ rule profile_tool:
 # UNIVERSAL RULE FOR ALL CUSTOM TOOLS
 # ==========================================
 rule custom_tool:
+    wildcard_constraints:
+        sample = "(?:" + "|".join(re.escape(s) for s in SAMPLES) + ")",
+        run_name = "(?:" + "|".join(re.escape(n) for n in ANNOTATORS) + ")"
     input:
         r1 = r1_input,
         r2 = r2_input
