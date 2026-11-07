@@ -36,7 +36,11 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
     "profiler": {
         "in": "FASTQ -i/-I, database -d, profile CSV -o, threads -t (same launcher as annotators). Native MetaPhlAn uses the registered profile adapter.",
         "out": "taxid + N_<sample> CSV and <output>.profile.json metadata: kind, unit, basis, taxonomy, rank, normalization. "
-               "No seq or fabricated per-read assignments. Empty profiles retain explicit sample columns.",
+               "No seq or fabricated per-read assignments. Empty profiles retain explicit sample columns. "
+               "MultiQC consumes report_profiles(Annotation, dest, stage, config): the same versioned "
+               ".profiles.json + full taxid/N_sample tables, with stage/identity/source metadata and "
+               "per-sample inventory. No GT, taxonomy/basis conversion or pooling is required; "
+               "per-read binning enters this boundary as counts, rank=taxid, normalization=all.",
     },
     "annotator": {
         "in": "FASTQ R1/R2 via CLI -i/-I, -d DB, -o out, -t threads "

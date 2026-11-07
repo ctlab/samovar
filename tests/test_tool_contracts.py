@@ -157,6 +157,15 @@ def test_profiler_contract(request, tmp_path, tiny_fastq):
     table, meta = load_profile(out)
     assert "seq" not in table and n_sample_columns(table)
     assert meta["kind"] == "abundance"
+    from samovar.parse_annotators import Annotation
+    from samovar.profiles import report_profiles, read_profiles
+    report = tmp_path / "report_profiles"
+    inventory = report_profiles(Annotation.from_abundance_tables({"contract": table}, {"contract": meta}),
+                                report, "initial")
+    saved, infos = read_profiles(report)
+    pd.testing.assert_frame_equal(saved["contract"], table, check_dtype=False)
+    assert infos["contract"]["stage"] == "initial"
+    assert len(inventory) == len(n_sample_columns(table))
 
 
 def test_table_regenerator_contract(request, tmp_path):

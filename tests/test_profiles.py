@@ -38,6 +38,48 @@ def test_mixed_annotation_keeps_both_channels_and_roundtrip(tmp_path):
     assert set(input_to_abundance_tables(obj)) == set(got)
 
 
+@pytest.mark.parametrize("stage", ["initial", "regenerated", "reprofiled"])
+def test_report_contract_preserves_mixed_profiles_without_truth(tmp_path, stage):
+    from samovar.profiles import report_profiles
+    obj = Annotation.from_long_table(pd.DataFrame({"seq": ["r1", "r2"], "sample": ["s", "s"],
+        "taxID_kaiju_0": [562, 0], "taxID_kaiju_1": [4932, 4932]}))
+    obj.add_profiles({"mpa": table([20, 70])}, {"mpa": metadata(dict(unit="percent", basis="organisms",
+        database="markers", unassigned_by_sample={"s": 0.1}))})
+    obj.abundance_tables["kaiju"] = table([2, 0])  # old conversion cache, not a new profiler
+    config = {"run_config": [dict(run_name="kaiju", type="kaiju", db_path="refseq")]}
+    rows = report_profiles(obj, tmp_path, stage, config)
+    tables, metas = read_profiles(tmp_path)
+    assert set(tables) == {"taxID_kaiju_0", "taxID_kaiju_1", "mpa"}
+    assert tables["taxID_kaiju_0"].set_index("taxid").N_s.to_dict() == {"0": 1, "562": 1}
+    assert metas["taxID_kaiju_0"]["unassigned_by_sample"] == {"s": 0.5}
+    assert metas["taxID_kaiju_1"]["database"] == "refseq"
+    assert metas["mpa"]["unit"] == "percent" and metas["mpa"]["basis"] == "organisms"
+    assert all(row["stage"] == stage for row in rows.values())
+    assert len(rows) == 3 and "seq" not in tables["mpa"]
+    # Independent units/bases stay separate, and rebuilding cannot change counts.
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    report_profiles(obj, tmp_path, stage, config)
+    assert before == {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+
+
+def test_report_contract_empty_unclassified_unresolved_and_invalid_metadata(tmp_path):
+    from samovar.profiles import report_profiles
+    obj = Annotation.from_abundance_tables(
+        {"empty": table([], ids=()), "unknown": table([5], ids=("0",)),
+         "native": table([100], ids=("unmapped:SGB1",))},
+        {"empty": metadata(), "unknown": metadata({"normalization": "all"}),
+         "native": metadata({"unit": "percent", "basis": "organisms"})})
+    rows = list(report_profiles(obj, tmp_path, "initial").values())
+    assert [r["status"] for r in rows] == ["empty", "all-unclassified", "available"]
+    assert rows[2]["unresolved_fraction"] == 1
+    assert rows[0]["unassigned_fraction"] is None
+    obj.profile_metadata["empty"]["unassigned_by_sample"] = {"s": 1.0}
+    assert report_profiles(obj, tmp_path, "initial")["0"]["status"] == "all-unclassified"
+    obj.profile_metadata["native"]["unassigned_by_sample"] = {"absent": 0.1}
+    with pytest.raises(ValueError, match="unknown samples"):
+        report_profiles(obj, tmp_path, "initial")
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -1, "broken"])
 def test_invalid_values_are_errors(value):
     with pytest.raises((ValueError, TypeError)):

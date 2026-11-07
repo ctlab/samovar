@@ -1582,6 +1582,22 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
             encoding="utf-8",
         )
         _copy_plot_assets(folder, dest, stage, i)
+        if stage != "feature_importance":
+            from samovar.profile_pipeline import stage_annotation
+            from samovar.profiles import report_profiles
+
+            phase = stage.removeprefix("viz_")
+            cfg_name = "config_reannotate.yaml" if phase == "regenerated" else "config_init.yaml"
+            config = _load_yaml(root / ".log" / "configs" / cfg_name)
+            inventory = report_profiles(stage_annotation(root, phase), dest / "profiles" / phase, phase, config)
+            if inventory:
+                payload = _normalize_mqc_json(
+                    dict(section_name="Profile inventory", plot_type="table", data=inventory,
+                         description="Available full profiles; mass uses the declared units. Unknown metadata remains unspecified. "
+                                     "Typed numeric tables and metadata are in multiqc_samovar/profiles/. No gold standard is required."),
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], stem="profile_inventory")
+                _emit_mqc(payload, dest / f"{i:02d}_{phase}_profile_inventory_mqc.json")
 
     hidden_ids = _hidden_parent_ids(dest)
     options_html = dest / "00_run_options_mqc.html"

@@ -295,6 +295,81 @@ def compatible(pred, truth):
                 raise ValueError(f"Incompatible profile {field}: {pred[field]} vs {truth[field]}")
 
 
+def report_profiles(annotation, dest, stage, config=None):
+    """Publish the report's typed profile contract and return per-sample inventory.
+
+    No rank/basis conversion, pooling, GT lookup or top-N filtering belongs at
+    this boundary. Binner identities retain the full source column so different
+    database runs cannot overwrite one another through display-name parsing.
+    """
+    from samovar.abundance import annotation_to_abundance_tables, taxid_annotation_columns, annotator_name
+
+    if stage not in {"initial", "regenerated", "reprofiled"}:
+        raise ValueError(f"Invalid report profile stage: {stage}")
+    tables, metas = {}, {}
+    frame = annotation.DataFrame
+    cached_names = {annotator_name(column) for column in taxid_annotation_columns(frame)}
+    for column in taxid_annotation_columns(frame):
+        columns = [column] + (["sample"] if "sample" in frame else [])
+        derived = annotation_to_abundance_tables(frame[columns])
+        if not derived:
+            continue
+        name = str(column)
+        tables[name] = next(iter(derived.values()))
+        metas[name] = metadata(dict(rank="taxid", normalization="all",
+                                    representation="per-read", source_column=name))
+    for name, table in (annotation.abundance_tables or {}).items():
+        if name not in annotation.profile_metadata and name in cached_names:
+            continue  # abundance cache of the read columns above
+        if name in tables:
+            raise ValueError(f"Report profile identity collision: {name}")
+        tables[name] = table
+        metas[name] = metadata(annotation.profile_metadata.get(name, {"rank": "taxid"}))
+        metas[name]["representation"] = "profile"
+    runs = (config or {}).get("run_config") or []
+    rows = {}
+    for name, table in tables.items():
+        info = metas[name]
+        source = info.get("source_identity", name)
+        matches = [run for run in runs if source == run.get("run_name") or
+                   source.startswith("taxID_" + str(run.get("run_name")) + "_")]
+        run = matches[0] if len(matches) == 1 else {}
+        info.update(stage=stage, identity=name, run_name=info.get("run_name", run.get("run_name", source)),
+                    tool=info.get("tool", run.get("type")),
+                    database=info.get("database", run.get("db_path")))
+        table, info = validate(table, info)
+        # Metadata unassigned values are fractions, independently of table units.
+        unassigned = dict(info.get("unassigned_by_sample") or {})
+        samples = [c[2:] for c in n_sample_columns(table)]
+        if set(unassigned) - set(samples):
+            raise ValueError(f"Unassigned metadata has unknown samples for {name}")
+        relative = fractions(table, {**info, "normalization": "all"}) if info["kind"] == "abundance" else None
+        for col, sample in zip(n_sample_columns(table), samples):
+            mass = float(table[col].sum())
+            value = unassigned.get(sample)
+            if relative is not None and table.taxid.eq("0").any():
+                observed = float(relative.loc[relative.taxid == "0", col].sum())
+                if value is not None and not np.isclose(value, observed):
+                    raise ValueError(f"Conflicting unassigned mass for {name}/{sample}")
+                value = observed
+            if value is not None:
+                if not np.isfinite(value) or not 0 <= value <= 1:
+                    raise ValueError(f"Invalid unassigned fraction for {name}/{sample}")
+                unassigned[sample] = float(value)
+            unresolved = float(relative.loc[table.taxid.str.startswith("unmapped:"), col].sum()) if relative is not None else None
+            status = "all-unclassified" if value == 1 else ("empty" if mass == 0 else "available")
+            rows[str(len(rows))] = dict(profile=name, sample=sample, stage=stage,
+                tool=info["tool"], run_name=info["run_name"], database=info["database"],
+                method=info.get("method"), representation=info["representation"],
+                kind=info["kind"], unit=info["unit"], basis=info["basis"], taxonomy=info["taxonomy"],
+                rank=info["rank"], normalization=info["normalization"], mass=mass,
+                unassigned_fraction=value, unresolved_fraction=unresolved, status=status)
+        info["unassigned_by_sample"] = unassigned
+        tables[name], metas[name] = table, info
+    write_profiles(dest, tables, metas)
+    return rows
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)

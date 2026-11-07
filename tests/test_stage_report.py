@@ -69,6 +69,28 @@ def test_bundle_multiqc_includes_plots_and_scores(tmp_path):
     assert "Raw" in next(p for p in jsons if "F1_kaiju" in p.name).read_text()
 
 
+def test_bundle_profiles_without_ground_truth(tmp_path):
+    import pandas as pd
+    from samovar.profiles import write_profiles, read_profiles
+
+    table = pd.DataFrame({"taxid": ["562", "0"], "N_patient_A": [8, 2]})
+    for phase in ("initial", "reprofiled"):
+        write_profiles(tmp_path / f"{phase}_profiles", {"baseline": table},
+                       {"baseline": {"normalization": "all", "database": "fixture"}})
+    staged = bundle_multiqc(tmp_path)
+    for phase, title in (("initial", "Raw"), ("reprofiled", "Reprofiled")):
+        tables, metas = read_profiles(staged / "profiles" / phase)
+        pd.testing.assert_frame_equal(tables["baseline"], table, check_dtype=False)
+        assert metas["baseline"]["stage"] == phase
+        payload = json.loads(next(staged.glob(f"*_{phase}_profile_inventory_mqc.json")).read_text())
+        assert payload["section_name"] == f"{title} — Profile inventory"
+        assert payload["data"]["0"]["unassigned_fraction"] == 0.2
+        assert payload["data"]["0"]["sample"] == "patient_A"
+    (staged / "profiles" / "initial" / "stale.csv").write_text("obsolete")
+    bundle_multiqc(tmp_path)
+    assert not (staged / "profiles" / "initial" / "stale.csv").exists()
+
+
 def test_write_heatmap_mqc_is_native_multiqc(tmp_path):
     import pandas as pd
 
