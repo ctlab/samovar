@@ -221,14 +221,14 @@ def section_of(filename: str) -> str:
         return "mag"
     if "tablescore" in name or "table_score" in name:
         return "table_scores"
-    if "profile" in name:
+    if "composition" in name:
+        return "composition"
+    if "profile_inventory" in name or "profile_quality" in name or name.startswith("profile"):
         return "profiles"
     if "feature_importance" in name or "importance" in name:
         return "feature_importance"
     if "correct" in name:
         return "correction"
-    if "composition" in name:
-        return "composition"
     if re.search(r"(^|_)alpha(_|$)|shannon|richness", name):
         return "alpha"
     if re.search(r"(^|_)beta(_|$)|pcoa|mantel", name):

@@ -75,7 +75,8 @@ def test_rebuild_drops_disabled_section_and_keeps_upstream(tmp_path):
     assert any("quality_scores" in path.name for path in subset.glob("*_mqc.json"))
     text = (subset / "98_report_status_mqc.html").read_text()
     assert "mag" not in text
-    assert "composition" in text
+    assert "alpha" in text
+    assert any("composition" in path.name for path in subset.glob("*_mqc.json"))
 
     narrowed = bundle_multiqc(
         tmp_path,
@@ -100,9 +101,10 @@ def test_profile_only_mixed_and_no_ground_truth(tmp_path):
     )
     profile_only = bundle_multiqc(tmp_path, effective_settings([{"sections": ["profiles", "composition"]}]))
     assert list(profile_only.glob("*profile_inventory*"))
-    status = (profile_only / "98_report_status_mqc.html").read_text()
-    assert "composition" in status
-    assert "no gold standard" not in status.lower()
+    composition = json.loads(next(profile_only.glob("*composition*bars_mqc.json")).read_text())
+    assert composition["data"]["sample"]["562"] == 75.0
+    assert composition["data"]["sample"]["0 (unclassified)"] == 25.0
+    assert "no gold standard" not in composition["description"].lower()
 
     _scores(tmp_path)
     mixed = bundle_multiqc(tmp_path)

@@ -1545,6 +1545,134 @@ def _write_multiqc_config(dest: Path, hidden_ids: Sequence[str]) -> Path:
     return cfg
 
 
+def _write_composition_plots(
+    dest: Path,
+    phase: str,
+    tables: Dict[str, Any],
+    metas: Dict[str, Any],
+    *,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    order: int,
+) -> List[Path]:
+    """Stacked composition for each profile, plus the full fraction table."""
+    from samovar.abundance import n_sample_columns
+    from samovar.profiles import (
+        composition_color,
+        composition_display,
+        composition_fractions,
+        composition_label,
+    )
+
+    written: List[Path] = []
+    folder = dest / "composition" / phase
+    for name, table in tables.items():
+        info = dict(metas.get(name) or {})
+        full = composition_fractions(table, info)
+        slug = _slug(str(name)) or "profile"
+        stem = f"{order:02d}_{phase}_composition_{slug}"
+        identity = str(info.get("identity") or name)
+        method = info.get("method") or info.get("representation") or ""
+        detail = (
+            f"rank {info.get('rank', '')}; unit {info.get('unit', '')}; "
+            f"basis {info.get('basis', '')}; normalization {info.get('normalization', '')}"
+        )
+        if method:
+            detail += f"; method {method}"
+        if info.get("database"):
+            detail += f"; database {info.get('database')}"
+        title = f"{parent_name} — {identity} composition"
+        if full is None:
+            payload = _normalize_mqc_json(
+                {
+                    "section_name": title,
+                    "plot_type": "table",
+                    "description": detail + ". Presence profiles have no quantitative composition.",
+                    "data": {"0": {"profile": identity, "status": "presence"}},
+                },
+                parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_table",
+            )
+            path = dest / f"{stem}_table_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
+            continue
+        columns = n_sample_columns(full)
+        folder.mkdir(parents=True, exist_ok=True)
+        full.to_csv(folder / f"{slug}.csv", index=False)
+        shown = composition_display(full)
+        labels = {str(tax): composition_label(str(tax)) for tax in shown.taxid.astype(str)}
+        series: Dict[str, Dict[str, float]] = {}
+        for column in columns:
+            sample = column[2:]
+            if float(full[column].sum()) <= 0:
+                continue
+            series[sample] = {
+                labels[str(tax)]: round(float(value) * 100, 4)
+                for tax, value in zip(shown.taxid.astype(str), shown[column])
+                if float(value) > 0
+            }
+        if series:
+            names: List[str] = []
+            for sample_series in series.values():
+                for label in sample_series:
+                    if label not in names:
+                        names.append(label)
+            cats = {
+                label: {"name": label, "color": composition_color(label.split(" (", 1)[0])}
+                for label in names
+            }
+            payload = {
+                "section_name": title,
+                "description": detail + ". Bars are percent. Top 10 taxa plus Other; unclassified and unresolved stay separate. Full fractions are in the composition table.",
+                "plot_type": "bargraph",
+                "categories": cats,
+                "pconfig": {
+                    "title": title,
+                    "xlab": "Sample",
+                    "ylab": "Percent",
+                    "ymin": 0,
+                    "ymax": 100,
+                    "stacking": "normal",
+                    "cpswitch": False,
+                    "sort_samples": False,
+                },
+                "data": series,
+            }
+            payload = _normalize_mqc_json(
+                payload, parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_bars",
+            )
+            path = dest / f"{stem}_bars_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
+        rows = {}
+        for index, (_, row) in enumerate(full.iterrows()):
+            rows[str(index)] = {
+                "taxid": str(row.taxid),
+                "profile": identity,
+                "tool": str(info.get("tool") or ""),
+                "run_name": str(info.get("run_name") or ""),
+                "database": str(info.get("database") or ""),
+                **{column[2:]: round(float(row[column]), 6) for column in columns},
+            }
+        table_payload = _normalize_mqc_json(
+            {
+                "section_name": f"{title} fractions",
+                "description": detail + ". Every taxon, not the top-10 display.",
+                "plot_type": "table",
+                "data": rows,
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_fractions",
+        )
+        path = dest / f"{stem}_fractions_mqc.json"
+        _emit_mqc(table_payload, path)
+        written.append(path)
+    return written
+
+
 def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = None) -> Path:
     """Materialize ``*_mqc.*`` custom content from plot folders and run options.
 
@@ -1622,15 +1750,15 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
             encoding="utf-8",
         )
         _copy_plot_assets(folder, dest, stage, i)
-        if stage != "feature_importance" and "profiles" in enabled:
+        if stage != "feature_importance" and ({"profiles", "composition"} & enabled):
             from samovar.profile_pipeline import stage_annotation
-            from samovar.profiles import report_profiles
+            from samovar.profiles import read_profiles, report_profiles
 
             phase = stage.removeprefix("viz_")
             cfg_name = "config_reannotate.yaml" if phase == "regenerated" else "config_init.yaml"
             config = _load_yaml(root / ".log" / "configs" / cfg_name)
             inventory = report_profiles(stage_annotation(root, phase), dest / "profiles" / phase, phase, config)
-            if inventory:
+            if "profiles" in enabled and inventory:
                 payload = _normalize_mqc_json(
                     dict(section_name="Profile inventory", plot_type="table", data=inventory,
                          description="Available full profiles; mass uses the declared units. Unknown metadata remains unspecified. "
@@ -1638,6 +1766,13 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], stem="profile_inventory")
                 _emit_mqc(payload, dest / f"{i:02d}_{phase}_profile_inventory_mqc.json")
+            if "composition" in enabled:
+                tables, metas = read_profiles(dest / "profiles" / phase)
+                _write_composition_plots(
+                    dest, phase, tables, metas,
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], order=i,
+                )
 
     if "qc" in enabled:
         qc_dir = dest / "qc"

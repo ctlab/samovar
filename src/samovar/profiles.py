@@ -285,6 +285,90 @@ def at_rank(table, info, rank, taxdump=None):
     return table, {**info, "rank": rank}
 
 
+COMPOSITION_TOP_N = 10
+COMPOSITION_COLORS = (
+    "#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02",
+    "#a6761d", "#1f78b4", "#666666", "#e41a1c", "#377eb8", "#4daf4a",
+    "#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999", "#66c2a5",
+    "#fc8d62", "#8da0cb",
+)
+
+
+def composition_color(taxid: str) -> str:
+    """Same taxon keeps the same colour across stages and annotators."""
+    token = str(taxid)
+    if token in {"0", "0 (unclassified)"}:
+        return "#bdbdbd"
+    if token == "Other":
+        return "#eeeeee"
+    if token.startswith("unmapped:") or token.endswith("(unresolved)"):
+        return "#636363"
+    import hashlib
+    slot = int(hashlib.md5(token.encode()).hexdigest()[:8], 16) % len(COMPOSITION_COLORS)
+    return COMPOSITION_COLORS[slot]
+
+
+def composition_label(taxid: str) -> str:
+    token = str(taxid)
+    if token == "0":
+        return "0 (unclassified)"
+    if token.startswith("unmapped:"):
+        return f"{token} (unresolved)"
+    return token
+
+
+def composition_fractions(table, info):
+    """Column shares on the table's own scale. Unclassified stays taxid 0.
+
+    A classified profile that omitted taxid 0 keeps ``unassigned_by_sample`` as
+    that slice and scales the other taxa only when they already sum to one.
+    Returns None for presence profiles, which have no quantitative composition.
+    """
+    if info.get("kind") != "abundance":
+        return None
+    work, info = validate(table, info)
+    cols = n_sample_columns(work)
+    values = work[cols]
+    if info["unit"] == "percent":
+        work[cols] = values / 100
+    elif info["unit"] == "counts":
+        work[cols] = values.div(values.sum().replace(0, np.nan)).fillna(0)
+    samples = [column[2:] for column in cols]
+    unassigned = {
+        sample: float((info.get("unassigned_by_sample") or {}).get(sample) or 0)
+        for sample in samples
+    }
+    if not work.taxid.eq("0").any() and any(unassigned.values()):
+        for column, sample in zip(cols, samples):
+            total = float(work[column].sum())
+            room = 1 - unassigned[sample]
+            if total > room + 1e-6 and total > 0 and room >= 0:
+                work[column] = work[column] * (room / total)
+        extra = {"taxid": "0"}
+        extra.update({column: unassigned[sample] for column, sample in zip(cols, samples)})
+        work = pd.concat([work, pd.DataFrame([extra])], ignore_index=True)
+    return work
+
+
+def composition_display(fractions_table, top_n=COMPOSITION_TOP_N):
+    """Top taxa plus Other. Unclassified and unresolved stay out of Other."""
+    cols = n_sample_columns(fractions_table)
+    labels = fractions_table.taxid.astype(str)
+    special = labels.eq("0") | labels.str.startswith("unmapped:")
+    ranked = fractions_table.loc[~special].copy()
+    ranked["_mean"] = ranked[cols].mean(axis=1) if cols else 0
+    ranked = ranked.sort_values(["_mean", "taxid"], ascending=[False, True])
+    keep = ranked.head(int(top_n)).drop(columns="_mean")
+    rest = ranked.iloc[int(top_n):]
+    shown = pd.concat([keep, fractions_table.loc[special]], ignore_index=True)
+    if not rest.empty:
+        other = {"taxid": "Other"}
+        for column in cols:
+            other[column] = float(rest[column].sum())
+        shown = pd.concat([shown, pd.DataFrame([other])], ignore_index=True)
+    return shown
+
+
 def compatible(pred, truth):
     for field in ("taxonomy", "rank"):
         if pred[field] != truth[field]:
