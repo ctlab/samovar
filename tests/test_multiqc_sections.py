@@ -89,6 +89,13 @@ def test_rebuild_drops_disabled_section_and_keeps_upstream(tmp_path):
     assert "kraken2" not in scores["data"]
     assert not any("mag_" in path.name for path in narrowed.glob("*"))
     assert (table.stat().st_mtime_ns, marker.stat().st_mtime_ns, table.read_text()) == before
+    other = tmp_path / "reprofiled_annotations_plots"
+    other.mkdir()
+    (other / "quality_scores.csv").write_text("annotator,accuracy,f1\nunwanted,1,1\n")
+    selected = bundle_multiqc(tmp_path, effective_settings([{"sections": ["benchmark"], "stages": ["initial"],
+                                                          "annotators": ["kaiju"]}]))
+    conclusion = (selected / "99_conclusion_mqc.html").read_text()
+    assert "unwanted" not in conclusion and "kaiju" in conclusion
 
 
 def test_profile_only_mixed_and_no_ground_truth(tmp_path):
@@ -115,3 +122,32 @@ def test_profile_only_mixed_and_no_ground_truth(tmp_path):
 
     no_truth = bundle_multiqc(tmp_path, effective_settings([{"stages": ["initial"]}]))
     assert "regenerated" not in (no_truth / "report_settings.json").read_text().split("stages")[1].split("]")[0]
+    for phase in ("initial", "regenerated"):
+        qc = tmp_path / f"{phase}_trimmed"
+        qc.mkdir()
+        (qc / f"{phase}.fastp.json").write_text("{}")
+    (tmp_path / "reprofiled_profiles").mkdir()
+    (tmp_path / "reprofiled_profiles/profile_joint.json").write_text("{}")
+    initial = bundle_multiqc(tmp_path, effective_settings([{"stages": ["initial"]}]))
+    assert {p.name for p in (initial / "qc").iterdir()} == {"initial.fastp.json"}
+    assert not (initial / "correction_artifacts_mqc.json").exists()
+
+
+def test_annotator_filter_precedes_grouped_calculation(tmp_path):
+    import pandas as pd
+    from samovar.profiles import write_profiles, read_profiles
+    table = pd.DataFrame({"taxid": ["1", "2", "3"], "N_a": [1, 0, 0], "N_b": [0, 1, 0], "N_c": [0, 0, 1]})
+    write_profiles(tmp_path / "initial_profiles", {"chosen": table, "excluded": table},
+                   {name: {"unit": "fraction", "normalization": "all"} for name in ("chosen", "excluded")})
+    dest = bundle_multiqc(tmp_path, effective_settings([{"sections": ["composition", "alpha", "beta"],
+                                                      "annotators": ["chosen"], "stages": ["initial"]}]))
+    assert set(read_profiles(dest / "profiles/initial")[0]) == {"chosen"}
+    assert json.loads((dest / "beta/initial/grouped.json").read_text())["profiles"] == ["chosen"]
+    assert not list(dest.glob("*excluded*"))
+
+
+def test_multiqc_failure_is_propagated(tmp_path, monkeypatch):
+    from samovar.stage_report import run_multiqc
+    monkeypatch.setattr("samovar.paths.discover_multiqc", lambda: "/configured/multiqc")
+    monkeypatch.setattr("subprocess.call", lambda *a, **k: 7)
+    assert run_multiqc(tmp_path) == 7

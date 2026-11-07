@@ -15,6 +15,9 @@ def test_pipeline_config_from_args_file(tmp_path):
     read_length: 100
     coverage: 20
     email: test@example.com
+    multiqc:
+      sections: [composition, alpha]
+      stages: [initial]
     annotators:
       - run_name: k2-test
         type: kraken2
@@ -36,6 +39,8 @@ def test_pipeline_config_from_args_file(tmp_path):
         kaiju=None
     )
     config = PipelineConfig.from_args(args)
+    assert config.multiqc["sections"] == ["composition", "alpha"]
+    assert config.multiqc["stages"] == ["initial"]
     assert config.input_dir == str(Path("/path/to/input").resolve())
     assert config.output_dir == str(Path(test_output_dir).resolve())
     assert config.read_length == 100

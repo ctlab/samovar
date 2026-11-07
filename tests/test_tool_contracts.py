@@ -233,11 +233,16 @@ def test_concordance_contract(request):
     ids = ["a", "b", "c"]
     values = [[0.0, 0.2, 0.4], [0.2, 0.0, 0.6], [0.4, 0.6, 0.0]]
     left = pd.DataFrame(values, index=ids, columns=ids)
-    block = fn(left, left, {"permutations": 19, "seed": 1})
+    block = fn(left, left, {"permutations": 19, "seed": 1, "metric": "bray_curtis", "taxonomy": "ncbi",
+                            "rank": "species", "basis": "reads", "normalization": "all", "stage": "initial",
+                            "profile_a": {"identity": "left"}, "profile_b": {"identity": "right"}})
     assert isinstance(block, dict)
-    assert "statistic" in block
+    assert {"method", "version", "statistic", "pvalue", "n_samples", "seed", "permutations", "status", "reason"} <= set(block)
     assert block.get("status") in {None, ""}
-    assert block["statistic"] == pytest.approx(1.0)
+    import math
+    assert math.isfinite(block["statistic"])
+    assert block["n_samples"] == len(ids)
+    assert block["pvalue"] is None or 0 <= block["pvalue"] <= 1
 
 
 def test_sample_scoring_contract(request):

@@ -196,6 +196,11 @@ def test_multiqc_render_is_adequate(tmp_path):
         )
     write_stage_report(tmp_path, "viz_initial")
     write_stage_report(tmp_path, "viz_regenerated")
+    from samovar.profiles import write_profiles
+    profile = pd.DataFrame({"taxid": ["1", "2", "3"], "N_a": [1, 0, 0], "N_b": [0, 1, 0],
+                            "N_c": [0, 0, 1], "N_d": [.5, .5, 0]})
+    write_profiles(tmp_path / "initial_profiles", {"first": profile, "second": profile},
+                   {name: {"unit": "fraction", "normalization": "all"} for name in ("first", "second")})
     staged = bundle_multiqc(tmp_path)
     out = tmp_path / "multiqc"
     proc = subprocess.run(
@@ -226,6 +231,10 @@ def test_multiqc_render_is_adequate(tmp_path):
     assert "samovar_raw_R2_" in keys
     assert "samovar_regenerated_R2_" in keys
     assert "samovar_raw_score_bars" in keys
+    grouped = next(v for k, v in plot_data.items() if "initial_beta_grouped_pcoa" in k)
+    assert len(grouped["datasets"]) == 1
+    assert len(grouped["datasets"][0]["points"]) == 8
+    assert {point["group"] for point in grouped["datasets"][0]["points"]} == {"first", "second"}
     assert html_path.stat().st_size > 50_000
 
 

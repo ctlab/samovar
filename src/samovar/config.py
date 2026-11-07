@@ -372,6 +372,7 @@ class PipelineConfig:
     regeneration_modes: Optional[List[str]] = None
     table_score: str = "shannon_ks"
     concordance: str = "mantel"
+    multiqc: Optional[Dict] = None
     sample_score: str = ""
     sample_score_by_annotator: Optional[Dict[str, str]] = None
     sample_score_by_method: Optional[Dict[str, str]] = None
@@ -548,6 +549,9 @@ class PipelineConfig:
                 yaml_concordance = input_config.get("concordance")
                 if yaml_concordance:
                     config.concordance = str(yaml_concordance)
+                if "multiqc" in input_config:
+                    from samovar.multiqc_report import DEFAULT_SETTINGS, parse_multiqc_block
+                    config.multiqc = {**DEFAULT_SETTINGS, **parse_multiqc_block(input_config["multiqc"])}
                 yaml_sample, yaml_sample_by, yaml_sample_method = ingest_sample_score_settings(
                     input_config.get("sample_score")
                     or input_config.get("sample-score")
@@ -2378,7 +2382,7 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             config.output_dir,
             args=args,
             argv=record_argv,
-            extra={"viz": config.viz},
+            extra={"viz": config.viz, "multiqc": config.multiqc},
         )
     except Exception as exc:
         print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)

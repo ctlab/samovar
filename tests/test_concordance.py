@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.concordance import score_concordance
 from samovar.multiqc_report import effective_settings
@@ -47,9 +48,9 @@ def test_config_selects_custom_scorer_and_report(tmp_path):
     right = pd.DataFrame({"taxid": ["1", "2", "3"], "N_a": [1.0, 0.0, 0.0], "N_b": [0.0, 0.0, 1.0], "N_c": [0.0, 0.2, 0.8]})
     for phase in ("initial", "reprofiled"):
         write_profiles(tmp_path / f"{phase}_profiles", {"mpa": left, "kraken": right}, {"mpa": info, "kraken": other})
+    from samovar.config import PipelineConfig
+    PipelineConfig(annotators=[], concordance=str(CUSTOM), regeneration_seed=17).generate_configs(str(tmp_path))
     configs = tmp_path / ".log" / "configs"
-    configs.mkdir(parents=True)
-    (configs / "config_init.yaml").write_text(f"concordance: {CUSTOM}\n", encoding="utf-8")
     staged = bundle_multiqc(tmp_path, effective_settings([{"sections": ["beta"], "stages": ["initial", "reprofiled"]}]))
     tables = list(staged.glob("*beta_concordance_table_mqc.json"))
     assert {path.name.split("_beta_")[0].split("_", 1)[-1] for path in tables} >= {"initial", "reprofiled"}
@@ -75,3 +76,25 @@ def test_config_selects_custom_scorer_and_report(tmp_path):
     switched = json.loads(next(mantel.glob("*initial_beta_concordance_table_mqc.json")).read_text())
     assert next(iter(switched["data"].values()))["method"] == "mantel"
     assert next(iter(switched["data"].values()))["pvalue"] is not None
+
+
+def test_invalid_distances_and_mantel_parameters_are_not_scores():
+    matrix = _matrix([[0, .2, .8], [.2, 0, .5], [.8, .5, 0]], list("abc"))
+    for count in (0, -2, 1.5):
+        with pytest.raises(ValueError, match="positive integer"):
+            score_concordance(matrix, matrix, {"permutations": count})
+    for broken in (matrix.set_axis(["a", "a", "c"]).set_axis(["a", "a", "c"], axis=1), -matrix):
+        assert score_concordance(broken, matrix)["status"] == "invalid distance matrix"
+    disjoint = matrix.rename(index={c: c.upper() for c in "abc"}, columns={c: c.upper() for c in "abc"})
+    assert score_concordance(matrix, disjoint, {"concordance": str(CUSTOM)})["statistic"] is None
+
+
+def test_concordance_does_not_compare_different_taxonomies(tmp_path):
+    table = pd.DataFrame({"taxid": ["1", "2"], "N_a": [1, 0], "N_b": [0, 1], "N_c": [.5, .5]})
+    info = metadata({"unit": "fraction", "normalization": "all"})
+    write_profiles(tmp_path / "initial_profiles", {"ncbi": table, "gtdb": table},
+                   {"ncbi": info, "gtdb": {**info, "taxonomy": "gtdb"}})
+    dest = bundle_multiqc(tmp_path, effective_settings([{"sections": ["beta"], "stages": ["initial"]}]))
+    pair = json.loads((dest / "beta/initial/concordance.json").read_text())["pairs"][0]
+    assert pair["status"] == "incompatible profiles" and pair["statistic"] is None
+    assert "taxonomy" in pair["reason"]

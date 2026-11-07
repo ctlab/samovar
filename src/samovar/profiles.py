@@ -391,7 +391,7 @@ def alpha_metrics(table, info):
             "sample": column[2:],
             "richness": int(positive.size),
             "shannon": float(shannon_entropy(positive)),
-            "unclassified": float(full.loc[labels.eq("0"), column].sum()) if labels.eq("0").any() else 0.0,
+            "unclassified": float(full.loc[labels.eq("0"), column].sum()) if labels.eq("0").any() else None,
             "unresolved": float(full.loc[labels.str.startswith("unmapped:"), column].sum()) if labels.str.startswith("unmapped:").any() else 0.0,
         })
     return rows
@@ -440,6 +440,7 @@ def beta_diversity(table, info, metric="bray_curtis"):
         "metric": metric,
         "preprocessing": BETA_PREPROCESSING,
         "rank": info.get("rank", ""),
+        "taxonomy": info.get("taxonomy", ""),
         "unit": info.get("unit", ""),
         "basis": info.get("basis", ""),
         "normalization": info.get("normalization", ""),
@@ -610,7 +611,7 @@ def compatible(pred, truth):
                 raise ValueError(f"Incompatible profile {field}: {pred[field]} vs {truth[field]}")
 
 
-def report_profiles(annotation, dest, stage, config=None):
+def report_profiles(annotation, dest, stage, config=None, *, annotators="all"):
     """Publish the report's typed profile contract and return per-sample inventory.
 
     No rank/basis conversion, pooling, GT lookup or top-N filtering belongs at
@@ -643,6 +644,7 @@ def report_profiles(annotation, dest, stage, config=None):
         metas[name]["representation"] = "profile"
     runs = (config or {}).get("run_config") or []
     rows = {}
+    selected_tables, selected_metas = {}, {}
     for name, table in tables.items():
         info = metas[name]
         source = info.get("source_identity", name)
@@ -652,6 +654,9 @@ def report_profiles(annotation, dest, stage, config=None):
         info.update(stage=stage, identity=name, run_name=info.get("run_name", run.get("run_name", source)),
                     tool=info.get("tool", run.get("type")),
                     database=info.get("database", run.get("db_path")))
+        from samovar.multiqc_report import profile_selected
+        if not profile_selected(name, info, annotators):
+            continue
         table, info = validate(table, info)
         # Metadata unassigned values are fractions, independently of table units.
         unassigned = dict(info.get("unassigned_by_sample") or {})
@@ -680,8 +685,8 @@ def report_profiles(annotation, dest, stage, config=None):
                 rank=info["rank"], normalization=info["normalization"], mass=mass,
                 unassigned_fraction=value, unresolved_fraction=unresolved, status=status)
         info["unassigned_by_sample"] = unassigned
-        tables[name], metas[name] = table, info
-    write_profiles(dest, tables, metas)
+        selected_tables[name], selected_metas[name] = table, info
+    write_profiles(dest, selected_tables, selected_metas)
     return rows
 
 

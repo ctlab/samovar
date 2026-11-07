@@ -68,10 +68,25 @@ def score_concordance(left, right, config=None) -> Dict[str, Any]:
     }
     if prepared["status"]:
         return base
+    if prepared["n_samples"] < 2:
+        return {**base, "status": "fewer than two shared samples", "reason": "No shared pairwise distances"}
     module = _load_scorer(name)
     raw = module.score(left_matrix, right_matrix, cfg)
     if not isinstance(raw, dict):
         raise TypeError(f"{name}.score() must return a dict")
+    missing = set(_FIELDS) - set(raw)
+    if missing:
+        raise ValueError(f"{name}.score() missing contract fields: {sorted(missing)}")
+    if not raw["method"] or not raw["version"] or raw["n_samples"] != prepared["n_samples"]:
+        raise ValueError(f"{name}.score() returned invalid method/version/sample count")
+    for field in ("statistic", "pvalue"):
+        value = raw[field]
+        if value is not None and not np.isfinite(float(value)):
+            raise ValueError(f"{name}.score() returned non-finite {field}")
+    if not raw["status"] and raw["statistic"] is None:
+        raise ValueError(f"{name}.score() returned no statistic or status")
+    if raw["pvalue"] is not None and not 0 <= float(raw["pvalue"]) <= 1:
+        raise ValueError(f"{name}.score() returned pvalue outside [0, 1]")
     row = dict(base)
     for key in _FIELDS:
         if key in raw:
@@ -91,16 +106,23 @@ def _check_matrix(frame, label):
     matrix = frame.copy()
     matrix.index = matrix.index.astype(str)
     matrix.columns = matrix.columns.astype(str)
+    if matrix.index.has_duplicates or matrix.columns.has_duplicates:
+        return None, f"{label} distance matrix has duplicate sample ids"
     if set(matrix.index) != set(matrix.columns):
         return None, f"{label} sample ids differ between rows and columns"
     matrix = matrix.loc[list(matrix.index), list(matrix.index)]
-    values = matrix.to_numpy(dtype=float)
+    try:
+        values = matrix.to_numpy(dtype=float)
+    except (ValueError, TypeError):
+        return None, f"{label} distance matrix is not numeric"
     if values.shape[0] != values.shape[1] or not np.isfinite(values).all():
         return None, f"{label} distance matrix is not finite and square"
     if not np.allclose(values, values.T, atol=1e-8):
         return None, f"{label} distance matrix is not symmetric"
     if not np.allclose(np.diag(values), 0, atol=1e-8):
         return None, f"{label} distance matrix diagonal is not zero"
+    if (values < 0).any():
+        return None, f"{label} distance matrix has negative distances"
     return matrix, None
 
 
@@ -174,7 +196,11 @@ def mantel_score(left, right, config=None):
     ``(1 + #{|r_perm| >= |r|}) / (permutations + 1)``.
     """
     cfg = dict(config or {})
-    permutations = int(cfg.get("permutations") or 999)
+    raw_permutations = cfg.get("permutations", 999)
+    raw_permutations = 999 if raw_permutations is None else raw_permutations
+    permutations = int(raw_permutations)
+    if isinstance(raw_permutations, bool) or permutations < 1 or permutations != float(raw_permutations):
+        raise ValueError("Mantel permutations must be a positive integer")
     seed = 42 if cfg.get("seed") is None else int(cfg["seed"])
     left_values = pd.DataFrame(left).to_numpy(dtype=float)
     right_values = pd.DataFrame(right).to_numpy(dtype=float)

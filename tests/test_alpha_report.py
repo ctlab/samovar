@@ -32,6 +32,8 @@ def test_zero_and_all_unclassified_and_presence():
     only = alpha_metrics(unclassified, info)[0]
     assert only["richness"] == 0 and only["shannon"] == 0.0
     assert abs(only["unclassified"] - 1.0) < 1e-12
+    unknown = alpha_metrics(pd.DataFrame({"taxid": ["562"], "N_only": [1.0]}), info)[0]
+    assert unknown["unclassified"] is None  # missing unassigned metadata is not an observed zero
     presence = metadata({"kind": "presence", "unit": "binary", "rank": "species"})
     assert alpha_metrics(pd.DataFrame({"taxid": ["562"], "N_only": [1]}), presence) is None
 

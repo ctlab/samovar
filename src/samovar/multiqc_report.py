@@ -25,6 +25,7 @@ SECTIONS = (
 )
 STAGES = ("initial", "regenerated", "reprofiled")
 FIELDS = ("sections", "include", "exclude", "stages", "annotators")
+DEFAULT_SETTINGS = dict(sections="all", include=[], exclude=[], stages="all", annotators="all")
 _ALWAYS = {"run_options", "conclusion", "intro", "status"}
 _CATALOG = {
     "sections": SECTIONS,
@@ -92,13 +93,7 @@ def parse_multiqc_block(block: Any) -> Dict[str, Any]:
 
 def effective_settings(layers: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     """Later layers win. ``include`` adds and ``exclude`` removes sections."""
-    merged: Dict[str, Any] = {
-        "sections": "all",
-        "include": [],
-        "exclude": [],
-        "stages": "all",
-        "annotators": "all",
-    }
+    merged: Dict[str, Any] = dict(DEFAULT_SETTINGS)
     for layer in layers:
         merged.update(parse_multiqc_block(layer))
     sections = set(SECTIONS) if merged["sections"] == "all" else set(merged["sections"])
@@ -241,6 +236,14 @@ def section_of(filename: str) -> str:
 def _matches(label: str, annotators: Sequence[str]) -> bool:
     text = str(label).lower()
     return any(token.lower() in text for token in annotators)
+
+
+def profile_selected(name, info, annotators):
+    """Select complete profiles before numerical calculations, not plotted points."""
+    if annotators == "all":
+        return True
+    labels = [name, *(info.get(field) or "" for field in ("tool", "run_name", "database", "source_identity"))]
+    return _matches(" ".join(map(str, labels)), annotators)
 
 
 def _filter_payload(payload: Dict[str, Any], annotators: Sequence[str]) -> Optional[Dict[str, Any]]:

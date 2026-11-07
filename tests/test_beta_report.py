@@ -142,8 +142,11 @@ def test_grouped_pcoa_is_one_space_and_names_missing_samples(tmp_path):
     own = json.loads(next(staged.glob("*initial_beta_mpa_a_pcoa_mqc.json")).read_text())
     shared = json.loads(next(staged.glob("*initial_beta_grouped_pcoa_mqc.json")).read_text())
     assert set(own["data"]) == {"a", "b", "c"}
-    assert shared["pconfig"]["data_labels"] == ["mpa_a", "mpa_b"]
-    assert set(shared["data"][0]) == {"a | mpa_a", "b | mpa_a"}
+    assert "data_labels" not in shared["pconfig"]  # one dataset, not a selector hiding the other annotator
+    assert len(shared["data"]) == 4
+    assert {point["group"] for point in shared["data"].values()} == {"mpa_a", "mpa_b"}
+    colors = [point["color"] for point in shared["data"].values() if point["group"] == "mpa_a"]
+    assert colors[0] == colors[1]
     summary = json.loads(next(staged.glob("*initial_beta_grouped_summary_mqc.json")).read_text())
     omitted = [row for row in summary["data"].values() if row["status"] != "ok"]
     assert omitted[0]["sample"] == "c" and omitted[0]["profile"] == "mpa_a"
@@ -153,3 +156,14 @@ def test_grouped_pcoa_is_one_space_and_names_missing_samples(tmp_path):
     off = bundle_multiqc(tmp_path, effective_settings([{"exclude": ["beta"]}]))
     assert not list(off.glob("*beta*"))
     assert not list(off.glob("beta/*"))
+
+
+def test_profile_names_do_not_overwrite_beta_sidecars(tmp_path):
+    table = pd.DataFrame({"taxid": ["1", "2"], "N_a": [1, 0], "N_b": [0, 1], "N_c": [.5, .5]})
+    names = ["grouped", "concordance", "x:y", "x_y", "x_y_coordinates"]
+    write_profiles(tmp_path / "initial_profiles", dict.fromkeys(names, table), dict.fromkeys(names, _info()))
+    dest = bundle_multiqc(tmp_path, effective_settings([{"sections": ["beta", "composition", "alpha"], "stages": ["initial"]}]))
+    artifacts = [json.loads(p.read_text()) for p in (dest / "beta/initial").glob("*.json")]
+    assert {v["profile"] for v in artifacts if "profile" in v} == set(names)
+    assert len(list((dest / "composition/initial").glob("*.csv"))) == len(names)
+    assert len(list((dest / "alpha/initial").glob("*.csv"))) == len(names)

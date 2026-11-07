@@ -488,6 +488,14 @@ def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_")
 
 
+def _profile_slug(name: str) -> str:
+    """Keep profile artifacts distinct from grouped/scorer/coordinate sidecars."""
+    if _slug(name) == name and not name.startswith("grouped") and name != "concordance" and not name.endswith("_coordinates"):
+        return name
+    import hashlib
+    return "_id_" + hashlib.sha256(name.encode()).hexdigest()[:20]
+
+
 def plot_parent(out_dir: PathLike) -> tuple:
     name = as_path(out_dir).name
     for stage, spec in REPORT_SECTION.items():
@@ -1415,14 +1423,19 @@ def _best_tool_row(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return max(tools, key=_rank)
 
 
-def _conclusion_html(output_dir: PathLike) -> str:
+def _conclusion_html(output_dir: PathLike, settings=None) -> str:
     root = as_path(output_dir)
     chosen_rows: List[Dict[str, Any]] = []
     stage_title = ""
     for stage in ("viz_reprofiled", "viz_regenerated", "viz_initial"):
+        if settings is not None and stage.removeprefix("viz_") not in settings["stages"]:
+            continue
         folder = REPORT_SECTION[stage]["folder"]
         scores = _read_scores_table(root / folder)
         rows = _rows_for_read_type(scores, "all")
+        if settings is not None and settings["annotators"] != "all":
+            from samovar.multiqc_report import profile_selected
+            rows = [row for row in rows if profile_selected(str(row.get("annotator", "")), {}, settings["annotators"])]
         if rows:
             chosen_rows = rows
             stage_title = REPORT_SECTION[stage]["title"]
@@ -1570,7 +1583,7 @@ def _write_composition_plots(
     for name, table in tables.items():
         info = dict(metas.get(name) or {})
         full = composition_fractions(table, info)
-        slug = _slug(str(name)) or "profile"
+        slug = _profile_slug(str(name))
         stem = f"{order:02d}_{phase}_composition_{slug}"
         identity = str(info.get("identity") or name)
         method = info.get("method") or info.get("representation") or ""
@@ -1694,7 +1707,7 @@ def _write_alpha_tables(
     for name, table in tables.items():
         info = dict(metas.get(name) or {})
         metrics = alpha_metrics(table, info)
-        slug = _slug(str(name)) or "profile"
+        slug = _profile_slug(str(name))
         stem = f"{order:02d}_{phase}_alpha_{slug}"
         identity = str(info.get("identity") or name)
         detail = (
@@ -1742,7 +1755,7 @@ def _write_alpha_tables(
                 "normalization": str(info.get("normalization") or ""),
                 "richness": row["richness"],
                 "shannon": round(float(row["shannon"]), 6),
-                "unclassified": round(float(row["unclassified"]), 6),
+                "unclassified": round(float(row["unclassified"]), 6) if row["unclassified"] is not None else None,
                 "unresolved": round(float(row["unresolved"]), 6),
             }
         payload = _normalize_mqc_json(
@@ -1784,7 +1797,7 @@ def _write_beta_plots(
     for name, table in tables.items():
         info = dict(metas.get(name) or {})
         result = beta_diversity(table, info)
-        slug = _slug(str(name)) or "profile"
+        slug = _profile_slug(str(name))
         stem = f"{order:02d}_{phase}_beta_{slug}"
         identity = str(info.get("identity") or name)
         result["profile"] = identity
@@ -1985,11 +1998,14 @@ def _write_grouped_beta(
         _emit_mqc(payload, path)
         written.append(path)
         if space["status"] is None and "PC2" in space["coordinates"]:
-            series: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            from samovar.profiles import composition_color
+            series = {}
             for point in space["points"]:
-                series.setdefault(point["profile"], {})[f"{point['sample']} | {point['profile']}"] = {
+                series[f"{len(series) + 1}: {point['sample']} | {point['profile']}"] = {
                     "x": point["PC1"],
                     "y": point["PC2"],
+                    "group": point["profile"],
+                    "color": composition_color(point["profile"]),
                     "name": " | ".join(
                         part for part in (point["sample"], point.get("tool", ""), point.get("run_name", ""), point.get("database", "")) if part
                     ),
@@ -2003,9 +2019,8 @@ def _write_grouped_beta(
                         "title": title,
                         "xlab": "PC1",
                         "ylab": "PC2",
-                        "data_labels": list(series),
                     },
-                    "data": list(series.values()),
+                    "data": series,
                 },
                 parent_id=parent_id, parent_name=parent_name,
                 parent_description=parent_description, stem=f"{stem}_pcoa",
@@ -2042,18 +2057,23 @@ def _write_concordance(
             }
             same = all(
                 left_result.get(field) == right_result.get(field)
-                for field in ("metric", "rank", "basis", "normalization")
+                for field in ("metric", "taxonomy", "rank", "basis", "normalization")
             )
             if not same or not left_result.get("matrix") or not right_result.get("matrix"):
                 row.update(method=str(cfg.get("concordance") or "mantel"), statistic=None, pvalue=None,
                            status="incompatible profiles" if not same else "no distance matrix",
-                           reason="rank, basis, normalization, or metric differ" if not same else "a profile has no distance matrix",
+                           reason="taxonomy, rank, basis, normalization, or metric differ" if not same else "a profile has no distance matrix",
                            n_samples=0, omitted_samples="")
                 pairs.append(row)
                 continue
             left_frame = pd.DataFrame(left_result["matrix"], index=left_result["sample_ids"], columns=left_result["sample_ids"])
             right_frame = pd.DataFrame(right_result["matrix"], index=right_result["sample_ids"], columns=right_result["sample_ids"])
-            scored_pair = score_concordance(left_frame, right_frame, cfg)
+            context = {field: left_result[field] for field in ("metric", "taxonomy", "rank", "basis", "normalization")}
+            scored_pair = score_concordance(left_frame, right_frame, {
+                **cfg, **context, "stage": phase,
+                "profile_a": {"identity": left_name, **left_info},
+                "profile_b": {"identity": right_name, **right_info},
+            })
             row.update(scored_pair)
             row["omitted_samples"] = ", ".join(scored_pair.get("omitted_samples") or [])
             pairs.append(row)
@@ -2116,8 +2136,8 @@ def _write_concordance(
             description=detail,
             xlab="Profile", ylab="Profile",
             parent_id=parent_id, parent_name=parent_name,
-            min_value=-1,
-            max_value=1,
+            min_value=min(-1.0, float(grid.min().min())),
+            max_value=max(1.0, float(grid.max().max())),
         )
         written.append(path)
     return written
@@ -2207,7 +2227,8 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
             phase = stage.removeprefix("viz_")
             cfg_name = "config_reannotate.yaml" if phase == "regenerated" else "config_init.yaml"
             config = _load_yaml(root / ".log" / "configs" / cfg_name)
-            inventory = report_profiles(stage_annotation(root, phase), dest / "profiles" / phase, phase, config)
+            inventory = report_profiles(stage_annotation(root, phase), dest / "profiles" / phase, phase, config,
+                                        annotators=settings["annotators"])
             if "profiles" in enabled and inventory:
                 payload = _normalize_mqc_json(
                     dict(section_name="Profile inventory", plot_type="table", data=inventory,
@@ -2233,7 +2254,9 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                     parent_description=spec["description"], order=i,
                 )
             if "beta" in enabled:
-                scorer_config = dict(config or {})
+                shared = _load_yaml(root / ".log" / "configs" / "config_annotation2iss.yaml")
+                scorer_config = {key: shared[key] for key in ("concordance", "seed", "permutations") if key in shared}
+                scorer_config.update(config)
                 if "concordance" not in scorer_config:
                     scorer_config["concordance"] = (
                         _load_yaml(root / ".log" / "configs" / "config_init.yaml").get("concordance")
@@ -2249,9 +2272,11 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
     if "qc" in enabled:
         qc_dir = dest / "qc"
         for source in qc_sources(root):
+            if source.parent.name.removesuffix("_trimmed") not in stages:
+                continue
             qc_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, qc_dir / source.name)
-    corrections = correction_sources(root) if "correction" in enabled else []
+    corrections = correction_sources(root) if "correction" in enabled and "reprofiled" in stages else []
     if corrections:
         payload = {
             "id": "samovar_correction",
@@ -2313,7 +2338,7 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                 "plot_type": "html",
             }
         )
-        + _conclusion_html(root)
+        + _conclusion_html(root, settings)
         + "\n",
         encoding="utf-8",
     )
@@ -2367,7 +2392,7 @@ def run_multiqc(
             "Optional install: ./install.sh MultiQC",
             file=sys.stderr,
         )
-        return 0
+        return rc
     return rc
 
 
