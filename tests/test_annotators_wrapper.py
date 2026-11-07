@@ -245,3 +245,33 @@ def test_snakemake_constant_taxid_rule(tmp_path):
     df = pd.read_table(outs[0], header=None, names=["seq", "taxID"])
     assert (df["taxID"].astype(str) == "9606").all()
     assert len(df) == 4
+@pytest.mark.parametrize("paired", [False, True])
+def test_sylph_profile_command_uses_config_and_quoted_paths(tmp_path, monkeypatch, paired):
+    import shlex
+    from samovar.annotators_wrapper import ProfileAnnotator
+    exe = tmp_path / "tools with spaces" / "sylph"
+    exe.parent.mkdir()
+    exe.touch()
+    called = []
+    def resolve(command, **kwargs):
+        called.append(command)
+        return command
+    monkeypatch.setattr("samovar.paths.resolve_executable", resolve)
+    db = tmp_path / "db with spaces"
+    db.mkdir()
+    (db / "genomes.syldb").write_bytes(b"index")
+    (db / "genomes.syldb.taxonomy.tsv").write_text("Genome_file\ttaxid\ng\t562\n")
+    (db / "sylph.manifest.json").write_text('{"compression": 50}')
+    annotator = ProfileAnnotator(dict(type="sylph", cmd=str(exe), run_name="sylph_ref", db_path=str(db), threads=3), {})
+    r1, r2 = str(tmp_path / "reads 1.fq"), str(tmp_path / "reads 2.fq") if paired else None
+    outputs = annotator.get_expected_outputs("original_sample", str(tmp_path))
+    lexer = shlex.shlex(annotator.get_snakemake_shell_cmd(r1, r2, outputs), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    command = list(lexer)
+    assert called and str(exe) in command and str(db / "genomes.syldb") in command
+    command = command[command.index(str(exe)):]
+    assert command[command.index("-t") + 1] == "3"
+    assert command[command.index("-c") + 1] == "50"
+    assert r1 in command and ("-2" in command) == paired
+    assert command[command.index("--sample") + 1] == "original_sample"
+    assert command[command.index("--format") + 1] == "sylph"

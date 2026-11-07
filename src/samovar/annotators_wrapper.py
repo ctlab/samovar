@@ -204,6 +204,27 @@ class ProfileAnnotator(BaseAnnotator):
         ingest = (f"{py} -m samovar.profiles ingest --output {shlex.quote(out)} "
                   f"--sample {shlex.quote(sample)} --identity {shlex.quote(self.run_name)} "
                   f"--database {shlex.quote(self.db_path)}")
+        if str(self.run_config["type"]).lower() == "sylph" or Path(command_argv(self.cmd)[-1]).name.lower() == "sylph":
+            db = Path(self.db_path)
+            if db.is_dir():
+                indexes = sorted([*db.glob("*.syldb"), *db.glob("*.syl2db")])
+                if len(indexes) != 1:
+                    raise ValueError("Sylph needs exactly one sketch database, or select its file explicitly")
+                db = indexes[0]
+            taxonomy = Path(str(db) + ".taxonomy.tsv")
+            if not db.is_file() or not taxonomy.is_file():
+                raise FileNotFoundError(f"Sylph needs a sketch and {taxonomy}; use samovar build --type sylph")
+            reads = (f"-1 {shlex.quote(str(input_r1))} -2 {shlex.quote(str(input_r2))}" if input_r2
+                     else shlex.quote(str(input_r1)))
+            raw = out + ".raw"
+            extra = shlex.split(self.extra or "")
+            manifest = db.parent / "sylph.manifest.json"
+            if db.name == "genomes.syldb" and manifest.is_file() and not any(p == "-c" or p.startswith("-c=") for p in extra):
+                import json
+                extra += ["-c", str(json.loads(manifest.read_text())["compression"])]
+            run = f"{self.cmd} profile {shlex.quote(str(db))} {reads} -t {int(self.threads)} -o {shlex.quote(raw)} {shlex.join(extra)}"
+            return skip_empty_reads_cmd(input_r1, [raw], run) + (
+                f" && {ingest} --source {shlex.quote(raw)} --format sylph --genome-taxonomy {shlex.quote(str(taxonomy))}")
         if native:
             db = Path(self.db_path)
             modern = _metaphlan_modern_cli(self.cmd)

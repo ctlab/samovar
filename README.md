@@ -54,16 +54,6 @@ Use `--ide codex`, `cursor`, or `claude` if your IDE terminal is not detected.
 
 ## Ensemble annotation
 
-Built-in ensemble members (wired through `samovar prepare`):
-
-| Tool | Role in the ensemble |
-|------|----------------------|
-| **Kraken2** | k-mer LCA classifier (`full`, or install/import through `ask`) |
-| **Kaiju** | protein-level (translated) classifier (`full`, or install/import through `ask`) |
-| **Kraken / KrakenUniq** | additional k-mer votes (`./install.sh full ask`, not the core install) |
-| **MetaPhlAn** | optional marker-gene profiler (not part of the core install) |
-| **Custom** | extra votes; can be easily additionally implemented for the developers |
-
 Workflow:
 
 1. Annotate real or ISS-simulated reads with every configured tool.

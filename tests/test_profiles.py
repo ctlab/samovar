@@ -18,6 +18,45 @@ def table(values, ids=("562", "4932"), sample="s"):
     return pd.DataFrame({"taxid": list(ids), "N_" + sample: list(values)})
 
 
+def test_sylph_native_profile_uses_explicit_taxonomy_and_organism_abundance(tmp_path):
+    mapping = tmp_path / "genomes.syldb.taxonomy.tsv"
+    mapping.write_text("Genome_file\ttaxid\ng1.fna\t562\ng2.fna\t562\n")
+    raw = tmp_path / "native.tsv"
+    header = "Sample_file\tGenome_file\tTaxonomic_abundance\tSequence_abundance\n"
+    raw.write_text(header + "reads_R1.fq\tg1.fna\t25\t60\nreads_R1.fq\tg2.fna\t75\t40\n")
+    settings = {"genome_taxonomy": str(mapping), "sample": "original_sample"}
+    frame, info = load_profile(raw, settings)
+    assert frame.to_dict("list") == {"taxid": ["562"], "N_original_sample": [100.]}
+    assert (info["unit"], info["basis"], info["normalization"]) == ("percent", "organisms", "classified")
+    assert info["rank"] == "taxid"
+    mapping.write_text("Genome_file\ttaxid\ng1.fna\t511145\ng2.fna\t83333\n")
+    from samovar.profiles import at_rank
+    frame, info = load_profile(raw, settings)
+    species, _ = at_rank(frame, info, "species", Path(__file__).parent / "data/taxdump")
+    assert species.taxid.tolist() == ["562"] and species.N_original_sample.item() == 100
+    mapping.write_text("Genome_file\ttaxid\ng1.fna\t562\ng2.fna\t562\n")
+    raw.write_text(header)
+    frame, _ = load_profile(raw, {**settings, "format": "sylph"})
+    assert frame.empty and list(frame) == ["taxid", "N_original_sample"]
+    raw.write_text(header + "reads_R1.fq\tunknown.fna\t100\t100\n")
+    with pytest.raises(ValueError, match="lack explicit taxonomy"):
+        load_profile(raw, settings)
+    raw.write_text(header + "a\tg1.fna\t50\t50\nb\tg2.fna\t50\t50\n")
+    with pytest.raises(ValueError, match="one Sylph sample"):
+        load_profile(raw, settings)
+    raw.write_text(header + "a\tg1.fna\t-1\t100\n")
+    with pytest.raises(ValueError, match="nonnegative"):
+        load_profile(raw, settings)
+    raw.write_text(header + "a\tg1.fna\t33.3334\t0\na\tg2.fna\t33.3334\t0\na\tg1.fna\t33.3333\t0\n")
+    frame, _ = load_profile(raw, settings)
+    assert frame.N_original_sample.sum() == pytest.approx(100)
+    with pytest.raises(ValueError, match="NCBI abundance"):
+        load_profile(raw, {**settings, "taxonomy": "gtdb"})
+    mapping.write_text("Genome_file\ttaxid\ng1.fna\tSGB1\ng2.fna\t562\n")
+    with pytest.raises(ValueError, match="positive NCBI taxids"):
+        load_profile(raw, settings)
+
+
 def annotation(frame, name="mpa", **info):
     return Annotation.from_abundance_tables({name: frame}, {name: metadata(info)})
 

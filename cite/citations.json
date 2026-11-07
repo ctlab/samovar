@@ -221,6 +221,9 @@
     "sparsedossa2_ma2021.bib",
     "sparsedossa2_r_harvest.bib"
   ],
+  "sylph": [
+    "sylph_shaw2024.bib"
+  ],
   "trimmomatic": [
     "trimmomatic_bolger2014.bib"
   ],

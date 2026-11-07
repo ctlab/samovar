@@ -54,6 +54,49 @@ def test_metaphlan_build_checks_marker_pair_and_indexes_via_shared_runner(tmp_pa
     assert len(calls) == 1
 
 
+
+def test_sylph_build_preserves_ncbi_mapping_and_resources(tmp_path, monkeypatch):
+    import yaml
+    genomes = tmp_path / "genomes with spaces"
+    genomes.mkdir()
+    (genomes / "562.fna").write_text(">contig\nACGTACGT\n")
+    cfg = tmp_path / "build.yaml"
+    cfg.write_text(yaml.safe_dump(dict(input_dir=[str(genomes)], compression=50)))
+    dest = tmp_path / "db with spaces"
+    calls = []
+
+    def sketch(cmd):
+        calls.append(cmd)
+        assert cmd[:3] == ["sylph", "sketch", "-l"]
+        assert Path(cmd[3]).read_text().splitlines() == [str(genomes / "562.fna")]
+        assert cmd[-4:] == ["-t", "3", "-c", "50"]
+        Path(cmd[cmd.index("-o") + 1] + ".syldb").write_bytes(b"index")
+
+    monkeypatch.setattr("samovar.build_database.run_command", sketch)
+    build_database_from_config(str(cfg), db_type="sylph", db_path=str(dest), threads=3)
+    assert (dest / "genomes.syldb").read_bytes() == b"index"
+    assert (dest / "genomes.syldb.taxonomy.tsv").read_text().splitlines() == [
+        "Genome_file\ttaxid", str(genomes / "562.fna") + "\t562"]
+    manifest = json.loads((dest / "sylph.manifest.json").read_text())
+    assert manifest["compression"] == 50 and manifest["genomes"][0]["taxid"] == "562"
+    assert len(calls) == 1
+
+
+def test_sylph_build_rejects_missing_index_and_unresolved_taxonomy(tmp_path, monkeypatch):
+    from samovar.build_database import build_database_sylph
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">contig\nACGTACGT\n")
+    dest = tmp_path / "db"
+    monkeypatch.setattr("samovar.build_database.run_command", lambda cmd: None)
+    with pytest.raises(ValueError, match="positive NCBI taxid"):
+        build_database_sylph({str(genome): "SGB1"}, str(dest))
+    with pytest.raises(RuntimeError, match="did not create"):
+        build_database_sylph({str(genome): "562"}, str(dest))
+    assert not (dest / "genomes.syldb.taxonomy.tsv").exists()
+    genome.write_text(">protein\nMKKLL\n")
+    with pytest.raises(ValueError, match="No nucleotide genomes"):
+        build_database_sylph({str(genome): "562"}, str(dest))
+
 def test_kaiju_protein_id_puts_taxid_last():
     assert kaiju_protein_id("9606") == "9606"
     assert kaiju_protein_id("9606", "NP_1").endswith("_9606")

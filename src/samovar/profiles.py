@@ -66,7 +66,7 @@ def validate(table, settings=None):
 
 
 def load_profile(path, settings=None):
-    """Read canonical CSV/TSV, CAMI or native MetaPhlAn at one declared rank."""
+    """Read canonical CSV/TSV, CAMI or native profiler output at one rank."""
     path = Path(path)
     sidecar = Path(str(path) + ".profile.json")
     saved = json.loads(sidecar.read_text()) if sidecar.is_file() else {}
@@ -74,11 +74,49 @@ def load_profile(path, settings=None):
     fmt = meta.get("format", "auto")
     with path.open() as handle:
         lines = handle.readlines()
+    if fmt == "auto" and any(x.startswith("Sample_file\t") and "Taxonomic_abundance" in x for x in lines):
+        fmt = "sylph"
     if fmt == "auto":
         fmt = "cami" if any(x.startswith("@@TAXID") for x in lines) else (
             "metaphlan" if any("clade_name" in x and "relative_abundance" in x for x in lines) else "abundance")
     if fmt == "abundance":
         table = pd.read_csv(path, sep="\t" if path.suffix == ".tsv" else ",", dtype={"taxid": str})
+    elif fmt == "sylph":
+        if meta["taxonomy"] != "ncbi" or meta["kind"] != "abundance":
+            raise ValueError("Sylph genome mapping requires an NCBI abundance profile")
+        mapping_path = meta.get("genome_taxonomy")
+        if not mapping_path:
+            raise ValueError("Sylph needs an explicit genome_taxonomy TSV (Genome_file, taxid); no taxids are inferred")
+        mapping = pd.read_csv(mapping_path, sep="\t", dtype=str)
+        if not {"Genome_file", "taxid"} <= set(mapping) or mapping[["Genome_file", "taxid"]].isna().any().any() or mapping.Genome_file.duplicated().any():
+            raise ValueError("Invalid Sylph genome taxonomy mapping; require unique Genome_file and taxid")
+        if not mapping.taxid.map(lambda value: value.isdigit() and int(value) > 0).all():
+            raise ValueError("Sylph mapping requires positive NCBI taxids")
+        sample = str(meta.get("sample", path.stem))
+        if not lines:
+            table = pd.DataFrame(columns=["taxid", "N_" + sample])
+        else:
+            raw = pd.read_csv(path, sep="\t", dtype={"Genome_file": str})
+            if not {"Genome_file", "Sample_file", "Taxonomic_abundance"} <= set(raw):
+                raise ValueError("Expected sylph profile output, not query output")
+            if raw.Sample_file.isna().any() or raw.Sample_file.nunique() > 1:
+                raise ValueError("Profiler execution must produce one Sylph sample")
+            raw["taxid"] = raw.Genome_file.map(mapping.set_index("Genome_file").taxid)
+            if raw.taxid.isna().any():
+                missing = raw.loc[raw.taxid.isna(), "Genome_file"].tolist()
+                raise ValueError(f"Sylph genomes lack explicit taxonomy mapping: {missing}")
+            raw["Taxonomic_abundance"] = pd.to_numeric(raw.Taxonomic_abundance, errors="raise")
+            if not np.isfinite(raw.Taxonomic_abundance).all() or (raw.Taxonomic_abundance < 0).any():
+                raise ValueError("Sylph abundances must be finite and nonnegative")
+            # Native percentages are printed to four decimals; remove only a
+            # rounding-sized surplus before the common mass validation.
+            total = raw.Taxonomic_abundance.sum()
+            if 100 < total <= 100 + len(raw) * 0.00005 + 1e-9:
+                raw["Taxonomic_abundance"] *= 100 / total
+            table = raw.groupby("taxid", as_index=False).Taxonomic_abundance.sum().rename(columns={"Taxonomic_abundance": "N_" + sample})
+        # A genome's NCBI ID can be below species. Existing quantitative stages
+        # project taxid-rank inputs to species through the common taxonomy code.
+        meta.update(unit="percent", basis="organisms", normalization="classified", rank="taxid")
     elif fmt in {"metaphlan", "cami"}:
         rows = []
         sample = meta.get("sample", path.stem)
@@ -699,6 +737,7 @@ def main(argv=None):
     parser.add_argument("--sample")
     parser.add_argument("--identity")
     parser.add_argument("--database", default="")
+    parser.add_argument("--genome-taxonomy")
     parser.add_argument("--format", default="auto")
     parser.add_argument("--output-dir")
     parser.add_argument("--stage", default="initial")
@@ -707,7 +746,10 @@ def main(argv=None):
     if args.action == "ingest":
         if args.format == "abundance" and not Path(str(args.source) + ".profile.json").is_file():
             raise ValueError("Profiler contract requires an output .profile.json sidecar")
-        table, meta = load_profile(args.source, {"format": args.format, "sample": args.sample})
+        settings = {"format": args.format, "sample": args.sample}
+        if args.genome_taxonomy:
+            settings["genome_taxonomy"] = args.genome_taxonomy
+        table, meta = load_profile(args.source, settings)
         cols = n_sample_columns(table)
         if len(cols) != 1:
             raise ValueError("Profiler execution must produce one sample")

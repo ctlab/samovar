@@ -78,6 +78,7 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
         companions=("krakenuniq-build", "jellyfish"),
     ),
     AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
+    AskTool("sylph", ("sylph",), "profiler", "optional:sylph"),
     AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),
     AskTool(
         "metax", ("metax",), "annotator", "optional:metax",

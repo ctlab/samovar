@@ -35,6 +35,11 @@ from samovar.paths import (
 from samovar.main_config import set_tool
 
 SIDECARS = {
+    "sylph": {
+        "python": None, "packages": ["sylph>=0.6"], "runtime_modules": (),
+        "runtime_versions": {}, "binary": "sylph", "tool_keys": ("sylph",),
+        "group": "profiler", "hint": "Optional sample-level profiler (./install.sh Sylph).",
+    },
     "kraken2": {
         "python": None, "packages": ["kraken2"], "runtime_modules": (),
         "runtime_versions": {}, "binary": "kraken2", "tool_keys": ("kraken2",),

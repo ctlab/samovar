@@ -909,6 +909,9 @@ def build_database_from_config(
             "This flag is only for toy tests; use --no-example-omit for a full index."
         )
 
+    if db_type == "sylph":
+        return build_database_sylph(file_taxid_map, db_path, threads, config)
+
     
     # Build database based on type
     if db_type == "kaiju":
@@ -1002,6 +1005,51 @@ def build_database_from_config(
         logger.info("k-mer encoder model written to %s", dest)
     else:
         raise ValueError(f"Unknown database type: {db_type}")
+
+
+def build_database_sylph(file_taxid_map, db_path, threads=1, config=None):
+    """Sketch complete genome FASTAs and publish their explicit NCBI mapping."""
+    import json
+    import pandas as pd
+    from samovar.seqio import fasta_handle
+    config = dict(config or {})
+    compression = int(config.get("compression", 200))
+    if compression < 1:
+        raise ValueError("Sylph compression must be positive")
+    rows = []
+    for filename, taxid in file_taxid_map.items():
+        if not str(taxid).isdigit() or int(taxid) <= 0:
+            raise ValueError(f"Sylph builder requires a resolved positive NCBI taxid: {filename}: {taxid}")
+        path = Path(filename).resolve()
+        valid, count = True, 0
+        with fasta_handle(path) as handle:
+            for rec in SeqIO.parse(handle, "fasta"):
+                count += 1
+                if not rec.seq or set(str(rec.seq).upper()) - set("ACGTRYSWKMBDHVN"):
+                    valid = False
+                    break
+        if not count or not valid:
+            continue  # existing input discovery also finds proteomes
+        rows.append({"Genome_file": str(path), "taxid": str(taxid)})
+    if not rows:
+        raise ValueError("No nucleotide genomes to sketch for Sylph")
+    if len({row["Genome_file"] for row in rows}) != len(rows):
+        raise ValueError("One genome path cannot have multiple Sylph taxids")
+    dest = Path(db_path)
+    dest.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dest, prefix=".sylph-build-") as work:
+        prefix = Path(work) / "genomes"
+        listing = Path(work) / "genomes.txt"
+        listing.write_text("".join(row["Genome_file"] + "\n" for row in rows))
+        run_command(["sylph", "sketch", "-l", str(listing), "-o", str(prefix), "-t", str(threads), "-c", str(compression)])
+        index = Path(str(prefix) + ".syldb")
+        if not index.is_file() or not index.stat().st_size:
+            raise RuntimeError("Sylph did not create a sketch database")
+        mapping = Path(work) / "taxonomy.tsv"
+        pd.DataFrame(rows).to_csv(mapping, sep="\t", index=False)
+        index.replace(dest / "genomes.syldb")
+        mapping.replace(dest / "genomes.syldb.taxonomy.tsv")
+    (dest / "sylph.manifest.json").write_text(json.dumps(dict(version=1, compression=compression, genomes=rows), indent=2) + "\n")
 
 
 def build_database_metaphlan(config, db_path, threads=1):
