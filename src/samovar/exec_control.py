@@ -2,7 +2,9 @@
 
 Completed steps write ``$output_dir/.log/checkpoints/<name>.done``. A later
 ``samovar exec`` skips those steps unless ``--redo`` (or ``SAMOVAR_REDO=1``).
-``--cleanup-tmp`` removes scratch dirs such as ``.tmp`` and ``.iss_full``.
+A profile run also reruns ``combine_initial`` or ``viz_initial`` when
+``initial_profiles`` or ``initial_annotations_plots/profile_quality_scores.csv``
+is gone. ``--cleanup-tmp`` removes scratch dirs such as ``.tmp`` and ``.iss_full``.
 """
 
 from __future__ import annotations
@@ -123,10 +125,41 @@ def redo_requested(explicit: Optional[bool] = None) -> bool:
     return os.environ.get("SAMOVAR_REDO", "0") not in {"", "0", "false", "False", "no"}
 
 
+def missing_profile_checkpoint_outputs(output_dir: PathLike, name: str) -> List[str]:
+    """Profile artifacts this step must leave behind, when they are absent.
+
+    Other checkpoints are not checked. A run without profile inputs or truth
+    has no extra requirements.
+    """
+    if name not in {"combine_initial", "viz_initial"}:
+        return []
+    root = as_path(output_dir)
+    scoring = root / ".log" / "configs" / "config_scoring.yaml"
+    if not scoring.is_file():
+        return []
+    try:
+        import yaml
+
+        data = yaml.safe_load(scoring.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    if not isinstance(data, dict) or not (data.get("profile_inputs") or data.get("profile_truth")):
+        return []
+    rel = (
+        "initial_profiles"
+        if name == "combine_initial"
+        else "initial_annotations_plots/profile_quality_scores.csv"
+    )
+    path = root / rel
+    return [] if path.exists() else [rel]
+
+
 def should_skip(output_dir: PathLike, name: str, redo: Optional[bool] = None) -> bool:
     if redo_requested(redo):
         return False
-    return (checkpoint_dir(output_dir) / f"{name}.done").is_file()
+    if not (checkpoint_dir(output_dir) / f"{name}.done").is_file():
+        return False
+    return not missing_profile_checkpoint_outputs(output_dir, name)
 
 
 def mark_done(output_dir: PathLike, name: str) -> Path:
@@ -677,7 +710,16 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     if args.command == "skip":
-        return 0 if should_skip(args.output_dir, args.name) else 1
+        missing = missing_profile_checkpoint_outputs(args.output_dir, args.name)
+        if should_skip(args.output_dir, args.name):
+            return 0
+        if missing and (checkpoint_dir(args.output_dir) / f"{args.name}.done").is_file():
+            print(
+                f"[checkpoint] {args.name} is marked done but missing "
+                f"{', '.join(missing)}; rerunning",
+                file=sys.stderr,
+            )
+        return 1
     if args.command == "mark":
         mark_done(args.output_dir, args.name)
         return 0

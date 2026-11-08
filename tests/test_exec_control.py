@@ -42,6 +42,88 @@ def test_checkpoint_skip_mark_clear_and_redo(tmp_path, monkeypatch):
     assert listed_done(tmp_path) == []
 
 
+def test_profile_checkpoint_reruns_when_outputs_are_gone(tmp_path):
+    scoring = tmp_path / ".log" / "configs"
+    scoring.mkdir(parents=True)
+    (scoring / "config_scoring.yaml").write_text(
+        "profile_inputs:\n  ext: {path: pred.csv}\nprofile_truth: {path: truth.csv}\n",
+        encoding="utf-8",
+    )
+    mark_done(tmp_path, "combine_initial")
+    mark_done(tmp_path, "viz_initial")
+    mark_done(tmp_path, "setup_reads")
+    assert not should_skip(tmp_path, "combine_initial")
+    assert not should_skip(tmp_path, "viz_initial")
+    assert should_skip(tmp_path, "setup_reads")
+    (tmp_path / "initial_profiles").mkdir()
+    scores = tmp_path / "initial_annotations_plots"
+    scores.mkdir()
+    (scores / "profile_quality_scores.csv").write_text("annotator\n", encoding="utf-8")
+    assert should_skip(tmp_path, "combine_initial")
+    assert should_skip(tmp_path, "viz_initial")
+    assert exec_control_main(["skip", str(tmp_path), "viz_initial"]) == 0
+    (scores / "profile_quality_scores.csv").unlink()
+    assert exec_control_main(["skip", str(tmp_path), "viz_initial"]) == 1
+
+
+def test_exec_restores_deleted_profile_outputs(tmp_path):
+    import os
+    import sys
+
+    work = tmp_path / "run"
+    work.mkdir()
+    (work / "pred.csv").write_text(
+        "taxid,N_A,N_B\n562,600,100\n4932,300,200\n9606,100,700\n",
+        encoding="utf-8",
+    )
+    (work / "truth.csv").write_text(
+        "taxid,N_A,N_B\n562,0.6,0.1\n4932,0.3,0.2\n9606,0.1,0.7\n",
+        encoding="utf-8",
+    )
+    cfg = work / "cfg.yaml"
+    cfg.write_text(
+        "profile_inputs:\n"
+        "  ext: {path: " + str(work / "pred.csv") + ", kind: abundance, unit: counts, "
+        "basis: reads, taxonomy: ncbi, rank: species, normalization: classified}\n"
+        "profile_truth: {path: " + str(work / "truth.csv") + ", kind: abundance, "
+        "unit: fraction, basis: reads, taxonomy: ncbi, rank: species, "
+        "normalization: classified}\n",
+        encoding="utf-8",
+    )
+    out = work / "out"
+    env = os.environ.copy()
+    env["PYTHON_PATH"] = sys.executable
+    env["SAMOVAR_ROOT"] = str(REPO)
+    prep = subprocess.run(
+        [sys.executable, str(REPO / "bin" / "samovar_preprocess"),
+         "--input_config", str(cfg), "--output_dir", str(out),
+         "--endpoint", "viz_initial", "--cores", "1"],
+        cwd=REPO, env=env, text=True, capture_output=True,
+    )
+    assert prep.returncode == 0, prep.stdout + prep.stderr
+    first = subprocess.run(
+        ["bash", str(REPO / "bin" / "samovar_exec"), "--output_dir", str(out)],
+        cwd=REPO, env=env, text=True, capture_output=True,
+    )
+    scores = out / "initial_annotations_plots" / "profile_quality_scores.csv"
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert scores.is_file()
+    assert (out / "initial_profiles").is_dir()
+    import shutil
+    shutil.rmtree(out / "initial_annotations_plots")
+    shutil.rmtree(out / "initial_profiles")
+    second = subprocess.run(
+        ["bash", str(REPO / "bin" / "samovar_exec"), "--output_dir", str(out)],
+        cwd=REPO, env=env, text=True, capture_output=True,
+    )
+    text = second.stdout + second.stderr
+    assert second.returncode == 0, text
+    assert "[checkpoint] run combine_initial" in text
+    assert "[checkpoint] run viz_initial" in text
+    assert scores.is_file()
+    assert (out / "initial_profiles").is_dir()
+
+
 def test_exec_control_cli_skip_mark_list(tmp_path):
     assert exec_control_main(["skip", str(tmp_path), "setup_reads"]) == 1
     assert exec_control_main(["mark", str(tmp_path), "setup_reads"]) == 0

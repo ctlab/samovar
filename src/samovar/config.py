@@ -1920,7 +1920,8 @@ class PipelineConfig:
         
         # Generate pipeline script (absolute paths so exec works from any cwd).
         # Completed steps write $out_dir/.log/checkpoints/<name>.done and are
-        # skipped on the next exec unless SAMOVAR_REDO=1 / --redo.
+        # skipped on the next exec unless SAMOVAR_REDO=1 / --redo. A profile
+        # run reruns combine_initial / viz_initial when their outputs are gone.
         # SAMOVAR_START / SAMOVAR_END select a slice; exec may override them.
         header = f"""# Setup
 set -e
@@ -1958,7 +1959,7 @@ ckpt_skip() {{
   if ! "$PYTHON_PATH" -m samovar.exec_control active "$1"; then
     return 0
   fi
-  [ "${{SAMOVAR_REDO:-0}}" = "0" ] && [ -f "$CKPT/$1.done" ]
+  "$PYTHON_PATH" -m samovar.exec_control skip "$out_dir" "$1"
 }}
 
 ckpt_finish() {{
