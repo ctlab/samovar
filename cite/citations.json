@@ -149,6 +149,12 @@
   "minimap2": [
     "minimap2_li2018.bib"
   ],
+  "motus": [
+    "motus_ruscheweyh2022.bib"
+  ],
+  "motus3": [
+    "motus_ruscheweyh2022.bib"
+  ],
   "multiqc": [
     "multiqc_ewels2016.bib"
   ],

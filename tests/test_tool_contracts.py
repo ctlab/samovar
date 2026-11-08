@@ -144,7 +144,7 @@ def test_profiler_contract(request, tmp_path, tiny_fastq):
     out = tmp_path / "sample_contract.profile.csv"
     argv = [str(python_path()), str(path)] if path.suffix == ".py" else [str(path)]
     db = _annotator_db(request)
-    if path.name.lower().startswith(("metaphlan", "sylph", "bracken")):
+    if path.name.lower().startswith(("metaphlan", "sylph", "bracken", "motus")):
         if db is None:
             pytest.skip("Native profiler contract needs a real --db-path")
         # Native MetaPhlAn rejects libraries containing only <70 bp reads.
@@ -152,7 +152,7 @@ def test_profiler_contract(request, tmp_path, tiny_fastq):
         for mate in (r1, r2):
             Path(mate).write_text("@contract\n" + "ACGT" * 25 + "\n+\n" + "I" * 100 + "\n")
         from samovar.annotators_wrapper import ProfileAnnotator
-        native_type = next(name for name in ("sylph", "bracken", "metaphlan") if path.name.lower().startswith(name))
+        native_type = next(name for name in ("sylph", "bracken", "metaphlan", "motus") if path.name.lower().startswith(name))
         tool = ProfileAnnotator(dict(run_name="contract", type=native_type, cmd=str(path), db_path=str(db), threads=1), {})
         command = tool.get_snakemake_shell_cmd(str(r1), str(r2), [str(out), str(out) + ".profile.json"])
         subprocess.run(["bash", "-e", "-c", command], check=True)

@@ -74,6 +74,8 @@ def load_profile(path, settings=None):
     fmt = meta.get("format", "auto")
     with path.open() as handle:
         lines = handle.readlines()
+    if fmt == "auto" and any(x.startswith("#consensus_taxonomy\tNCBI_tax_id\t") for x in lines):
+        fmt = "motus"
     if fmt == "auto" and any("taxonomy_id\ttaxonomy_lvl\t" in x and "new_est_reads" in x for x in lines):
         fmt = "bracken"
     if fmt == "auto" and any(x.startswith("Sample_file\t") and "Taxonomic_abundance" in x for x in lines):
@@ -83,6 +85,51 @@ def load_profile(path, settings=None):
             "metaphlan" if any("clade_name" in x and "relative_abundance" in x for x in lines) else "abundance")
     if fmt == "abundance":
         table = pd.read_csv(path, sep="\t" if path.suffix == ".tsv" else ",", dtype={"taxid": str})
+    elif fmt in {"motus", "motus3"}:
+        if meta["taxonomy"] != "ncbi":
+            raise ValueError("mOTUs3 profiles use NCBI taxonomy with explicit unmapped mOTUs")
+        import re
+        header = next((line.rstrip("\n").split("\t") for line in lines
+                       if line.startswith("#consensus_taxonomy\tNCBI_tax_id\t")), None)
+        if header is None or len(header) != 3:
+            raise ValueError("mOTUs3 requires a single-sample mOTU profile with -p NCBI taxids")
+        if any(re.search(r"(?:^|\s)-c(?:\s|$)", line) for line in lines if line.startswith("#")):
+            raise ValueError("mOTUs3 count output (-c) is not organism relative abundance")
+        sample = str(meta.get("sample", header[2]))
+        rows, seen = [], set()
+        for line in lines:
+            if not line.strip() or line.startswith("#"):
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) != 3:
+                raise ValueError("Malformed mOTUs3 profile row")
+            label, ncbi, value = fields
+            match = re.search(r"\[((?:ref|meta|ext)_mOTU_[^]\s]+)\]$", label)
+            native_id = match[1] if match else label
+            if native_id in seen:
+                raise ValueError(f"Duplicate mOTUs3 identifier: {native_id}")
+            seen.add(native_id)
+            if label == "unassigned":
+                taxid = "0"
+            elif not match:
+                raise ValueError("mOTUs3 profile must retain mOTU IDs (-k mOTU)")
+            elif native_id.startswith("ref_") and ncbi.isdigit() and int(ncbi) > 0:
+                taxid = str(int(ncbi))
+            else:
+                # Meta/ext-mOTUs may name only an ancestral NCBI taxon, not a species.
+                taxid = "unmapped:" + native_id
+            rows.append((taxid, float(value)))
+        col = "N_" + sample
+        table = pd.DataFrame(rows, columns=["taxid", col])
+        meta.update(kind="abundance", unit="fraction", basis="organisms", taxonomy="ncbi",
+                    rank="species", normalization="all", native_header=[x.strip() for x in lines if x.startswith("#")])
+        # Several reference mOTUs can resolve to the same NCBI species.
+        values = pd.to_numeric(table[col], errors="raise")
+        if not np.isfinite(values).all() or (values < 0).any():
+            raise ValueError("Profile values must be finite and nonnegative")
+        table = table.groupby("taxid", as_index=False, sort=False)[col].sum()
+        meta["unassigned_by_sample"] = {sample: float(table.loc[table.taxid.eq("0"), col].sum())}
+        table = table.loc[table[col] > 0].reset_index(drop=True)
     elif fmt == "bracken":
         raw = pd.read_csv(path, sep="\t", dtype={"taxonomy_id": str})
         required = {"taxonomy_id", "taxonomy_lvl", "new_est_reads"}
@@ -743,6 +790,73 @@ def report_profiles(annotation, dest, stage, config=None, *, annotators="all"):
 
 
 
+def run_motus(r1, r2, database, raw_output, sample, threads=1, executable="motus", flags=""):
+    """Run mOTUs3 with its configured companions and a private native workspace."""
+    import argparse
+    import os
+    import shlex
+    import subprocess
+    import tempfile
+    from samovar.paths import command_argv, resolve_executable
+    from samovar.seqio import fastq_has_reads, is_gzip_file
+
+    options = argparse.ArgumentParser(add_help=False)
+    options.add_argument("-g", type=int, default=3)
+    options.add_argument("-l", type=int, default=75)
+    options.add_argument("-v", type=int, default=3)
+    opts = options.parse_args(shlex.split(flags))
+    if opts.g < 1 or opts.l < 1 or threads < 1:
+        raise ValueError("mOTUs3 requires positive marker, alignment-length and thread settings")
+    db, out = Path(database).resolve(), Path(raw_output).resolve()
+    versions = list(db.glob("*_versions"))
+    if not versions and (db / "db_mOTU").is_dir():
+        db = db / "db_mOTU"
+        versions = list(db.glob("*_versions"))
+    if len(versions) != 1:
+        raise FileNotFoundError(f"mOTUs3 database requires one *_versions file in {db}")
+    prefix = versions[0].name[:-len("_versions")]
+    info = dict(line.split("\t", 1) for line in versions[0].read_text().splitlines() if "\t" in line)
+    if not info.get("motus", "").startswith("3."):
+        raise ValueError("mOTUs3 requires a version 3 database")
+    if not (db / (prefix + "_DB_NR.fasta.bwt")).is_file():
+        raise FileNotFoundError("mOTUs3 database is missing its BWA marker index")
+    command = command_argv(resolve_executable(executable, tool_key="motus"))
+    companions = {name: command_argv(resolve_executable(name, tool_key=name))
+                  for name in ("bwa", "samtools")}
+    for argv in (command, *companions.values()):
+        if not argv or not Path(argv[0]).is_file():
+            raise FileNotFoundError(f"mOTUs3 executable is not configured: {argv}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    scratch = out.parent / ".tmp" / "motus"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=scratch, prefix="profile-") as tmp:
+        work = Path(tmp)
+        # Native mOTUs3 hardcodes bwa/samtools names and splits paths internally.
+        # Expose only config-resolved commands, and pass safe relative input paths.
+        bindir = work / "bin"; bindir.mkdir()
+        for name, argv in companions.items():
+            launcher = bindir / name
+            launcher.write_text("#!/bin/sh\nexec " + shlex.join(argv) + ' "$@"\n')
+            launcher.chmod(0o700)
+        env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.defpath}
+        (work / prefix).symlink_to(db, target_is_directory=True)
+        inputs = []
+        for number, source in enumerate([r1, *([r2] if r2 else [])]):
+            filename = f"reads{number}.fastq" + (".gz" if is_gzip_file(source) else "")
+            (work / filename).symlink_to(Path(source).resolve())
+            inputs.extend((["-f", filename] if number == 0 and r2 else ["-r" if number else "-s", filename]))
+        target = work / "profile.tsv"
+        if fastq_has_reads(r1):
+            argv = [*command, "profile", *inputs, "-db", prefix, "-n", sample, "-p", "-k", "mOTU",
+                    "-t", str(threads), "-g", str(opts.g), "-l", str(opts.l), "-v", str(opts.v), "-o", target.name]
+            subprocess.run(argv, cwd=work, env=env, check=True)
+            # An rc=0 without a valid typed result is still an error.
+            load_profile(target, {"format": "motus", "sample": sample})
+        else:
+            target.write_text(f"#consensus_taxonomy\tNCBI_tax_id\t{sample}\n")
+        target.replace(out)
+
+
 def run_bracken(report, database, raw_output, read_length=100, threshold=10):
     """Run the native estimator via configured Python; empty eligible sets are valid."""
     import subprocess
@@ -768,7 +882,7 @@ def run_bracken(report, database, raw_output, read_length=100, threshold=10):
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["ingest", "bracken", "collect", "materialize", "correct"])
+    parser.add_argument("action", choices=["ingest", "bracken", "motus", "collect", "materialize", "correct"])
     parser.add_argument("--source")
     parser.add_argument("--output")
     parser.add_argument("--sample")
@@ -782,7 +896,16 @@ def main(argv=None):
     parser.add_argument("--output-dir")
     parser.add_argument("--stage", default="initial")
     parser.add_argument("--config")
+    parser.add_argument("--input-r1")
+    parser.add_argument("--input-r2")
+    parser.add_argument("--executable", default="motus")
+    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--native-flags", default="")
     args = parser.parse_args(argv)
+    if args.action == "motus":
+        run_motus(args.input_r1, args.input_r2, args.database, args.source, args.sample,
+                  args.threads, args.executable, args.native_flags)
+        return 0
     if args.action == "bracken":
         run_bracken(args.kraken_report, args.database, args.source, args.read_length, args.threshold)
         args.format = "bracken"

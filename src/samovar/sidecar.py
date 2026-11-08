@@ -32,9 +32,15 @@ from samovar.paths import (
     sidecar_envs_dir,
     write_config,
 )
-from samovar.main_config import set_tool
+from samovar.main_config import lookup_tool_record, set_tool
 
 SIDECARS = {
+    "motus": {
+        "python": "3.8", "packages": ["python=3.8", "python_abi=3.8=*_cp38", "motus=3.1.0", "bwa", "samtools"], "runtime_modules": (),
+        "runtime_versions": {"motu": "3.1.0"}, "binary": "motus", "tool_keys": ("motus",),
+        "companions": ("bwa", "samtools"), "companion_group": "aligner", "group": "profiler",
+        "hint": "mOTUs3 sample-level profiler (./install.sh mOTUs3); reference DB installed separately.",
+    },
     "kmcp": {
         "python": None, "packages": ["kmcp>=0.9.5"], "runtime_modules": (),
         "runtime_versions": {}, "binary": "kmcp", "tool_keys": ("kmcp",),
@@ -448,15 +454,18 @@ def record_sidecar(name: str, prefix: Path, binary_path: str) -> None:
                 group=group,
             )
     for companion in spec.get("companions", ()):
+        if lookup_tool_record(cfg, companion):
+            continue  # Keep independently configured companion programs.
         set_tool(cfg, companion, env="conda", workflow=name,
                  path=str((prefix / "bin" / companion).resolve()),
-                 group=str(spec.get("group") or "annotator"))
+                 group=str(spec.get("companion_group") or spec.get("group") or "annotator"))
     write_config(cfg)
 
 
 def install_named(name: str) -> Path:
     key = str(name or "").strip().lower()
     aliases = {
+        "motus3": "motus",
         "art_illumina": "art",
         "das_tool": "dastool",
         "das-tool": "dastool",

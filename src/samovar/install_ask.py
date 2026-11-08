@@ -81,6 +81,7 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool("bracken", ("bracken",), "profiler", "optional:bracken",
             companions=("bracken-build", "est_abundance.py", "kmer2read_distr", "generate_kmer_distribution.py"),
             probes=(("-v",),)),
+    AskTool("motus", ("motus",), "profiler", "optional:motus", companions=("bwa", "samtools")),
     AskTool("kmcp", ("kmcp",), "annotator", "optional:kmcp"),
     AskTool("sylph", ("sylph",), "profiler", "optional:sylph"),
     AskTool("centrifuge", ("centrifuge",), "annotator", "conda:centrifuge"),

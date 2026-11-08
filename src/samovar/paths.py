@@ -49,6 +49,8 @@ KNOWN_TOOLS = (
     "krakenuniq",
     "metaphlan",
     "metaphlan4",
+    "motus",
+    "motus3",
     "sylph",
     "bracken",
     "kmcp",
@@ -1196,6 +1198,7 @@ _STATUS_TOOL_KEYS = {
     "kraken2": ("kraken2",),
     "kaiju": ("kaiju",),
     "metaphlan": ("metaphlan", "metaphlan4"),
+    "motus": ("motus", "motus3"),
     "sylph": ("sylph",),
     "bracken": ("bracken",),
     "kmcp": ("kmcp",),
@@ -1336,6 +1339,11 @@ def install_status_rows() -> List[Dict[str, Any]]:
             path=_existing_tool("metaphlan") or _existing_tool("metaphlan4"),
             config_key="tools.metaphlan / tool_envs.metaphlan",
             install="conda install -c bioconda metaphlan",
+        ),
+        row(
+            "motus", required=False, role="mOTUs3 sample-level profiler",
+            path=_existing_tool("motus"), config_key="tools.motus / tool_envs.motus",
+            install="./install.sh mOTUs3",
         ),
         row(
             "kmcp", required=False, role="per-read taxonomic annotator / index builder",

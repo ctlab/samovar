@@ -204,6 +204,13 @@ class ProfileAnnotator(BaseAnnotator):
         ingest = (f"{py} -m samovar.profiles ingest --output {shlex.quote(out)} "
                   f"--sample {shlex.quote(sample)} --identity {shlex.quote(self.run_name)} "
                   f"--database {shlex.quote(self.db_path)}")
+        if str(self.run_config["type"]).lower() in {"motus", "motus3"} or Path(command_argv(self.cmd)[-1]).name == "motus":
+            run = (f"{py} -m samovar.profiles motus --source {shlex.quote(out + '.raw')} "
+                   f"--input-r1 {shlex.quote(str(input_r1))} {_r2_flag('--input-r2', input_r2)}"
+                   f"--database {shlex.quote(self.db_path)} --sample {shlex.quote(sample)} "
+                   f"--executable {shlex.quote(self.cmd)} --threads {int(self.threads)} "
+                   f"--native-flags={shlex.quote(self.extra or '')}")
+            return run + f" && {ingest} --source {shlex.quote(out + '.raw')} --format motus"
         if str(self.run_config["type"]).lower() == "bracken" or Path(command_argv(self.cmd)[-1]).name == "bracken":
             import argparse
             options = argparse.ArgumentParser(add_help=False)

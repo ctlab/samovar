@@ -207,6 +207,8 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "krakenuniq": "annotator",
     "metaphlan": "annotator",
     "metaphlan4": "annotator",
+    "motus": "profiler",
+    "motus3": "profiler",
     "sylph": "profiler",
     "bracken": "profiler",
     "kmcp": "annotator",

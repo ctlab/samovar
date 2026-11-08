@@ -25,6 +25,7 @@
 #   ./install.sh SPAdes          optional SPAdes / metaSPAdes assembler (sidecar; included in full)
 #   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
 #   ./install.sh Metax          optional Metax profiler (sidecar; custom.sh -p metax)
+#   ./install.sh mOTUs3         optional mOTUs3 sample-level profiler (reference DB separate)
 #   ./install.sh KMCP           optional native per-read annotator and index builder
 #   ./install.sh Bracken        optional Kraken2 + Bracken profiler and distribution builder
 #   ./install.sh Sylph          optional sample-level profiler and sketch builder (sidecar)
@@ -60,6 +61,7 @@
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
 #   SAMOVAR_INSTALL_SPADES=1   also sidecar-conda SPAdes (included in full; same as ./install.sh SPAdes)
+#   SAMOVAR_INSTALL_MOTUS=1    also sidecar-conda mOTUs3 (included in full)
 #   SAMOVAR_INSTALL_KMCP=1     also sidecar-conda KMCP (included in full)
 #   SAMOVAR_INSTALL_BRACKEN=1  also sidecar-conda Bracken (included in full)
 #   SAMOVAR_INSTALL_SYLPH=1    also sidecar-conda Sylph (included in full)
@@ -733,6 +735,7 @@ normalize_optional_arg() {
         metax) echo "metax" ;;
         sylph) echo "sylph" ;;
         bracken) echo "bracken" ;;
+        motus|motus3) echo "motus" ;;
         kmcp) echo "kmcp" ;;
         cuml) echo "cuml" ;;
         full|all|everything) echo "full" ;;
@@ -786,6 +789,7 @@ run_optional_named() {
         metax) "$PYTHON_PATH" -m samovar.sidecar metax ;;
         sylph) "$PYTHON_PATH" -m samovar.sidecar sylph ;;
         bracken) "$PYTHON_PATH" -m samovar.sidecar bracken ;;
+        motus) "$PYTHON_PATH" -m samovar.sidecar motus ;;
         kmcp) "$PYTHON_PATH" -m samovar.sidecar kmcp ;;
         *) return 1 ;;
     esac
@@ -822,6 +826,7 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_METAX=1
     export SAMOVAR_INSTALL_SYLPH=1
     export SAMOVAR_INSTALL_BRACKEN=1
+    export SAMOVAR_INSTALL_MOTUS=1
     export SAMOVAR_INSTALL_KMCP=1
     export SAMOVAR_INSTALL_SPADES=1
 }
@@ -1147,6 +1152,12 @@ if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then
     "$PYTHON_PATH" -m samovar.sidecar metax || echo "Warning: optional Metax sidecar install did not complete."
 else
     echo "Skipping Metax (not required). Use ./install.sh Metax for the custom.sh annotator."
+fi
+
+if [ "${SAMOVAR_INSTALL_MOTUS:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar motus || echo "Warning: optional mOTUs3 install did not complete."
+else
+    echo "Skipping mOTUs3 (not required). Use ./install.sh mOTUs3 for profiling."
 fi
 
 if [ "${SAMOVAR_INSTALL_KMCP:-0}" != "0" ]; then

@@ -300,3 +300,22 @@ def test_bracken_profile_uses_kraken_contract_threads_and_quoted_paths(tmp_path,
     assert 'samovar.profiles' in argv and 'bracken' in argv
     with pytest.raises(FileNotFoundError, match='distribution'):
         ProfileAnnotator({**tool.run_config, 'extra': '-r 150'}, {}).get_snakemake_shell_cmd(r1, r2, output)
+
+
+@pytest.mark.parametrize('paired', [False, True])
+def test_motus_profile_command_reuses_shared_profile_stage(tmp_path, monkeypatch, paired):
+    import shlex
+    from samovar.annotators_wrapper import ProfileAnnotator
+    native = tmp_path/'motus'; native.touch()
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: str(native))
+    obj = get_annotator_instance('motus', dict(run_name='motus_named', type='motus', cmd=str(native),
+         db_path=str(tmp_path/'marker DB'), threads=2, output_level='profile'), {})
+    assert isinstance(obj, ProfileAnnotator)
+    outputs = obj.get_expected_outputs('sample_one', str(tmp_path/'output with spaces'))
+    cmd = obj.get_snakemake_shell_cmd(str(tmp_path/'r1 reads.fq'), str(tmp_path/'r2 reads.fq') if paired else '', outputs)
+    args = shlex.split(cmd)
+    assert 'motus' in args and 'ingest' in args and 'samovar.profiles' in args
+    assert args[args.index('--sample')+1] == 'sample_one'
+    assert ('--input-r2' in args) == paired
+    assert args[args.index('--threads')+1] == '2'
+    assert '--format' in args and args[args.index('--format')+1] == 'motus'

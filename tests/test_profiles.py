@@ -330,3 +330,107 @@ def test_bracken_estimator_configured_python_empty_threshold_and_failure(tmp_pat
         run_bracken(report, tmp_path, output, 126)
     with pytest.raises(FileNotFoundError):
         run_bracken(report, tmp_path, output, 100)
+
+
+def test_motus3_profile_preserves_species_unknowns_mass_and_roundtrip(tmp_path):
+    raw = tmp_path / 'native.motus'
+    raw.write_text('# motus version 3.1.0\n#consensus_taxonomy\tNCBI_tax_id\toriginal\n'
+                   'Ecoli [ref_mOTU_v3_1]\t562\t0.2\n'
+                   'Other Ecoli [ref_mOTU_v3_2]\t562\t0.1\n'
+                   'unknown Clostridiales [meta_mOTU_v3_3]\t186802\t0.3\n'
+                   'Novel [ext_mOTU_v3_4]\tNA\t0.1\nunassigned\tNA\t0.3\n')
+    frame, info = load_profile(raw)
+    assert frame.set_index('taxid').N_original.to_dict() == {
+        '562': pytest.approx(0.3), 'unmapped:meta_mOTU_v3_3': 0.3,
+        'unmapped:ext_mOTU_v3_4': 0.1, '0': 0.3}
+    assert (info['unit'], info['basis'], info['normalization']) == ('fraction', 'organisms', 'all')
+    assert info['unassigned_by_sample'] == {'original': 0.3}
+    obj = Annotation.from_abundance_tables({'motus_db': frame}, {'motus_db': info})
+    dump_builtin(obj, tmp_path/'exported', 'abundance')
+    loaded = load_table_input(tmp_path/'exported')
+    pd.testing.assert_frame_equal(input_to_abundance_tables(loaded)['motus_db'], frame, check_dtype=False)
+    assert loaded.profile_metadata['motus_db']['native_header'] == info['native_header']
+    raw.write_text('#consensus_taxonomy\tNCBI_tax_id\toriginal\n')
+    empty, _ = load_profile(raw)
+    assert empty.empty and list(empty) == ['taxid', 'N_original']
+
+
+@pytest.mark.parametrize('body', [
+    '#consensus_taxonomy\tsample\nEcoli\t1\n',
+    '# call: motus profile -c\n#consensus_taxonomy\tNCBI_tax_id\tsample\n',
+    '#consensus_taxonomy\tNCBI_tax_id\tsample\nEcoli [ref_mOTU_v3_1]\t562\t-0.1\n',
+    '#consensus_taxonomy\tNCBI_tax_id\tsample\nEcoli [ref_mOTU_v3_1]\t562\tnan\n',
+    '#consensus_taxonomy\tNCBI_tax_id\tsample\nEcoli [ref_mOTU_v3_1]\t562\t1.1\n',
+    '#consensus_taxonomy\tNCBI_tax_id\tsample\nGenus\t562\t1\n',
+    '#consensus_taxonomy\tNCBI_tax_id\tsample\na [ref_mOTU_v3_1]\t562\t.2\na [ref_mOTU_v3_1]\t562\t.2\n',
+])
+def test_motus3_rejects_incompatible_or_broken_profiles(tmp_path, body):
+    raw = tmp_path/'bad.motus'; raw.write_text(body)
+    with pytest.raises(ValueError):
+        load_profile(raw, {'format': 'motus'})
+
+
+@pytest.mark.parametrize('paired', [False, True])
+def test_motus3_runner_configured_companions_and_private_paths(tmp_path, monkeypatch, paired):
+    from samovar.profiles import run_motus
+    import subprocess
+    db = tmp_path/'database with spaces'; db.mkdir()
+    (db/'db_mOTU_versions').write_text('motus\t3.1.0\n')
+    (db/'db_mOTU_DB_NR.fasta.bwt').touch()
+    tool = tmp_path/'configured tool'; tool.touch()
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: str(tool))
+    reads = tmp_path/'reads with spaces.fastq'
+    reads.write_text('@r\nACGT\n+\nIIII\n')
+    out = tmp_path/'output with spaces/raw.motus'
+    calls = []
+    def run(argv, *, cwd, env, check):
+        calls.append(argv)
+        assert check and argv[0] == str(tool)
+        assert argv[argv.index('-t')+1] == '2'
+        assert argv[argv.index('-g')+1] == '1'
+        assert ('-f' in argv and '-r' in argv) == paired
+        assert ('-s' in argv) != paired
+        work = Path(cwd)
+        assert (work/'db_mOTU').resolve() == db
+        assert str(tool) in (work/'bin/bwa').read_text()
+        assert env['PATH'].split(':')[0] == str(work/'bin')
+        (work/'profile.tsv').write_text('#consensus_taxonomy\tNCBI_tax_id\ts\nEcoli [ref_mOTU_v3_1]\t562\t1\n')
+    monkeypatch.setattr(subprocess, 'run', run)
+    run_motus(reads, reads if paired else None, db, out, 's', 2, flags='-g 1')
+    assert load_profile(out)[0].taxid.tolist() == ['562']
+    assert not list((out.parent/'.tmp/motus').iterdir())
+    reads.write_text(''); calls.clear()
+    run_motus(reads, None, db, out, 's')
+    assert load_profile(out)[0].empty and not calls
+    with pytest.raises(SystemExit):
+        run_motus(reads, None, db, out, 's', flags='-c')
+    (db/'db_mOTU_DB_NR.fasta.bwt').unlink()
+    with pytest.raises(FileNotFoundError):
+        run_motus(reads, None, db, out, 's')
+
+
+@pytest.mark.parametrize('outcome', ['failed', 'missing', 'broken'])
+def test_motus3_native_errors_preserve_prior_output(tmp_path, monkeypatch, outcome):
+    import subprocess
+    from samovar.profiles import run_motus
+    db = tmp_path/'db'; db.mkdir()
+    (db/'db_mOTU_versions').write_text('motus\t3.1.0\n')
+    (db/'db_mOTU_DB_NR.fasta.bwt').touch()
+    tool = tmp_path/'motus'; tool.touch()
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: str(tool))
+    reads = tmp_path/'reads.fastq'; reads.write_text('@r\nACGT\n+\nIIII\n')
+    out = tmp_path/'out'; out.write_text('previous result')
+    def run(argv, **kwargs):
+        if outcome == 'failed':
+            raise subprocess.CalledProcessError(2, argv)
+        if outcome == 'broken':
+            (Path(kwargs['cwd'])/'profile.tsv').write_text('unexpected output')
+    monkeypatch.setattr(subprocess, 'run', run)
+    error = {'failed': subprocess.CalledProcessError, 'missing': FileNotFoundError, 'broken': ValueError}[outcome]
+    with pytest.raises(error):
+        run_motus(reads, None, db, out, 's')
+    assert out.read_text() == 'previous result'
+    assert not list((tmp_path/'.tmp/motus').iterdir())
+    (db/'db_mOTU_versions').write_text('motus\t4.0.0\n')
+    with pytest.raises(ValueError, match='version 3'):
+        run_motus(reads, None, db, out, 's')
