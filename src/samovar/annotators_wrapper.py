@@ -279,7 +279,11 @@ class ProfileAnnotator(BaseAnnotator):
                    f"{db_flag} {shlex.quote(self.db_path)} {map_flag} {shlex.quote(out + '.bowtie2.bz2')} "
                    f"-o {shlex.quote(raw)} {extra}")
             return skip_empty_reads_cmd(input_r1, [raw], run) + f" && {ingest} --source {shlex.quote(raw)} --format metaphlan"
-        run = (f"{self.cmd} -i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+        from samovar.paths import resolve_executable
+        argv = command_argv(resolve_executable(self.cmd, allow_python_script=True))
+        if Path(argv[0]).suffix == ".py":
+            argv = [python_path(), *argv]
+        run = (f"{shlex.join(argv)} -i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
                f"-d {shlex.quote(self.db_path)} -o {shlex.quote(out)} -t {int(self.threads)} {self.extra or ''}")
         return run + f" && {ingest} --source {shlex.quote(out)} --format abundance"
 

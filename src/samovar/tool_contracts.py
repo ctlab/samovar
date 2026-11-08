@@ -34,7 +34,10 @@ def _contract_repo_root() -> Path:
 
 CONTRACTS: Dict[str, Dict[str, str]] = {
     "profiler": {
-        "in": "FASTQ -i/-I, database -d, profile CSV -o, threads -t (same launcher as annotators). Native MetaPhlAn uses the registered profile adapter.",
+        "in": "FASTQ -i/-I, database -d, profile CSV -o, threads -t (same launcher as annotators). "
+              "External wrappers need no native-tool changes. Python .py wrappers use the configured "
+              "SAMOVAR interpreter in both import --pytest and pipeline execution; executable wrappers run directly. "
+              "Native profilers use their registered profile adapters.",
         "out": "taxid + N_<sample> CSV and <output>.profile.json metadata: kind, unit, basis, taxonomy, rank, normalization. "
                "No seq or fabricated per-read assignments. Empty profiles retain explicit sample columns. "
                "MultiQC consumes report_profiles(Annotation, dest, stage, config): the same versioned "

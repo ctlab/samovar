@@ -592,9 +592,9 @@ def command_argv(command: str) -> List[str]:
 
 def resolve_executable(
     name_or_path: Optional[str], tool_key: Optional[str] = None,
-    cfg: Optional[Dict[str, Any]] = None,
+    cfg: Optional[Dict[str, Any]] = None, *, allow_python_script: bool = False,
 ) -> str:
-    """Return an absolute executable path when possible; otherwise the original token."""
+    """Resolve a tool path; interpreter-driven callers may allow non-executable .py files."""
     if not name_or_path:
         return ""
     raw = str(name_or_path).strip()
@@ -607,7 +607,7 @@ def resolve_executable(
     if (
         (token_path.is_absolute() or "/" in token)
         and token_path.is_file()
-        and os.access(token_path, os.X_OK)
+        and (os.access(token_path, os.X_OK) or (allow_python_script and token_path.suffix == ".py"))
     ):
         return shlex.join([str(token_path.resolve()), *rest]) if rest else str(token_path.resolve())
 
@@ -633,7 +633,7 @@ def resolve_executable(
         if not cand:
             continue
         path = Path(cand).expanduser()
-        if path.is_file() and os.access(path, os.X_OK):
+        if path.is_file() and (os.access(path, os.X_OK) or (allow_python_script and path.suffix == ".py")):
             resolved = str(path.resolve())
             return shlex.join([resolved, *rest]) if rest else resolved
         if path.is_absolute():

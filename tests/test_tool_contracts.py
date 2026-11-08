@@ -137,13 +137,13 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
 def test_profiler_contract(request, tmp_path, tiny_fastq):
     _skip_if_other_type(request, "profiler")
     from samovar.profiles import load_profile
-    from samovar.paths import python_path
+    from samovar.annotators_wrapper import ProfileAnnotator
     import subprocess
     path = _tool_path(request, "profiler")
     r1, r2 = tiny_fastq
     out = tmp_path / "sample_contract.profile.csv"
-    argv = [str(python_path()), str(path)] if path.suffix == ".py" else [str(path)]
     db = _annotator_db(request)
+    native_type = "custom_profiler"
     if path.name.lower().startswith(("metaphlan", "sylph", "bracken", "motus")):
         if db is None:
             pytest.skip("Native profiler contract needs a real --db-path")
@@ -151,14 +151,11 @@ def test_profiler_contract(request, tmp_path, tiny_fastq):
         # A valid-length unmapped library still must yield a typed empty profile.
         for mate in (r1, r2):
             Path(mate).write_text("@contract\n" + "ACGT" * 25 + "\n+\n" + "I" * 100 + "\n")
-        from samovar.annotators_wrapper import ProfileAnnotator
         native_type = next(name for name in ("sylph", "bracken", "metaphlan", "motus") if path.name.lower().startswith(name))
-        tool = ProfileAnnotator(dict(run_name="contract", type=native_type, cmd=str(path), db_path=str(db), threads=1), {})
-        command = tool.get_snakemake_shell_cmd(str(r1), str(r2), [str(out), str(out) + ".profile.json"])
-        subprocess.run(["bash", "-e", "-c", command], check=True)
-    else:
-        subprocess.run([*argv, "-i", str(r1), "-I", str(r2), "-d", str(db or tmp_path),
-                        "-o", str(out), "-t", "1"], check=True)
+    tool = ProfileAnnotator(dict(run_name="contract", type=native_type, cmd=str(path),
+                                 db_path=str(db or tmp_path), threads=1), {})
+    command = tool.get_snakemake_shell_cmd(str(r1), str(r2), [str(out), str(out) + ".profile.json"])
+    subprocess.run(["bash", "-e", "-c", command], check=True)
     assert Path(str(out) + ".profile.json").is_file()
     table, meta = load_profile(out)
     assert "seq" not in table and n_sample_columns(table)

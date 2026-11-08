@@ -18,6 +18,112 @@ def table(values, ids=("562", "4932"), sample="s"):
     return pd.DataFrame({"taxid": list(ids), "N_" + sample: list(values)})
 
 
+@pytest.fixture
+def external_kraken_profiler(tmp_path, monkeypatch):
+    import os
+    import shutil
+    import sys
+
+    folder = tmp_path / "external profiler space's Ω"
+    folder.mkdir()
+    wrapper = folder / "kraken2_profile.py"
+    shutil.copyfile(Path(__file__).parent / "data/kraken2_profile_wrapper.py", wrapper)
+    fake = folder / "native kraken2"
+    fake.write_text(f'#!{sys.executable}\n' + '''import json, sys
+from pathlib import Path
+args = sys.argv[1:]
+db = Path(args[args.index('--db') + 1])
+(db / 'argv.json').write_text(json.dumps(args))
+if (db / 'fail').exists():
+    raise SystemExit(7)
+Path(args[args.index('--report') + 1]).write_text((db / 'report').read_text())
+''')
+    fake.chmod(0o755)
+    config = Path(os.environ["SAMOVAR_CONFIG"])
+    cfg = json.loads(config.read_text())
+    cfg["tools"]["kraken2"] = {"type": "annotator", "exec": {"path": str(fake)}}
+    config.write_text(json.dumps(cfg))
+    foreign = folder / "foreign"
+    foreign.mkdir()
+    for name in ("python", "python3", "kraken2"):
+        path = foreign / name
+        path.write_text("#!/bin/sh\nexit 91\n")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", str(foreign) + os.pathsep + os.environ["PATH"])
+    db = folder / "database"
+    db.mkdir()
+    (db / "report").write_text("30\t3\t3\tU\t0\tunclassified\n"
+                              "70\t7\t0\tR\t1\troot\n"
+                              "70\t7\t3\tG\t561\t  genus\n"
+                              "40\t4\t4\tS\t562\t    species\n")
+    reads = folder / "reads.fastq"
+    reads.write_text("@read\nACGT\n+\nIIII\n")
+    return wrapper, db, reads
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_external_profiler_import_and_production_launch(external_kraken_profiler, paired, capsys):
+    import subprocess
+    from samovar.tools_import import main as import_main
+    from samovar.annotators_wrapper import get_annotator_instance
+    from argparse import Namespace
+    from samovar.config import PipelineConfig
+
+    wrapper, db, reads = external_kraken_profiler
+    argv = ["--name", "external_profile", "--type", "profiler", "--exec-path", str(wrapper),
+            "--tool-version", "test", "--db-path", str(db)]
+    if paired:
+        argv.append("--pytest")
+    assert import_main(argv) == 0
+    settings = wrapper.parent / "prepare.yaml"
+    settings.write_text(__import__("yaml").safe_dump({"annotators": [dict(
+        type="external_profile", cmd="external_profile", run_name="named_profile", db_path=str(db))]}))
+    cfg = PipelineConfig.from_args(Namespace(input_config=str(settings), input_dir=None,
+                                            output_dir=str(wrapper.parent / "run"), kraken2=None, kaiju=None))
+    ann = cfg.annotators[0]
+    assert ann.output_level == "profile"
+    assert "not on PATH" not in capsys.readouterr().err
+    tool = get_annotator_instance(ann.type, vars(ann), {})
+    out = Path(tool.get_expected_outputs("patient_A", str(wrapper.parent))[0])
+    command = tool.get_snakemake_shell_cmd(str(reads), str(reads) if paired else "", [str(out)])
+    subprocess.run(["bash", "-e", "-c", command], check=True)
+    frame, info = load_profile(out)
+    assert dict(zip(frame.taxid, frame.N_patient_A)) == {"0": 3, "561": 3, "562": 4}
+    assert info["identity"] == "named_profile" and info["database"] == str(db)
+    assert info["rank"] == "taxid" and info["normalization"] == "all"
+    args = json.loads((db / "argv.json").read_text())
+    assert ("--paired" in args) == paired
+    assert not list((wrapper.parent / ".tmp").iterdir())
+
+
+@pytest.mark.parametrize("mode", ["empty", "no_hits", "blank", "malformed", "negative", "duplicate", "failure"])
+def test_external_profiler_empty_and_failed_results(external_kraken_profiler, mode):
+    import subprocess
+    from samovar.paths import python_path
+    wrapper, db, reads = external_kraken_profiler
+    if mode == "empty":
+        reads.write_text("")
+    elif mode == "no_hits":
+        (db / "report").write_text("100\t1\t1\tU\t0\tunclassified\n")
+    elif mode == "failure":
+        (db / "fail").touch()
+    else:
+        report = {"blank": "", "malformed": "broken\n", "negative": "0\t1\t-1\tS\t562\tspecies\n",
+                  "duplicate": "50\t1\t1\tS\t562\tspecies\n" * 2}[mode]
+        (db / "report").write_text(report)
+    out = wrapper.parent / "result.csv"
+    result = subprocess.run([python_path(), str(wrapper), "-i", str(reads), "-d", str(db),
+                             "-o", str(out), "-t", "2"], capture_output=True, text=True)
+    if mode in {"empty", "no_hits"}:
+        assert result.returncode == 0, result.stderr
+        frame, _ = load_profile(out)
+        assert frame.empty if mode == "empty" else frame.taxid.tolist() == ["0"]
+    else:
+        assert result.returncode != 0
+        assert not out.exists() and not Path(str(out) + ".profile.json").exists()
+    assert not list((wrapper.parent / ".tmp").iterdir())
+
+
 def test_sylph_native_profile_uses_explicit_taxonomy_and_organism_abundance(tmp_path):
     mapping = tmp_path / "genomes.syldb.taxonomy.tsv"
     mapping.write_text("Genome_file\ttaxid\ng1.fna\t562\ng2.fna\t562\n")

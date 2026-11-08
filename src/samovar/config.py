@@ -280,7 +280,7 @@ def _portable_annotator_cmd(cmd: str) -> str:
     path = Path(token).expanduser()
     if path.is_file():
         return text
-    resolved = (command_argv(resolve_executable(token)) or [""])[0]
+    resolved = (command_argv(resolve_executable(token, allow_python_script=True)) or [""])[0]
     if resolved and Path(resolved).expanduser().is_file():
         return text
     if shutil.which(token):
