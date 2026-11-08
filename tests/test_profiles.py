@@ -41,6 +41,8 @@ Path(args[args.index('--report') + 1]).write_text((db / 'report').read_text())
     fake.chmod(0o755)
     config = Path(os.environ["SAMOVAR_CONFIG"])
     cfg = json.loads(config.read_text())
+    cfg['tools'] = {key: value for key, value in cfg['tools'].items() if key.split(':')[0] != 'kraken2'}
+    cfg.get('tool_envs', {}).pop('kraken2', None)
     cfg["tools"]["kraken2"] = {"type": "annotator", "exec": {"path": str(fake)}}
     config.write_text(json.dumps(cfg))
     foreign = folder / "foreign"

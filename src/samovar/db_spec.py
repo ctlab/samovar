@@ -44,6 +44,7 @@ SCHEMA_KEYS = {
 
 # (tool, name) or (tool, name, version) → official archive used to rebuild the index.
 DEFAULT_LAZY_DOWNLOAD: Dict[Tuple[str, ...], str] = {
+    ("phanta", "default", "1.01"): "http://ab_phanta.os.scg.stanford.edu/Phanta_DBs/unmasked_db_v1.01.tar.gz",
     ("motus", "db_mOTU", "3.1.0"): "https://zenodo.org/records/7778108/files/db_mOTU_v3.1.0.tar.gz",
     (
         "kraken2",

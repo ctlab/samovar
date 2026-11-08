@@ -35,6 +35,20 @@ from samovar.paths import (
 from samovar.main_config import lookup_tool_record, set_tool
 
 SIDECARS = {
+    "phanta": {
+        "python": None, "packages": ["kraken2>=2.1.6"], "runtime_modules": (), "runtime_versions": {},
+        "binary": "kraken2", "tool_keys": ("phanta",), "group": "profiler",
+        "required_help": "--report-minimizer-data",
+        "dependencies": ("kraken2", "bracken"),
+        "source": {
+            "url": "https://codeload.github.com/bhattlab/phanta/tar.gz/ecbfcf9fbf874072ec6069913291991cbec6bab3",
+            "sha256": "e1a2efe568b281f23e6f81eb3075481437044acbcecac1b99088c7267cd3c115",
+            "revision": "ecbfcf9fbf874072ec6069913291991cbec6bab3",
+            "directory": "phanta-ecbfcf9fbf874072ec6069913291991cbec6bab3",
+            "executable": "run_phanta.py",
+        },
+        "hint": "Phanta native sample profiler (./install.sh Phanta); database installed separately.",
+    },
     "motus": {
         "python": "3.8", "packages": ["python=3.8", "python_abi=3.8=*_cp38", "motus=3.1.0", "bwa", "samtools"], "runtime_modules": (),
         "runtime_versions": {"motu": "3.1.0"}, "binary": "motus", "tool_keys": ("motus",),
@@ -358,6 +372,13 @@ def env_has_versions(prefix: Path, versions: dict) -> bool:
 
 def sidecar_is_healthy(name: str, prefix: Path) -> bool:
     spec = SIDECARS[name]
+    if spec.get('required_help'):
+        binary = prefix / 'bin' / spec['binary']
+        if not binary.is_file():
+            return False
+        result = subprocess.run([str(binary), '--help'], capture_output=True, text=True, timeout=30)
+        if spec['required_help'] not in result.stdout + result.stderr:
+            return False
     return all(env_has_binary(prefix, binary) for binary in (str(spec["binary"]), *spec.get("companions", ()))) and env_has_runtime(
         prefix, tuple(spec.get("runtime_modules") or ())
     ) and env_has_versions(prefix, dict(spec.get("runtime_versions") or {}))
@@ -462,6 +483,49 @@ def record_sidecar(name: str, prefix: Path, binary_path: str) -> None:
     write_config(cfg)
 
 
+def _install_source_tool(name: str) -> Path:
+    """Install a pinned source workflow through the same optional installer."""
+    import hashlib
+    import tarfile
+    import tempfile
+    import urllib.request
+    from samovar.paths import _existing_tool
+
+    spec = SIDECARS[name]
+    source = spec['source']
+    for dependency in spec.get('dependencies', ()):
+        if not _existing_tool(dependency):
+            install_named(dependency)
+    dest = sidecar_envs_dir().parent / 'sources' / name / source['revision']
+    executable = dest / source['executable']
+    if not executable.is_file():
+        if os.environ.get('SAMOVAR_OFFLINE', '0') != '0':
+            raise RuntimeError(f'{name} source is unavailable in offline mode: {dest}')
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=dest.parent, prefix='.install-') as tmp:
+            work = Path(tmp)
+            archive = work / 'source.tar.gz'
+            with urllib.request.urlopen(source['url'], timeout=120) as response, archive.open('wb') as handle:
+                shutil.copyfileobj(response, handle)
+            if hashlib.sha256(archive.read_bytes()).hexdigest() != source['sha256']:
+                raise RuntimeError(f'{name} source checksum mismatch')
+            with tarfile.open(archive) as contents:
+                kwargs = {'filter': 'data'} if hasattr(tarfile, 'data_filter') else {}
+                contents.extractall(work / 'unpacked', **kwargs)
+            (work / 'unpacked' / source['directory']).replace(dest)
+    executable.chmod(executable.stat().st_mode | 0o111)
+    cfg = load_config()
+    kraken = _existing_tool('phanta-kraken2') or _existing_tool('kraken2')
+    probe = subprocess.run([kraken, '--help'], capture_output=True, text=True, timeout=30)
+    if spec['required_help'] not in probe.stdout + probe.stderr:
+        prefix = create_sidecar_env(name)
+        set_tool(cfg, 'phanta-kraken2', path=str(prefix / 'bin/kraken2'), group='annotator')
+    set_tool(cfg, name, path=str(executable), group=spec['group'], version=source['revision'])
+    write_config(cfg)
+    print(f'{name}: {executable} (source revision {source["revision"]})')
+    return dest
+
+
 def install_named(name: str) -> Path:
     key = str(name or "").strip().lower()
     aliases = {
@@ -485,6 +549,8 @@ def install_named(name: str) -> Path:
     spec = SIDECARS.get(key)
     if spec is None:
         raise ValueError(f"Unknown sidecar {name!r}")
+    if spec.get('source'):
+        return _install_source_tool(key)
     existing = None
     if key == "nanosim":
         existing = discover_nanosim()

@@ -1356,6 +1356,11 @@ def install_status_rows() -> List[Dict[str, Any]]:
             install="./install.sh Bracken",
         ),
         row(
+            "phanta", required=False, role="Phanta sample-level profiler",
+            path=_existing_tool("phanta"), config_key="tools.phanta",
+            install="./install.sh Phanta",
+        ),
+        row(
             "sylph",
             required=False,
             role="sample-level profiler / sketch builder",

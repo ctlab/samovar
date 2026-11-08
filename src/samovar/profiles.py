@@ -76,6 +76,8 @@ def load_profile(path, settings=None):
         lines = handle.readlines()
     if fmt == "auto" and any(x.startswith("#consensus_taxonomy\tNCBI_tax_id\t") for x in lines):
         fmt = "motus"
+    if fmt == "auto" and any('taxonomy_id' in x and 'rel_taxon_abundance' in x for x in lines[:1]):
+        fmt = "phanta"
     if fmt == "auto" and any("taxonomy_id\ttaxonomy_lvl\t" in x and "new_est_reads" in x for x in lines):
         fmt = "bracken"
     if fmt == "auto" and any(x.startswith("Sample_file\t") and "Taxonomic_abundance" in x for x in lines):
@@ -85,6 +87,33 @@ def load_profile(path, settings=None):
             "metaphlan" if any("clade_name" in x and "relative_abundance" in x for x in lines) else "abundance")
     if fmt == "abundance":
         table = pd.read_csv(path, sep="\t" if path.suffix == ".tsv" else ",", dtype={"taxid": str})
+    elif fmt == "phanta":
+        if meta['taxonomy'] != 'ncbi' or meta['rank'] != 'species':
+            raise ValueError('Phanta exposes species profiles with explicit unresolved native taxids')
+        from samovar.taxdump import names_dmp, load_scientific_names
+        names = names_dmp()
+        canonical = load_scientific_names(names) if names is not None else {}
+        required = ['name', 'taxonomy_id', 'new_est_reads', 'rel_taxon_abundance']
+        native = pd.read_csv(path, sep='\t', dtype={'taxonomy_id': str}) if lines else pd.DataFrame(columns=required)
+        if not set(required) <= set(native):
+            raise ValueError('Malformed Phanta scaled Bracken profile')
+        if native['taxonomy_id'].duplicated().any():
+            raise ValueError('Duplicate Phanta species taxid')
+        abundance = pd.to_numeric(native['rel_taxon_abundance'], errors='raise').astype(float)
+        counts = pd.to_numeric(native['new_est_reads'], errors='raise').astype(float)
+        if not np.isfinite(counts).all() or (counts < 0).any():
+            raise ValueError('Invalid native Phanta read counts')
+        ids, original = [], {}
+        for row in native.itertuples(index=False):
+            tax, name = str(row.taxonomy_id), str(row.name)
+            if not tax.isdigit() or int(tax) < 1:
+                raise ValueError('Invalid native Phanta species taxid')
+            mapped = tax if canonical.get(int(tax)) == name else 'unmapped:phanta:' + tax
+            ids.append(mapped)
+            original[mapped] = dict(taxid=tax, name=name)
+        sample = str(meta.get('sample', 'sample'))
+        table = pd.DataFrame({'taxid': ids, 'N_' + sample: abundance})
+        meta.update(unit='fraction', basis='organisms', normalization='classified', native_taxa=original)
     elif fmt in {"motus", "motus3"}:
         if meta["taxonomy"] != "ncbi":
             raise ValueError("mOTUs3 profiles use NCBI taxonomy with explicit unmapped mOTUs")

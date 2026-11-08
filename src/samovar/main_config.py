@@ -211,6 +211,7 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "motus3": "profiler",
     "sylph": "profiler",
     "bracken": "profiler",
+    "phanta": "profiler",
     "kmcp": "annotator",
     "centrifuge": "annotator",
     "metax": "annotator",

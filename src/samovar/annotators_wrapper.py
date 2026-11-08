@@ -204,6 +204,12 @@ class ProfileAnnotator(BaseAnnotator):
         ingest = (f"{py} -m samovar.profiles ingest --output {shlex.quote(out)} "
                   f"--sample {shlex.quote(sample)} --identity {shlex.quote(self.run_name)} "
                   f"--database {shlex.quote(self.db_path)}")
+        if str(self.run_config['type']).lower() == 'phanta' or Path(command_argv(self.cmd)[-1]).name == 'run_phanta.py':
+            run = (f"{py} -m samovar.phanta -i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+                   f"-d {shlex.quote(self.db_path)} -o {shlex.quote(out + '.phanta.tsv')} -t {int(self.threads)} "
+                   f"--sample {shlex.quote(sample)} --exec-path {shlex.quote(self.cmd)} "
+                   f"--native-flags={shlex.quote(self.extra or '')}")
+            return run + f" && {ingest} --source {shlex.quote(out + '.phanta.tsv')} --format phanta"
         if str(self.run_config["type"]).lower() in {"motus", "motus3"} or Path(command_argv(self.cmd)[-1]).name == "motus":
             run = (f"{py} -m samovar.profiles motus --source {shlex.quote(out + '.raw')} "
                    f"--input-r1 {shlex.quote(str(input_r1))} {_r2_flag('--input-r2', input_r2)}"

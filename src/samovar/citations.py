@@ -41,6 +41,7 @@ DOI_RECORDS: Dict[str, str] = {
     "motus_ruscheweyh2022.bib": "10.1186/s40168-022-01410-z",
     "kmcp_shen2023.bib": "10.1093/bioinformatics/btac845",
     "bracken_lu2017.bib": "10.7717/peerj-cs.104",
+    "phanta_pinto2023.bib": "10.1038/s41587-023-01799-4",
     "sylph_shaw2024.bib": "10.1038/s41587-024-02412-y",
     "flye_kolmogorov2019.bib": "10.1038/s41587-019-0072-8",
     "metaflye_kolmogorov2020.bib": "10.1038/s41592-020-00971-x",

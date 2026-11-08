@@ -144,14 +144,15 @@ def test_profiler_contract(request, tmp_path, tiny_fastq):
     out = tmp_path / "sample_contract.profile.csv"
     db = _annotator_db(request)
     native_type = "custom_profiler"
-    if path.name.lower().startswith(("metaphlan", "sylph", "bracken", "motus")):
+    if path.name.lower().startswith(("metaphlan", "sylph", "bracken", "motus", "run_phanta")):
         if db is None:
             pytest.skip("Native profiler contract needs a real --db-path")
         # Native MetaPhlAn rejects libraries containing only <70 bp reads.
         # A valid-length unmapped library still must yield a typed empty profile.
         for mate in (r1, r2):
             Path(mate).write_text("@contract\n" + "ACGT" * 25 + "\n+\n" + "I" * 100 + "\n")
-        native_type = next(name for name in ("sylph", "bracken", "metaphlan", "motus") if path.name.lower().startswith(name))
+        native_type = 'phanta' if path.name.lower().startswith('run_phanta') else next(
+            name for name in ("sylph", "bracken", "metaphlan", "motus") if path.name.lower().startswith(name))
     tool = ProfileAnnotator(dict(run_name="contract", type=native_type, cmd=str(path),
                                  db_path=str(db or tmp_path), threads=1), {})
     command = tool.get_snakemake_shell_cmd(str(r1), str(r2), [str(out), str(out) + ".profile.json"])
