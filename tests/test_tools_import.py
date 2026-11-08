@@ -922,6 +922,8 @@ def test_reserved_builtin_names_are_rejected_and_remove_deletes_them(tmp_path, m
         }),
         encoding="utf-8",
     )
-    merged = _merge_existing_config(disk, {"tools": {"keep": memory["tools"]["keep"]}})
+    merged = _merge_existing_config(
+        disk, {"tools": {"keep": memory["tools"]["keep"]}}, replace_tools=True
+    )
     merged_bare = {bare_tool_name(key) for key in merged["tools"]}
     assert "linear" not in merged_bare and "keep" in merged_bare

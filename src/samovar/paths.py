@@ -302,7 +302,7 @@ def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict
         apply_legacy_updates(cfg, updates)
         after = disk_payload(cfg)
         if before != after or not dest.is_file():
-            _write_config_unlocked(cfg, also_repo_build=also_repo_build)
+            _write_config_unlocked(cfg, also_repo_build=also_repo_build, replace_tools=True)
     return as_install_config(cfg)
 
 
@@ -713,11 +713,17 @@ def _writing_install_config(dest: Path) -> bool:
     return recorded is not None and _same_config_file(Path(override), recorded)
 
 
-def _merge_existing_config(dest: Path, data: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_existing_config(
+    dest: Path,
+    data: Dict[str, Any],
+    *,
+    replace_tools: bool = False,
+) -> Dict[str, Any]:
     """Fold ``data`` into the user config already on disk.
 
-    That file is the install the user already has. A parallel writer adds its
-    keys; it does not replace the file with a new document.
+    A parallel ``write_config`` adds its keys. ``update_config`` passes
+    ``replace_tools`` so a tool deleted from the loaded document stays deleted.
+    Bare names match versioned keys (``keep`` and ``keep:9.4``).
     """
     existing = _read_json(dest)
     if not existing:
@@ -725,6 +731,8 @@ def _merge_existing_config(dest: Path, data: Dict[str, Any]) -> Dict[str, Any]:
     from samovar.main_config import apply_legacy_updates
 
     merged = apply_legacy_updates(dict(existing), data)
+    if not replace_tools:
+        return merged
     incoming = data.get("tools") if isinstance(data, dict) else None
     tools = merged.get("tools") if isinstance(merged, dict) else None
     if isinstance(incoming, dict) and isinstance(tools, dict):
@@ -756,11 +764,16 @@ def _publish_text(dest: Path, text: str) -> None:
         checkpoint.unlink(missing_ok=True)
 
 
-def _write_config_unlocked(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
+def _write_config_unlocked(
+    data: Dict[str, Any],
+    also_repo_build: bool = True,
+    *,
+    replace_tools: bool = False,
+) -> Path:
     dest = user_config_path()
     # SAMOVAR_CONFIG names a private file. The shared user config is merged.
     if _writing_install_config(dest):
-        data = _merge_existing_config(dest, data)
+        data = _merge_existing_config(dest, data, replace_tools=replace_tools)
     payload = disk_payload(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
