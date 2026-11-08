@@ -2427,10 +2427,25 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _report_help(raw: Sequence[str]) -> bool:
+    """``-h``/``--help`` before ``--`` is SamovaR help, not a MultiQC flag."""
+    if not raw or raw[0] not in {"bundle", "multiqc"}:
+        return False
+    body = list(raw[1:])
+    if "--" in body:
+        body = body[: body.index("--")]
+    return "-h" in body or "--help" in body
+
+
 def _report_command(raw: Sequence[str]) -> Optional[int]:
     """Parse report flags ourselves. argparse REMAINDER would swallow them."""
-    if not raw or raw[0] not in {"bundle", "multiqc"} or (len(raw) > 1 and raw[1] in {"-h", "--help"}):
+    if not raw or raw[0] not in {"bundle", "multiqc"}:
         return None
+    if _report_help(raw):
+        try:
+            _parser().parse_args([raw[0], "--help"])
+        except SystemExit as exc:
+            return int(exc.code or 0)
     if len(raw) < 2:
         raise ValueError(f"{raw[0]} needs an output directory")
     from samovar.multiqc_report import parse_cli, resolve_settings
@@ -2446,7 +2461,11 @@ def _report_command(raw: Sequence[str]) -> Optional[int]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
-    handled = _report_command(raw)
+    try:
+        handled = _report_command(raw)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     if handled is not None:
         return handled
     args = _parser().parse_args(raw)

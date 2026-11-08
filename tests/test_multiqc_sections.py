@@ -36,6 +36,22 @@ def test_unknown_section_is_rejected():
         effective_settings([{"sections": ["benchmark", "not_a_section"]}])
 
 
+def test_help_exits_cleanly_and_unknown_option_has_no_traceback(capsys):
+    from samovar.stage_report import main
+
+    assert main(["multiqc", "-h"]) == 0
+    assert main(["bundle", "--help"]) == 0
+    help_text = capsys.readouterr().out
+    assert "usage:" in help_text.lower()
+    assert main(["multiqc", "out", "--not-a-flag"]) == 2
+    captured = capsys.readouterr()
+    assert "Unknown multiqc option --not-a-flag" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+    _cli, extra = parse_cli(["--", "-h", "--export"])
+    assert extra == ["-h", "--export"]
+
+
 def test_cli_overrides_run_config(tmp_path):
     hydra = tmp_path / ".hydra"
     hydra.mkdir()
