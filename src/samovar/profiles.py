@@ -487,10 +487,22 @@ def validate_profile_settings(config):
         metadata(result)
         if not Path(result["path"]).is_file():
             raise ValueError(f"{label}: file does not exist: {result['path']}")
-        load_profile(result["path"], result)
-        return result
-    inputs = {str(name): descriptor(value, f"profile_inputs {name}") for name, value in inputs.items()}
-    truth = descriptor(config["profile_truth"], "profile_truth") if config.get("profile_truth") else None
+        table, _loaded = load_profile(result["path"], result)
+        return result, [column[2:] for column in n_sample_columns(table)]
+    loaded = {}
+    for name, value in inputs.items():
+        result, samples = descriptor(value, f"profile_inputs {name}")
+        loaded[str(name)] = (result, samples)
+    inputs = {name: result for name, (result, _samples) in loaded.items()}
+    truth = None
+    if config.get("profile_truth"):
+        truth, truth_samples = descriptor(config["profile_truth"], "profile_truth")
+        for name, (_result, samples) in loaded.items():
+            if set(samples) != set(truth_samples):
+                raise ValueError(
+                    f"profile_inputs {name} samples ({', '.join(samples)}) "
+                    f"differ from profile_truth samples ({', '.join(truth_samples)})"
+                )
     corrector = config.get("profile_corrector", "profile_ratio")
     if corrector not in {"profile_ratio", "none"}:
         from samovar.abundance_correctors import require_known_export

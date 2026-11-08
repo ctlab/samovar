@@ -630,3 +630,74 @@ def test_missing_profile_input_is_a_prepare_error(tmp_path):
     assert "profile_inputs ext" in text
     assert str(missing) in text
     assert "Traceback" not in text
+
+
+def test_profile_sample_mismatch_is_a_prepare_error(tmp_path):
+    import subprocess
+    import sys
+
+    from samovar.profiles import validate_profile_settings
+
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    bracken = profiles / "A.bracken.tsv"
+    bracken.write_text(
+        "name\ttaxonomy_id\ttaxonomy_lvl\tkraken_assigned_reads\tadded_reads\tnew_est_reads\tfraction_total_reads\n"
+        "Escherichia coli\t562\tS\t71976\t0\t71976\t0.60255\n"
+        "Saccharomyces cerevisiae\t4932\tS\t36146\t0\t36146\t0.30260\n"
+        "Homo sapiens\t9606\tS\t11331\t0\t11331\t0.09486\n",
+        encoding="utf-8",
+    )
+    truth = tmp_path / "truth_counts.csv"
+    truth.write_text("taxid,N_A,N_B\n4932,36214,24062\n562,71983,12031\n9606,11803,83907\n", encoding="utf-8")
+    cfg = tmp_path / "mismatch.yaml"
+    cfg.write_text(
+        "profile_inputs:\n"
+        "  ext:\n"
+        "    basis: reads\n"
+        "    format: bracken\n"
+        "    kind: abundance\n"
+        "    normalization: classified\n"
+        f"    path: {bracken}\n"
+        "    rank: species\n"
+        "    sample: A\n"
+        "    taxonomy: ncbi\n"
+        "    unit: counts\n"
+        "profile_truth:\n"
+        "  basis: reads\n"
+        "  kind: abundance\n"
+        "  normalization: all\n"
+        f"  path: {truth}\n"
+        "  rank: species\n"
+        "  taxonomy: ncbi\n"
+        "  unit: counts\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "bin/samovar_preprocess", "--input_config", str(cfg),
+         "--output_dir", str(tmp_path / "out"), "--endpoint", "viz_initial", "--cores", "1"],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+    )
+    text = proc.stdout + proc.stderr
+    assert proc.returncode == 1
+    assert "profile_inputs ext samples (A)" in text
+    assert "profile_truth samples (A, B)" in text
+    assert "Traceback" not in text
+    matched = truth.with_name("truth_A.csv")
+    matched.write_text("taxid,N_A\n4932,1\n562,1\n9606,1\n", encoding="utf-8")
+    block = {
+        "profile_inputs": {"ext": {
+            "basis": "reads", "format": "bracken", "kind": "abundance",
+            "normalization": "classified", "path": str(bracken), "rank": "species",
+            "sample": "A", "taxonomy": "ncbi", "unit": "counts",
+        }},
+        "profile_truth": {
+            "basis": "reads", "kind": "abundance", "normalization": "all",
+            "path": str(matched), "rank": "species", "taxonomy": "ncbi", "unit": "counts",
+        },
+    }
+    inputs, truth_desc, _corrector, _refs = validate_profile_settings(block)
+    assert set(inputs) == {"ext"}
+    assert truth_desc["path"] == str(matched)
