@@ -190,12 +190,8 @@ def preprocess_data(df, drop_missing_true: bool = True, *, preprocessing=None):
     # Convert taxID columns to categorical and handle NA values
     taxid_cols = [col for col in df.columns if col.startswith('taxid_')]
     for col in taxid_cols:
-        # First convert to string and handle NA values
-        df[col] = df[col].fillna('0').astype(str)
-        # Remove any non-numeric characters and convert to numeric
-        df[col] = df[col].str.extract(r'(\d+)', expand=False).fillna('0')
-        # Convert to numeric
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        digits = df[col].astype("string").str.extract(r"(\d+)", expand=False)
+        df[col] = pd.to_numeric(digits, errors="coerce").fillna(0).astype(int)
     
     # Convert length to int if present; dummy/custom tables often omit it
     if 'length' not in df.columns:

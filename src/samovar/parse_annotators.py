@@ -1160,7 +1160,20 @@ class Annotation:
         obj.id = 0
         obj.DataFrame = pd.DataFrame() if df is None else df.copy()
         if not obj.DataFrame.empty:
-            obj.DataFrame = obj.DataFrame.fillna("0")
+            frame = obj.DataFrame
+            numeric = [col for col in frame.columns if pd.api.types.is_numeric_dtype(frame[col])]
+            if numeric:
+                frame[numeric] = frame[numeric].fillna(0)
+            for col in numeric:
+                if not (str(col).startswith("taxID") or str(col).startswith("taxid")):
+                    continue
+                values = frame[col]
+                if bool((values.dropna() == values.dropna().round()).all()):
+                    frame[col] = values.astype("int64")
+            text = [col for col in frame.columns if col not in numeric]
+            if text:
+                frame[text] = frame[text].fillna("0")
+            obj.DataFrame = frame
         obj.true_annotation = []
         if "true" in obj.DataFrame.columns:
             obj.true_annotation = [str(x) for x in obj.DataFrame["true"].tolist()]
