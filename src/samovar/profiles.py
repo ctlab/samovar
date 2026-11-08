@@ -329,33 +329,133 @@ def change_basis(table, info, basis, lengths):
     return table, result
 
 
-def reference_lengths(taxids, genome_dir, config=None, *, selected_paths=None):
-    """Use the same genome resolver/selection as read regeneration."""
-    from samovar.table2iss import _resolve_genomes_for_taxids
+def _fasta_length(path):
     from samovar.seqio import fasta_handle
-    cfg = dict(config or {})
+    with fasta_handle(path) as handle:
+        return sum(len(line.strip()) for line in handle if not line.startswith(">"))
+
+
+def _reference_key(taxid):
+    return str(taxid).split(".")[0]
+
+
+def _explicit_reference_paths(taxids, config):
+    """``profile_references`` maps one taxid to one genome. Length is not stored."""
+    chosen = (config or {}).get("profile_references")
+    if not chosen:
+        return None
+    if not isinstance(chosen, dict):
+        raise ValueError("profile_references must map a taxid to one genome FASTA")
+    wanted = {_reference_key(tax) for tax in taxids}
+    paths = {}
+    for tax in sorted(wanted):
+        raw = chosen.get(tax)
+        if isinstance(raw, (list, tuple, dict)):
+            raise ValueError(
+                f"Ambiguous profile reference for taxid {tax}: name one genome. "
+                "Its length is read from the file."
+            )
+        if not raw:
+            continue
+        path = Path(str(raw)).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Profile reference genome for taxid {tax} is not a file: {path}")
+        paths[tax] = str(path)
+    missing = wanted - set(paths)
+    if missing:
+        raise ValueError(
+            "profile_references has no genome for taxa: "
+            + ", ".join(sorted(missing))
+            + ". Name one FASTA per taxid; its length is read from the file."
+        )
+    return paths
+
+
+def _local_reference_candidates(genome_dir, taxid):
+    root = Path(genome_dir)
+    if not root.is_dir():
+        return []
+    suffixes = (".fna.gz", ".fa.gz", ".fasta.gz", ".fsa.gz", ".fna", ".fa", ".fasta", ".fsa")
+    hits = []
+    for path in sorted(root.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        name = path.name
+        stem = next((name[: -len(ext)] for ext in suffixes if name.endswith(ext)), "")
+        if stem == taxid or stem.startswith(taxid + "_"):
+            hits.append(path)
+    return hits
+
+
+def _selected_reference_paths(taxids, genome_dir, saved):
+    """One local FASTA, or the pinned file from an earlier explicit choice."""
+    paths = {}
+    for tax in sorted({_reference_key(tax) for tax in taxids}):
+        hits = _local_reference_candidates(genome_dir, tax)
+        if len(hits) > 1:
+            listed = ", ".join(str(path) for path in hits)
+            raise ValueError(
+                f"Ambiguous reference genomes for taxid {tax}: {listed}. "
+                "Set profile_references to one FASTA; its length is read from the file."
+            )
+        if len(hits) == 1:
+            paths[tax] = str(hits[0].resolve())
+            continue
+        record = saved.get(tax)
+        if record and record.get("path"):
+            paths[tax] = str(Path(record["path"]).resolve())
+    return paths
+
+
+def reference_lengths(taxids, genome_dir, config=None, *, selected_paths=None):
+    """Lengths are the base counts of the selected reference FASTA files.
+
+    The public choice is ``profile_references`` (taxid → one genome) or the
+    genomes already selected for this run. A directory with several FASTA
+    files for one taxid is an error, not a silent cache pick.
+    """
     genome_dir = Path(genome_dir)
     genome_dir.mkdir(parents=True, exist_ok=True)
-    if selected_paths is None:
-        paths = _resolve_genomes_for_taxids(taxids, str(genome_dir), cfg.get("email", ""), True,
-                                          gzip_genomes=cfg.get("gzip_genomes", True),
-                                          reannotation_level=cfg.get("reannotation_level", "taxid"),
-                                          max_genome_mb=cfg.get("max_genome_mb"),
-                                          genome_skip_list=cfg.get("genome_skip_list"))
-    else:
-        paths = {tax: selected_paths[tax] for tax in taxids if tax in selected_paths}
-    sizes = {}
     manifest = genome_dir / ".profile_references.json"
     saved = json.loads(manifest.read_text()) if manifest.is_file() else {}
-    for tax, path in paths.items():
-        with fasta_handle(path) as handle:
-            sizes[tax] = sum(len(line.strip()) for line in handle if not line.startswith(">"))
-        stat = Path(path).stat()
-        saved[tax] = dict(path=str(Path(path).resolve()), length=sizes[tax],
-                          size=stat.st_size, mtime_ns=stat.st_mtime_ns)
-    missing = set(taxids) - set(sizes)
+    wanted = {_reference_key(tax) for tax in taxids}
+    if selected_paths is not None:
+        paths = {
+            _reference_key(tax): str(Path(selected_paths[key]).expanduser().resolve())
+            for tax in wanted
+            for key in (tax, tax.split(".")[0])
+            if key in selected_paths
+        }
+    else:
+        paths = _explicit_reference_paths(wanted, config)
+        if paths is None:
+            paths = _selected_reference_paths(wanted, genome_dir, saved)
+    sizes = {}
+    for tax, raw in paths.items():
+        path = Path(raw)
+        if not path.is_file():
+            raise FileNotFoundError(f"Profile reference genome for taxid {tax} is not a file: {path}")
+        record = saved.get(tax) or {}
+        same = record.get("path") and Path(record["path"]).resolve() == path.resolve()
+        stat = path.stat()
+        if same and (stat.st_size != record.get("size") or stat.st_mtime_ns != record.get("mtime_ns")):
+            raise ValueError(
+                f"Selected profile reference changed for taxid {tax}: {path}; rebuild dependent profiles"
+            )
+        length = _fasta_length(path)
+        if same and record.get("length") not in (None, length):
+            raise ValueError(
+                f"Selected profile reference changed for taxid {tax}: {path}; rebuild dependent profiles"
+            )
+        sizes[tax] = length
+        saved[tax] = dict(path=str(path.resolve()), length=length, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
+    missing = wanted - set(sizes)
     if missing:
-        raise ValueError(f"No reference genomes for profile taxa: {sorted(missing)}")
+        raise ValueError(
+            "No explicit reference genome for profile taxa: "
+            + ", ".join(sorted(missing))
+            + ". Set profile_references to one FASTA per taxid; its length is read from the file."
+        )
     manifest.write_text(json.dumps(saved, indent=2) + "\n")
     return sizes
 
@@ -395,7 +495,24 @@ def validate_profile_settings(config):
     if corrector not in {"profile_ratio", "none"}:
         from samovar.abundance_correctors import require_known_export
         corrector = require_known_export(corrector)
-    return inputs, truth, corrector
+    references = config.get("profile_references") or {}
+    if references and not isinstance(references, dict):
+        raise ValueError("profile_references must map a taxid to one genome FASTA")
+    resolved = {}
+    for tax, raw in references.items():
+        key = _reference_key(tax)
+        if isinstance(raw, (list, tuple, dict)) or not raw:
+            raise ValueError(
+                f"Ambiguous profile reference for taxid {key}: name one genome. "
+                "Its length is read from the file."
+            )
+        path = Path(str(raw)).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Profile reference genome for taxid {key} is not a file: {path}")
+        if key in resolved:
+            raise ValueError(f"Ambiguous profile reference for taxid {key}: name one genome.")
+        resolved[key] = str(path)
+    return inputs, truth, corrector, resolved
 
 
 def at_rank(table, info, rank, taxdump=None):

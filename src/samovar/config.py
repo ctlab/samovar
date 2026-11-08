@@ -361,6 +361,7 @@ class PipelineConfig:
     annotators: List[AnnotatorConfig] = None
     profile_inputs: Optional[Dict] = None
     profile_truth: Optional[Dict] = None
+    profile_references: Optional[Dict] = None
     profile_corrector: str = "profile_ratio"
     read_length: int = 150
     coverage: int = 30
@@ -856,7 +857,12 @@ class PipelineConfig:
             config.input_dir = absolute_path(config.input_dir)
         config.output_dir = absolute_path(config.output_dir or DEFAULT_OUTPUT_DIR)
         from samovar.profiles import validate_profile_settings
-        config.profile_inputs, config.profile_truth, config.profile_corrector = validate_profile_settings(input_config)
+        (
+            config.profile_inputs,
+            config.profile_truth,
+            config.profile_corrector,
+            config.profile_references,
+        ) = validate_profile_settings(input_config)
         if config.input_dir:
             from samovar.seqio import link_or_copy_reads
 
@@ -1617,6 +1623,7 @@ class PipelineConfig:
             'max_genome_mb': float(getattr(self, "max_genome_mb", UNLIMITED_GENOME_MB)),
             'genome_skip_list': list(getattr(self, "genome_skip_list", None) or []),
             'reads_generator': self.reads_generator,
+            'profile_references': self.profile_references or {},
         }
         modes = list(self.regeneration_modes or [self.regeneration_mode])
         annotation2iss_config["table_reads_generators"] = modes
@@ -1656,6 +1663,7 @@ class PipelineConfig:
             'profile_truth': self.profile_truth,
             'profile_corrector': self.profile_corrector,
             'profile_inputs': self.profile_inputs or {},
+            'profile_references': self.profile_references or {},
             'profile_settings': annotation2iss_config,
             'scoring_flags': self.scoring_flags or "",
             'scoring_tool_flags': self.scoring_tool_flags or {},

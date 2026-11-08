@@ -271,19 +271,65 @@ def test_length_conversion_and_exact_fragment_allocation():
         read_counts(frame, info, 100, {"562": 1000})
 
 
-def test_profile_reference_selection_is_pinned_and_changes_fail(tmp_path, monkeypatch):
+def _write_fasta(path, bases):
+    path.write_text(f">{path.stem}\n" + ("ACGT" * ((bases + 3) // 4))[:bases] + "\n")
+
+
+def test_profile_reference_selection_is_pinned_and_changes_fail(tmp_path):
     from samovar.profiles import reference_lengths
-    from samovar.table2iss import _resolve_genomes_for_taxids
     source = tmp_path / "reference.fa"
-    source.write_text(">chromosome\nACGTACGT\n")
-    monkeypatch.setattr("samovar.genome_resolve.resolve_genome_file", lambda *a, **kw: str(source))
+    _write_fasta(source, 8)
     selected = tmp_path / "genomes"
-    assert reference_lengths({"562"}, selected) == {"562": 8}
-    monkeypatch.setattr("samovar.genome_resolve.resolve_genome_file", lambda *a, **kw: pytest.fail("must reuse selected reference"))
-    assert _resolve_genomes_for_taxids(["562"], str(selected), "", True) == {"562": str(source)}
-    source.write_text(">chromosome\nACGT\n")
+    config = {"profile_references": {"562": str(source)}}
+    assert reference_lengths({"562"}, selected, config) == {"562": 8}
+    pin = json.loads((selected / ".profile_references.json").read_text())
+    assert Path(pin["562"]["path"]) == source.resolve()
+    assert pin["562"]["length"] == 8
+    assert reference_lengths({"562"}, selected, config) == {"562": 8}
+    _write_fasta(source, 4)
     with pytest.raises(ValueError, match="reference changed"):
-        _resolve_genomes_for_taxids(["562"], str(selected), "", True)
+        reference_lengths({"562"}, selected, config)
+
+
+def test_explicit_genome_choice_sets_basis_conversion(tmp_path):
+    from samovar.profile_pipeline import align_truth
+    from samovar.profiles import reference_lengths
+    from samovar.scores import profile_scores
+    reads = {"562": 0.5, "4932": 0.5}
+    lengths_x = {"562": 2_000_000, "4932": 3_000_000}
+    org = {tax: reads[tax] / lengths_x[tax] for tax in reads}
+    scale = sum(org.values())
+    org = {tax: value / scale for tax, value in org.items()}
+    pred = pd.DataFrame({"taxid": list(org), "N_A": [org[tax] * 100 for tax in org]})
+    truth = pd.DataFrame({"taxid": ["562", "4932"], "N_A": [0.5, 0.5]})
+    pred_meta = metadata(dict(unit="percent", basis="organisms", taxonomy="ncbi", rank="species", normalization="classified"))
+    truth_meta = metadata(dict(unit="fraction", basis="reads", taxonomy="ncbi", rank="species", normalization="classified"))
+    genomes = {}
+    for name, n in (("562_X", 2_000_000), ("562_Y", 6_000_000), ("4932", 3_000_000)):
+        path = tmp_path / f"{name}.fna"
+        _write_fasta(path, n)
+        genomes[name] = path
+    yeast = str(genomes["4932"])
+
+    def bc(choice):
+        folder = tmp_path / f"genomes_{choice}"
+        config = {"profile_references": {"562": str(genomes[f"562_{choice}"]), "4932": yeast}}
+        converted_pred, pm, converted_truth, tm = align_truth(pred, pred_meta, truth, truth_meta, folder, config)
+        return float(profile_scores(converted_pred, converted_truth, pm, tm).bray_curtis.iloc[0])
+
+    assert bc("X") == pytest.approx(0.0)
+    assert bc("Y") == pytest.approx(0.2666666666666666)
+    pin = json.loads((tmp_path / "genomes_Y" / "genomes" / ".profile_references.json").read_text())
+    assert pin["562"]["length"] == 6_000_000
+    assert pin["562"]["path"].endswith("562_Y.fna")
+    ambiguous = tmp_path / "both"
+    ambiguous.mkdir()
+    _write_fasta(ambiguous / "562_X.fna", 20)
+    _write_fasta(ambiguous / "562_Y.fna", 60)
+    with pytest.raises(ValueError, match="Ambiguous reference genomes"):
+        reference_lengths({"562"}, ambiguous)
+    with pytest.raises(ValueError, match="profile_references"):
+        reference_lengths({"562"}, tmp_path / "empty")
 
 
 def test_incompatible_taxonomy_and_unassigned_length_are_explicit_errors():
