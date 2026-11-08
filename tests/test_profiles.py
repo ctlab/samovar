@@ -588,3 +588,45 @@ def test_motus3_native_errors_preserve_prior_output(tmp_path, monkeypatch, outco
     (db/'db_mOTU_versions').write_text('motus\t4.0.0\n')
     with pytest.raises(ValueError, match='version 3'):
         run_motus(reads, None, db, out, 's')
+
+
+def test_missing_profile_input_is_a_prepare_error(tmp_path):
+    import subprocess
+    import sys
+
+    truth = tmp_path / "truth.csv"
+    truth.write_text("taxid,N_A,N_B\n4932,1,1\n562,1,1\n9606,1,1\n", encoding="utf-8")
+    missing = tmp_path / "nope.csv"
+    cfg = tmp_path / "missing.yaml"
+    cfg.write_text(
+        "profile_inputs:\n"
+        "  ext:\n"
+        "    basis: reads\n"
+        "    kind: abundance\n"
+        "    normalization: classified\n"
+        f"    path: {missing}\n"
+        "    rank: species\n"
+        "    taxonomy: ncbi\n"
+        "    unit: counts\n"
+        "profile_truth:\n"
+        "  basis: reads\n"
+        "  kind: abundance\n"
+        "  normalization: all\n"
+        f"  path: {truth}\n"
+        "  rank: species\n"
+        "  taxonomy: ncbi\n"
+        "  unit: counts\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "bin/samovar_preprocess", "--input_config", str(cfg),
+         "--output_dir", str(tmp_path / "out"), "--endpoint", "viz_initial", "--cores", "1"],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+    )
+    text = proc.stdout + proc.stderr
+    assert proc.returncode == 1
+    assert "profile_inputs ext" in text
+    assert str(missing) in text
+    assert "Traceback" not in text

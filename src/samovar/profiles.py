@@ -476,21 +476,21 @@ def validate_profile_settings(config):
     inputs = config.get("profile_inputs") or {}
     if not isinstance(inputs, dict):
         raise ValueError("profile_inputs must map profile identities to descriptors")
-    def descriptor(value):
+    def descriptor(value, label):
         if not isinstance(value, dict) or not value.get("path"):
-            raise ValueError("Profile descriptor requires a path and explicit metadata")
+            raise ValueError(f"{label} requires a path and explicit metadata")
         result = dict(value)
         result["path"] = str(Path(result["path"]).expanduser().resolve())
         for key in ("kind", "unit", "basis", "taxonomy", "rank", "normalization"):
             if key not in result:
-                raise ValueError(f"Profile descriptor requires explicit {key}")
+                raise ValueError(f"{label} requires explicit {key}")
         metadata(result)
         if not Path(result["path"]).is_file():
-            raise FileNotFoundError(result["path"])
+            raise ValueError(f"{label}: file does not exist: {result['path']}")
         load_profile(result["path"], result)
         return result
-    inputs = {str(name): descriptor(value) for name, value in inputs.items()}
-    truth = descriptor(config["profile_truth"]) if config.get("profile_truth") else None
+    inputs = {str(name): descriptor(value, f"profile_inputs {name}") for name, value in inputs.items()}
+    truth = descriptor(config["profile_truth"], "profile_truth") if config.get("profile_truth") else None
     corrector = config.get("profile_corrector", "profile_ratio")
     if corrector not in {"profile_ratio", "none"}:
         from samovar.abundance_correctors import require_known_export
