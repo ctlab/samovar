@@ -1436,13 +1436,21 @@ def generate_iss_from_abundance_table(
     annotator_name = str(annotator_name or "full")
     from samovar.abundance import generation_sample_names
 
-    if isinstance(table, (str, os.PathLike)):
+    from samovar.profiles import load_profile, metadata, read_counts, reference_lengths, validate
+
+    info = metadata()
+    if isinstance(table, (str, os.PathLike)) and Path(str(table) + ".profile.json").is_file():
+        abundance, info = load_profile(table)
+    elif isinstance(table, (str, os.PathLike)):
         abundance = pd.read_csv(table)
     else:
         abundance = table.copy()
     from samovar.abundance import normalize_abundance_table
 
-    abundance = normalize_abundance_table(abundance)
+    abundance = normalize_abundance_table(abundance, strict=True)
+    abundance, info = validate(abundance, info)
+    if info["taxonomy"] != "ncbi" or info["kind"] != "abundance":
+        raise ValueError("ISS generation requires quantitative abundance with NCBI reference taxids")
     sample_names = generation_sample_names(abundance)
     from samovar.regenerate import cap_abundance_table, finite_max_genomes
 
@@ -1453,12 +1461,6 @@ def generate_iss_from_abundance_table(
     n_cols = _n_columns(abundance)
     if not n_cols:
         raise ValueError("Abundance table has no sample columns for read generation")
-
-    sample_tables: Dict[str, pd.DataFrame] = {}
-    for sample, col in zip(sample_names, n_cols):
-        piece = abundance[["taxid", col]].copy()
-        piece = piece.rename(columns={col: f"N_{sample}"})
-        sample_tables[str(sample)] = piece
 
     if genomes:
         from samovar.regenerate import cap_sequence
@@ -1479,6 +1481,19 @@ def generate_iss_from_abundance_table(
             True,
             max_genomes=finite_max_genomes(max_genomes),
         )
+    if total_reads is not None:
+        lengths = reference_lengths(
+            set(abundance["taxid"]), genome_dir, selected_paths=available,
+        ) if info["basis"] != "reads" else {}
+        abundance, converted = read_counts(abundance, info, total_reads, lengths)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        provenance = {**converted, "source_metadata": info}
+        (Path(output_dir) / ".profile_conversion.json").write_text(json.dumps(provenance, indent=2) + "\n")
+    elif info["unit"] != "counts" or info["basis"] != "reads" or (abundance[n_cols] % 1 != 0).any().any():
+        raise ValueError("Fractional or organism abundance requires total_reads for fragment allocation")
+    sample_tables: Dict[str, pd.DataFrame] = {}
+    for sample, col in zip(sample_names, n_cols):
+        sample_tables[str(sample)] = abundance[["taxid", col]].rename(columns={col: f"N_{sample}"})
     outputs: List[str] = []
     pool_dir = os.path.join(output_dir, ".tmp", "iss")
     os.makedirs(pool_dir, exist_ok=True)
@@ -1488,8 +1503,6 @@ def generate_iss_from_abundance_table(
         counts: Dict[str, int] = {}
         col = _n_columns(tbl)[0]
         amounts = tbl[col].tolist()
-        if total_reads:
-            amounts = _scale_amounts(amounts, int(total_reads))
         for taxid, n_reads in zip(tbl["taxid"].astype(str), amounts):
             if taxid not in available or int(n_reads) <= 0:
                 continue

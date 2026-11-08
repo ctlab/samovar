@@ -300,18 +300,21 @@ def change_basis(table, info, basis, lengths):
     return table, result
 
 
-def reference_lengths(taxids, genome_dir, config=None):
+def reference_lengths(taxids, genome_dir, config=None, *, selected_paths=None):
     """Use the same genome resolver/selection as read regeneration."""
     from samovar.table2iss import _resolve_genomes_for_taxids
     from samovar.seqio import fasta_handle
     cfg = dict(config or {})
     genome_dir = Path(genome_dir)
     genome_dir.mkdir(parents=True, exist_ok=True)
-    paths = _resolve_genomes_for_taxids(taxids, str(genome_dir), cfg.get("email", ""), True,
-                                      gzip_genomes=cfg.get("gzip_genomes", True),
-                                      reannotation_level=cfg.get("reannotation_level", "taxid"),
-                                      max_genome_mb=cfg.get("max_genome_mb"),
-                                      genome_skip_list=cfg.get("genome_skip_list"))
+    if selected_paths is None:
+        paths = _resolve_genomes_for_taxids(taxids, str(genome_dir), cfg.get("email", ""), True,
+                                          gzip_genomes=cfg.get("gzip_genomes", True),
+                                          reannotation_level=cfg.get("reannotation_level", "taxid"),
+                                          max_genome_mb=cfg.get("max_genome_mb"),
+                                          genome_skip_list=cfg.get("genome_skip_list"))
+    else:
+        paths = {tax: selected_paths[tax] for tax in taxids if tax in selected_paths}
     sizes = {}
     manifest = genome_dir / ".profile_references.json"
     saved = json.loads(manifest.read_text()) if manifest.is_file() else {}

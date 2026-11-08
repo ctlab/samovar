@@ -124,8 +124,8 @@ def _is_numeric_series(series: pd.Series) -> bool:
     return bool(coerced.notna().mean() >= 0.8)
 
 
-def normalize_abundance_table(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return ``taxid`` plus ``N_<sample>`` columns (numeric, zeros filled)."""
+def normalize_abundance_table(frame: pd.DataFrame, *, strict: bool = False) -> pd.DataFrame:
+    """Return ``taxid`` plus ``N_<sample>``; strict mode rejects invalid values."""
     if frame is None or frame.empty:
         return pd.DataFrame(columns=["taxid"])
     work = frame.copy()
@@ -151,7 +151,12 @@ def normalize_abundance_table(frame: pd.DataFrame) -> pd.DataFrame:
         n_cols = list(renamed.values())
     out = pd.DataFrame({"taxid": work[id_col].astype(str)})
     for col in n_cols:
-        out[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+        values = pd.to_numeric(work[col], errors="raise" if strict else "coerce")
+        if strict:
+            import numpy as np
+            if not np.isfinite(values.to_numpy(float)).all() or (values < 0).any():
+                raise ValueError("Abundance values must be finite and nonnegative")
+        out[col] = values.fillna(0.0)
     if n_cols:
         out = out[out[n_cols].sum(axis=1) > 0]
     return out.reset_index(drop=True)
