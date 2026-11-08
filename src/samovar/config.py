@@ -1537,7 +1537,32 @@ class PipelineConfig:
             if filtered:
                 config.regeneration_modes = filtered
                 config.regeneration_mode = filtered[0]
+        config._reject_unused_initial_ground_truth()
         return config
+
+    def _reject_unused_initial_ground_truth(self) -> None:
+        """Per-read seq→taxid truth is not a profile gold standard."""
+        raw = str(self.initial_ground_truth_table or "").strip()
+        if not raw:
+            return
+        path = Path(absolute_path(raw))
+        if not path.is_file():
+            raise ValueError(
+                f"--initial-ground-truth-table: file does not exist: {path}"
+            )
+        profile_mode = bool(
+            self.profile_inputs
+            or self.profile_truth
+            or any(a.output_level == "profile" for a in self.annotators)
+        )
+        has_read = any(a.output_level == "read" for a in self.annotators)
+        if profile_mode and not has_read:
+            raise ValueError(
+                f"--initial-ground-truth-table {path} is the per-read seq→taxid "
+                "table for the initial combine true column. This run has no "
+                "per-read initial combine, so the table would not be used. "
+                "The profile gold standard is profile_truth."
+            )
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
         """Generate all necessary config files and return their paths"""

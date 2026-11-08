@@ -701,3 +701,82 @@ def test_profile_sample_mismatch_is_a_prepare_error(tmp_path):
     inputs, truth_desc, _corrector, _refs = validate_profile_settings(block)
     assert set(inputs) == {"ext"}
     assert truth_desc["path"] == str(matched)
+
+
+def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    pred = tmp_path / "pred.csv"
+    truth = tmp_path / "truth.csv"
+    pred.write_text(
+        "taxid,N_A,N_B\n562,600,100\n4932,300,200\n9606,100,700\n",
+        encoding="utf-8",
+    )
+    truth.write_text(
+        "taxid,N_A,N_B\n562,0.6,0.1\n4932,0.3,0.2\n9606,0.1,0.7\n",
+        encoding="utf-8",
+    )
+    missing = tmp_path / "does_not_exist.tsv"
+    malformed = tmp_path / "malformed.txt"
+    malformed.write_text("only_one_column\n", encoding="utf-8")
+    fields = "kind: abundance, taxonomy: ncbi, rank: species, normalization: classified"
+    notruth = tmp_path / "cfg_notruth.yaml"
+    withtruth = tmp_path / "cfg_truth.yaml"
+    notruth.write_text(
+        f"profile_inputs:\n  ext: {{path: {pred}, unit: counts, basis: reads, {fields}}}\n",
+        encoding="utf-8",
+    )
+    withtruth.write_text(
+        notruth.read_text(encoding="utf-8")
+        + f"profile_truth: {{path: {truth}, unit: fraction, basis: reads, {fields}}}\n",
+        encoding="utf-8",
+    )
+    repo = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHON_PATH"] = sys.executable
+    env["SAMOVAR_ROOT"] = str(repo)
+
+    def prepare(name, cfg, *extra):
+        out = tmp_path / f"out_{name}"
+        proc = subprocess.run(
+            [sys.executable, str(repo / "bin" / "samovar_preprocess"),
+             "--input_config", str(cfg), "--output_dir", str(out),
+             "--endpoint", "viz_initial", "--cores", "1", *extra],
+            cwd=repo, env=env, text=True, capture_output=True,
+        )
+        return proc, out
+
+    for name, cfg, path in (
+        ("missing", notruth, missing),
+        ("malformed", notruth, malformed),
+        ("missing_with_truth", withtruth, missing),
+    ):
+        proc, out = prepare(name, cfg, "--initial-ground-truth-table", str(path))
+        text = proc.stdout + proc.stderr
+        assert proc.returncode == 1, text
+        assert "--initial-ground-truth-table" in text
+        assert str(path) in text
+        assert "Traceback" not in text
+        if path.is_file():
+            assert "would not be used" in text
+            assert "profile_truth" in text
+        else:
+            assert "file does not exist" in text
+        script = out / ".log" / "samovar.sh"
+        if script.is_file():
+            assert "--truth-table" not in script.read_text(encoding="utf-8")
+
+    proc, out = prepare("control", withtruth)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (out / ".log" / "samovar.sh").read_text(encoding="utf-8")
+    assert "--truth-table" not in script
+    exe = subprocess.run(
+        ["bash", str(repo / "bin" / "samovar_exec"), "--output_dir", str(out)],
+        cwd=repo, env=env, text=True, capture_output=True,
+    )
+    assert exe.returncode == 0, exe.stdout + exe.stderr
+    scores = pd.read_csv(out / "initial_annotations_plots" / "profile_quality_scores.csv")
+    assert set(scores["sample"]) == {"A", "B"}
+    assert scores["bray_curtis"].eq(0).all()

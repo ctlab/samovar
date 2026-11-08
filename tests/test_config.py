@@ -295,7 +295,7 @@ def test_generate_pipeline(tmp_path):
         # Check config file paths
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "_runtime-env" in pipeline_content
-        assert '[ -f "$CKPT/$1.done" ]' in pipeline_content
+        assert 'exec_control skip "$out_dir"' in pipeline_content
         assert "visualization failed; continuing" not in pipeline_content
         assert "XDG_CONFIG_HOME" in pipeline_content
         assert "samovar/env" in pipeline_content
