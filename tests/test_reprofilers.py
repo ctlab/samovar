@@ -6,7 +6,10 @@ import pytest
 from samovar.config import PipelineConfig
 from samovar.paths import write_config
 from samovar.reprofilers import (
+    EmptyReprofileError,
     apply_saved_reprofiler,
+    load_initial_tables,
+    main,
     require_known_reprofiler,
     resolve_reprofiler,
     run_reprofiler,
@@ -376,3 +379,110 @@ def test_reprofile_ignores_tax_column_suffix(tmp_path):
         out, _ = _align_ml_tables(regen, None, initial)
     assert any("taxid_kraken2" in str(item.message) for item in caught)
     assert "taxid_kraken2" in out.columns
+
+
+def _sentinel_frames():
+    regenerated = pd.DataFrame({
+        "seq": ["g0", "g1", "g2", "g3"],
+        "taxid_A": [562, 562, 1280, 1280],
+        "true": [562, 562, 1280, 1280],
+    })
+    frames = {
+        name: pd.DataFrame({
+            "seq": [f"{name}0", f"{name}1"],
+            "taxid_A": [562, 1280],
+            "true": [777, 777],
+        })
+        for name in ("S1", "S2")
+    }
+    return regenerated, frames
+
+
+def _write_initial(root, frames, combined):
+    root.mkdir()
+    if not combined:
+        for name, frame in frames.items():
+            frame.to_csv(root / f"{name}.csv", index=False)
+        return
+    pd.concat(
+        [frame.assign(sample=name) for name, frame in frames.items()],
+        ignore_index=True,
+    ).to_csv(root / "combined_annotation_table.csv", index=False)
+
+
+def test_combined_only_initial_reaches_adapter_without_copying_true(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(
+        "def reprofile(regenerated, ground_truth, initial, config):\n"
+        "    tables = {}\n"
+        "    for stem, df in (initial or {}).items():\n"
+        "        out = df.copy()\n"
+        "        out['taxid_SAMOVAR'] = 562\n"
+        "        tables[stem] = out\n"
+        "    return {'tables': tables, 'seen': sorted((initial or {}).keys())}\n"
+    )
+    import_tool(name="sentinel_lr", tool_type="ml", exec_path=str(adapter), also_repo_build=False)
+    regenerated, frames = _sentinel_frames()
+    regen_path = tmp_path / "regenerated.csv"
+    regenerated.to_csv(regen_path, index=False)
+    for combined in (False, True):
+        label = "combined" if combined else "files"
+        initial = tmp_path / label
+        _write_initial(initial, frames, combined)
+        loaded = load_initial_tables(initial)
+        assert set(loaded) == {"S1", "S2"}
+        assert "sample" not in loaded["S1"].columns
+        dest = tmp_path / f"out_{label}"
+        result = run_reprofiler(
+            "sentinel_lr",
+            regenerated_path=regen_path,
+            initial_dir=initial,
+            output_dir=dest,
+        )
+        assert result.extras["seen"] == ["S1", "S2"]
+        written = list(dest.glob("*_reprofiled.csv"))
+        assert {path.stem.split("_reprofiled")[0] for path in written} == {"S1", "S2"}
+        for path in written:
+            table = pd.read_csv(path)
+            assert set(table["true"]) == {777}
+            assert (table["taxid_SAMOVAR"] == 777).sum() == 0
+
+    empty = tmp_path / "empty.py"
+    empty.write_text(
+        "def reprofile(regenerated, ground_truth, initial, config):\n"
+        "    return {'tables': {}}\n"
+    )
+    import_tool(name="empty_lr", tool_type="ml", exec_path=str(empty), also_repo_build=False)
+    dest = tmp_path / "out_empty"
+    with pytest.raises(EmptyReprofileError, match="returned no tables"):
+        run_reprofiler(
+            "empty_lr",
+            regenerated_path=regen_path,
+            initial_dir=tmp_path / "combined",
+            output_dir=dest,
+        )
+    assert list(dest.glob("*_reprofiled.csv")) == []
+
+    cli = tmp_path / "cli"
+    rc = main([
+        "--reprofiler", "sentinel_lr",
+        "--initial", str(tmp_path / "combined"),
+        "--regenerated", str(regen_path),
+        "--output_dir", str(cli),
+    ])
+    assert rc == 0
+    rows = pd.concat(pd.read_csv(path) for path in cli.glob("*_reprofiled.csv"))
+    assert len(rows) == 4
+    assert (rows["taxid_SAMOVAR"] == 777).sum() == 0
+    failed = tmp_path / "cli_empty"
+    rc = main([
+        "--reprofiler", "empty_lr",
+        "--initial", str(tmp_path / "combined"),
+        "--regenerated", str(regen_path),
+        "--output_dir", str(failed),
+    ])
+    assert rc == 1
+    assert list(failed.glob("*_reprofiled.csv")) == []
