@@ -18,7 +18,7 @@ _has_run_dir() {
 }
 
 _find_cfg() {
-    if [ -n "${SAMOVAR_CONFIG:-}" ] && [ -f "$SAMOVAR_CONFIG" ]; then
+    if [ -n "${SAMOVAR_CONFIG:-}" ]; then
         echo "$SAMOVAR_CONFIG"
         return
     fi
@@ -153,6 +153,12 @@ else
     fi
     echo "Error: SamovaR is not installed (no ~/.config/samovar/config.json or build/config.json)."
     echo "Run ./install.sh from the SamovaR source tree."
+    exit 1
+fi
+
+if [ ! -f "$CFG" ]; then
+    printf 'Error: explicit SAMOVAR_CONFIG is not a regular file: %s\n' "$CFG" >&2
+    printf 'Run install.sh with this SAMOVAR_CONFIG to create it, or select an existing config.\n' >&2
     exit 1
 fi
 
