@@ -322,6 +322,25 @@ def _assembly_rows(annotators: Sequence[Mapping[str, str]]) -> Dict[str, List[Di
     return grouped
 
 
+def reads_generation_recorded(outdir: Path) -> bool:
+    """True when ``samovar generate`` left a script for this run."""
+    return (Path(outdir) / ".generate" / "generate.sh").is_file()
+
+
+def _supplied_reads_row(stage: str) -> Dict[str, Any]:
+    sentence = "Supplied sequencing reads were prepared for the run."
+    return {
+        "stage": stage,
+        "contract": "supplied_reads",
+        "tools": [],
+        "keys": [],
+        "mode": "",
+        "md": sentence,
+        "tex": sentence,
+        "methods": "supplied reads",
+    }
+
+
 def collect_stage_rows(outdir: Path) -> List[Dict[str, Any]]:
     """Enabled stages with tools, contract, citation keys, filled sentences."""
     configs = outdir / ".log" / "configs"
@@ -409,7 +428,9 @@ def collect_stage_rows(outdir: Path) -> List[Dict[str, Any]]:
         if contract == "annotator":
             packed = pack(stage, "annotator", annotators)
         elif contract == "reads_generator":
-            if meta and stage == "setup_reads":
+            if stage == "setup_reads" and not reads_generation_recorded(outdir):
+                packed = _supplied_reads_row(stage)
+            elif meta and stage == "setup_reads":
                 packed = pack(stage, "metagenome_generator", [{"tool": meta}])
             else:
                 packed = pack(stage, "reads_generator", [{"tool": reads}])
