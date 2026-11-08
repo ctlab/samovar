@@ -760,13 +760,21 @@ def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
         assert str(path) in text
         assert "Traceback" not in text
         if path.is_file():
-            assert "would not be used" in text
-            assert "profile_truth" in text
+            assert "not a seq→taxid table" in text
         else:
             assert "file does not exist" in text
-        script = out / ".log" / "samovar.sh"
-        if script.is_file():
-            assert "--truth-table" not in script.read_text(encoding="utf-8")
+    valid = tmp_path / "reads_mapping.tsv"
+    valid.write_text("seq\ttaxid\nr1\t562\n", encoding="utf-8")
+    proc, out = prepare("no_fastq", withtruth, "--initial-ground-truth-table", str(valid))
+    text = proc.stdout + proc.stderr
+    assert proc.returncode == 1, text
+    assert str(valid) in text
+    assert "no FASTQ" in text
+    assert "profile_truth" in text
+    assert "Traceback" not in text
+    script = out / ".log" / "samovar.sh"
+    if script.is_file():
+        assert "--truth-table" not in script.read_text(encoding="utf-8")
 
     proc, out = prepare("control", withtruth)
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -779,4 +787,50 @@ def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
     assert exe.returncode == 0, exe.stdout + exe.stderr
     scores = pd.read_csv(out / "initial_annotations_plots" / "profile_quality_scores.csv")
     assert set(scores["sample"]) == {"A", "B"}
+    assert set(scores["ground_truth"]) == {"profile_truth"}
     assert scores["bray_curtis"].eq(0).all()
+
+
+def test_three_ground_truths_score_independently(tmp_path):
+    from samovar.profile_pipeline import score
+    from samovar.profiles import metadata, write_profiles
+
+    reads = tmp_path / "initial"
+    reads.mkdir()
+    (reads / "A.fastq").write_text(
+        "@r1|taxid:9606\nACGT\n+\nIIII\n@r2|taxid:9606\nACGT\n+\nIIII\n",
+        encoding="utf-8",
+    )
+    mapping = tmp_path / "map.tsv"
+    mapping.write_text(
+        "seq\ttaxid\nr1|taxid:9606\t562\nr2|taxid:9606\t562\n",
+        encoding="utf-8",
+    )
+    truth = tmp_path / "truth.csv"
+    truth.write_text("taxid,N_A\n4932,1\n", encoding="utf-8")
+    fields = metadata({
+        "kind": "abundance", "unit": "counts", "basis": "reads",
+        "taxonomy": "ncbi", "rank": "species", "normalization": "all",
+    })
+    write_profiles(
+        tmp_path / "initial_profiles",
+        {"ext": pd.DataFrame({"taxid": ["562"], "N_A": [2.0]})},
+        {"ext": fields},
+    )
+    assert score(tmp_path, "initial", {
+        "initial_ground_truth_table": str(mapping),
+        "profile_truth": {**fields, "path": str(truth)},
+    })
+    scores = pd.read_csv(tmp_path / "initial_annotations_plots" / "profile_quality_scores.csv")
+    assert set(scores["ground_truth"]) == {"reads", "per-read-table", "profile_truth"}
+    assert set(scores["annotator"]) == {"ext"}
+    presence = truth.with_name("presence.csv")
+    presence.write_text("taxid,N_A\n562,1\n", encoding="utf-8")
+    assert score(tmp_path, "initial", {
+        "profile_truth": {**fields, "path": str(presence), "kind": "presence",
+                          "unit": "binary", "basis": "presence"},
+    })
+    present = pd.read_csv(tmp_path / "initial_annotations_plots" / "profile_quality_scores.csv")
+    present = present[present["ground_truth"] == "profile_truth"]
+    assert present["reason"].str.contains("presence gold standard").all()
+    assert present["bray_curtis"].isna().all()

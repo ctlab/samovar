@@ -1540,8 +1540,14 @@ class PipelineConfig:
         config._reject_unused_initial_ground_truth()
         return config
 
+    def _fastq_for_ground_truth(self) -> bool:
+        from samovar.seqio import list_fastq_samples
+
+        raw = str(self.input_dir or "").strip()
+        return bool(raw and list_fastq_samples(raw))
+
     def _reject_unused_initial_ground_truth(self) -> None:
-        """Per-read seq→taxid truth is not a profile gold standard."""
+        """A seq→taxid table needs a per-read combine or FASTQ sample assignment."""
         raw = str(self.initial_ground_truth_table or "").strip()
         if not raw:
             return
@@ -1550,19 +1556,21 @@ class PipelineConfig:
             raise ValueError(
                 f"--initial-ground-truth-table: file does not exist: {path}"
             )
-        profile_mode = bool(
-            self.profile_inputs
-            or self.profile_truth
-            or any(a.output_level == "profile" for a in self.annotators)
-        )
-        has_read = any(a.output_level == "read" for a in self.annotators)
-        if profile_mode and not has_read:
+        from samovar.ground_truth import iter_truth_pairs
+
+        if not any(iter_truth_pairs(path)):
             raise ValueError(
-                f"--initial-ground-truth-table {path} is the per-read seq→taxid "
-                "table for the initial combine true column. This run has no "
-                "per-read initial combine, so the table would not be used. "
-                "The profile gold standard is profile_truth."
+                f"--initial-ground-truth-table {path} is not a seq→taxid table"
             )
+        has_read = any(a.output_level == "read" for a in self.annotators)
+        if has_read or self._fastq_for_ground_truth():
+            return
+        raise ValueError(
+            f"--initial-ground-truth-table {path} is a per-read seq→taxid table. "
+            "This run has no per-read combine and no FASTQ, so read ids cannot "
+            "be assigned to samples. Genome-based per-read truth comes from read "
+            "headers. The sample-level gold standard is profile_truth."
+        )
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
         """Generate all necessary config files and return their paths"""
@@ -1686,6 +1694,7 @@ class PipelineConfig:
             'seed': self.regeneration_seed,
             'cores': int(self.cores),
             'profile_truth': self.profile_truth,
+            'initial_ground_truth_table': str(self.initial_ground_truth_table or ''),
             'profile_corrector': self.profile_corrector,
             'profile_inputs': self.profile_inputs or {},
             'profile_references': self.profile_references or {},

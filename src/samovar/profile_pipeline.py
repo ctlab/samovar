@@ -60,6 +60,18 @@ def stage_tables(root, stage):
     return tables, meta
 
 
+def _counts_table(columns):
+    return (
+        pd.DataFrame({
+            name: pd.Series(dict(counts), dtype=float)
+            for name, counts in columns.items()
+        })
+        .fillna(0)
+        .rename_axis("taxid")
+        .reset_index()
+    )
+
+
 def truth_from_reads(root, stage):
     """Aggregate actual simulator truth, not the requested pre-simulation mass."""
     from collections import Counter
@@ -84,24 +96,155 @@ def truth_from_reads(root, stage):
         columns["N_" + sample] = counts
     if not columns:
         return None
-    table = pd.DataFrame({name: pd.Series(dict(counts), dtype=float) for name, counts in columns.items()}).fillna(0).rename_axis("taxid").reset_index()
-    return table, metadata({"rank": "taxid", "normalization": "all", "source": "actual simulator read headers"})
+    table = _counts_table(columns)
+    return table, metadata({
+        "rank": "taxid",
+        "normalization": "all",
+        "source": "genome-based read headers",
+        "ground_truth": "reads",
+    })
+
+
+def _truth_from_true_column(root, stage):
+    from samovar.abundance import annotation_to_abundance_tables
+
+    frame = stage_annotation(root, stage).DataFrame
+    if frame.empty or "true" not in frame or not frame["true"].notna().all():
+        return None
+    labels = frame["true"].astype(str)
+    if not (labels.str.fullmatch(r"[0-9]+").all() and labels.ne("0").any()):
+        return None
+    truth = frame[[c for c in ("sample", "true") if c in frame]].rename(columns={"true": "taxID_truth"})
+    table = annotation_to_abundance_tables(truth)["truth"]
+    return table, metadata({
+        "rank": "taxid",
+        "normalization": "all",
+        "source": "per-read true column",
+        "ground_truth": "per-read",
+    })
+
+
+def _read_folder(root, stage):
+    root = Path(root)
+    folder = root / ("initial_trimmed" if stage == "initial" else "regenerated_trimmed")
+    if not folder.is_dir():
+        folder = root / ("initial" if stage == "initial" else "regenerated")
+    return folder
+
+
+def _truth_lookup(pairs):
+    """Same read-id matching as the annotation combiner."""
+    exact = {}
+    prefixes = {}
+    for key, tax in pairs:
+        if not key or not tax or tax == "0":
+            continue
+        exact[key] = tax
+        if len(key) > 2 and key[-2] == "/":
+            exact[key[:-2]] = tax
+        if "/" not in key and len(key) >= 4:
+            prefixes[key] = tax
+
+    def lookup(seq):
+        if seq in exact:
+            return exact[seq]
+        token = seq.split()[0]
+        if token in exact:
+            return exact[token]
+        if len(token) > 2 and token[-2] == "/" and token[:-2] in exact:
+            return exact[token[:-2]]
+        best = ""
+        for key in prefixes:
+            if len(key) <= len(best) or len(key) > len(token) or not token.startswith(key):
+                continue
+            best = key
+        return prefixes.get(best, "")
+
+    return lookup
+
+
+def profile_from_truth_table(root, table_path, stage="initial"):
+    """Count a seq→taxid table onto FASTQ samples. None when no FASTQ is present."""
+    from collections import Counter
+
+    from samovar.ground_truth import iter_truth_pairs
+    from samovar.seqio import fastq_record_id, find_fastq_mate, iter_fastq_records, list_fastq_samples
+
+    path = Path(table_path)
+    pairs = [(seq, tax) for seq, tax in iter_truth_pairs(path) if tax and tax != "0"]
+    if not pairs:
+        raise ValueError(f"{path} is not a seq→taxid ground-truth table")
+    lookup = _truth_lookup(pairs)
+    folder = _read_folder(root, stage)
+    samples = list_fastq_samples(folder)
+    if not samples:
+        return None
+    columns = {}
+    matched = 0
+    for sample in samples:
+        counts = Counter()
+        for header, _seq, _plus, _qual in iter_fastq_records(find_fastq_mate(folder, sample)):
+            tax = lookup(fastq_record_id(header))
+            if not tax:
+                continue
+            counts[tax] += 1
+            matched += 1
+        columns["N_" + sample] = counts
+    if matched == 0:
+        raise ValueError(f"No read ids under {folder} match the seq→taxid table {path}")
+    return _counts_table(columns), metadata({
+        "rank": "taxid",
+        "normalization": "all",
+        "source": "per-read seq→taxid table",
+        "ground_truth": "per-read-table",
+    })
+
+
+def ground_truths(root, stage, config):
+    """Every supplied ground truth, with genome-based reads first."""
+    read_stage = "initial" if stage == "reprofiled" else stage
+    if stage == "regenerated":
+        aggregated = _truth_from_true_column(root, "regenerated")
+        if aggregated:
+            return [("per-read", *aggregated)]
+        headers = truth_from_reads(root, "regenerated")
+        if headers:
+            table, meta = headers
+            return [("reads", table, {**meta, "ground_truth": "reads"})]
+        return []
+    found = []
+    headers = truth_from_reads(root, read_stage)
+    if headers:
+        table, meta = headers
+        found.append(("reads", table, {**meta, "ground_truth": "reads"}))
+    table_path = str(
+        config.get("initial_ground_truth_table") or config.get("truth_table") or ""
+    ).strip()
+    if table_path and read_stage == "initial":
+        mapped = profile_from_truth_table(root, table_path, "initial")
+        if mapped:
+            found.append(("per-read-table", *mapped))
+    if stage in {"initial", "reprofiled"} and config.get("profile_truth"):
+        desc = config["profile_truth"]
+        table, meta = load_profile(desc["path"], desc)
+        found.append(("profile_truth", table, {
+            **meta,
+            "ground_truth": "profile_truth",
+            "source": meta.get("source") or "profile_truth",
+        }))
+    if not found:
+        aggregated = _truth_from_true_column(root, read_stage)
+        if aggregated:
+            found.append(("per-read", *aggregated))
+    return found
 
 
 def ground_truth(root, stage, config):
-    if stage in {"initial", "reprofiled"} and config.get("profile_truth"):
-        desc = config["profile_truth"]
-        return load_profile(desc["path"], desc)
-    from samovar.abundance import annotation_to_abundance_tables
-    read_stage = "initial" if stage == "reprofiled" else stage
-    frame = stage_annotation(root, read_stage).DataFrame
-    if not frame.empty and "true" in frame and frame["true"].notna().all():
-        labels = frame["true"].astype(str)
-        if labels.str.fullmatch(r"[0-9]+").all() and labels.ne("0").any():
-            truth = frame[[c for c in ("sample", "true") if c in frame]].rename(columns={"true": "taxID_truth"})
-            table = annotation_to_abundance_tables(truth)["truth"]
-            return table, metadata({"rank": "taxid", "normalization": "all", "source": "per-read true column"})
-    return truth_from_reads(root, "initial" if stage == "reprofiled" else stage)
+    """Primary ground truth. Genome-based reads come before supplied alternatives."""
+    found = ground_truths(root, stage, config)
+    if not found:
+        return None
+    return found[0][1], found[0][2]
 
 
 def align_truth(pred, pm, truth, tm, root, config):
@@ -128,21 +271,27 @@ def score(root, stage, config):
     """Write separate profile metrics and MultiQC, leaving per-read scores alone."""
     root = Path(root)
     config = {**config.get("profile_settings", {}), **config}
-    native, _ = read_profiles(root / f"{stage}_profiles")
-    if not native and not config.get("profile_truth"):
+    native, native_meta = read_profiles(root / f"{stage}_profiles")
+    tables, metas = stage_tables(root, stage)
+    for name, table in native.items():
+        if name not in tables:
+            tables[name] = table
+            metas[name] = native_meta[name]
+    gts = ground_truths(root, stage, config)
+    if not tables or (not gts and not (native or config.get("profile_truth"))):
         return False
     from samovar.scores import profile_scores
-    tables, metas = stage_tables(root, stage)
-    gt = ground_truth(root, stage, config)
     rows = []
-    for name, table in tables.items():
-        if gt is None:
+    if not gts:
+        for name in tables:
             rows.append(pd.DataFrame([dict(annotator=name, reason="no profile gold standard available")]))
-            continue
-        pred, pm, truth, tm = align_truth(table, metas[name], *gt, root, config)
-        result = profile_scores(pred, truth, pm, tm)
-        result.insert(0, "annotator", name)
-        rows.append(result)
+    for gt_name, truth, tm in gts:
+        for name, table in tables.items():
+            pred, pm, aligned, aligned_meta = align_truth(table, metas[name], truth, tm, root, config)
+            result = profile_scores(pred, aligned, pm, aligned_meta)
+            result.insert(0, "ground_truth", gt_name)
+            result.insert(0, "annotator", name)
+            rows.append(result)
     dest = root / f"{stage}_annotations_plots"
     dest.mkdir(parents=True, exist_ok=True)
     result = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
@@ -152,13 +301,14 @@ def score(root, stage, config):
     content = dict(id=f"{stage}_profile_scores", section_name="Taxonomic profiles",
                    description="Sample-level metrics; no per-read assignments inferred.", plot_type="table", data=data)
     (dest / "profile_quality_scores_mqc.json").write_text(json.dumps(content, indent=2, allow_nan=False) + "\n")
-    if config.get("viz", {}).get("opal") and gt is not None and gt[1]["kind"] == "abundance":
+    opal_gt = next(((truth, tm) for _name, truth, tm in gts if tm.get("kind") == "abundance"), None)
+    if config.get("viz", {}).get("opal") and opal_gt is not None:
         from samovar.cami_profile import write_cami_profile
         from samovar.opal import run_opal
         profile_files = []
         gold_files = []
         for name, table in tables.items():
-            pred, pm, truth, tm = align_truth(table, metas[name], *gt, root, config)
+            pred, pm, truth, tm = align_truth(table, metas[name], *opal_gt, root, config)
             from samovar.profiles import fractions
             pred, truth = fractions(pred, pm), fractions(truth, tm)
             for col in n_sample_columns(pred):

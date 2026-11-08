@@ -464,7 +464,11 @@ def main():
         '--initial-annotation-ground-truth-table',
         dest='initial_ground_truth_table',
         default=None,
-        help='CAMI-style seq→taxid table for initial combine (true column)',
+        help=(
+            'Per-read seq→taxid table for the initial combine true column. '
+            'With FASTQ it also scores sample profiles. '
+            'Genome-based header truth remains the default.'
+        ),
     )
     parser.add_argument(
         '--regenerated-metagenomes',
