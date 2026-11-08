@@ -724,7 +724,23 @@ def _merge_existing_config(dest: Path, data: Dict[str, Any]) -> Dict[str, Any]:
         return data
     from samovar.main_config import apply_legacy_updates
 
-    return apply_legacy_updates(dict(existing), data)
+    merged = apply_legacy_updates(dict(existing), data)
+    incoming = data.get("tools") if isinstance(data, dict) else None
+    tools = merged.get("tools") if isinstance(merged, dict) else None
+    if isinstance(incoming, dict) and isinstance(tools, dict):
+        from samovar.tool_spec import bare_tool_name
+
+        wanted = {
+            bare_tool_name(key).lower()
+            for key in incoming
+            if not str(key).startswith("_") and incoming[key] is not None
+        }
+        for key in list(tools):
+            if str(key).startswith("_"):
+                continue
+            if bare_tool_name(key).lower() not in wanted:
+                tools.pop(key, None)
+    return merged
 
 
 def _publish_text(dest: Path, text: str) -> None:

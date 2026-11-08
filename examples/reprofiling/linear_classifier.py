@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Linear (logistic) reprofiler — thin wrapper around the builtin.
 
-Prefer ``samovar prepare --reprofiler linear``. Import this file only if you
-need a custom name/flags overlay::
+Prefer ``samovar prepare --reprofiler linear`` for the built-in model.
+``linear`` is reserved, so import this file under another name::
 
-    samovar tools import -n linear \\
+    samovar tools import -n linear_classifier \\
         --exec-path examples/reprofiling/linear_classifier.py --type ml \\
         --flags "--max-iter 500"
 """

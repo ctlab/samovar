@@ -856,3 +856,72 @@ def test_import_camisim_checkout(tmp_path, monkeypatch):
     (checkout / "main.nf").write_text("workflow {}\n")
     import_tool(name="camisim", tool_type="metagenome_generator", exec_path=str(checkout))
     assert tool_path(iter_tools(load_config())["camisim"], "camisim") == str(checkout)
+
+
+def test_reserved_builtin_names_are_rejected_and_remove_deletes_them(tmp_path, monkeypatch):
+    from samovar.main_config import apply_legacy_updates, set_tool
+    from samovar.paths import _merge_existing_config, load_config
+    from samovar.reprofilers import resolve_reprofiler
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    script = tmp_path / "adapter.py"
+    script.write_text(
+        "def reprofile(regenerated, ground_truth, initial, config):\n"
+        "    return {'tables': {}}\n",
+        encoding="utf-8",
+    )
+    write_config(
+        {"root": str(tmp_path), "tools": {"keep": ["", "bash", "/bin/true", "annotator"]}},
+        also_repo_build=False,
+    )
+    reserved = (
+        ("linear", "ml", "linear"),
+        ("logistic", "ml", "linear"),
+        ("rf", "reprofiler", "random_forest"),
+        ("mantel", "concordance", "mantel"),
+        ("direct", "table", "direct"),
+        ("top", "sample-filter", "top"),
+        ("bray_curtis", "sample-score", "bray_curtis"),
+        ("illumina", "reads", "art"),
+    )
+    for name, typ, canon in reserved:
+        with pytest.raises(ValueError, match="reserved") as caught:
+            import_tool(name=name, tool_type=typ, exec_path=str(script), also_repo_build=False)
+        assert canon in str(caught.value)
+        assert import_main(["-n", name, "-t", typ, "--exec-path", str(script)]) == 1
+    import_tool(name="linear_marker", tool_type="ml", exec_path=str(script), also_repo_build=False)
+    import_tool(name="iss", tool_type="reads", exec_path=str(script), also_repo_build=False)
+    assert resolve_reprofiler("linear_marker") == ("custom", "linear_marker")
+    assert resolve_reprofiler("linear") == ("builtin", "linear")
+    loaded = load_config()
+    set_tool(loaded, "linear", path=str(script), group="reprofiler")
+    set_tool(loaded, "linear:1", path=str(script), group="reprofiler")
+    write_config(loaded, also_repo_build=False)
+    assert import_main(["--remove", "-n", "linear"]) == 0
+    stored = json.loads(cfg.read_text())["tools"]
+    bare = {bare_tool_name(key) for key in stored}
+    assert "linear" not in bare
+    assert {"keep", "linear_marker", "iss"} <= bare
+    assert import_main(["--remove", "-n", "linear"]) == 1
+    memory = {
+        "tools": {
+            "linear": ["", "bash", str(script), "reprofiler"],
+            "keep": ["", "bash", "/bin/true", "annotator"],
+        }
+    }
+    apply_legacy_updates(memory, {"tools": {"linear": None}})
+    assert "linear" not in memory["tools"] and "keep" in memory["tools"]
+    disk = tmp_path / "disk.json"
+    disk.write_text(
+        json.dumps({
+            "tools": {
+                "linear": ["", "bash", str(script), "reprofiler"],
+                "keep": ["", "bash", "/bin/true", "annotator"],
+            }
+        }),
+        encoding="utf-8",
+    )
+    merged = _merge_existing_config(disk, {"tools": {"keep": memory["tools"]["keep"]}})
+    merged_bare = {bare_tool_name(key) for key in merged["tools"]}
+    assert "linear" not in merged_bare and "keep" in merged_bare

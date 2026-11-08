@@ -568,6 +568,23 @@ def lookup_tool_record(cfg: Dict[str, Any], name: str) -> Optional[Dict[str, Any
     return None
 
 
+def drop_tool(cfg: Dict[str, Any], name: str) -> None:
+    """Remove ``tools.<name>`` and any ``name:version`` key. Other tools stay."""
+    from samovar.tool_spec import bare_tool_name
+
+    tools = cfg.get("tools")
+    if not isinstance(tools, dict):
+        return
+    want = bare_tool_name(name).lower()
+    if not want:
+        return
+    for key in list(tools):
+        if str(key).startswith("_"):
+            continue
+        if bare_tool_name(key).lower() == want:
+            tools.pop(key, None)
+
+
 def set_tool(
     cfg: Dict[str, Any],
     name: str,
@@ -1185,6 +1202,9 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
             if isinstance(value, dict):
                 for name, entry in value.items():
                     if str(name).startswith("_"):
+                        continue
+                    if entry is None:
+                        drop_tool(cfg, str(name))
                         continue
                     from samovar.tool_spec import parse_tool_record
 
