@@ -1,0 +1,3 @@
+contract: concordance
+md: Annotator concordance of beta diversity {verb} assessed with {tools}{cite_md}.
+tex: Annotator concordance of beta diversity {verb} assessed with {tools}{cite_tex}.
