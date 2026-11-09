@@ -6,6 +6,7 @@ import csv
 import fcntl
 import gzip
 import os
+import shutil
 import subprocess
 import tempfile
 from contextlib import contextmanager
@@ -141,6 +142,63 @@ def _truth_table_for_cpp(truth_table: Optional[str]) -> Iterator[Optional[str]]:
         path.unlink(missing_ok=True)
 
 
+def ambiguous_sample_run_stems(samples, run_names):
+    """Pairs whose ``{sample}_{run}`` output stem is not unique.
+
+    ``sample_one`` + ``kmcp`` and ``sample`` + ``one_kmcp`` write the same
+    filename. The workflow must stop instead of assigning one sample.
+    """
+    owners = {}
+    conflicts = []
+    for sample in samples:
+        for run in run_names:
+            stem = f"{sample}_{run}"
+            owner = (str(sample), str(run))
+            previous = owners.get(stem)
+            if previous and previous != owner:
+                conflicts.append((stem, previous, owner))
+            else:
+                owners[stem] = owner
+    return conflicts
+
+
+def _mapped_batch_dir(input_dir: str):
+    """Stage ``*.out`` under ``{sample}_bN`` when the workflow recorded the sample.
+
+    Returns a temporary directory, or None when no sidecar is present and the
+    combiner may keep its filename rule. A partial map is an error.
+    """
+    folder = Path(input_dir)
+    outs = [path for path in folder.iterdir() if path.is_file() and path.name.endswith(".out")]
+    recorded = [path for path in outs if Path(str(path) + ".sample").is_file()]
+    if not recorded:
+        return None
+    missing = [path.name for path in outs if not Path(str(path) + ".sample").is_file()]
+    if missing:
+        raise ValueError(
+            "Batch combine is missing sample ids for: "
+            + ", ".join(sorted(missing))
+            + ". The annotation workflow records them; the sample is not inferred from underscores."
+        )
+    staged = tempfile.TemporaryDirectory(prefix="samovar_batch_")
+    root = Path(staged.name)
+    for index, out in enumerate(sorted(outs, key=lambda path: path.name)):
+        sample = Path(str(out) + ".sample").read_text(encoding="utf-8").strip()
+        if not sample or any(char in sample for char in "/\\\n"):
+            staged.cleanup()
+            raise ValueError(f"Invalid sample id for {out.name}: {sample!r}")
+        dot = out.name.find(".")
+        if dot < 0:
+            staged.cleanup()
+            raise ValueError(f"Annotator output has no tool suffix: {out.name}")
+        alias = root / f"{sample}_b{index}{out.name[dot:]}"
+        try:
+            os.link(out, alias)
+        except OSError:
+            shutil.copy2(out, alias)
+    return staged
+
+
 def combine_with_cpp(
     input_dir: str,
     output_dir: str,
@@ -150,10 +208,12 @@ def combine_with_cpp(
 ) -> None:
     binary = ensure_combine_binary()
     os.makedirs(output_dir, exist_ok=True)
+    staged = _mapped_batch_dir(input_dir)
+    source = staged.name if staged is not None else input_dir
     cmd = [
         str(binary),
         "-i",
-        input_dir,
+        source,
         "-o",
         output_dir,
         "-s",
@@ -161,10 +221,14 @@ def combine_with_cpp(
         "--chunk-rows",
         str(chunk_rows),
     ]
-    with _truth_table_for_cpp(truth_table) as table_path:
-        if table_path:
-            cmd.extend(["--truth-table", table_path])
-        subprocess.check_call(cmd)
+    try:
+        with _truth_table_for_cpp(truth_table) as table_path:
+            if table_path:
+                cmd.extend(["--truth-table", table_path])
+            subprocess.check_call(cmd)
+    finally:
+        if staged is not None:
+            staged.cleanup()
 
 
 def sample_name_from(filename: str, split_n: int = 1) -> str:
