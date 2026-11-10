@@ -189,6 +189,8 @@ rule profile_tool:
         mem_mb=rule_mem
     log:
         config["output_dir"] + "/logs/{sample}_{run_name}.profile.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/profile/{sample}.tsv"
     params:
         cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
             input.r1, shell_r2(wildcards, input), [output.profile, output.metadata])
@@ -217,6 +219,8 @@ rule custom_tool:
     priority: CUSTOM_PRIORITY
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/custom_{tool_name}/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, f"custom_{wildcards.tool_name}.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, f"custom_{wildcards.tool_name}.out"),
@@ -333,6 +337,8 @@ rule assembly:
     priority: annotator_priority("assembly")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/assembly/{sample}.tsv"
     params:
         environment = mapping_environment,
         written = lambda wildcards: disk_out(wildcards, "assembly.out"),
@@ -362,6 +368,8 @@ rule kraken2:
     priority: annotator_priority("kraken2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kraken2/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kraken2.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kraken2.out"),
@@ -390,6 +398,8 @@ if not BATCH_KAIJU:
         priority: annotator_priority("kaiju")
         log:
             f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
+        benchmark:
+            config["output_dir"] + "/runtime/samples/{run_name}/kaiju/{sample}.tsv"
         params:
             written = lambda wildcards: disk_out(wildcards, "kaiju.out"),
             ingest = lambda wildcards: ingest_shell(wildcards, "kaiju.out"),
@@ -456,6 +466,8 @@ rule metaphlan4:
     priority: annotator_priority("metaphlan4")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/metaphlan4/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "metaphlan4.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "metaphlan4.out"),
@@ -485,6 +497,8 @@ rule kmer2:
     priority: annotator_priority("kmer2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kmer2/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kmer2.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kmer2.out"),
@@ -512,6 +526,8 @@ rule gc:
     priority: annotator_priority("gc")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/gc/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "gc.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "gc.out"),
@@ -539,6 +555,8 @@ rule kmer_encoder:
     priority: annotator_priority("kmer_encoder")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kmer_encoder/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kmer_encoder.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kmer_encoder.out"),
@@ -566,6 +584,8 @@ rule kraken:
     priority: annotator_priority("kraken")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kraken/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kraken.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kraken.out"),
@@ -593,6 +613,8 @@ rule krakenuniq:
     priority: annotator_priority("krakenuniq")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/krakenuniq/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "krakenuniq.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "krakenuniq.out"),

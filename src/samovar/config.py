@@ -229,13 +229,22 @@ def _annotation_combine_bash(
 
 
 def _checkpoint_block(name: str, body: str) -> str:
-    """Wrap a bash snippet so it is skipped when the named checkpoint exists."""
+    """Wrap a bash snippet so it is skipped when the named checkpoint exists.
+
+    A stage that runs records its own wall clock. A skipped stage does not
+    write a zero over the previous measurement.
+    """
+    quoted = shlex.quote(name)
     return (
         f"if ckpt_skip {name}; then\n"
         f"  echo \"[checkpoint] skip {name}\"\n"
         f"else\n"
         f"  echo \"[checkpoint] run {name}\"\n"
+        f"  _samovar_rt0=$(date +%s.%N)\n"
         f"{_indent_bash(body, 2)}\n"
+        f"  _samovar_rt1=$(date +%s.%N)\n"
+        f"  \"$PYTHON_PATH\" -m samovar.runtime record-stage "
+        f"\"$out_dir\" {quoted} \"$_samovar_rt0\" \"$_samovar_rt1\"\n"
         f"  ckpt_finish {name}\n"
         f"fi\n"
     )

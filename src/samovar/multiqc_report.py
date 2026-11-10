@@ -20,6 +20,7 @@ SECTIONS = (
     "composition",
     "alpha",
     "beta",
+    "runtime",
     "feature_importance",
     "table_scores",
 )
@@ -43,6 +44,7 @@ _MISSING = {
     "composition": "no composition plot in this run",
     "alpha": "no alpha-diversity table in this run",
     "beta": "no beta-diversity table in this run",
+    "runtime": "no recorded stage or per-sample runtime in this run",
     "feature_importance": "no feature-importance plot",
     "table_scores": "no table_selection.json",
 }
@@ -224,6 +226,8 @@ def section_of(filename: str) -> str:
         return "feature_importance"
     if "correct" in name:
         return "correction"
+    if "runtime" in name:
+        return "runtime"
     if re.search(r"(^|_)alpha(_|$)|shannon|richness", name):
         return "alpha"
     if re.search(r"(^|_)beta(_|$)|pcoa|mantel", name):

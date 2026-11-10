@@ -16,7 +16,7 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from samovar.exec_control import CHECKPOINT_STEPS
 from samovar.paths import PACKAGE_VERSION
@@ -2143,6 +2143,92 @@ def _write_concordance(
     return written
 
 
+def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) -> None:
+    """Box plot of per-sample seconds and a table of means plus stage wall clocks."""
+    import csv
+
+    from samovar.multiqc_report import _matches
+    from samovar.runtime import load_sample_runtimes, load_stage_runtimes, mean_per_run
+
+    phases = settings["stages"]
+    annotators = settings["annotators"]
+    samples = [
+        row for row in load_sample_runtimes(root)
+        if row["phase"] in phases
+        and (annotators == "all" or _matches(str(row["run_name"]), annotators))
+    ]
+    stages = [
+        row for row in load_stage_runtimes(root)
+        if phases >= {"initial", "regenerated", "reprofiled"}
+        or any(token in row["stage"] for token in phases)
+    ]
+    if not samples and not stages:
+        return
+    folder = dest / "runtime"
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / "samples.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["phase", "run_name", "rule", "sample", "elapsed_s"])
+        writer.writeheader()
+        writer.writerows(samples)
+    with (folder / "stages.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["stage", "elapsed_s"])
+        writer.writeheader()
+        writer.writerows(stages)
+    means = mean_per_run(samples)
+    with (folder / "means.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["phase", "run_name", "n", "mean_elapsed_s"])
+        writer.writeheader()
+        writer.writerows(means)
+    if samples:
+        grouped: Dict[str, List[float]] = {}
+        for row in samples:
+            grouped.setdefault(f"{row['phase']}: {row['run_name']}", []).append(row["elapsed_s"])
+        payload = {
+            "id": "samovar_runtime_box",
+            "section_name": "Runtime per sample",
+            "description": (
+                "Each point is one sample's wall-clock seconds for that annotator or profiler. "
+                "The mean is the per-sample runtime. Absolute stage time is the checkpoint wall clock "
+                "and is not the sum of these points. A tool that did not run is absent, not zero."
+            ),
+            "plot_type": "box",
+            "pconfig": {
+                "id": "samovar_runtime_box_plot",
+                "title": "Elapsed seconds per sample",
+                "ylab": "Seconds",
+            },
+            "data": grouped,
+        }
+        _emit_mqc(payload, dest / "runtime_box_mqc.json")
+    rows: Dict[str, Dict[str, Any]] = {}
+    for row in means:
+        rows[str(len(rows))] = {
+            "kind": "per_sample_mean",
+            "stage": row["phase"],
+            "name": row["run_name"],
+            "n": row["n"],
+            "elapsed_s": round(row["mean_elapsed_s"], 6),
+        }
+    for row in stages:
+        rows[str(len(rows))] = {
+            "kind": "absolute",
+            "stage": row["stage"],
+            "name": row["stage"],
+            "n": "",
+            "elapsed_s": round(row["elapsed_s"], 6),
+        }
+    if rows:
+        payload = {
+            "id": "samovar_runtime_table",
+            "section_name": "Runtime summary",
+            "description": "per_sample_mean is the average sample elapsed. absolute is the stage wall clock.",
+            "plot_type": "table",
+            "pconfig": {"id": "samovar_runtime_summary", "title": "Runtime", "col1_header": "Row"},
+            "data": rows,
+        }
+        _emit_mqc(payload, dest / "runtime_summary_mqc.json")
+
+
 def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = None) -> Path:
     """Materialize ``*_mqc.*`` custom content from plot folders and run options.
 
@@ -2288,6 +2374,8 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
             "data": {name: {"present": 1} for name in corrections},
         }
         _emit_mqc(payload, dest / "correction_artifacts_mqc.json")
+    if "runtime" in enabled:
+        _write_runtime_section(root, dest, settings)
     produced = apply_selection(dest, settings)
     if corrections:
         produced.add("correction")

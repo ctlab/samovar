@@ -241,6 +241,9 @@ def test_snakemake_constant_taxid_rule(tmp_path):
     if proc.returncode != 0:
         pytest.fail(proc.stdout + "\n" + proc.stderr)
     outs = list(out_dir.glob("*.out"))
+    bench = next((out_dir / "runtime" / "samples").glob("*/*/*.tsv"))
+    header = bench.read_text(encoding="utf-8").splitlines()[0].split("\t")
+    assert "s" in header
     assert outs
     df = pd.read_table(outs[0], header=None, names=["seq", "taxID"])
     assert (df["taxID"].astype(str) == "9606").all()
