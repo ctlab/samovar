@@ -134,6 +134,7 @@ TOOL_FILES: Dict[str, List[str]] = {
     "metax": ["metax_deng2026.bib"],
     "sylph": ["sylph_shaw2024.bib"],
     "bracken": ["bracken_lu2017.bib", "kraken2_wood2019.bib"],
+    "phanta": ["phanta_pinto2023.bib", "kraken2_wood2019.bib", "bracken_lu2017.bib"],
     "motus": ["motus_ruscheweyh2022.bib"],
     "motus3": ["motus_ruscheweyh2022.bib"],
     "kmcp": ["kmcp_shen2023.bib"],
