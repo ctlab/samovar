@@ -17,6 +17,15 @@ from samovar.profiles import (at_rank, change_basis, load_profile, metadata, rea
 
 def collect(root, stage, config):
     root = Path(root)
+    if stage == "initial":
+        from samovar.exec_control import missing_profiler_reports
+
+        missing = missing_profiler_reports(root)
+        if missing:
+            raise ValueError(
+                "Missing profiler output, so the sample would be dropped from "
+                "the combined profile: " + ", ".join(missing)
+            )
     grouped, metas = {}, {}
     sources = [(p, {}) for p in sorted((root / f"{stage}_reports").glob("*.profile.csv"))]
     if stage == "initial":

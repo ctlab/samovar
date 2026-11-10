@@ -66,6 +66,48 @@ def test_profile_checkpoint_reruns_when_outputs_are_gone(tmp_path):
     assert exec_control_main(["skip", str(tmp_path), "viz_initial"]) == 1
 
 
+def test_deleted_profiler_csv_reruns_annotate_and_downstream(tmp_path):
+    reads = tmp_path / "initial_trimmed"
+    reads.mkdir(parents=True)
+    (reads / "A.fastq").write_text("@a|taxid:562\nACGT\n+\nIIII\n", encoding="utf-8")
+    (reads / "B.fastq").write_text("@b|taxid:4932\nACGT\n+\nIIII\n", encoding="utf-8")
+    configs = tmp_path / ".log" / "configs"
+    configs.mkdir(parents=True)
+    (configs / "config_init.yaml").write_text(
+        "r1_dir: " + str(reads) + "\n"
+        "run_config:\n"
+        "  - {run_name: sylph-test, output_level: profile}\n",
+        encoding="utf-8",
+    )
+    (configs / "config_scoring.yaml").write_text("{}\n", encoding="utf-8")
+    reports = tmp_path / "initial_reports"
+    reports.mkdir()
+    (reports / "B_sylph-test.profile.csv").write_text("taxid,N_B\n4932,1\n", encoding="utf-8")
+    (tmp_path / "initial_profiles").mkdir()
+    scores = tmp_path / "initial_annotations_plots"
+    scores.mkdir()
+    (scores / "profile_quality_scores.csv").write_text("annotator\n", encoding="utf-8")
+    for name in ("annotate_initial", "combine_initial", "viz_initial"):
+        mark_done(tmp_path, name)
+    assert not should_skip(tmp_path, "annotate_initial")
+    assert not should_skip(tmp_path, "combine_initial")
+    assert not should_skip(tmp_path, "viz_initial")
+    assert exec_control_main(["skip", str(tmp_path), "annotate_initial"]) == 1
+    assert not (tmp_path / ".log" / "checkpoints" / "combine_initial.done").is_file()
+    assert not (tmp_path / ".log" / "checkpoints" / "viz_initial.done").is_file()
+    (reports / "A_sylph-test.profile.csv").write_text("taxid,N_A\n562,1\n", encoding="utf-8")
+    assert should_skip(tmp_path, "annotate_initial")
+    from samovar.profile_pipeline import collect
+
+    (reports / "A_sylph-test.profile.csv").unlink()
+    try:
+        collect(tmp_path, "initial", {})
+    except ValueError as exc:
+        assert "A_sylph-test.profile.csv" in str(exc)
+    else:
+        raise AssertionError("partial profiler output was collected")
+
+
 def test_exec_restores_deleted_profile_outputs(tmp_path):
     import os
     import sys
