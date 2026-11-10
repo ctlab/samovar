@@ -35,7 +35,7 @@ IDE automatically discovers the same directory. Discovery paths follow the
 [Cursor](https://cursor.com/docs/skills) and
 [Claude Code](https://code.claude.com/docs/en/skills) documentation.
 
-In the SAMOVAR source checkout, open `example/agentic-phage/agents.md` as context
+In the SAMOVAR source checkout, open `examples/agentic-phage/agents.md` as context
 or work in its directory, then invoke `/samovar`. The skill reads that profile and
 derives the public CLI workflow; no `pipeline.sh` or copied command recipe is
 needed. The profile pins reference membership, initial depth/resources and the

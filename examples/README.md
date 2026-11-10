@@ -18,7 +18,7 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 | [logistic-correction](logistic-correction/) | Single-annotator logistic abundance correction |
 | [multiple_tables](multiple_tables/) | Scoring several abundance-table methods |
 | [phage](phage/) | Named `phage_test` indexes, then `generate` / `prepare` / `exec` twice |
-| [agentic-phage](../example/agentic-phage/agents.md) | Human profile for one `/samovar` invocation; the agent derives the CLI workflow |
+| [agentic-phage](agentic-phage/agents.md) | Human profile for one `/samovar` invocation; the agent derives the CLI workflow |
 | [assembly](assembly/) | Assembly annotator: taxID plus Feature `MAG_ID` |
 | [mag_identity](mag_identity/) | Stable MAG ids from tetranucleotide homology, or mapping onto the initial MAGs |
 | [databases_comparison](databases_comparison/) | Same community, several Kraken2 indexes |
