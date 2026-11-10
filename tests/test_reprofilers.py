@@ -68,7 +68,8 @@ def test_prepare_cores_are_training_threads(tmp_path):
     assert repro["gpu"] is False
     assert export["cores"] == 6
     script = Path(config.generate_pipeline(str(tmp_path))).read_text()
-    assert "--cores 6" in script
+    assert 'export SAMOVAR_CORES="6"' in script
+    assert '--cores "$SAMOVAR_CORES"' in script
     regenerated, ground, initial = _tiny_tables()
     result = run_reprofiler(
         "rf",
@@ -91,7 +92,8 @@ def test_prepare_gpu_flag_reaches_ml(tmp_path):
     assert repro["gpu"] is True
     script = Path(config.generate_pipeline(str(tmp_path))).read_text()
     assert "--gpu" in script
-    assert "--cores 2" in script
+    assert 'export SAMOVAR_CORES="2"' in script
+    assert '--cores "$SAMOVAR_CORES"' in script
 
 
 def test_train_models_single_method():

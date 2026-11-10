@@ -48,6 +48,114 @@ def available_mem_mb() -> int:
     return max(1, kb // 1024)
 
 
+def _positive_int(value: object) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text.isdigit():
+        return None
+    number = int(text)
+    return number if number > 0 else None
+
+
+def _cgroup_text(name: str) -> Optional[str]:
+    relatives = []
+    try:
+        lines = Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        parts = line.split(":", 2)
+        if len(parts) == 3 and (parts[0] == "0" or parts[1] in {"memory", "cpu", "cpuset"}):
+            relatives.append(parts[2].strip("/"))
+    candidates = []
+    for rel in relatives:
+        candidates.append(Path("/sys/fs/cgroup") / rel / name)
+        candidates.append(Path("/sys/fs/cgroup/memory") / rel / name)
+        candidates.append(Path("/sys/fs/cgroup/cpu") / rel / name)
+        candidates.append(Path("/sys/fs/cgroup/cpuset") / rel / name)
+    candidates.append(Path("/sys/fs/cgroup") / name)
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return None
+
+
+def _cpu_list_count(text: str) -> Optional[int]:
+    total = 0
+    for part in str(text or "").split(","):
+        piece = part.strip()
+        if not piece:
+            continue
+        if "-" in piece:
+            left, right = piece.split("-", 1)
+            if left.strip().isdigit() and right.strip().isdigit():
+                total += int(right) - int(left) + 1
+        elif piece.isdigit():
+            total += 1
+    return total or None
+
+
+def _slurm_cpus() -> list[int]:
+    found = []
+    for key in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"):
+        number = _positive_int(os.environ.get(key, ""))
+        if number:
+            found.append(number)
+    match = re.match(r"(\d+)", os.environ.get("SLURM_JOB_CPUS_PER_NODE", "").strip())
+    if match:
+        found.append(int(match.group(1)))
+    return found
+
+
+def available_cores() -> int:
+    """CPUs this process may use: min(host, affinity, Slurm, cgroup)."""
+    limits = [max(1, int(os.cpu_count() or 1))]
+    try:
+        limits.append(max(1, len(os.sched_getaffinity(0))))
+    except (AttributeError, OSError):
+        pass
+    limits.extend(_slurm_cpus())
+    cpu_max = _cgroup_text("cpu.max")
+    if cpu_max:
+        quota, _, period = cpu_max.partition(" ")
+        if quota.isdigit() and period.strip().isdigit() and int(period) > 0:
+            limits.append(max(1, int(quota) // int(period)))
+    cpuset = _cgroup_text("cpuset.cpus") or _cgroup_text("cpuset.effective_cpus")
+    if cpuset:
+        count = _cpu_list_count(cpuset)
+        if count:
+            limits.append(count)
+    return max(1, min(limits))
+
+
+def _external_mem_mb() -> list[int]:
+    """Hard allocation caps. Unlimited cgroup values are omitted."""
+    caps = []
+    per_node = _positive_int(os.environ.get("SLURM_MEM_PER_NODE", ""))
+    if per_node:
+        caps.append(per_node)
+    per_cpu = _positive_int(os.environ.get("SLURM_MEM_PER_CPU", ""))
+    if per_cpu:
+        cpus = min(_slurm_cpus()) if _slurm_cpus() else available_cores()
+        caps.append(per_cpu * cpus)
+    host_bytes = available_mem_mb() * 1024 * 1024
+    for name in ("memory.max", "memory.limit_in_bytes"):
+        raw = _cgroup_text(name)
+        if not raw or raw == "max":
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value <= 0 or value >= max(host_bytes * 2, 1 << 60):
+            continue
+        caps.append(max(1, value // (1024 * 1024)))
+        break
+    return caps
+
+
 _MEM_UNITS = {"K": 1 / 1024, "M": 1, "G": 1024, "T": 1024 * 1024}
 _MEM_TEXT = re.compile(r"^(\d+(?:\.\d+)?)([KMGT])?B?$")
 
@@ -92,25 +200,36 @@ def add_mem_argument(parser: argparse.ArgumentParser, *, default=None) -> None:
         help=(
             "Maximum memory for this run, as in SLURM --mem. "
             "A bare number is MiB; K, M, G, and T are accepted (16G). "
-            "Default: 85%% of available RAM."
+            "Default: the minimum of 85%% of available RAM, Slurm, and a finite cgroup limit."
         ),
     )
 
 
 def memory_limit_mb(requested: Optional[int] = None) -> int:
-    """Ceiling in MiB. Explicit value, else ``SAMOVAR_MEM_MB``, else 85% of RAM."""
+    """Ceiling in MiB.
+
+    An explicit value or ``SAMOVAR_MEM_MB`` wins over 85% of host RAM. Slurm
+    and a finite cgroup limit then cap whichever number was chosen.
+    """
+    chosen = None
     if requested is not None:
         try:
-            return max(1, int(requested))
+            chosen = max(1, int(requested))
         except (TypeError, ValueError):
-            pass
-    raw = os.environ.get("SAMOVAR_MEM_MB", "").strip()
-    if raw:
-        try:
-            return max(1, int(raw))
-        except ValueError:
-            pass
-    return max(1, int(available_mem_mb() * _MEM_FRACTION))
+            chosen = None
+    if chosen is None:
+        raw = os.environ.get("SAMOVAR_MEM_MB", "").strip()
+        if raw:
+            try:
+                chosen = max(1, int(raw))
+            except ValueError:
+                chosen = None
+    if chosen is None:
+        chosen = max(1, int(available_mem_mb() * _MEM_FRACTION))
+    external = _external_mem_mb()
+    if external:
+        chosen = min(chosen, min(external))
+    return max(1, chosen)
 
 
 def rss_mb() -> int:

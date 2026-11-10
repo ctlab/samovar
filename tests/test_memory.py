@@ -20,6 +20,45 @@ from samovar.reprofiling import predict_taxid, train_models, preprocess_data
 import pytest
 
 
+def test_allocation_caps_memory_and_cores(monkeypatch):
+    from samovar.memory import available_cores, memory_limit_mb
+
+    monkeypatch.setattr("samovar.memory.available_mem_mb", lambda: 16_000)
+    monkeypatch.setattr("samovar.memory._cgroup_text", lambda name: None)
+    monkeypatch.delenv("SAMOVAR_MEM_MB", raising=False)
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", "8192")
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    assert memory_limit_mb() == 8192
+    assert memory_limit_mb(1000) == 1000
+    assert memory_limit_mb(20_000) == 8192
+    monkeypatch.delenv("SLURM_MEM_PER_NODE", raising=False)
+    monkeypatch.setenv("SLURM_MEM_PER_CPU", "1024")
+    assert memory_limit_mb() == 2048
+    monkeypatch.delenv("SLURM_MEM_PER_CPU", raising=False)
+    monkeypatch.setattr("samovar.memory._cgroup_text", lambda name: "4294967296" if name == "memory.max" else None)
+    assert memory_limit_mb() == 4096
+    monkeypatch.setattr("samovar.memory._cgroup_text", lambda name: "max" if name == "memory.max" else None)
+    assert memory_limit_mb() == int(16_000 * 0.85)
+
+    monkeypatch.setattr("samovar.memory.os.cpu_count", lambda: 8)
+    monkeypatch.setattr("samovar.memory.os.sched_getaffinity", lambda _pid: set(range(8)))
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "4")
+    assert available_cores() == 2
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
+    monkeypatch.delenv("SLURM_CPUS_ON_NODE", raising=False)
+
+    def cgroup(name):
+        if name == "cpu.max":
+            return "200000 100000"
+        if name == "cpuset.cpus":
+            return "0-1,4"
+        return None
+
+    monkeypatch.setattr("samovar.memory._cgroup_text", cgroup)
+    assert available_cores() == 2
+
+
 def test_parse_mem_matches_slurm():
     assert parse_mem("16000") == 16000
     assert parse_mem("16G") == 16 * 1024

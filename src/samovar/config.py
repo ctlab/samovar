@@ -505,6 +505,9 @@ class PipelineConfig:
                 config.cores = int(custom_cli["--cores"])
             except (TypeError, ValueError):
                 pass
+        from samovar.memory import available_cores
+
+        config.cores = max(1, min(int(config.cores or 1), available_cores()))
         config.max_genomes = parse_max_genomes(
             getattr(args, "max_genomes", None),
             default_from_env=getattr(args, "max_genomes", None) is None,
@@ -1964,6 +1967,10 @@ export NCBI_EMAIL="${{NCBI_EMAIL:-{email}}}"
 # Prefer the current install env (other-HPC reinstall) when present.
 {env_snippet}{runtime_snippet}export PYTHONPATH="{src}${{PYTHONPATH:+:$PYTHONPATH}}"
 export SAMOVAR_CORES="{int(self.cores)}"
+DETECTED_CORES="$("$PYTHON_PATH" -c 'from samovar.memory import available_cores; print(available_cores())')"
+if [ "$DETECTED_CORES" -lt "$SAMOVAR_CORES" ]; then
+  export SAMOVAR_CORES="$DETECTED_CORES"
+fi
 # --mem from prepare (SLURM --mem, MiB). SAMOVAR_MEM_MB still overrides it.
 PREPARED_MEM="{int(self.mem_mb or 0)}"
 if [ -n "${{SAMOVAR_MEM_MB:-}}" ]; then
@@ -2053,7 +2060,7 @@ fi
             f""""$SNAKEMAKE" -s {shlex.quote(str(wf / 'annotators' / 'Snakefile'))} \\
     --configfile {configs['init_annotator']} \\
     --directory "$out_dir" \\
-    --cores {self.cores} \\
+    --cores "$SAMOVAR_CORES" \\
     --resources mem_mb=$MEM_MB""",
         )
 
@@ -2153,7 +2160,7 @@ mkdir -p "$out_dir/genomes"
             f""""$SNAKEMAKE" -s {shlex.quote(str(wf / 'abundance2iss' / 'Snakefile'))} \\
     --configfile {configs['abundance2iss']} \\
     --directory "$out_dir" \\
-    --cores {self.cores} \\
+    --cores "$SAMOVAR_CORES" \\
     --resources mem_mb=$MEM_MB
 "$PYTHON_PATH" -m samovar.exec_control cleanup "$out_dir" || true""",
         )
@@ -2189,7 +2196,7 @@ fi
             f""""$SNAKEMAKE" -s {shlex.quote(str(wf / 'annotators' / 'Snakefile'))} \\
     --configfile {configs['reannotate']} \\
     --directory "$out_dir" \\
-    --cores {self.cores} \\
+    --cores "$SAMOVAR_CORES" \\
     --resources mem_mb=$MEM_MB""",
         )
 
@@ -2224,7 +2231,7 @@ fi
     --output_dir "$out_dir/reprofiled_annotations" \\
     --reprofiler {self.reprofiler} \\
     --config {configs['reprofiling']} \\
-    --cores {self.cores} --mem-mb "$MEM_MB"{gpu_line} \\
+    --cores "$SAMOVAR_CORES" --mem-mb "$MEM_MB"{gpu_line} \\
     --seed {self.regeneration_seed} \\
     "${{FEATURE_ARG[@]}}"
 """
