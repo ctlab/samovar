@@ -186,6 +186,44 @@ def test_stages_and_overrides_split():
     assert extra == ["generate.n_samples=3"]
 
 
+def test_reproduce_resolves_relative_inputs_from_recorded_cwd(tmp_path, monkeypatch, capsys):
+    recorded = tmp_path / "proj"
+    recorded.mkdir()
+    (recorded / "frac.csv").write_text("taxid,N_S1\n562,1\n", encoding="utf-8")
+    (recorded / "genomes").mkdir()
+    out = recorded / "run"
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    monkeypatch.chdir(recorded)
+    record_stage(
+        "generate",
+        str(out),
+        args=SimpleNamespace(output_dir="run", genome_dir="genomes", abundance_table="frac.csv"),
+        argv=["--genome_dir", "genomes", "-i", "frac.csv", "--output_dir", "run", "--cores", "1"],
+    )
+    from samovar.repro import resolve_recorded_inputs
+
+    _argv, err = resolve_recorded_inputs(["-i", "frac.csv"], "")
+    assert err and "no runtime cwd" in err
+    monkeypatch.chdir(tmp_path)
+    code = reproduce(out, "./rerun", install=False, dry_run=True)
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+    genomes = str((recorded / "genomes").resolve())
+    table = str((recorded / "frac.csv").resolve())
+    assert f"--genome_dir {genomes}" in captured.out
+    assert f"-i {table}" in captured.out
+    assert "--output_dir ./rerun" in captured.out
+    assert "Traceback" not in captured.err
+    (recorded / "frac.csv").unlink()
+    code = reproduce(out, "./rerun", install=False, dry_run=True)
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "recorded input not found" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_compare_tools_ok_when_versions_match():
     snap = empty_snapshot()
     snap.tools = {
