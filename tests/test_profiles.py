@@ -786,6 +786,43 @@ def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
     assert "--truth-table" not in script
 
 
+def test_reprofiled_per_read_uses_the_initial_sample_id(tmp_path, monkeypatch):
+    import samovar.profile_pipeline as pipe
+    from samovar.profiles import metadata, write_profiles
+
+    monkeypatch.setattr(
+        pipe, "at_rank",
+        lambda table, info, rank, taxdump=None: (table, {**info, "rank": rank}),
+    )
+    reads = tmp_path / "initial"
+    reads.mkdir()
+    (reads / "A.fastq").write_text(
+        "@r1|taxid:562\nACGT\n+\nIIII\n@r2|taxid:562\nACGT\n+\nIIII\n",
+        encoding="utf-8",
+    )
+    ann = tmp_path / "reprofiled_annotations"
+    ann.mkdir()
+    pd.DataFrame({"seq": ["r1", "r2"], "taxID_kraken2_0": [562, 562]}).to_csv(
+        ann / "A_reprofiled.csv", index=False
+    )
+    fields = metadata({
+        "kind": "abundance", "unit": "counts", "basis": "reads",
+        "taxonomy": "ncbi", "rank": "species", "normalization": "all",
+    })
+    write_profiles(
+        tmp_path / "reprofiled_profiles",
+        {"ext": pd.DataFrame({"taxid": ["562"], "N_A": [2.0]})},
+        {"ext": fields},
+    )
+    tables, _meta = pipe.stage_tables(tmp_path, "reprofiled")
+    assert list(tables["kraken2"].columns) == ["taxid", "N_A"]
+    assert pipe.score(tmp_path, "reprofiled", {})
+    scores = pd.read_csv(tmp_path / "reprofiled_annotations_plots" / "profile_quality_scores.csv")
+    assert set(scores["sample"]) == {"A"}
+    assert set(scores["annotator"]) == {"kraken2", "ext"}
+    assert set(scores["ground_truth"]) == {"reads"}
+
+
 def test_three_ground_truths_score_independently(tmp_path):
     from samovar.profile_pipeline import score
     from samovar.profiles import metadata, write_profiles

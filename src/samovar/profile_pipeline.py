@@ -60,12 +60,35 @@ def stage_annotation(root, stage):
     return obj
 
 
+def _drop_reprofiled_suffix(table, meta):
+    """``A_reprofiled.csv`` is sample A, the same id as the initial reads."""
+    rename = {
+        col: col[: -len("_reprofiled")]
+        for col in n_sample_columns(table)
+        if str(col).endswith("_reprofiled")
+    }
+    if not rename:
+        return table, meta
+    table = table.rename(columns=rename)
+    raw = dict((meta or {}).get("unassigned_by_sample") or {})
+    if not raw:
+        return table, meta
+    meta = dict(meta)
+    meta["unassigned_by_sample"] = {
+        (key[: -len("_reprofiled")] if str(key).endswith("_reprofiled") else key): value
+        for key, value in raw.items()
+    }
+    return table, meta
+
+
 def stage_tables(root, stage):
     ann = stage_annotation(root, stage)
     tables = input_to_abundance_tables(ann)
     meta = dict(ann.profile_metadata)
     for name in tables:
         meta.setdefault(name, metadata({"rank": "taxid"}))
+        if stage == "reprofiled":
+            tables[name], meta[name] = _drop_reprofiled_suffix(tables[name], meta[name])
     return tables, meta
 
 
