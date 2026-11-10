@@ -70,6 +70,11 @@ if _conflicts:
         + detail
     )
 
+# A run name may contain "_". Without this, A_kraken2_x is sample A_kraken2, run x.
+wildcard_constraints:
+    sample="(?:" + "|".join(re.escape(s) for s in SAMPLES) + ")",
+    run_name="(?:" + "|".join(re.escape(n) for n in ANNOTATORS) + ")"
+
 MACHINE_CORES = max(1, int(config.get("cores") or os.environ.get("SAMOVAR_CORES") or 1))
 MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None
 

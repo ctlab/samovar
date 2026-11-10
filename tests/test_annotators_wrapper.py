@@ -245,6 +245,59 @@ def test_snakemake_constant_taxid_rule(tmp_path):
     df = pd.read_table(outs[0], header=None, names=["seq", "taxID"])
     assert (df["taxID"].astype(str) == "9606").all()
     assert len(df) == 4
+
+
+def test_builtin_rule_keeps_underscore_run_name(tmp_path):
+    """rule kraken2 must not parse A_kraken2_x as sample A_kraken2."""
+    pytest.importorskip("snakemake")
+    import subprocess
+
+    from samovar.paths import command_argv, resolve_executable, workflow_dir
+
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    _tiny_fastq(reads / "A.fastq", n=1, prefix="a")
+    _tiny_fastq(reads / "sample_one.fastq", n=1, prefix="b")
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        yaml.dump(
+            {
+                "r1_dir": str(reads),
+                "r2_dir": str(reads),
+                "output_dir": str(tmp_path / "reports"),
+                "cores": 1,
+                "run_config": [
+                    {
+                        "run_name": "kraken2_x",
+                        "type": "kraken2",
+                        "cmd": "kraken2",
+                        "db_path": str(tmp_path / "db"),
+                        "threads": 1,
+                    }
+                ],
+            }
+        )
+    )
+    result = subprocess.run(
+        [
+            *command_argv(resolve_executable("snakemake", tool_key="snakemake")),
+            "-s",
+            str(Path(workflow_dir()) / "annotators" / "Snakefile"),
+            "--configfile",
+            str(cfg),
+            "--cores",
+            "1",
+            "--dry-run",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    text = result.stdout + result.stderr
+    assert result.returncode == 0, text
+    assert "sample=A, run_name=kraken2_x" in text
+    assert "sample=sample_one, run_name=kraken2_x" in text
+    assert "sample=A_kraken2" not in text
 @pytest.mark.parametrize("paired", [False, True])
 def test_sylph_profile_command_uses_config_and_quoted_paths(tmp_path, monkeypatch, paired):
     import shlex
