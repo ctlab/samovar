@@ -786,6 +786,23 @@ def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
     assert "--truth-table" not in script
 
 
+def test_taxid_profiles_score_without_a_taxdump(tmp_path, monkeypatch):
+    import samovar.profile_pipeline as pipe
+
+    monkeypatch.setattr(pipe, "_taxdump_present", lambda taxdump: False)
+    pred = pd.DataFrame({"taxid": ["562"], "N_A": [2.0]})
+    truth = pd.DataFrame({"taxid": ["562"], "N_A": [2.0]})
+    info = metadata({"rank": "taxid", "normalization": "all"})
+    converted_pred, pm, converted_truth, tm = pipe.align_truth(
+        pred, info, truth, info, tmp_path, {}
+    )
+    assert pm["rank"] == "taxid"
+    assert tm["rank"] == "taxid"
+    assert list(converted_pred["taxid"]) == ["562"]
+    scores = profile_scores(converted_pred, converted_truth, pm, tm)
+    assert float(scores["l1_norm"].iloc[0]) == 0.0
+
+
 def test_reprofiled_per_read_uses_the_initial_sample_id(tmp_path, monkeypatch):
     import samovar.profile_pipeline as pipe
     from samovar.profiles import metadata, write_profiles

@@ -279,11 +279,26 @@ def ground_truth(root, stage, config):
     return found[0][1], found[0][2]
 
 
+def _taxdump_present(taxdump) -> bool:
+    from samovar.kreport import resolve_taxdump_files
+
+    try:
+        resolve_taxdump_files(taxdump or None)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def align_truth(pred, pm, truth, tm, root, config):
     if pm["taxonomy"] != tm["taxonomy"]:
         raise ValueError(f"Incompatible profile taxonomy: {pm['taxonomy']} vs {tm['taxonomy']}; supply an explicit taxonomy mapping")
-    rank = pm["rank"] if pm["rank"] != "taxid" else "species"
-    taxdump = config.get("taxdump")
+    taxdump = config.get("taxdump") or None
+    # Per-read tables and read-header truth are both rank taxid. Species
+    # rollup needs a taxdump; without one, compare the taxids as stored.
+    if pm["rank"] == "taxid" and tm["rank"] == "taxid" and not _taxdump_present(taxdump):
+        rank = "taxid"
+    else:
+        rank = pm["rank"] if pm["rank"] != "taxid" else "species"
     pred, pm = at_rank(pred, pm, rank, taxdump)
     truth, tm = at_rank(truth, tm, rank, taxdump)
     if tm["kind"] != "presence" and pm["normalization"] == "classified" and tm["normalization"] == "all":
