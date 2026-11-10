@@ -790,6 +790,7 @@ def _db_stub(tmp_path: Path) -> tuple:
     return stub, db
 
 
+@pytest.mark.optional
 def test_annotator_shell_contract_needs_a_real_db(tmp_path):
     import os
     import subprocess

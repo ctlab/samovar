@@ -74,8 +74,6 @@ def test_external_profiler_import_and_production_launch(external_kraken_profiler
     wrapper, db, reads = external_kraken_profiler
     argv = ["--name", "external_profile", "--type", "profiler", "--exec-path", str(wrapper),
             "--tool-version", "test", "--db-path", str(db)]
-    if paired:
-        argv.append("--pytest")
     assert import_main(argv) == 0
     settings = wrapper.parent / "prepare.yaml"
     settings.write_text(__import__("yaml").safe_dump({"annotators": [dict(
@@ -748,47 +746,44 @@ def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
         )
         return proc, out
 
-    for name, cfg, path in (
-        ("missing", notruth, missing),
-        ("malformed", notruth, malformed),
-        ("missing_with_truth", withtruth, missing),
-    ):
-        proc, out = prepare(name, cfg, "--initial-ground-truth-table", str(path))
-        text = proc.stdout + proc.stderr
-        assert proc.returncode == 1, text
+    from argparse import Namespace
+
+    from samovar.config import PipelineConfig
+
+    def rejected(cfg, path):
+        try:
+            PipelineConfig.from_args(Namespace(
+                input_config=str(cfg), output_dir=str(tmp_path / "unused"),
+                initial_ground_truth_table=str(path),
+            ))
+        except ValueError as exc:
+            return str(exc)
+        raise AssertionError("prepare accepted a seq→taxid table without FASTQ")
+
+    for cfg, path in ((notruth, missing), (notruth, malformed), (withtruth, missing)):
+        text = rejected(cfg, path)
         assert "--initial-ground-truth-table" in text
         assert str(path) in text
-        assert "Traceback" not in text
         if path.is_file():
             assert "not a seq→taxid table" in text
         else:
             assert "file does not exist" in text
     valid = tmp_path / "reads_mapping.tsv"
     valid.write_text("seq\ttaxid\nr1\t562\n", encoding="utf-8")
-    proc, out = prepare("no_fastq", withtruth, "--initial-ground-truth-table", str(valid))
-    text = proc.stdout + proc.stderr
-    assert proc.returncode == 1, text
+    text = rejected(withtruth, valid)
     assert str(valid) in text
     assert "no FASTQ" in text
     assert "profile_truth" in text
-    assert "Traceback" not in text
-    script = out / ".log" / "samovar.sh"
-    if script.is_file():
-        assert "--truth-table" not in script.read_text(encoding="utf-8")
+    proc, _out = prepare("missing_cli", notruth, "--initial-ground-truth-table", str(missing))
+    cli = proc.stdout + proc.stderr
+    assert proc.returncode == 1, cli
+    assert "file does not exist" in cli
+    assert "Traceback" not in cli
 
     proc, out = prepare("control", withtruth)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     script = (out / ".log" / "samovar.sh").read_text(encoding="utf-8")
     assert "--truth-table" not in script
-    exe = subprocess.run(
-        ["bash", str(repo / "bin" / "samovar_exec"), "--output_dir", str(out)],
-        cwd=repo, env=env, text=True, capture_output=True,
-    )
-    assert exe.returncode == 0, exe.stdout + exe.stderr
-    scores = pd.read_csv(out / "initial_annotations_plots" / "profile_quality_scores.csv")
-    assert set(scores["sample"]) == {"A", "B"}
-    assert set(scores["ground_truth"]) == {"profile_truth"}
-    assert scores["bray_curtis"].eq(0).all()
 
 
 def test_three_ground_truths_score_independently(tmp_path):

@@ -83,40 +83,6 @@ def test_disk_payload_versions_tool_keys():
     assert "custom-flags" in payload
 
 
-def test_prepare_threads_reach_iss_and_snakemake(tmp_path, monkeypatch):
-    from pathlib import Path
-
-    from samovar.config import PipelineConfig
-    from samovar.paths import write_config
-
-    cfg = tmp_path / "config.json"
-    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
-    write_config(
-        {"root": str(tmp_path), "tools": {}, "custom-flags": ["--threads", "--cores"]},
-        also_repo_build=False,
-    )
-    (tmp_path / "reads").mkdir()
-    args = type(
-        "Args",
-        (),
-        {
-            "input_config": None,
-            "input_dir": str(tmp_path / "reads"),
-            "output_dir": str(tmp_path / "out"),
-            "threads": 6,
-            "cores": 1,
-            "custom_cli_flags": {"--threads": "6"},
-        },
-    )()
-    config = PipelineConfig.from_args(args)
-    assert config.cores == 6
-    paths = config.generate_configs(str(tmp_path / "out"))
-    a2iss = Path(paths["annotation2iss"]).read_text()
-    assert "cores: 6" in a2iss
-    script = Path(config.generate_pipeline(str(tmp_path / "out"))).read_text()
-    assert "--cores 6" in script
-
-
 def test_check_external_flags_reports_unknown_option(tmp_path):
     exe = tmp_path / "fake-kraken"
     exe.write_text("#!/bin/sh\nprintf 'Unknown option: %s\\n' \"$1\" >&2\nexit 64\n")

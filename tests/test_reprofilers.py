@@ -64,6 +64,8 @@ def test_prepare_cores_are_training_threads(tmp_path):
     repro = yaml.safe_load(Path(paths["reprofiling"]).read_text())
     export = yaml.safe_load(Path(paths["export"]).read_text())
     assert repro["cores"] == 6
+    iss = yaml.safe_load(Path(paths["annotation2iss"]).read_text())
+    assert iss["cores"] == 6
     assert repro["reprofiler"] == "random_forest"
     assert repro["gpu"] is False
     assert export["cores"] == 6

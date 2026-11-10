@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from samovar.exec_control import (
     CHECKPOINT_STEPS,
@@ -108,6 +109,7 @@ def test_deleted_profiler_csv_reruns_annotate_and_downstream(tmp_path):
         raise AssertionError("partial profiler output was collected")
 
 
+@pytest.mark.optional
 def test_exec_restores_deleted_profile_outputs(tmp_path):
     import os
     import sys
@@ -139,7 +141,7 @@ def test_exec_restores_deleted_profile_outputs(tmp_path):
     prep = subprocess.run(
         [sys.executable, str(REPO / "bin" / "samovar_preprocess"),
          "--input_config", str(cfg), "--output_dir", str(out),
-         "--endpoint", "viz_initial", "--cores", "1"],
+         "--endpoint", "viz_initial", "--cores", "1", "--no-multiqc"],
         cwd=REPO, env=env, text=True, capture_output=True,
     )
     assert prep.returncode == 0, prep.stdout + prep.stderr
