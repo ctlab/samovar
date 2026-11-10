@@ -803,6 +803,43 @@ def test_taxid_profiles_score_without_a_taxdump(tmp_path, monkeypatch):
     assert float(scores["l1_norm"].iloc[0]) == 0.0
 
 
+def test_empty_fastq_sample_scores_as_empty_abundance(tmp_path, monkeypatch):
+    import samovar.profile_pipeline as pipe
+
+    monkeypatch.setattr(
+        pipe, "at_rank",
+        lambda table, info, rank, taxdump=None: (table, {**info, "rank": rank}),
+    )
+    reads = tmp_path / "initial"
+    reads.mkdir()
+    (reads / "A.fastq").write_text("@r1|taxid:562\nACGT\n+\nIIII\n", encoding="utf-8")
+    (reads / "E.fastq").write_text("", encoding="utf-8")
+    ann = tmp_path / "initial_annotations"
+    ann.mkdir()
+    pd.DataFrame({"seq": ["r1"], "taxID_kraken2_0": [562]}).to_csv(ann / "A.csv", index=False)
+    assert pipe.score(tmp_path, "initial", {})
+    scores = pd.read_csv(tmp_path / "initial_annotations_plots" / "profile_quality_scores.csv")
+    assert set(scores["sample"]) == {"A", "E"}
+    empty = scores.loc[scores["sample"] == "E"].iloc[0]
+    assert empty["reason"] == "empty abundance has no quantitative composition"
+    assert float(empty["l1_norm"]) != float(empty["l1_norm"])
+
+    omitted = tmp_path / "omitted"
+    (omitted / "initial").mkdir(parents=True)
+    (omitted / "initial" / "A.fastq").write_text(
+        "@r1|taxid:562\nACGT\n+\nIIII\n", encoding="utf-8"
+    )
+    (omitted / "initial" / "B.fastq").write_text(
+        "@r2|taxid:562\nACGT\n+\nIIII\n", encoding="utf-8"
+    )
+    (omitted / "initial_annotations").mkdir()
+    pd.DataFrame({"seq": ["r1"], "taxID_kraken2_0": [562]}).to_csv(
+        omitted / "initial_annotations" / "A.csv", index=False
+    )
+    with pytest.raises(ValueError, match="sample identities differ"):
+        pipe.score(omitted, "initial", {})
+
+
 def test_reprofiled_per_read_uses_the_initial_sample_id(tmp_path, monkeypatch):
     import samovar.profile_pipeline as pipe
     from samovar.profiles import metadata, write_profiles

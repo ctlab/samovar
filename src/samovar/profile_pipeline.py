@@ -104,16 +104,45 @@ def _counts_table(columns):
     )
 
 
+def _read_folder(root, stage):
+    """Reads that were sent to classifiers: trimmed folder when QC wrote one."""
+    root = Path(root)
+    trimmed = root / ("initial_trimmed" if stage == "initial" else "regenerated_trimmed")
+    if trimmed.exists():
+        return trimmed
+    return root / ("initial" if stage == "initial" else "regenerated")
+
+
+def empty_read_samples(root, stage):
+    """FASTQ samples with no records. A missing per-read column is an empty profile."""
+    from samovar.seqio import fastq_has_reads, find_fastq_mate, list_fastq_samples
+
+    folder = _read_folder(root, stage)
+    found = []
+    for sample in list_fastq_samples(folder):
+        path = find_fastq_mate(folder, sample)
+        if path is None or not fastq_has_reads(path):
+            found.append(sample)
+    return found
+
+
+def _fill_empty_read_samples(table, samples):
+    missing = [f"N_{sample}" for sample in samples if f"N_{sample}" not in map(str, table.columns)]
+    if not missing:
+        return table
+    table = table.copy()
+    for col in missing:
+        table[col] = 0.0
+    return table
+
+
 def truth_from_reads(root, stage):
     """Aggregate actual simulator truth, not the requested pre-simulation mass."""
     from collections import Counter
     from samovar.parse_annotators import extract_true_taxid
     from samovar.seqio import list_fastq_samples, find_fastq_mate, iter_fastq_records
     root = Path(root)
-    # Truth describes the reads actually sent to classifiers (after QC).
-    folder = root / ("initial_trimmed" if stage == "initial" else "regenerated_trimmed")
-    if not folder.exists():
-        folder = root / ("initial" if stage == "initial" else "regenerated")
+    folder = _read_folder(root, stage)
     columns = {}
     for sample in list_fastq_samples(folder):
         path = find_fastq_mate(folder, sample)
@@ -320,6 +349,10 @@ def score(root, stage, config):
     config = {**config.get("profile_settings", {}), **config}
     native, native_meta = read_profiles(root / f"{stage}_profiles")
     tables, metas = stage_tables(root, stage)
+    read_stage = "initial" if stage == "reprofiled" else stage
+    empty = empty_read_samples(root, read_stage)
+    for name in tables:
+        tables[name] = _fill_empty_read_samples(tables[name], empty)
     for name, table in native.items():
         if name not in tables:
             tables[name] = table
