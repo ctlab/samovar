@@ -69,6 +69,37 @@ def test_parse_mem_matches_slurm():
     assert parse_mem(32) == 32
 
 
+def test_prepare_keeps_requested_cores_for_exec(tmp_path, monkeypatch):
+    from samovar.config import PipelineConfig
+    from samovar.paths import write_config
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "threads": None,
+            "cores": 4,
+            "mem_mb": None,
+            "custom_cli_flags": {},
+        },
+    )()
+    config = PipelineConfig.from_args(args)
+    assert config.cores == 4
+    script = open(config.generate_pipeline(str(tmp_path / "out")), encoding="utf-8").read()
+    assert 'export SAMOVAR_CORES="4"' in script
+    assert 'if [ "$DETECTED_CORES" -lt "$SAMOVAR_CORES" ]; then' in script
+    init = (tmp_path / "out" / ".log" / "configs" / "config_init.yaml").read_text(encoding="utf-8")
+    assert "cores: 4" in init
+
+
 def test_prepare_bakes_mem_into_the_pipeline(tmp_path, monkeypatch):
     from samovar.config import PipelineConfig
     from samovar.paths import write_config

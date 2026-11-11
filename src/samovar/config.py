@@ -514,9 +514,9 @@ class PipelineConfig:
                 config.cores = int(custom_cli["--cores"])
             except (TypeError, ValueError):
                 pass
-        from samovar.memory import available_cores
-
-        config.cores = max(1, min(int(config.cores or 1), available_cores()))
+        # The request is stored here. exec lowers SAMOVAR_CORES to the CPUs
+        # visible on that machine and does not raise it.
+        config.cores = max(1, int(config.cores or 1))
         config.max_genomes = parse_max_genomes(
             getattr(args, "max_genomes", None),
             default_from_env=getattr(args, "max_genomes", None) is None,
