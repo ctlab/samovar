@@ -20,6 +20,45 @@ from samovar.reprofiling import predict_taxid, train_models, preprocess_data
 import pytest
 
 
+def test_allocation_caps_memory_and_cores(monkeypatch):
+    from samovar.memory import available_cores, memory_limit_mb
+
+    monkeypatch.setattr("samovar.memory.available_mem_mb", lambda: 16_000)
+    monkeypatch.setattr("samovar.memory._cgroup_text", lambda name: None)
+    monkeypatch.delenv("SAMOVAR_MEM_MB", raising=False)
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", "8192")
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    assert memory_limit_mb() == 8192
+    assert memory_limit_mb(1000) == 1000
+    assert memory_limit_mb(20_000) == 8192
+    monkeypatch.delenv("SLURM_MEM_PER_NODE", raising=False)
+    monkeypatch.setenv("SLURM_MEM_PER_CPU", "1024")
+    assert memory_limit_mb() == 2048
+    monkeypatch.delenv("SLURM_MEM_PER_CPU", raising=False)
+    monkeypatch.setattr("samovar.memory._cgroup_text", lambda name: "4294967296" if name == "memory.max" else None)
+    assert memory_limit_mb() == 4096
+    monkeypatch.setattr("samovar.memory._cgroup_text", lambda name: "max" if name == "memory.max" else None)
+    assert memory_limit_mb() == int(16_000 * 0.85)
+
+    monkeypatch.setattr("samovar.memory.os.cpu_count", lambda: 8)
+    monkeypatch.setattr("samovar.memory.os.sched_getaffinity", lambda _pid: set(range(8)))
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    monkeypatch.setenv("SLURM_CPUS_ON_NODE", "4")
+    assert available_cores() == 2
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
+    monkeypatch.delenv("SLURM_CPUS_ON_NODE", raising=False)
+
+    def cgroup(name):
+        if name == "cpu.max":
+            return "200000 100000"
+        if name == "cpuset.cpus":
+            return "0-1,4"
+        return None
+
+    monkeypatch.setattr("samovar.memory._cgroup_text", cgroup)
+    assert available_cores() == 2
+
+
 def test_parse_mem_matches_slurm():
     assert parse_mem("16000") == 16000
     assert parse_mem("16G") == 16 * 1024
@@ -28,6 +67,37 @@ def test_parse_mem_matches_slurm():
     assert parse_mem("2T") == 2 * 1024 * 1024
     assert parse_mem("512K") == 1
     assert parse_mem(32) == 32
+
+
+def test_prepare_keeps_requested_cores_for_exec(tmp_path, monkeypatch):
+    from samovar.config import PipelineConfig
+    from samovar.paths import write_config
+
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "threads": None,
+            "cores": 4,
+            "mem_mb": None,
+            "custom_cli_flags": {},
+        },
+    )()
+    config = PipelineConfig.from_args(args)
+    assert config.cores == 4
+    script = open(config.generate_pipeline(str(tmp_path / "out")), encoding="utf-8").read()
+    assert 'export SAMOVAR_CORES="4"' in script
+    assert 'if [ "$DETECTED_CORES" -lt "$SAMOVAR_CORES" ]; then' in script
+    init = (tmp_path / "out" / ".log" / "configs" / "config_init.yaml").read_text(encoding="utf-8")
+    assert "cores: 4" in init
 
 
 def test_prepare_bakes_mem_into_the_pipeline(tmp_path, monkeypatch):

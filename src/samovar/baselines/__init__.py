@@ -1,7 +1,9 @@
-"""Built-in baseline tools for every ``samovar tools import`` contract.
+"""Inbuilt tools for every ``samovar tools import`` contract.
 
-These are first-class implementations (identity / constant / passthrough),
-not test stubs. Contract pytest and ``--pytest`` on import run against them.
+Register each script in ``BASELINE_TOOLS`` below. Do not add another registry.
+A small contract implements the whole tool here. A contract whose algorithm
+lives in a stage module keeps a script here that calls that module.
+Contract pytest and ``--pytest`` on import run against these files.
 """
 
 from __future__ import annotations
@@ -13,9 +15,11 @@ _DIR = Path(__file__).resolve().parent
 
 # group → baseline script (package-relative)
 BASELINE_TOOLS: Dict[str, Path] = {
+    "profiler": _DIR / "constant_profile.py",
     "annotator": _DIR / "constant_taxid.py",
     "table_reads_generator": _DIR / "identity_table.py",
     "sample_scoring": _DIR / "constant_sample_score.py",
+    "concordance": _DIR / "mantel.py",
     "sample_filtering": _DIR / "passthrough_sample_filter.py",
     "scoring": _DIR / "count_files.py",
     "reads_generator": _DIR / "identity_reads.py",

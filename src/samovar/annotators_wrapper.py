@@ -4,6 +4,7 @@ import re
 import shlex
 import sqlite3
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -174,6 +175,145 @@ class BaseAnnotator:
         raise NotImplementedError(
             "Method parse_output must be implemented in child class"
         )
+
+
+@lru_cache(maxsize=32)
+def _metaphlan_modern_cli(command):
+    import subprocess
+    result = subprocess.run(command_argv(command) + ["--help"], check=True, capture_output=True, text=True)
+    return "--db_dir" in result.stdout
+
+
+class ProfileAnnotator(BaseAnnotator):
+    """Sample-level contract, sharing tool lookup/resources with annotators."""
+
+    @property
+    def default_cmd(self):
+        return self.run_config["type"]
+
+    def get_expected_outputs(self, sample, output_dir):
+        out = os.path.join(output_dir, f"{sample}_{self.run_name}.profile.csv")
+        return [out, out + ".profile.json"]
+
+    def get_snakemake_shell_cmd(self, input_r1, input_r2, outputs):
+        out = outputs[0]
+        native = Path(command_argv(self.cmd)[-1]).name.lower().startswith("metaphlan")
+        native = native or str(self.run_config["type"]).lower() in {"metaphlan", "metaphlan4", "mpa", "mp4"}
+        sample = Path(out).name[:-len(f"_{self.run_name}.profile.csv")]
+        py = shlex.quote(python_path())
+        ingest = (f"{py} -m samovar.profiles ingest --output {shlex.quote(out)} "
+                  f"--sample {shlex.quote(sample)} --identity {shlex.quote(self.run_name)} "
+                  f"--database {shlex.quote(self.db_path)}")
+        if str(self.run_config['type']).lower() == 'phanta' or Path(command_argv(self.cmd)[-1]).name == 'run_phanta.py':
+            run = (f"{py} -m samovar.phanta -i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+                   f"-d {shlex.quote(self.db_path)} -o {shlex.quote(out + '.phanta.tsv')} -t {int(self.threads)} "
+                   f"--sample {shlex.quote(sample)} --exec-path {shlex.quote(self.cmd)} "
+                   f"--native-flags={shlex.quote(self.extra or '')}")
+            return run + f" && {ingest} --source {shlex.quote(out + '.phanta.tsv')} --format phanta"
+        if str(self.run_config["type"]).lower() in {"motus", "motus3"} or Path(command_argv(self.cmd)[-1]).name == "motus":
+            run = (f"{py} -m samovar.profiles motus --source {shlex.quote(out + '.raw')} "
+                   f"--input-r1 {shlex.quote(str(input_r1))} {_r2_flag('--input-r2', input_r2)}"
+                   f"--database {shlex.quote(self.db_path)} --sample {shlex.quote(sample)} "
+                   f"--executable {shlex.quote(self.cmd)} --threads {int(self.threads)} "
+                   f"--native-flags={shlex.quote(self.extra or '')}")
+            return run + f" && {ingest} --source {shlex.quote(out + '.raw')} --format motus"
+        if str(self.run_config["type"]).lower() == "bracken" or Path(command_argv(self.cmd)[-1]).name == "bracken":
+            import argparse
+            options = argparse.ArgumentParser(add_help=False)
+            options.add_argument("-r", type=int)
+            options.add_argument("-l", choices=["S"], default="S")
+            options.add_argument("-t", type=int, default=10)
+            opts = options.parse_args(shlex.split(self.extra or ""))
+            lengths = [int(p.name[len("database"):-len("mers.kmer_distrib")])
+                       for p in Path(self.db_path).glob("database*mers.kmer_distrib")
+                       if p.name[len("database"):-len("mers.kmer_distrib")].isdigit()]
+            length = opts.r if opts.r is not None else (lengths[0] if len(lengths) == 1 else 100)
+            if length < 1 or opts.t < 0:
+                raise ValueError("Bracken needs positive -r read length and nonnegative -t threshold")
+            if not (Path(self.db_path) / f"database{length}mers.kmer_distrib").is_file():
+                raise FileNotFoundError(f"Bracken distribution for -r {length} missing; build --type bracken or select -r")
+            kraken = Kraken2Annotator({**self.run_config, "type": "kraken2", "cmd": "kraken2", "extra": ""}, self.config)
+            reports = kraken.get_expected_outputs(sample, str(Path(out).parent))
+            command = kraken.get_snakemake_shell_cmd(input_r1, input_r2, reports)
+            native_profile = ingest.replace("samovar.profiles ingest", "samovar.profiles bracken")
+            return command + (f" && {native_profile} --source {shlex.quote(out + '.bracken.tsv')} "
+                              f"--kraken-report {shlex.quote(reports[0])} --read-length {length} --threshold {opts.t}")
+        if str(self.run_config["type"]).lower() == "sylph" or Path(command_argv(self.cmd)[-1]).name.lower() == "sylph":
+            db = Path(self.db_path)
+            if db.is_dir():
+                indexes = sorted([*db.glob("*.syldb"), *db.glob("*.syl2db")])
+                if len(indexes) != 1:
+                    raise ValueError("Sylph needs exactly one sketch database, or select its file explicitly")
+                db = indexes[0]
+            taxonomy = Path(str(db) + ".taxonomy.tsv")
+            if not db.is_file() or not taxonomy.is_file():
+                raise FileNotFoundError(f"Sylph needs a sketch and {taxonomy}; use samovar build --type sylph")
+            reads = (f"-1 {shlex.quote(str(input_r1))} -2 {shlex.quote(str(input_r2))}" if input_r2
+                     else shlex.quote(str(input_r1)))
+            raw = out + ".raw"
+            extra = shlex.split(self.extra or "")
+            manifest = db.parent / "sylph.manifest.json"
+            if db.name == "genomes.syldb" and manifest.is_file() and not any(p == "-c" or p.startswith("-c=") for p in extra):
+                import json
+                extra += ["-c", str(json.loads(manifest.read_text())["compression"])]
+            run = f"{self.cmd} profile {shlex.quote(str(db))} {reads} -t {int(self.threads)} -o {shlex.quote(raw)} {shlex.join(extra)}"
+            return skip_empty_reads_cmd(input_r1, [raw], run) + (
+                f" && {ingest} --source {shlex.quote(raw)} --format sylph --genome-taxonomy {shlex.quote(str(taxonomy))}")
+        if native:
+            db = Path(self.db_path)
+            modern = _metaphlan_modern_cli(self.cmd)
+            db_flag, map_flag = ("--db_dir", "--mapout") if modern else ("--bowtie2db", "--bowtie2out")
+            extra_parts = shlex.split(self.extra or "")
+            extra_parts = [db_flag if p == "--bowtie2db" else p for p in extra_parts]
+            if db_flag in extra_parts:
+                at = extra_parts.index(db_flag)
+                if at + 1 >= len(extra_parts) or Path(extra_parts[at + 1]) != db:
+                    raise ValueError("MetaPhlAn database flags disagree with selected database")
+                del extra_parts[at:at + 2]
+            extra = shlex.join(extra_parts)
+            if not any(p == "--bowtie2_exe" or p.startswith("--bowtie2_exe=") for p in extra_parts):
+                from samovar.paths import resolve_executable
+                extra += " --bowtie2_exe " + shlex.quote(resolve_executable("bowtie2", tool_key="bowtie2"))
+            if "--index" not in shlex.split(extra):
+                prefixes = sorted({p.name.split(".1.bt2")[0] for p in db.glob("*.1.bt2*") if ".rev.1.bt2" not in p.name})
+                if len(prefixes) != 1:
+                    raise ValueError("MetaPhlAn profiler needs a pinned --index or exactly one installed Bowtie2 index")
+                extra += " --index " + shlex.quote(prefixes[0])
+            raw = out + ".raw"
+            reads = ",".join(p for p in (str(input_r1), str(input_r2 or "")) if p)
+            run = (f"{self.cmd} {shlex.quote(reads)} --input_type fastq --nproc {int(self.threads)} "
+                   f"{db_flag} {shlex.quote(self.db_path)} {map_flag} {shlex.quote(out + '.bowtie2.bz2')} "
+                   f"-o {shlex.quote(raw)} {extra}")
+            return skip_empty_reads_cmd(input_r1, [raw], run) + f" && {ingest} --source {shlex.quote(raw)} --format metaphlan"
+        from samovar.paths import resolve_executable
+        argv = command_argv(resolve_executable(self.cmd, allow_python_script=True))
+        if Path(argv[0]).suffix == ".py":
+            argv = [python_path(), *argv]
+        run = (f"{shlex.join(argv)} -i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+               f"-d {shlex.quote(self.db_path)} -o {shlex.quote(out)} -t {int(self.threads)} {self.extra or ''}")
+        return run + f" && {ingest} --source {shlex.quote(out)} --format abundance"
+
+
+class KMCPAnnotator(BaseAnnotator):
+    """Read-level native KMCP search → profile -B through the shared contract."""
+
+    @property
+    def default_cmd(self):
+        return "kmcp"
+
+    def get_expected_outputs(self, sample, output_dir):
+        # Reuse the universal annotation/ingestion rule for seq + taxID tools.
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.custom_kmcp.out")]
+
+    def get_snakemake_shell_cmd(self, input_r1, input_r2, outputs):
+        return (f"{shlex.quote(python_path())} -m samovar.kmcp "
+                f"-i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+                f"-d {shlex.quote(str(self.db_path))} -o {shlex.quote(outputs[0])} "
+                f"-t {int(self.threads)} --exec-path {shlex.quote(self.cmd)} {self.extra or ''}")
+
+    def parse_output(self, file_path):
+        from samovar.parse_annotators import read_custom_raw
+        return read_custom_raw(file_path)
 
 
 class Kraken2Annotator(BaseAnnotator):
@@ -931,9 +1071,12 @@ def get_annotator_instance(
 ) -> BaseAnnotator:
     """Factory function to instantiate the correct annotator class."""
     tool = tool_type.lower()
+    if run_config.get("output_level") == "profile":
+        return ProfileAnnotator(run_config, config)
 
     native_tools = {
         "kraken2": Kraken2Annotator,
+        "kmcp": KMCPAnnotator,
         "kaiju": KaijuAnnotator,
         "metaphlan": MetaPhlanAnnotator,
         "metaphlan4": MetaPhlanAnnotator,
@@ -965,6 +1108,9 @@ def get_annotator_instance(
         "kmerencoder": KmerEncoderAnnotator,
     }
 
+    parts = command_argv(run_config.get("cmd") or "")
+    if parts and Path(parts[-1]).name == "kmcp":
+        return KMCPAnnotator(run_config, config)
     if tool in CONSTANT_TAXID_TOOL_NAMES:
         return ConstantTaxidAnnotator(run_config, config, tool_name=tool_type)
 

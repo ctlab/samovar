@@ -106,9 +106,14 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
         db = _annotator_db(request)
         if db is None:
             pytest.skip("contract needs a DB (pass --db-path or SAMOVAR_CONTRACT_DB)")
-        subprocess.check_call(
-            [str(path), "-i", str(r1), "-I", str(r2), "-d", str(db), "-o", str(out), "-t", "1"]
-        )
+        if path.name.lower() == "kmcp":
+            from samovar.annotators_wrapper import KMCPAnnotator
+            native = KMCPAnnotator(dict(run_name="clf", type="kmcp", cmd=str(path), db_path=str(db), threads=1), {})
+            subprocess.run(["bash", "-e", "-c", native.get_snakemake_shell_cmd(str(r1), str(r2), [str(out)])], check=True)
+        else:
+            subprocess.check_call(
+                [str(path), "-i", str(r1), "-I", str(r2), "-d", str(db), "-o", str(out), "-t", "1"]
+            )
         from samovar.annotators_wrapper import CustomAnnotator
 
         inst = CustomAnnotator(
@@ -127,6 +132,44 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
     )
     assert has_tax or has_feat, f"annotator/feature contract needs taxID and/or features: {list(frame.columns)}"
     assert not frame.empty
+
+
+def test_profiler_contract(request, tmp_path, tiny_fastq):
+    _skip_if_other_type(request, "profiler")
+    from samovar.profiles import load_profile
+    from samovar.annotators_wrapper import ProfileAnnotator
+    import subprocess
+    path = _tool_path(request, "profiler")
+    r1, r2 = tiny_fastq
+    out = tmp_path / "sample_contract.profile.csv"
+    db = _annotator_db(request)
+    native_type = "custom_profiler"
+    if path.name.lower().startswith(("metaphlan", "sylph", "bracken", "motus", "run_phanta")):
+        if db is None:
+            pytest.skip("Native profiler contract needs a real --db-path")
+        # Native MetaPhlAn rejects libraries containing only <70 bp reads.
+        # A valid-length unmapped library still must yield a typed empty profile.
+        for mate in (r1, r2):
+            Path(mate).write_text("@contract\n" + "ACGT" * 25 + "\n+\n" + "I" * 100 + "\n")
+        native_type = 'phanta' if path.name.lower().startswith('run_phanta') else next(
+            name for name in ("sylph", "bracken", "metaphlan", "motus") if path.name.lower().startswith(name))
+    tool = ProfileAnnotator(dict(run_name="contract", type=native_type, cmd=str(path),
+                                 db_path=str(db or tmp_path), threads=1), {})
+    command = tool.get_snakemake_shell_cmd(str(r1), str(r2), [str(out), str(out) + ".profile.json"])
+    subprocess.run(["bash", "-e", "-c", command], check=True)
+    assert Path(str(out) + ".profile.json").is_file()
+    table, meta = load_profile(out)
+    assert "seq" not in table and n_sample_columns(table)
+    assert meta["kind"] == "abundance"
+    from samovar.parse_annotators import Annotation
+    from samovar.profiles import report_profiles, read_profiles
+    report = tmp_path / "report_profiles"
+    inventory = report_profiles(Annotation.from_abundance_tables({"contract": table}, {"contract": meta}),
+                                report, "initial")
+    saved, infos = read_profiles(report)
+    pd.testing.assert_frame_equal(saved["contract"], table, check_dtype=False)
+    assert infos["contract"]["stage"] == "initial"
+    assert len(inventory) == len(n_sample_columns(table))
 
 
 def test_table_regenerator_contract(request, tmp_path):
@@ -183,6 +226,27 @@ def test_table_scoring_contract(request):
         assert "rank_value" in cands[0] or "ks_statistic" in cands[0]
     else:
         assert "rank_value" in block or "ks_statistic" in block
+
+
+def test_concordance_contract(request):
+    _skip_if_other_type(request, "concordance")
+    path = _tool_path(request, "concordance")
+    module = load_python_module(path, "contract_concordance")
+    fn = getattr(module, "score", None)
+    assert callable(fn), f"{path} must define score(left, right, config)"
+    ids = ["a", "b", "c"]
+    values = [[0.0, 0.2, 0.4], [0.2, 0.0, 0.6], [0.4, 0.6, 0.0]]
+    left = pd.DataFrame(values, index=ids, columns=ids)
+    block = fn(left, left, {"permutations": 19, "seed": 1, "metric": "bray_curtis", "taxonomy": "ncbi",
+                            "rank": "species", "basis": "reads", "normalization": "all", "stage": "initial",
+                            "profile_a": {"identity": "left"}, "profile_b": {"identity": "right"}})
+    assert isinstance(block, dict)
+    assert {"method", "version", "statistic", "pvalue", "n_samples", "seed", "permutations", "status", "reason"} <= set(block)
+    assert block.get("status") in {None, ""}
+    import math
+    assert math.isfinite(block["statistic"])
+    assert block["n_samples"] == len(ids)
+    assert block["pvalue"] is None or 0 <= block["pvalue"] <= 1
 
 
 def test_sample_scoring_contract(request):
@@ -726,6 +790,7 @@ def _db_stub(tmp_path: Path) -> tuple:
     return stub, db
 
 
+@pytest.mark.optional
 def test_annotator_shell_contract_needs_a_real_db(tmp_path):
     import os
     import subprocess

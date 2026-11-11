@@ -50,7 +50,7 @@ def run_command(cmd: List[str], check: bool = True) -> subprocess.CompletedProce
 
         resolved = command_argv(resolve_executable(argv[0]) or "")
         if resolved and resolved[0]:
-            argv[0] = resolved[0]
+            argv = [*resolved, *argv[1:]]
     logger.info(f"Running command: {' '.join(argv)}")
     return subprocess.run(argv, check=check, text=True)
 
@@ -188,7 +188,8 @@ def build_database_kraken2(
     kmer_len: int = 35,
     minimizer_len: int = 31,
     minimizer_spaces: int = 7,
-    skip_maps: bool = True
+    skip_maps: bool = True,
+    clean: bool = True,
 ) -> None:
     """Build a custom Kraken2 database from the library of sequences.
     
@@ -231,8 +232,9 @@ def build_database_kraken2(
     run_command(build_cmd)
     
     # Clean up intermediate files
-    clean_cmd = ["kraken2-build", "--clean", "--db", db_path]
-    run_command(clean_cmd)
+    if clean:
+        clean_cmd = ["kraken2-build", "--clean", "--db", db_path]
+        run_command(clean_cmd)
     
     logger.info(f"Database successfully built at {db_path}")
 
@@ -828,6 +830,7 @@ def build_database_from_config(
     example_omit: Optional[bool] = None,
     threads: int = 1,
     minimizer_len: Optional[int] = None,
+    keep_library: bool = False,
 ):
     """
     Build database from config file.
@@ -853,6 +856,15 @@ def build_database_from_config(
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    if db_type == "bracken":
+        if config.get("input_dir"):
+            if int(config.get("kmer_len", 35)) != 35:
+                raise ValueError("New Kraken2 indexes use kmer_len=35; a different Bracken k requires a matching prebuilt index")
+            build_database_from_config(config_path, "kraken2", db_path,
+                                       False if example_omit is None else example_omit, threads, keep_library=True)
+        return build_database_bracken(config, db_path, threads)
+    if db_type == "metaphlan":
+        return build_database_metaphlan(config, db_path, threads)
     
     # Process input directories
     input_dirs = config['input_dir']
@@ -907,6 +919,11 @@ def build_database_from_config(
             "This flag is only for toy tests; use --no-example-omit for a full index."
         )
 
+    if db_type == "kmcp":
+        return build_database_kmcp(file_taxid_map, db_path, threads, config)
+    if db_type == "sylph":
+        return build_database_sylph(file_taxid_map, db_path, threads, config)
+
     
     # Build database based on type
     if db_type == "kaiju":
@@ -938,7 +955,8 @@ def build_database_from_config(
                 kmer_len=35,
                 minimizer_len=31,
                 minimizer_spaces=7,
-                skip_maps=True,
+                skip_maps=not keep_library,
+                clean=not keep_library,
             )
             if final_dir is not None:
                 install_kraken2_db(work_dir, final_dir)
@@ -1000,3 +1018,208 @@ def build_database_from_config(
         logger.info("k-mer encoder model written to %s", dest)
     else:
         raise ValueError(f"Unknown database type: {db_type}")
+
+
+
+def build_database_bracken(config, db_path, threads=1):
+    """Build native read-length distributions on an existing Kraken2 library."""
+    import json
+    from samovar.paths import python_path, resolve_executable
+    from samovar.seqio import fasta_handle
+    dest = Path(db_path).resolve()
+    for name in ("hash.k2d", "opts.k2d", "taxo.k2d", "seqid2taxid.map", "taxonomy/nodes.dmp"):
+        if not (dest / name).is_file():
+            raise FileNotFoundError(f"Bracken requires a complete Kraken2 DB with library: {dest / name}")
+    genomes = sorted(p for p in (dest / "library").rglob("*") if p.is_file() and
+                     p.name.endswith((".fa", ".fna", ".fasta", ".fa.gz", ".fna.gz", ".fasta.gz")))
+    if not genomes:
+        raise ValueError("Bracken build requires the original Kraken2 nucleotide library")
+    lengths = sorted({int(n) for n in config.get("read_lengths", [100])})
+    k = int(config.get("kmer_len", 35))
+    if not lengths or k < 1 or any(n < k for n in lengths):
+        raise ValueError("Bracken read_lengths must be nonempty and >= positive kmer_len")
+    work_root = dest / ".tmp"
+    work_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=work_root, prefix="bracken-") as work:
+        work = Path(work)
+        joined = work / "genomes.fna"
+        with joined.open("w") as output:
+            for genome in genomes:
+                with fasta_handle(genome) as source:
+                    shutil.copyfileobj(source, output)
+                output.write("\n")
+        classified = work / "database.kraken"
+        run_command(["kraken2", "--db", str(dest), "--threads", str(threads), "--memory-mapping",
+                     "--output", str(classified), str(joined)])
+        for length in lengths:
+            counts = work / f"database{length}mers.kraken"
+            result = work / f"database{length}mers.kmer_distrib"
+            run_command(["kmer2read_distr", "--seqid2taxid", str(dest / "seqid2taxid.map"),
+                         "--taxonomy", str(dest / "taxonomy"), "--kraken", str(classified),
+                         "--output", str(counts), "-k", str(k), "-l", str(length), "-t", str(threads)])
+            run_command([python_path(), resolve_executable("generate_kmer_distribution.py", tool_key="generate_kmer_distribution.py"),
+                         "-i", str(counts), "-o", str(result)])
+            if not result.is_file() or not result.stat().st_size:
+                raise RuntimeError("Bracken did not create a read-length distribution")
+        for length in lengths:
+            (work / f"database{length}mers.kmer_distrib").replace(dest / f"database{length}mers.kmer_distrib")
+    (dest / "bracken.manifest.json").write_text(json.dumps(dict(version=1, read_lengths=lengths, kmer_len=k), indent=2) + "\n")
+
+
+def build_database_kmcp(file_taxid_map, db_path, threads=1, config=None):
+    """Native compute→index, explicit reference map, and an owned NCBI taxdump."""
+    import hashlib
+    import json
+    from samovar.seqio import fasta_handle
+    config = dict(config or {})
+    rows = nucleotide_genome_rows(file_taxid_map)
+    k, chunks, overlap = (int(config.get(key, default)) for key, default in (
+        ("kmer_len", 21), ("chunks", 10), ("overlap", 150)))
+    fpr, hashes = float(config.get("false_positive_rate", 0.3)), int(config.get("num_hashes", 1))
+    if not 1 <= k <= 64 or chunks < 1 or overlap < 0 or not 0 < fpr < 1 or hashes < 1:
+        raise ValueError("Invalid KMCP compute/index parameters")
+    dest = Path(db_path).resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    if (dest / "index").exists():
+        raise FileExistsError("KMCP index already exists; choose a fresh database directory")
+    work_root = dest / ".tmp"
+    work_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=work_root, prefix="kmcp-build-") as work:
+        work = Path(work)
+        refs = work / "references"
+        refs.mkdir()
+        mapping = []
+        for number, row in enumerate(sorted(rows, key=lambda row: row["Genome_file"])):
+            # Distinct genomes of one taxon must remain distinct references.
+            ref = f"ref_{row['taxid']}_{number}"
+            with fasta_handle(row["Genome_file"]) as source, (refs / (ref + ".fna")).open("w") as output:
+                shutil.copyfileobj(source, output)
+            mapping.append(f"{ref}\t{row['taxid']}\n")
+        compute = ["kmcp", "compute", "-I", str(refs), "-O", str(work / "compute"),
+                   "-k", str(k), "-n", str(chunks), "-l", str(overlap), "-j", str(threads)]
+        index = ["kmcp", "index", "-I", str(work / "compute"), "-O", str(work / "index"),
+                 "-f", str(fpr), "-n", str(hashes), "-j", str(threads)]
+        run_command(compute)
+        run_command(index)
+        if not any((work / "index").rglob("__db.yml")) or not any((work / "index").rglob("*.uniki")):
+            raise RuntimeError("KMCP did not create a complete index")
+        get_taxonomy_db(str(work / "taxdump"), config.get("taxdump"))
+        for name in ("nodes.dmp", "names.dmp"):
+            if not (work / "taxdump" / name).is_file():
+                raise RuntimeError(f"KMCP taxdump missing {name}")
+        checksums = {}
+        for name in ("nodes.dmp", "names.dmp"):
+            digest = hashlib.sha256()
+            with (work / "taxdump" / name).open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            checksums[name] = digest.hexdigest()
+        (work / "taxid.map").write_text("".join(mapping))
+        (work / "index").replace(dest / "index")
+        (work / "taxdump").replace(dest / "taxdump")
+        (work / "taxid.map").replace(dest / "taxid.map")
+    (dest / "kmcp.manifest.json").write_text(json.dumps(dict(
+        version=1, genomes=rows, compute=compute, index=index, taxdump_sha256=checksums,
+        parameters=dict(kmer_len=k, chunks=chunks, overlap=overlap, false_positive_rate=fpr, num_hashes=hashes)), indent=2) + "\n")
+
+
+def nucleotide_genome_rows(file_taxid_map):
+    """Validated nucleotide references shared by genome-sketch builders."""
+    from samovar.seqio import fasta_handle
+    rows = []
+    for filename, taxid in file_taxid_map.items():
+        if not str(taxid).isdigit() or int(taxid) <= 0:
+            raise ValueError(f"Reference builder requires a resolved positive NCBI taxid: {filename}: {taxid}")
+        path = Path(filename).resolve()
+        valid, count = True, 0
+        with fasta_handle(path) as handle:
+            for rec in SeqIO.parse(handle, "fasta"):
+                count += 1
+                if not rec.seq or set(str(rec.seq).upper()) - set("ACGTRYSWKMBDHVN"):
+                    valid = False
+                    break
+        if not count or not valid:
+            continue  # existing input discovery also finds proteomes
+        rows.append({"Genome_file": str(path), "taxid": str(taxid)})
+    if not rows:
+        raise ValueError("No nucleotide genomes to sketch")
+    if len({row["Genome_file"] for row in rows}) != len(rows):
+        raise ValueError("One genome path cannot have multiple taxids")
+    return rows
+
+
+def build_database_sylph(file_taxid_map, db_path, threads=1, config=None):
+    """Sketch complete genome FASTAs and publish their explicit NCBI mapping."""
+    import json
+    import pandas as pd
+    config = dict(config or {})
+    compression = int(config.get("compression", 200))
+    if compression < 1:
+        raise ValueError("Sylph compression must be positive")
+    rows = nucleotide_genome_rows(file_taxid_map)
+    dest = Path(db_path)
+    dest.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dest, prefix=".sylph-build-") as work:
+        prefix = Path(work) / "genomes"
+        listing = Path(work) / "genomes.txt"
+        listing.write_text("".join(row["Genome_file"] + "\n" for row in rows))
+        run_command(["sylph", "sketch", "-l", str(listing), "-o", str(prefix), "-t", str(threads), "-c", str(compression)])
+        index = Path(str(prefix) + ".syldb")
+        if not index.is_file() or not index.stat().st_size:
+            raise RuntimeError("Sylph did not create a sketch database")
+        mapping = Path(work) / "taxonomy.tsv"
+        pd.DataFrame(rows).to_csv(mapping, sep="\t", index=False)
+        index.replace(dest / "genomes.syldb")
+        mapping.replace(dest / "genomes.syldb.taxonomy.tsv")
+    (dest / "sylph.manifest.json").write_text(json.dumps(dict(version=1, compression=compression, genomes=rows), indent=2) + "\n")
+
+
+def build_database_metaphlan(config, db_path, threads=1):
+    """Index a matched MetaPhlAn marker FASTA/metadata pair, not arbitrary ORFs."""
+    import bz2
+    import hashlib
+    import json
+    import pickle
+    source = Path(config.get("marker_fasta", ""))
+    info = Path(config.get("marker_metadata", ""))
+    if not source.is_file() or not info.is_file():
+        raise ValueError("MetaPhlAn build needs marker_fasta and matching native marker_metadata (.pkl); genome FASTA alone is not a marker database")
+    with bz2.open(info, "rb") as handle:
+        data = pickle.load(handle)
+    if not isinstance(data.get("taxonomy"), dict) or not isinstance(data.get("markers"), dict) or not data["markers"]:
+        raise ValueError("Invalid MetaPhlAn marker metadata")
+    name = str(config.get("index_name") or info.stem)
+    if Path(name).name != name:
+        raise ValueError("MetaPhlAn index_name must be a filename prefix")
+    dest = Path(db_path)
+    dest.mkdir(parents=True, exist_ok=True)
+    fasta = dest / (name + ".fna")
+    if fasta.resolve() == source.resolve():
+        raise ValueError("Build destination must not overwrite the marker source")
+    seen = set()
+    opener = bz2.open if source.suffix == ".bz2" else open_text
+    with opener(source, "rt") as handle, fasta.open("w") as output:
+        for rec in SeqIO.parse(handle, "fasta"):
+            if rec.id in seen or rec.id not in data["markers"]:
+                raise ValueError(f"Duplicate or undocumented MetaPhlAn marker: {rec.id}")
+            if len(rec.seq) != int(data["markers"][rec.id]["len"]):
+                raise ValueError(f"Marker length does not match metadata: {rec.id}")
+            seen.add(rec.id)
+            SeqIO.write(rec, output, "fasta")
+    if seen != set(data["markers"]):
+        raise ValueError("Marker FASTA is incomplete relative to MetaPhlAn metadata")
+    shutil.copyfile(info, dest / (name + ".pkl"))
+    # MetaPhlAn's DB completeness check requires .bt2l even for tiny fixtures.
+    run_command(["bowtie2-build", "--threads", str(max(1, int(threads))), "--large-index", str(fasta), str(dest / name)])
+    suffix = "bt2l" if (dest / (name + ".1.bt2l")).is_file() else "bt2"
+    if not all((dest / f"{name}.{part}.{suffix}").is_file() for part in ("1", "2", "3", "4", "rev.1", "rev.2")):
+        raise RuntimeError("bowtie2-build did not write a complete MetaPhlAn index")
+    def digest(path):
+        sha = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                sha.update(block)
+        return sha.hexdigest()
+    (dest / "metaphlan.manifest.json").write_text(json.dumps(dict(
+        index=name, marker_count=len(seen), source_fasta=str(source.resolve()), source_metadata=str(info.resolve()),
+        fasta_sha256=digest(source), metadata_sha256=digest(info)), indent=2) + "\n")

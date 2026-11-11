@@ -247,6 +247,12 @@ bool read_sample(Sample* sample) {
     return true;
 }
 
+void usage() {
+    std::cerr
+        << "Usage: samovar_spearman [--threads N] [--against-last]\n"
+        << "  Read SAMPLES matrices on stdin and write Spearman correlations.\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -254,10 +260,18 @@ int main(int argc, char** argv) {
     bool against_last = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help") {
+            usage();
+            return 0;
+        }
         if (arg == "--threads" && i + 1 < argc) {
             threads = std::max(1, std::atoi(argv[++i]));
         } else if (arg == "--against-last") {
             against_last = true;
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "Unknown option " << arg << "\n";
+            usage();
+            return 2;
         }
     }
 #ifdef _OPENMP

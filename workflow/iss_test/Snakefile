@@ -20,6 +20,11 @@ if not config.get("genomes"):
     config["genomes"] = cap_sequence(config.get("genomes") or [], config.get("max_genomes"))
 
 SAMPLES = [str(i) for i in range(1, config["n_samples"] + 1)]
+if config.get("abundance_table"):
+    from samovar.abundance import generation_sample_names
+    SAMPLES = generation_sample_names(config["abundance_table"], config["n_samples"])
+    if config.get("sample_names") is not None and set(SAMPLES) != set(config["sample_names"]):
+        raise ValueError("Abundance sample identities changed since generate; recreate the generate config")
 OUTPUT_FILES = []
 for sample in SAMPLES:
     OUTPUT_FILES.append(f"{config['output_dir']}/{sample}_full_R1.fastq")

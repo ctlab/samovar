@@ -22,12 +22,13 @@ shown by the installed help. For taxid requests, check local genomes/catalog
 before any download; report unavailable taxa and obtain authorization for new
 downloads. Bundled truncated genomes are test fixtures, not a scientific reference.
 
-Check sample labels against the installed workflow too: the current ISS workflow
-expects `N_1` through `N_<n_samples>`. A table such as `N_0,N_1` can be accepted
-at prepare time but fail during execution because generated and expected FASTQ
-names differ. Warn and stop for a supported-input decision in that case; never
-silently rename the user's samples. This is a known CLI limitation, not evidence
-of successful generation.
+Check sample labels against the installed version too. From SAMOVAR 0.14.3,
+ISS preserves literal `N_<sample>` labels, including zero-based and named samples,
+and infers the count when `--n_samples` is omitted. An explicit count must match.
+IDs start with a letter/digit and contain only letters/digits, `_` or `-`;
+duplicates and unsafe IDs are errors. Older ISS workflows require `N_1` through
+`N_<n_samples>` and can fail on other labels. Warn and stop on that older-version
+limitation; never silently rename the user's samples or claim a failed run passed.
 
 Translate sample count, sequencing records, host fraction, seed and core budget
 explicitly. ISS counts paired fragments; ONT counts single reads. Do not change

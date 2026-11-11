@@ -35,7 +35,7 @@ IDE automatically discovers the same directory. Discovery paths follow the
 [Cursor](https://cursor.com/docs/skills) and
 [Claude Code](https://code.claude.com/docs/en/skills) documentation.
 
-In the SAMOVAR source checkout, open `example/agentic-phage/agents.md` as context
+In the SAMOVAR source checkout, open `examples/agentic-phage/agents.md` as context
 or work in its directory, then invoke `/samovar`. The skill reads that profile and
 derives the public CLI workflow; no `pipeline.sh` or copied command recipe is
 needed. The profile pins reference membership, initial depth/resources and the
@@ -95,9 +95,9 @@ Report the actual commands, outputs and limitations for review. Installer tests,
 native pipeline execution are reported separately; no claim is made that every
 model or IDE UI has been tested.
 
-The current ISS CLI has a known sample-label limitation for supplied abundance
-tables (follow-up #886). The generate skill explains when to stop and warn;
-it does not silently rename samples or treat a failed run as successful.
+From SAMOVAR 0.14.3, ISS preserves sample labels from supplied abundance tables
+(#886). The generate skill describes validation and warns about older versions;
+it never silently renames samples or treats a failed run as successful.
 
 When extending this bundle, read the conditional
 [layout](rules/agents-portable-layout.md) and

@@ -16,7 +16,7 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from samovar.exec_control import CHECKPOINT_STEPS
 from samovar.paths import PACKAGE_VERSION
@@ -486,6 +486,14 @@ def _html_comment(meta: Dict[str, str]) -> str:
 
 def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_")
+
+
+def _profile_slug(name: str) -> str:
+    """Keep profile artifacts distinct from grouped/scorer/coordinate sidecars."""
+    if _slug(name) == name and not name.startswith("grouped") and name != "concordance" and not name.endswith("_coordinates"):
+        return name
+    import hashlib
+    return "_id_" + hashlib.sha256(name.encode()).hexdigest()[:20]
 
 
 def plot_parent(out_dir: PathLike) -> tuple:
@@ -1339,7 +1347,7 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
     return written
 
 
-def _run_options_html(output_dir: PathLike, hidden_ids: Sequence[str]) -> str:
+def _run_options_html(output_dir: PathLike, hidden_ids: Sequence[str], settings: Optional[Dict[str, Any]] = None) -> str:
     wiki = "https://github.com/ctlab/samovar/wiki"
     rows = collect_run_options(output_dir)
     parts = [
@@ -1352,6 +1360,21 @@ def _run_options_html(output_dir: PathLike, hidden_ids: Sequence[str]) -> str:
         f'(pipeline overview, <a href="{wiki}/Home">Home</a>).</p>',
         "<p>Options used for this SAMOVAR run:</p>",
     ]
+    if settings:
+        from samovar.multiqc_report import settings_document
+
+        document = settings_document(settings)
+        parts.append(
+            "<p>MultiQC sections: <strong>"
+            + html.escape(", ".join(document["sections"]) or "(none)")
+            + "</strong>. Stages: "
+            + html.escape(", ".join(document["stages"]) or "(none)")
+            + ". Annotators: "
+            + html.escape(document["annotators"] if isinstance(document["annotators"], str) else ", ".join(document["annotators"]))
+            + ". "
+            + html.escape(document["priority"])
+            + ".</p>"
+        )
     if rows:
         parts.append('<dl class="dl-horizontal" style="margin-top:0.75em">')
         for label, value in rows:
@@ -1400,14 +1423,19 @@ def _best_tool_row(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return max(tools, key=_rank)
 
 
-def _conclusion_html(output_dir: PathLike) -> str:
+def _conclusion_html(output_dir: PathLike, settings=None) -> str:
     root = as_path(output_dir)
     chosen_rows: List[Dict[str, Any]] = []
     stage_title = ""
     for stage in ("viz_reprofiled", "viz_regenerated", "viz_initial"):
+        if settings is not None and stage.removeprefix("viz_") not in settings["stages"]:
+            continue
         folder = REPORT_SECTION[stage]["folder"]
         scores = _read_scores_table(root / folder)
         rows = _rows_for_read_type(scores, "all")
+        if settings is not None and settings["annotators"] != "all":
+            from samovar.multiqc_report import profile_selected
+            rows = [row for row in rows if profile_selected(str(row.get("annotator", "")), {}, settings["annotators"])]
         if rows:
             chosen_rows = rows
             stage_title = REPORT_SECTION[stage]["title"]
@@ -1511,6 +1539,8 @@ def _write_multiqc_config(dest: Path, hidden_ids: Sequence[str]) -> Path:
         for hid in hidden_ids:
             if hid.startswith(spec["id"] + "_"):
                 order.append(hid)
+    order.append("samovar_correction")
+    order.append("samovar_report_status")
     order.append("samovar_conclusion")
     lines = [
         f'title: "SAMOVAR"',
@@ -1528,38 +1558,768 @@ def _write_multiqc_config(dest: Path, hidden_ids: Sequence[str]) -> Path:
     return cfg
 
 
-def bundle_multiqc(output_dir: PathLike) -> Path:
-    """Materialize ``*_mqc.*`` custom content from plot folders and run options."""
-    root = as_path(output_dir)
-    write_overview_report(root)
-    from samovar.MAG.report import write_mag_mapping_plots
+def _write_composition_plots(
+    dest: Path,
+    phase: str,
+    tables: Dict[str, Any],
+    metas: Dict[str, Any],
+    *,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    order: int,
+) -> List[Path]:
+    """Stacked composition for each profile, plus the full fraction table."""
+    from samovar.abundance import n_sample_columns
+    from samovar.profiles import (
+        composition_color,
+        composition_display,
+        composition_fractions,
+        composition_label,
+    )
 
-    write_mag_mapping_plots(root)
+    written: List[Path] = []
+    folder = dest / "composition" / phase
+    for name, table in tables.items():
+        info = dict(metas.get(name) or {})
+        full = composition_fractions(table, info)
+        slug = _profile_slug(str(name))
+        stem = f"{order:02d}_{phase}_composition_{slug}"
+        identity = str(info.get("identity") or name)
+        method = info.get("method") or info.get("representation") or ""
+        detail = (
+            f"rank {info.get('rank', '')}; unit {info.get('unit', '')}; "
+            f"basis {info.get('basis', '')}; normalization {info.get('normalization', '')}"
+        )
+        if method:
+            detail += f"; method {method}"
+        if info.get("database"):
+            detail += f"; database {info.get('database')}"
+        title = f"{parent_name} — {identity} composition"
+        if full is None:
+            payload = _normalize_mqc_json(
+                {
+                    "section_name": title,
+                    "plot_type": "table",
+                    "description": detail + ". Presence profiles have no quantitative composition.",
+                    "data": {"0": {"profile": identity, "status": "presence"}},
+                },
+                parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_table",
+            )
+            path = dest / f"{stem}_table_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
+            continue
+        columns = n_sample_columns(full)
+        folder.mkdir(parents=True, exist_ok=True)
+        full.to_csv(folder / f"{slug}.csv", index=False)
+        shown = composition_display(full)
+        labels = {str(tax): composition_label(str(tax)) for tax in shown.taxid.astype(str)}
+        series: Dict[str, Dict[str, float]] = {}
+        for column in columns:
+            sample = column[2:]
+            if float(full[column].sum()) <= 0:
+                continue
+            series[sample] = {
+                labels[str(tax)]: round(float(value) * 100, 4)
+                for tax, value in zip(shown.taxid.astype(str), shown[column])
+                if float(value) > 0
+            }
+        if series:
+            names: List[str] = []
+            for sample_series in series.values():
+                for label in sample_series:
+                    if label not in names:
+                        names.append(label)
+            cats = {
+                label: {"name": label, "color": composition_color(label.split(" (", 1)[0])}
+                for label in names
+            }
+            payload = {
+                "section_name": title,
+                "description": detail + ". Bars are percent. Top 10 taxa plus Other; unclassified and unresolved stay separate. Full fractions are in the composition table.",
+                "plot_type": "bargraph",
+                "categories": cats,
+                "pconfig": {
+                    "title": title,
+                    "xlab": "Sample",
+                    "ylab": "Percent",
+                    "ymin": 0,
+                    "ymax": 100,
+                    "stacking": "normal",
+                    "cpswitch": False,
+                    "sort_samples": False,
+                },
+                "data": series,
+            }
+            payload = _normalize_mqc_json(
+                payload, parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_bars",
+            )
+            path = dest / f"{stem}_bars_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
+        rows = {}
+        for index, (_, row) in enumerate(full.iterrows()):
+            rows[str(index)] = {
+                "taxid": str(row.taxid),
+                "profile": identity,
+                "tool": str(info.get("tool") or ""),
+                "run_name": str(info.get("run_name") or ""),
+                "database": str(info.get("database") or ""),
+                **{column[2:]: round(float(row[column]), 6) for column in columns},
+            }
+        table_payload = _normalize_mqc_json(
+            {
+                "section_name": f"{title} fractions",
+                "description": detail + ". Every taxon, not the top-10 display.",
+                "plot_type": "table",
+                "data": rows,
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_fractions",
+        )
+        path = dest / f"{stem}_fractions_mqc.json"
+        _emit_mqc(table_payload, path)
+        written.append(path)
+    return written
+
+
+def _write_alpha_tables(
+    dest: Path,
+    phase: str,
+    tables: Dict[str, Any],
+    metas: Dict[str, Any],
+    *,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    order: int,
+) -> List[Path]:
+    """Per-sample richness and Shannon for each saved profile."""
+    import pandas as pd
+
+    from samovar.profiles import alpha_metrics
+
+    written: List[Path] = []
+    folder = dest / "alpha" / phase
+    for name, table in tables.items():
+        info = dict(metas.get(name) or {})
+        metrics = alpha_metrics(table, info)
+        slug = _profile_slug(str(name))
+        stem = f"{order:02d}_{phase}_alpha_{slug}"
+        identity = str(info.get("identity") or name)
+        detail = (
+            f"rank {info.get('rank', '')}; unit {info.get('unit', '')}; "
+            f"basis {info.get('basis', '')}; normalization {info.get('normalization', '')}"
+        )
+        if info.get("method") or info.get("representation"):
+            detail += f"; method {info.get('method') or info.get('representation')}"
+        if info.get("database"):
+            detail += f"; database {info.get('database')}"
+        title = f"{parent_name} — {identity} alpha diversity"
+        formula = (
+            " Observed richness counts biological taxa with positive mass. "
+            "Shannon is nats (natural log) on those taxa only. "
+            "Taxid 0 and unresolved taxa are separate shares, not taxa. "
+            "No rarefaction, pseudocount, or group test."
+        )
+        if metrics is None:
+            payload = _normalize_mqc_json(
+                {
+                    "section_name": title,
+                    "plot_type": "table",
+                    "description": detail + ". Presence profiles have no abundance alpha diversity.",
+                    "data": {"0": {"profile": identity, "status": "presence"}},
+                },
+                parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_table",
+            )
+            path = dest / f"{stem}_table_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(metrics).to_csv(folder / f"{slug}.csv", index=False)
+        rows = {}
+        for index, row in enumerate(metrics):
+            rows[str(index)] = {
+                "sample": row["sample"],
+                "profile": identity,
+                "tool": str(info.get("tool") or ""),
+                "run_name": str(info.get("run_name") or ""),
+                "database": str(info.get("database") or ""),
+                "rank": str(info.get("rank") or ""),
+                "basis": str(info.get("basis") or ""),
+                "normalization": str(info.get("normalization") or ""),
+                "richness": row["richness"],
+                "shannon": round(float(row["shannon"]), 6),
+                "unclassified": round(float(row["unclassified"]), 6) if row["unclassified"] is not None else None,
+                "unresolved": round(float(row["unresolved"]), 6),
+            }
+        payload = _normalize_mqc_json(
+            {
+                "section_name": title,
+                "description": detail + "." + formula,
+                "plot_type": "table",
+                "data": rows,
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_table",
+        )
+        path = dest / f"{stem}_table_mqc.json"
+        _emit_mqc(payload, path)
+        written.append(path)
+    return written
+
+
+def _write_beta_plots(
+    dest: Path,
+    phase: str,
+    tables: Dict[str, Any],
+    metas: Dict[str, Any],
+    *,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    order: int,
+    config: Optional[Dict[str, Any]] = None,
+) -> List[Path]:
+    """Distance matrix and ordinary PCoA for each saved profile."""
+    import pandas as pd
+
+    from samovar.profiles import beta_diversity
+
+    written: List[Path] = []
+    folder = dest / "beta" / phase
+    scored = []
+    for name, table in tables.items():
+        info = dict(metas.get(name) or {})
+        result = beta_diversity(table, info)
+        slug = _profile_slug(str(name))
+        stem = f"{order:02d}_{phase}_beta_{slug}"
+        identity = str(info.get("identity") or name)
+        result["profile"] = identity
+        result["tool"] = str(info.get("tool") or "")
+        result["run_name"] = str(info.get("run_name") or "")
+        result["database"] = str(info.get("database") or "")
+        result["method"] = str(info.get("method") or info.get("representation") or "")
+        scored.append((identity, info, result))
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{slug}.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        if result["matrix"] is not None:
+            pd.DataFrame(
+                result["matrix"], index=result["sample_ids"], columns=result["sample_ids"]
+            ).to_csv(folder / f"{slug}.csv")
+        if result["coordinates"]:
+            pd.DataFrame(result["coordinates"], index=result["sample_ids"]).to_csv(
+                folder / f"{slug}_coordinates.csv"
+            )
+        detail = (
+            f"rank {result['rank']}; unit {result['unit']}; basis {result['basis']}; "
+            f"normalization {result['normalization']}; metric {result['metric']}; "
+            f"preprocessing {result['preprocessing']}"
+        )
+        if result["method"]:
+            detail += f"; method {result['method']}"
+        variance = ", ".join(
+            f"PC{index} {100 * share:.1f}%"
+            for index, share in enumerate(result["explained_variance"], start=1)
+        )
+        if variance:
+            detail += f". Explained variance: {variance}"
+        if result["negative_eigenvalues"]:
+            shown = ", ".join(f"{value:.6g}" for value in result["negative_eigenvalues"])
+            detail += (
+                f". Negative eigenvalues ({shown}) are not axes and are not replaced with zero. "
+                "Bray–Curtis can be non-Euclidean; the map is then a projection."
+            )
+        title = f"{parent_name} — {identity} beta diversity"
+        payload = _normalize_mqc_json(
+            {
+                "section_name": f"{title} summary",
+                "plot_type": "table",
+                "description": detail + (f". {result['status']}." if result["status"] else "."),
+                "data": {"0": {
+                    "profile": identity,
+                    "tool": result["tool"],
+                    "run_name": result["run_name"],
+                    "database": result["database"],
+                    "metric": result["metric"],
+                    "status": result["status"] or "ok",
+                    "sample_ids": ", ".join(result["sample_ids"]),
+                    "omitted_sample_ids": ", ".join(result["omitted_sample_ids"]),
+                    "explained_variance": variance,
+                    "negative_eigenvalues": ", ".join(f"{value:.6g}" for value in result["negative_eigenvalues"]),
+                }},
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_summary",
+        )
+        path = dest / f"{stem}_summary_mqc.json"
+        _emit_mqc(payload, path)
+        written.append(path)
+        if result["status"] in {None, "one positive eigenvalue"} and result["matrix"] is not None:
+            frame = pd.DataFrame(
+                result["matrix"], index=result["sample_ids"], columns=result["sample_ids"]
+            )
+            path = dest / f"{stem}_heatmap_mqc.json"
+            write_heatmap_mqc(
+                frame, path,
+                section_name=title,
+                description=detail + ". Distances use the full profile."
+                + (f" {result['status']}." if result["status"] else ""),
+                xlab="Sample", ylab="Sample",
+                parent_id=parent_id, parent_name=parent_name,
+            )
+            written.append(path)
+            if len(result["explained_variance"]) >= 2:
+                points = pd.DataFrame({
+                    "sample": result["sample_ids"],
+                    "x": result["coordinates"]["PC1"],
+                    "y": result["coordinates"]["PC2"],
+                })
+                path = dest / f"{stem}_pcoa_mqc.json"
+                write_scatter_mqc(
+                    points, path,
+                    section_name=f"{title} PCoA",
+                    description=detail,
+                    xlab="PC1", ylab="PC2", x="x", y="y", label="sample",
+                    parent_id=parent_id, parent_name=parent_name,
+                )
+                written.append(path)
+    written.extend(_write_grouped_beta(
+        dest, phase, tables, metas, folder,
+        parent_id=parent_id, parent_name=parent_name,
+        parent_description=parent_description, order=order,
+    ))
+    written.extend(_write_concordance(
+        dest, phase, scored, folder,
+        parent_id=parent_id, parent_name=parent_name,
+        parent_description=parent_description, order=order, config=config,
+    ))
+    return written
+
+
+def _write_grouped_beta(
+    dest, phase, tables, metas, folder, *,
+    parent_id, parent_name, parent_description, order,
+):
+    """One PCoA for compatible profiles. Colour is the profile, not a metadata group."""
+    import pandas as pd
+
+    from samovar.profiles import grouped_beta
+
+    written = []
+    grouped = grouped_beta(tables, metas)
+    spaces = grouped["spaces"] or [{
+        "profiles": [],
+        "excluded_profiles": grouped["excluded_profiles"],
+        "omitted_samples": [],
+        "points": [],
+        "rank": "",
+        "basis": "",
+        "normalization": "",
+        "taxonomy": "",
+        "metric": "bray_curtis",
+        "preprocessing": "",
+        "matrix": None,
+        "explained_variance": [],
+        "negative_eigenvalues": [],
+        "status": "no compatible abundance profiles",
+        "eigenvalues": [],
+        "coordinates": {},
+    }]
+    for index, space in enumerate(spaces):
+        slug = "grouped" if len(spaces) == 1 else f"grouped_{index}"
+        stem = f"{order:02d}_{phase}_beta_{slug}"
+        names = ", ".join(space["profiles"]) or "none"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{slug}.json").write_text(json.dumps(space, indent=2) + "\n", encoding="utf-8")
+        if space["points"]:
+            pd.DataFrame(space["points"]).to_csv(folder / f"{slug}_coordinates.csv", index=False)
+        title = f"{parent_name} — grouped beta PCoA ({names})"
+        variance = ", ".join(
+            f"PC{number} {100 * share:.1f}%"
+            for number, share in enumerate(space["explained_variance"], start=1)
+        )
+        detail = (
+            f"rank {space['rank']}; basis {space['basis']}; normalization {space['normalization']}; "
+            f"metric {space['metric']}. {space['preprocessing']}"
+        )
+        if variance:
+            detail += f" Explained variance: {variance}."
+        if space["negative_eigenvalues"]:
+            shown = ", ".join(f"{value:.6g}" for value in space["negative_eigenvalues"])
+            detail += f" Negative eigenvalues ({shown}) are not axes and are not replaced with zero."
+        if space["status"]:
+            detail += f" {space['status']}."
+        rows = {}
+        for point in space["points"]:
+            rows[str(len(rows))] = {
+                "sample": point["sample"],
+                "profile": point["profile"],
+                "tool": point.get("tool", ""),
+                "run_name": point.get("run_name", ""),
+                "database": point.get("database", ""),
+                "status": space["status"] or "ok",
+                **{axis: round(float(point[axis]), 6) for axis in ("PC1", "PC2") if axis in point},
+            }
+        for omitted in space["omitted_samples"]:
+            rows[str(len(rows))] = {
+                "sample": omitted["sample"],
+                "profile": omitted["profile"],
+                "tool": "",
+                "run_name": "",
+                "database": "",
+                "status": omitted["reason"],
+            }
+        for excluded in space["excluded_profiles"]:
+            rows[str(len(rows))] = {
+                "sample": "",
+                "profile": excluded["profile"],
+                "tool": "",
+                "run_name": "",
+                "database": "",
+                "status": excluded["reason"],
+            }
+        payload = _normalize_mqc_json(
+            {
+                "section_name": f"{title} summary",
+                "plot_type": "table",
+                "description": detail,
+                "data": rows or {"0": {"profile": names, "status": space["status"] or "ok"}},
+            },
+            parent_id=parent_id, parent_name=parent_name,
+            parent_description=parent_description, stem=f"{stem}_summary",
+        )
+        path = dest / f"{stem}_summary_mqc.json"
+        _emit_mqc(payload, path)
+        written.append(path)
+        if space["status"] is None and "PC2" in space["coordinates"]:
+            from samovar.profiles import composition_color
+            series = {}
+            for point in space["points"]:
+                series[f"{len(series) + 1}: {point['sample']} | {point['profile']}"] = {
+                    "x": point["PC1"],
+                    "y": point["PC2"],
+                    "group": point["profile"],
+                    "color": composition_color(point["profile"]),
+                    "name": " | ".join(
+                        part for part in (point["sample"], point.get("tool", ""), point.get("run_name", ""), point.get("database", "")) if part
+                    ),
+                }
+            payload = _normalize_mqc_json(
+                {
+                    "section_name": title,
+                    "plot_type": "scatter",
+                    "description": detail + " Colour is the profile.",
+                    "pconfig": {
+                        "title": title,
+                        "xlab": "PC1",
+                        "ylab": "PC2",
+                    },
+                    "data": series,
+                },
+                parent_id=parent_id, parent_name=parent_name,
+                parent_description=parent_description, stem=f"{stem}_pcoa",
+            )
+            path = dest / f"{stem}_pcoa_mqc.json"
+            _emit_mqc(payload, path)
+            written.append(path)
+    return written
+
+
+def _write_concordance(
+    dest, phase, scored, folder, *,
+    parent_id, parent_name, parent_description, order, config=None,
+):
+    """Pairwise concordance for one stage. The scorer name comes from config."""
+    import pandas as pd
+
+    from samovar.concordance import score_concordance
+
+    cfg = dict(config or {})
+    names = [name for name, _, _ in scored]
+    pairs = []
+    for left in range(len(scored)):
+        for right in range(left + 1, len(scored)):
+            left_name, left_info, left_result = scored[left]
+            right_name, right_info, right_result = scored[right]
+            row = {
+                "profile_a": left_name,
+                "profile_b": right_name,
+                "tool": " ".join(part for part in (str(left_info.get("tool") or ""), str(right_info.get("tool") or "")) if part),
+                "run_name": " ".join(part for part in (str(left_info.get("run_name") or ""), str(right_info.get("run_name") or "")) if part),
+                "database": " ".join(part for part in (str(left_info.get("database") or ""), str(right_info.get("database") or "")) if part),
+                "stage": phase,
+            }
+            same = all(
+                left_result.get(field) == right_result.get(field)
+                for field in ("metric", "taxonomy", "rank", "basis", "normalization")
+            )
+            if not same or not left_result.get("matrix") or not right_result.get("matrix"):
+                row.update(method=str(cfg.get("concordance") or "mantel"), statistic=None, pvalue=None,
+                           status="incompatible profiles" if not same else "no distance matrix",
+                           reason="taxonomy, rank, basis, normalization, or metric differ" if not same else "a profile has no distance matrix",
+                           n_samples=0, omitted_samples="")
+                pairs.append(row)
+                continue
+            left_frame = pd.DataFrame(left_result["matrix"], index=left_result["sample_ids"], columns=left_result["sample_ids"])
+            right_frame = pd.DataFrame(right_result["matrix"], index=right_result["sample_ids"], columns=right_result["sample_ids"])
+            context = {field: left_result[field] for field in ("metric", "taxonomy", "rank", "basis", "normalization")}
+            scored_pair = score_concordance(left_frame, right_frame, {
+                **cfg, **context, "stage": phase,
+                "profile_a": {"identity": left_name, **left_info},
+                "profile_b": {"identity": right_name, **right_info},
+            })
+            row.update(scored_pair)
+            row["omitted_samples"] = ", ".join(scored_pair.get("omitted_samples") or [])
+            pairs.append(row)
+    folder.mkdir(parents=True, exist_ok=True)
+    payload = {"scorer": str(cfg.get("concordance") or "mantel"), "stage": phase, "pairs": pairs}
+    (folder / "concordance.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    stem = f"{order:02d}_{phase}_beta_concordance"
+    title = f"{parent_name} — beta concordance"
+    detail = (
+        f"Scorer {payload['scorer']}. P-values are raw, one per annotator pair, "
+        "and are not adjusted for the number of pairs. "
+        "Shared samples only; a sample missing from one profile is omitted, not filled with zeros."
+    )
+    rows = {}
+    for pair in pairs:
+        rows[str(len(rows))] = {
+            "profile": f"{pair['profile_a']} {pair['profile_b']}",
+            "tool": pair.get("tool") or "",
+            "run_name": pair.get("run_name") or "",
+            "database": pair.get("database") or "",
+            "method": pair.get("method") or "",
+            "statistic": None if pair.get("statistic") is None else round(float(pair["statistic"]), 6),
+            "pvalue": None if pair.get("pvalue") is None else round(float(pair["pvalue"]), 6),
+            "n_samples": pair.get("n_samples") or 0,
+            "seed": pair.get("seed"),
+            "permutations": pair.get("permutations"),
+            "status": pair.get("status") or "ok",
+            "omitted_samples": pair.get("omitted_samples") or "",
+            "pvalue_policy": "raw, not adjusted across pairs",
+        }
+    if not rows:
+        rows = {"0": {"profile": "", "status": "fewer than two profiles", "method": payload["scorer"]}}
+    written = []
+    table = _normalize_mqc_json(
+        {
+            "section_name": f"{title} table",
+            "plot_type": "table",
+            "description": detail,
+            "data": rows,
+        },
+        parent_id=parent_id, parent_name=parent_name,
+        parent_description=parent_description, stem=f"{stem}_table",
+    )
+    path = dest / f"{stem}_table_mqc.json"
+    _emit_mqc(table, path)
+    written.append(path)
+    labels = list(dict.fromkeys([*names, *[pair["profile_b"] for pair in pairs]]))
+    grid = pd.DataFrame(index=labels, columns=labels, dtype=float)
+    for pair in pairs:
+        if pair.get("statistic") is None:
+            continue
+        grid.loc[pair["profile_a"], pair["profile_b"]] = float(pair["statistic"])
+        grid.loc[pair["profile_b"], pair["profile_a"]] = float(pair["statistic"])
+    if grid.notna().any().any():
+        path = dest / f"{stem}_heatmap_mqc.json"
+        write_heatmap_mqc(
+            grid,
+            path,
+            section_name=title,
+            description=detail,
+            xlab="Profile", ylab="Profile",
+            parent_id=parent_id, parent_name=parent_name,
+            min_value=min(-1.0, float(grid.min().min())),
+            max_value=max(1.0, float(grid.max().max())),
+        )
+        written.append(path)
+    return written
+
+
+def _csv_cell(value: Any) -> Any:
+    return "" if value is None else value
+
+
+def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) -> None:
+    """Box plots of per-sample seconds and peak RSS, plus means and stage wall clocks."""
+    import csv
+
+    from samovar.multiqc_report import _matches
+    from samovar.runtime import load_sample_runtimes, load_stage_runtimes, mean_per_run
+
+    phases = settings["stages"]
+    annotators = settings["annotators"]
+    samples = [
+        row for row in load_sample_runtimes(root)
+        if row["phase"] in phases
+        and (annotators == "all" or _matches(str(row["run_name"]), annotators))
+    ]
+    stages = [
+        row for row in load_stage_runtimes(root)
+        if phases >= {"initial", "regenerated", "reprofiled"}
+        or any(token in row["stage"] for token in phases)
+    ]
+    if not samples and not stages:
+        return
+    folder = dest / "runtime"
+    folder.mkdir(parents=True, exist_ok=True)
+    sample_fields = ["phase", "run_name", "rule", "sample", "elapsed_s", "max_rss_mb"]
+    with (folder / "samples.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=sample_fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows({key: _csv_cell(row.get(key)) for key in sample_fields} for row in samples)
+    with (folder / "stages.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["stage", "elapsed_s"])
+        writer.writeheader()
+        writer.writerows(stages)
+    means = mean_per_run(samples)
+    mean_fields = ["phase", "run_name", "n", "mean_elapsed_s", "mean_max_rss_mb"]
+    with (folder / "means.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=mean_fields)
+        writer.writeheader()
+        writer.writerows({key: _csv_cell(row.get(key)) for key in mean_fields} for row in means)
+    if samples:
+        grouped: Dict[str, List[float]] = {}
+        for row in samples:
+            grouped.setdefault(f"{row['phase']}: {row['run_name']}", []).append(row["elapsed_s"])
+        payload = {
+            "id": "samovar_runtime_box",
+            "section_name": "Runtime per sample",
+            "description": (
+                "Each point is one sample's wall-clock seconds for that annotator or profiler. "
+                "The mean is the per-sample runtime. Absolute stage time is the checkpoint wall clock "
+                "and is not the sum of these points. A tool that did not run is absent, not zero."
+            ),
+            "plot_type": "box",
+            "pconfig": {
+                "id": "samovar_runtime_box_plot",
+                "title": "Elapsed seconds per sample",
+                "ylab": "Seconds",
+            },
+            "data": grouped,
+        }
+        _emit_mqc(payload, dest / "runtime_box_mqc.json")
+        memory: Dict[str, List[float]] = {}
+        for row in samples:
+            if row.get("max_rss_mb") is None:
+                continue
+            memory.setdefault(f"{row['phase']}: {row['run_name']}", []).append(row["max_rss_mb"])
+        if memory:
+            payload = {
+                "id": "samovar_runtime_memory_box",
+                "section_name": "Peak memory per sample",
+                "description": (
+                    "Each point is one sample's Snakemake benchmark max_rss, in MB, "
+                    "for that annotator or profiler. The mean is the per-sample peak. "
+                    "A missing max_rss is absent, not zero."
+                ),
+                "plot_type": "box",
+                "pconfig": {
+                    "id": "samovar_runtime_memory_box_plot",
+                    "title": "Peak RSS per sample",
+                    "ylab": "MB",
+                },
+                "data": memory,
+            }
+            _emit_mqc(payload, dest / "runtime_memory_box_mqc.json")
+    rows: Dict[str, Dict[str, Any]] = {}
+    for row in means:
+        rss = row.get("mean_max_rss_mb")
+        rows[str(len(rows))] = {
+            "kind": "per_sample_mean",
+            "stage": row["phase"],
+            "name": row["run_name"],
+            "n": row["n"],
+            "elapsed_s": round(row["mean_elapsed_s"], 6),
+            "max_rss_mb": "" if rss is None else round(rss, 6),
+        }
+    for row in stages:
+        rows[str(len(rows))] = {
+            "kind": "absolute",
+            "stage": row["stage"],
+            "name": row["stage"],
+            "n": "",
+            "elapsed_s": round(row["elapsed_s"], 6),
+            "max_rss_mb": "",
+        }
+    if rows:
+        payload = {
+            "id": "samovar_runtime_table",
+            "section_name": "Runtime summary",
+            "description": (
+                "per_sample_mean is the average sample elapsed and, when the benchmark "
+                "recorded it, the average peak RSS in MB. absolute is the stage wall clock "
+                "and has no peak memory."
+            ),
+            "plot_type": "table",
+            "pconfig": {"id": "samovar_runtime_summary", "title": "Runtime", "col1_header": "Row"},
+            "data": rows,
+        }
+        _emit_mqc(payload, dest / "runtime_summary_mqc.json")
+
+
+def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = None) -> Path:
+    """Materialize ``*_mqc.*`` custom content from plot folders and run options.
+
+    ``settings`` selects sections, stages, and annotators. The staged directory
+    is replaced, so a section that was turned off does not keep its previous plot.
+    Annotation, regeneration, and training outputs are not rebuilt.
+    """
+    from samovar.multiqc_report import (
+        apply_selection,
+        correction_sources,
+        missing_sections,
+        qc_sources,
+        resolve_settings,
+        settings_document,
+    )
+
+    root = as_path(output_dir)
+    if settings is None:
+        settings = resolve_settings(root)
+    enabled = set(settings["sections"])
+    stages = set(settings["stages"])
+    write_overview_report(root)
+    if "mag" in enabled:
+        from samovar.MAG.report import write_mag_mapping_plots
+
+        write_mag_mapping_plots(root)
     dest = multiqc_stage_dir(root)
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
     plots = root / REPORT_SECTION["viz_regenerated"]["folder"]
-    if not plots.is_dir() or not any(plots.glob("TableScore_*_mqc.json")):
+    if "table_scores" in enabled and "regenerated" in stages and (
+        not plots.is_dir() or not any(plots.glob("TableScore_*_mqc.json"))
+    ):
         for candidate in (
             root / "regenerated" / ".regenerated_abundance" / "table_selection.json",
             root / "regenerated" / "table_selection.json",
         ):
             if candidate.is_file():
-                try:
-                    from samovar.table_scorers import write_table_score_plots
+                from samovar.table_scorers import write_table_score_plots
 
-                    write_table_score_plots(
-                        json.loads(candidate.read_text(encoding="utf-8")),
-                        plots,
-                    )
-                except Exception:
-                    pass
+                write_table_score_plots(
+                    json.loads(candidate.read_text(encoding="utf-8")),
+                    plots,
+                )
                 break
 
     for i, stage in enumerate(REPORT_STAGES, start=1):
         spec = REPORT_SECTION[stage]
+        if stage == "feature_importance":
+            if "feature_importance" not in enabled:
+                continue
+        elif stage.removeprefix("viz_") not in stages:
+            continue
         folder = root / spec["folder"]
         if stage == "feature_importance" and not (
             folder.is_dir() and any(folder.glob("*_mqc.json"))
@@ -1582,7 +2342,101 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
             encoding="utf-8",
         )
         _copy_plot_assets(folder, dest, stage, i)
+        if stage != "feature_importance" and ({"profiles", "composition", "alpha", "beta"} & enabled):
+            from samovar.profile_pipeline import stage_annotation
+            from samovar.profiles import read_profiles, report_profiles
 
+            phase = stage.removeprefix("viz_")
+            cfg_name = "config_reannotate.yaml" if phase == "regenerated" else "config_init.yaml"
+            config = _load_yaml(root / ".log" / "configs" / cfg_name)
+            inventory = report_profiles(stage_annotation(root, phase), dest / "profiles" / phase, phase, config,
+                                        annotators=settings["annotators"])
+            if "profiles" in enabled and inventory:
+                payload = _normalize_mqc_json(
+                    dict(section_name="Profile inventory", plot_type="table", data=inventory,
+                         description="Available full profiles; mass uses the declared units. Unknown metadata remains unspecified. "
+                                     "Typed numeric tables and metadata are in multiqc_samovar/profiles/. No gold standard is required."),
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], stem="profile_inventory")
+                _emit_mqc(payload, dest / f"{i:02d}_{phase}_profile_inventory_mqc.json")
+            if {"composition", "alpha", "beta"} & enabled:
+                tables, metas = read_profiles(dest / "profiles" / phase)
+            else:
+                tables, metas = {}, {}
+            if "composition" in enabled:
+                _write_composition_plots(
+                    dest, phase, tables, metas,
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], order=i,
+                )
+            if "alpha" in enabled:
+                _write_alpha_tables(
+                    dest, phase, tables, metas,
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], order=i,
+                )
+            if "beta" in enabled:
+                shared = _load_yaml(root / ".log" / "configs" / "config_annotation2iss.yaml")
+                scorer_config = {key: shared[key] for key in ("concordance", "seed", "permutations") if key in shared}
+                scorer_config.update(config)
+                if "concordance" not in scorer_config:
+                    scorer_config["concordance"] = (
+                        _load_yaml(root / ".log" / "configs" / "config_init.yaml").get("concordance")
+                        or "mantel"
+                    )
+                _write_beta_plots(
+                    dest, phase, tables, metas,
+                    parent_id=spec["id"], parent_name=spec["title"],
+                    parent_description=spec["description"], order=i,
+                    config=scorer_config,
+                )
+
+    if "qc" in enabled:
+        qc_dir = dest / "qc"
+        for source in qc_sources(root):
+            if source.parent.name.removesuffix("_trimmed") not in stages:
+                continue
+            qc_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, qc_dir / source.name)
+    corrections = correction_sources(root) if "correction" in enabled and "reprofiled" in stages else []
+    if corrections:
+        payload = {
+            "id": "samovar_correction",
+            "section_name": "Correction",
+            "description": "Saved correction artifact. The model is not retrained.",
+            "plot_type": "table",
+            "pconfig": {"id": "samovar_correction_table", "title": "Correction", "col1_header": "Artifact"},
+            "headers": {"present": {"title": "Present", "format": "{:.0f}"}},
+            "data": {name: {"present": 1} for name in corrections},
+        }
+        _emit_mqc(payload, dest / "correction_artifacts_mqc.json")
+    if "runtime" in enabled:
+        _write_runtime_section(root, dest, settings)
+    produced = apply_selection(dest, settings)
+    if corrections:
+        produced.add("correction")
+    missing = missing_sections(settings, produced)
+    if missing:
+        items = "".join(f"<li><strong>{html.escape(name)}</strong>: {html.escape(reason)}</li>" for name, reason in missing)
+        status = dest / "98_report_status_mqc.html"
+        status.write_text(
+            _html_comment(
+                {
+                    "id": "samovar_report_status",
+                    "section_name": "Report status",
+                    "description": "Selected sections with nothing to plot in this run.",
+                    "plot_type": "html",
+                }
+            )
+            + "<p>These selected sections have no saved data in this run. Nothing was recomputed from reads or databases.</p><ul>"
+            + items
+            + "</ul>\n",
+            encoding="utf-8",
+        )
+    (dest / "report_settings.json").write_text(
+        json.dumps(settings_document(settings), indent=2) + "\n",
+        encoding="utf-8",
+    )
     hidden_ids = _hidden_parent_ids(dest)
     options_html = dest / "00_run_options_mqc.html"
     options_html.write_text(
@@ -1594,7 +2448,7 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
                 "plot_type": "html",
             }
         )
-        + _run_options_html(root, hidden_ids)
+        + _run_options_html(root, hidden_ids, settings)
         + "\n",
         encoding="utf-8",
     )
@@ -1608,7 +2462,7 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
                 "plot_type": "html",
             }
         )
-        + _conclusion_html(root)
+        + _conclusion_html(root, settings)
         + "\n",
         encoding="utf-8",
     )
@@ -1616,25 +2470,32 @@ def bundle_multiqc(output_dir: PathLike) -> Path:
     return dest
 
 
-def run_multiqc(output_dir: PathLike, extra_args: Optional[Sequence[str]] = None) -> int:
+def run_multiqc(
+    output_dir: PathLike,
+    extra_args: Optional[Sequence[str]] = None,
+    settings: Optional[Dict[str, Any]] = None,
+) -> int:
     """Invoke the real MultiQC CLI on staged ``*_mqc`` files.
 
-    Extra args are passed through (after an optional ``--``), so you can do
-    ``samovar multiqc --output_dir RUN -- --export --module custom_content``.
+    Report flags (``--sections``, ``--exclude``, ``--stages``, ``--annotators``,
+    ``--config``) are read before ``--``. Everything after ``--`` is passed to
+    MultiQC, for example ``samovar multiqc --output_dir RUN -- --export``.
     Native Plotly plots (heatmap / scatter / bar / table) show MultiQC's
     in-report export checkboxes; ``--export`` / ``-p`` writes png/svg/pdf.
     """
     import subprocess
 
+    from samovar.multiqc_report import parse_cli, resolve_settings
     from samovar.paths import discover_multiqc
 
-    staged = bundle_multiqc(output_dir)
+    cli, extra = parse_cli(list(extra_args or []))
+    if settings is None:
+        config_path = Path(cli["config"]) if cli.get("config") else None
+        settings = resolve_settings(as_path(output_dir), cli, config_path)
+    staged = bundle_multiqc(output_dir, settings)
     out = as_path(output_dir) / "multiqc"
     out.mkdir(parents=True, exist_ok=True)
     cfg = staged / "multiqc_config.yaml"
-    extra = list(extra_args or [])
-    if extra and extra[0] == "--":
-        extra = extra[1:]
     exe = discover_multiqc()
     if exe:
         cmd = [exe, str(staged), "-o", str(out), "-f", "-c", str(cfg)]
@@ -1655,7 +2516,7 @@ def run_multiqc(output_dir: PathLike, extra_args: Optional[Sequence[str]] = None
             "Optional install: ./install.sh MultiQC",
             file=sys.stderr,
         )
-        return 0
+        return rc
     return rc
 
 
@@ -1672,25 +2533,72 @@ def _parser() -> argparse.ArgumentParser:
     overview.add_argument("output_dir")
     bundle = sub.add_parser("bundle", help="Stage *_mqc files for MultiQC")
     bundle.add_argument("output_dir")
+    bundle.add_argument("--sections", default=None, help="Comma-separated section names, or all")
+    bundle.add_argument("--include", default=None)
+    bundle.add_argument("--exclude", default=None)
+    bundle.add_argument("--stages", default=None, help="initial, regenerated, reprofiled, or all")
+    bundle.add_argument("--annotators", default=None)
+    bundle.add_argument("--config", default=None, help="YAML with a multiqc block; overrides .hydra")
     render = sub.add_parser("multiqc", help="Bundle and run the MultiQC CLI")
     render.add_argument("output_dir")
-    render.add_argument("multiqc_args", nargs=argparse.REMAINDER, help="Passed to multiqc (use -- first)")
+    render.add_argument("--sections", default=None, help="Comma-separated section names, or all")
+    render.add_argument("--include", default=None)
+    render.add_argument("--exclude", default=None)
+    render.add_argument("--stages", default=None, help="initial, regenerated, reprofiled, or all")
+    render.add_argument("--annotators", default=None)
+    render.add_argument("--config", default=None, help="YAML with a multiqc block; overrides .hydra")
+    render.add_argument("multiqc_args", nargs=argparse.REMAINDER, help="Passed to multiqc after --")
     return parser
 
 
+def _report_help(raw: Sequence[str]) -> bool:
+    """``-h``/``--help`` before ``--`` is SamovaR help, not a MultiQC flag."""
+    if not raw or raw[0] not in {"bundle", "multiqc"}:
+        return False
+    body = list(raw[1:])
+    if "--" in body:
+        body = body[: body.index("--")]
+    return "-h" in body or "--help" in body
+
+
+def _report_command(raw: Sequence[str]) -> Optional[int]:
+    """Parse report flags ourselves. argparse REMAINDER would swallow them."""
+    if not raw or raw[0] not in {"bundle", "multiqc"}:
+        return None
+    if _report_help(raw):
+        try:
+            _parser().parse_args([raw[0], "--help"])
+        except SystemExit as exc:
+            return int(exc.code or 0)
+    if len(raw) < 2:
+        raise ValueError(f"{raw[0]} needs an output directory")
+    from samovar.multiqc_report import parse_cli, resolve_settings
+
+    cli, extra = parse_cli(raw[2:])
+    config_path = Path(cli["config"]) if cli.get("config") else None
+    settings = resolve_settings(Path(raw[1]), cli, config_path)
+    if raw[0] == "bundle":
+        bundle_multiqc(raw[1], settings)
+        return 0
+    return run_multiqc(raw[1], extra_args=["--", *extra], settings=settings)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = _parser().parse_args(list(argv) if argv is not None else None)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    try:
+        handled = _report_command(raw)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    if handled is not None:
+        return handled
+    args = _parser().parse_args(raw)
     if args.command == "emit":
         write_stage_report(args.output_dir, args.stage)
         return 0
     if args.command == "overview":
         write_overview_report(args.output_dir)
         return 0
-    if args.command == "bundle":
-        bundle_multiqc(args.output_dir)
-        return 0
-    if args.command == "multiqc":
-        return run_multiqc(args.output_dir, extra_args=getattr(args, "multiqc_args", None))
     return 2
 
 

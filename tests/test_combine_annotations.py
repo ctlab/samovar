@@ -12,6 +12,7 @@ import pytest
 from samovar.parse_annotators import Annotation, extract_true_taxid
 from samovar.annotation_io import read_annotation_dir
 from samovar.combine_tables import (
+    ambiguous_sample_run_stems,
     apply_rank_level_csv,
     apply_species_level_csv,
     combine_with_cpp,
@@ -55,6 +56,61 @@ def _write_features(path: Path, header, rows):
         handle.write("\t".join(header) + "\n")
         for row in rows:
             handle.write("\t".join(str(x) for x in row) + "\n")
+
+
+def test_batch_combine_uses_recorded_sample_when_run_name_has_underscores(tmp_path):
+    reports = tmp_path / "reports"
+    out = tmp_path / "ann"
+    reports.mkdir()
+    out_file = reports / "sample_one_kmcp_native.custom_kmcp.out"
+    _write_custom(out_file, [("r1", "562")])
+    (reports / "sample_one_kmcp_native.custom_kmcp.out.sample").write_text(
+        "sample_one\n", encoding="utf-8"
+    )
+    combine_with_cpp(str(reports), str(out), 1)
+    assert (out / "sample_one.annotation.csv").is_file()
+    assert not (out / "sample_one_kmcp.annotation.csv").exists()
+    frame = pd.read_csv(out / "sample_one.annotation.csv")
+    assert frame["seq"].tolist() == ["r1"]
+    assert ambiguous_sample_run_stems(
+        ["sample", "sample_one"], ["one_kmcp", "kmcp"]
+    ) == [("sample_one_kmcp", ("sample", "one_kmcp"), ("sample_one", "kmcp"))]
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    _write_custom(bare / "sample_one_kmcp_native.custom_kmcp.out", [("r1", "562")])
+    guessed = tmp_path / "guessed"
+    combine_with_cpp(str(bare), str(guessed), 1)
+    assert (guessed / "sample_one_kmcp.annotation.csv").is_file()
+
+
+def test_batch_pipeline_keeps_underscore_sample(tmp_path):
+    import os
+    import sys
+
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "sample_one.fastq").write_text("@r1\nACGT\n+\nIIII\n", encoding="utf-8")
+    out = tmp_path / "out"
+    repo = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHON_PATH"] = sys.executable
+    env["SAMOVAR_ROOT"] = str(repo)
+    proc = subprocess.run(
+        [sys.executable, str(repo / "bin" / "samovar_preprocess"),
+         "--input_dir", str(reads), "--output_dir", str(out),
+         "--kmcp_native", "dummy", "--endpoint", "combine_initial",
+         "--no-incremental-annotations", "--no-multiqc", "--cores", "1"],
+        cwd=repo, env=env, text=True, capture_output=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    exe = subprocess.run(
+        ["bash", str(repo / "bin" / "samovar_exec"), "--output_dir", str(out)],
+        cwd=repo, env=env, text=True, capture_output=True,
+    )
+    assert exe.returncode == 0, exe.stdout + exe.stderr
+    ann = out / "initial_annotations"
+    assert (ann / "sample_one.annotation.csv").is_file()
+    assert not (ann / "sample_one_kmcp.annotation.csv").exists()
 
 
 def test_combine_merges_headered_features(tmp_path, combiner):

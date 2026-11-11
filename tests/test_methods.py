@@ -77,6 +77,9 @@ def _toy_run(tmp_path: Path, *, start="setup_reads", end="viz_reprofiled") -> Pa
         {"reprofiler": "ensemble", "feature_importance": "off"},
     )
     _dump_yaml(configs / "config_export.yaml", {"export": "off", "export_formats": []})
+    generated = tmp_path / ".generate"
+    generated.mkdir()
+    (generated / "generate.sh").write_text("#!/bin/bash\n", encoding="utf-8")
     (tmp_path / "used_citations.bib").write_text(
         "% --- kraken2 ---\n"
         "@article{Wood_2019, title={Improved metagenomic analysis with Kraken 2}, year={2019}}\n\n"
@@ -147,6 +150,72 @@ def test_collect_stage_rows_fills_annotator_ensemble_sentence(tmp_path):
     assert stages <= set(CHECKPOINT_STEPS)
     assert "setup_reads" in stages
     assert "reprofile" in stages
+
+
+def test_supplied_reads_do_not_claim_a_generator(tmp_path):
+    out = _toy_run(tmp_path)
+    (out / ".generate" / "generate.sh").unlink()
+    rows = collect_stage_rows(out)
+    setup = next(r for r in rows if r["stage"] == "setup_reads")
+    assert setup["contract"] == "supplied_reads"
+    assert setup["tools"] == []
+    assert "iss" not in setup["md"].lower()
+    assert "Gourle" not in setup["md"]
+    assert "Supplied sequencing reads were prepared for the run." in setup["md"]
+    regen = next(r for r in rows if r["stage"] == "regenerate_reads")
+    assert regen["contract"] == "reads_generator"
+    assert "iss" in regen["md"]
+    assert "@Gourle_2019" in regen["md"]
+
+
+def test_prepare_supplied_fastq_methods_omit_iss(tmp_path):
+    import os
+    import random
+    import subprocess
+    import sys
+
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    for name, seed in (("A", 0), ("B", 1)):
+        rng = random.Random(seed)
+        lines = []
+        for i in range(50):
+            seq = "".join(rng.choice("ACGT") for _ in range(100))
+            lines.append(f"@r{i}\n{seq}\n+\n{'I' * 100}\n")
+        (reads / f"{name}.fastq").write_text("".join(lines), encoding="utf-8")
+    truth = tmp_path / "truth.csv"
+    truth.write_text(
+        "taxid,N_A,N_B\n562,0.6,0.1\n4932,0.3,0.2\n9606,0.1,0.7\n",
+        encoding="utf-8",
+    )
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "input_dir: {reads}\n"
+        "profile_truth: {{path: {truth}, unit: fraction, basis: reads, "
+        "kind: abundance, taxonomy: ncbi, rank: species, normalization: classified}}\n".format(
+            reads=reads, truth=truth
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    repo = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHON_PATH"] = sys.executable
+    env["SAMOVAR_ROOT"] = str(repo)
+    proc = subprocess.run(
+        [sys.executable, str(repo / "bin" / "samovar_preprocess"),
+         "--input_config", str(cfg), "--output_dir", str(out),
+         "--endpoint", "viz_initial", "--cores", "1"],
+        cwd=repo, env=env, text=True, capture_output=True,
+    )
+    text = proc.stdout + proc.stderr
+    assert proc.returncode == 0, text
+    assert not (out / ".generate").exists()
+    md = (out / "methods.md").read_text(encoding="utf-8")
+    assert "Supplied sequencing reads were prepared for the run." in md
+    assert "generated with iss" not in md
+    assert "Gourle" not in md
+    assert "iss" not in md.lower()
 
 
 def test_window_env_limits_stages(tmp_path):

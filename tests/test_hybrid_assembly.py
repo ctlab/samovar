@@ -109,6 +109,7 @@ def test_regenerated_hybrid_retains_paired_library(tmp_path, monkeypatch, gzip_r
     _hybrid(run / "initial")
     out = run / "regenerated"
     out.mkdir()
+    (tmp_path / "562.fa").write_text(">contig\nACGT\n")
     _simulate_camisim_sample("hybrid", {"562": 3}, {"562": str(tmp_path / "562.fa")}, str(out),
                              "1_full", "kraken2", model="hiseq", cpus=1, seed=42,
                              gzip_reads=gzip_reads, flags=[], ids=[], config={})

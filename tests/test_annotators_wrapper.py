@@ -241,7 +241,137 @@ def test_snakemake_constant_taxid_rule(tmp_path):
     if proc.returncode != 0:
         pytest.fail(proc.stdout + "\n" + proc.stderr)
     outs = list(out_dir.glob("*.out"))
+    bench = next((out_dir / "runtime" / "samples").glob("*/*/*.tsv"))
+    header = bench.read_text(encoding="utf-8").splitlines()[0].split("\t")
+    assert "s" in header
     assert outs
     df = pd.read_table(outs[0], header=None, names=["seq", "taxID"])
     assert (df["taxID"].astype(str) == "9606").all()
     assert len(df) == 4
+
+
+def test_builtin_rule_keeps_underscore_run_name(tmp_path):
+    """rule kraken2 must not parse A_kraken2_x as sample A_kraken2."""
+    pytest.importorskip("snakemake")
+    import subprocess
+
+    from samovar.paths import command_argv, resolve_executable, workflow_dir
+
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    _tiny_fastq(reads / "A.fastq", n=1, prefix="a")
+    _tiny_fastq(reads / "sample_one.fastq", n=1, prefix="b")
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        yaml.dump(
+            {
+                "r1_dir": str(reads),
+                "r2_dir": str(reads),
+                "output_dir": str(tmp_path / "reports"),
+                "cores": 1,
+                "run_config": [
+                    {
+                        "run_name": "kraken2_x",
+                        "type": "kraken2",
+                        "cmd": "kraken2",
+                        "db_path": str(tmp_path / "db"),
+                        "threads": 1,
+                    }
+                ],
+            }
+        )
+    )
+    result = subprocess.run(
+        [
+            *command_argv(resolve_executable("snakemake", tool_key="snakemake")),
+            "-s",
+            str(Path(workflow_dir()) / "annotators" / "Snakefile"),
+            "--configfile",
+            str(cfg),
+            "--cores",
+            "1",
+            "--dry-run",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    text = result.stdout + result.stderr
+    assert result.returncode == 0, text
+    assert "sample=A, run_name=kraken2_x" in text
+    assert "sample=sample_one, run_name=kraken2_x" in text
+    assert "sample=A_kraken2" not in text
+@pytest.mark.parametrize("paired", [False, True])
+def test_sylph_profile_command_uses_config_and_quoted_paths(tmp_path, monkeypatch, paired):
+    import shlex
+    from samovar.annotators_wrapper import ProfileAnnotator
+    exe = tmp_path / "tools with spaces" / "sylph"
+    exe.parent.mkdir()
+    exe.touch()
+    called = []
+    def resolve(command, **kwargs):
+        called.append(command)
+        return command
+    monkeypatch.setattr("samovar.paths.resolve_executable", resolve)
+    db = tmp_path / "db with spaces"
+    db.mkdir()
+    (db / "genomes.syldb").write_bytes(b"index")
+    (db / "genomes.syldb.taxonomy.tsv").write_text("Genome_file\ttaxid\ng\t562\n")
+    (db / "sylph.manifest.json").write_text('{"compression": 50}')
+    annotator = ProfileAnnotator(dict(type="sylph", cmd=str(exe), run_name="sylph_ref", db_path=str(db), threads=3), {})
+    r1, r2 = str(tmp_path / "reads 1.fq"), str(tmp_path / "reads 2.fq") if paired else None
+    outputs = annotator.get_expected_outputs("original_sample", str(tmp_path))
+    lexer = shlex.shlex(annotator.get_snakemake_shell_cmd(r1, r2, outputs), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    command = list(lexer)
+    assert called and str(exe) in command and str(db / "genomes.syldb") in command
+    command = command[command.index(str(exe)):]
+    assert command[command.index("-t") + 1] == "3"
+    assert command[command.index("-c") + 1] == "50"
+    assert r1 in command and ("-2" in command) == paired
+    assert command[command.index("--sample") + 1] == "original_sample"
+    assert command[command.index("--format") + 1] == "sylph"
+
+@pytest.mark.parametrize('paired', [False, True])
+def test_bracken_profile_uses_kraken_contract_threads_and_quoted_paths(tmp_path, monkeypatch, paired):
+    import shlex
+    from samovar.annotators_wrapper import ProfileAnnotator
+    db = tmp_path / 'database with spaces'
+    db.mkdir()
+    (db / 'database126mers.kmer_distrib').write_text('distribution')
+    exe = tmp_path / 'programs with spaces' / 'bracken'
+    exe.parent.mkdir(); exe.touch()
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda cmd, **k: str(exe) if cmd == str(exe) else cmd)
+    tool = ProfileAnnotator(dict(type='bracken', cmd=str(exe), run_name='kb', db_path=str(db), threads=3, extra='-t 0'), {})
+    r1, r2 = str(tmp_path / 'read 1.fastq'), str(tmp_path / 'read 2.fastq') if paired else None
+    output = tool.get_expected_outputs('original_sample', str(tmp_path))
+    lexer = shlex.shlex(tool.get_snakemake_shell_cmd(r1, r2, output), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    argv = list(lexer)
+    assert argv[argv.index('--threads') + 1] == '3'
+    assert argv[argv.index('--read-length') + 1] == '126'
+    assert argv[argv.index('--threshold') + 1] == '0'
+    assert argv[argv.index('--sample') + 1] == 'original_sample'
+    assert r1 in argv and ('--paired' in argv) == paired
+    assert 'samovar.profiles' in argv and 'bracken' in argv
+    with pytest.raises(FileNotFoundError, match='distribution'):
+        ProfileAnnotator({**tool.run_config, 'extra': '-r 150'}, {}).get_snakemake_shell_cmd(r1, r2, output)
+
+
+@pytest.mark.parametrize('paired', [False, True])
+def test_motus_profile_command_reuses_shared_profile_stage(tmp_path, monkeypatch, paired):
+    import shlex
+    from samovar.annotators_wrapper import ProfileAnnotator
+    native = tmp_path/'motus'; native.touch()
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: str(native))
+    obj = get_annotator_instance('motus', dict(run_name='motus_named', type='motus', cmd=str(native),
+         db_path=str(tmp_path/'marker DB'), threads=2, output_level='profile'), {})
+    assert isinstance(obj, ProfileAnnotator)
+    outputs = obj.get_expected_outputs('sample_one', str(tmp_path/'output with spaces'))
+    cmd = obj.get_snakemake_shell_cmd(str(tmp_path/'r1 reads.fq'), str(tmp_path/'r2 reads.fq') if paired else '', outputs)
+    args = shlex.split(cmd)
+    assert 'motus' in args and 'ingest' in args and 'samovar.profiles' in args
+    assert args[args.index('--sample')+1] == 'sample_one'
+    assert ('--input-r2' in args) == paired
+    assert args[args.index('--threads')+1] == '2'
+    assert '--format' in args and args[args.index('--format')+1] == 'motus'

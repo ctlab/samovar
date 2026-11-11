@@ -148,13 +148,15 @@ def iter_prepare_refs(
             if program or database:
                 rows.append((program, database))
     for entry in getattr(args, "annotators", None) or []:
-        if isinstance(entry, dict):
-            command = str(entry.get("cmd") or "")
-            rows.append(_annotator_ref(str(entry.get("type") or "annotator"), command))
+        fields = entry if isinstance(entry, dict) else vars(entry)
+        command = str(fields.get("cmd") or "")
+        rows.append(_annotator_ref(str(fields.get("type") or "annotator"), command))
     for name, group in _named_programs(args):
         for required, required_group in _generator_programs(name, group, args):
             if _should_offer(required, required_group):
                 rows.append(((required, required_group, ""), None))
+    if any(program and program[0] == "bracken" for program, _ in rows):
+        rows.append((("kraken2", "annotator", ""), None))
     return rows
 
 

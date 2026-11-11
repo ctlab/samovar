@@ -1,8 +1,11 @@
 """Fast integration tests for prepare / build / exec wiring (no real annotators)."""
 
 import os
+import json
+import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +18,46 @@ from samovar.version import get_version
 
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("override", ["missing", "existing", "unset"])
+def test_cli_explicit_config_is_exclusive(tmp_path, override):
+    root = tmp_path / "checkout"
+    (root / "bin").mkdir(parents=True)
+    (root / "build").mkdir()
+    shutil.copyfile(REPO / "bin" / "samovar", root / "bin" / "samovar")
+    (root / "src").symlink_to(REPO / "src", target_is_directory=True)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    config = shared / "config.json"
+    config.write_text("{}")
+    # Exit before any application code if the shared environment is selected.
+    (shared / "env").write_text("exit 77\n")
+    pointer = root / "build" / "config_path"
+    pointer.write_text(str(config))
+    private = tmp_path / "private config.json"
+    if override == "existing":
+        private.write_text(json.dumps({"root": str(REPO), "compilers": {"python": sys.executable}}))
+    env = os.environ.copy()
+    env.pop("SAMOVAR_CONFIG", None)
+    if override != "unset":
+        env["SAMOVAR_CONFIG"] = str(private)
+    result = subprocess.run(
+        ["bash", str(root / "bin" / "samovar"), "tools", "import", "--help"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    if override == "missing":
+        assert result.returncode == 1
+        assert "explicit SAMOVAR_CONFIG" in result.stderr
+        assert str(private) in result.stderr
+        assert not private.exists()
+    elif override == "existing":
+        assert result.returncode == 0, result.stderr
+        assert "usage:" in result.stdout.lower()
+    else:
+        assert result.returncode == 77
+    assert config.read_text() == "{}"
+    assert pointer.read_text() == str(config)
 
 
 

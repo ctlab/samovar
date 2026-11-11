@@ -5,6 +5,7 @@ import re
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
 from samovar.memory import annotator_mem_mb
 from samovar.tool_spec import annotator_priority, memory_tool_name
+from samovar.combine_tables import ambiguous_sample_run_stems
 from samovar.seqio import find_fastq_mate, list_fastq_samples
 
 try:
@@ -57,6 +58,22 @@ for run_conf in config.get('run_config', []):
     ANNOTATORS[run_name] = get_annotator_instance(tool_type, run_conf, config)
     THREADS[run_name] = run_conf.get('threads', 1)
     TOOL_TYPES[run_name] = str(tool_type or run_name)
+
+_conflicts = ambiguous_sample_run_stems(SAMPLES, list(ANNOTATORS))
+if _conflicts:
+    detail = "\n".join(
+        f"{stem}: sample {left[0]!r} run {left[1]!r} or sample {right[0]!r} run {right[1]!r}"
+        for stem, left, right in _conflicts
+    )
+    raise ValueError(
+        "Ambiguous sample and run names would write one annotator file for two samples:\n"
+        + detail
+    )
+
+# A run name may contain "_". Without this, A_kraken2_x is sample A_kraken2, run x.
+wildcard_constraints:
+    sample="(?:" + "|".join(re.escape(s) for s in SAMPLES) + ")",
+    run_name="(?:" + "|".join(re.escape(n) for n in ANNOTATORS) + ")"
 
 MACHINE_CORES = max(1, int(config.get("cores") or os.environ.get("SAMOVAR_CORES") or 1))
 MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None
@@ -120,15 +137,23 @@ def disk_out(wildcards, suffix):
 
 
 def ingest_shell(wildcards, suffix):
-    if not INCREMENTAL:
-        return ""
     written = disk_out(wildcards, suffix)
+    # The batch combiner reads this instead of stripping the last underscore.
+    record = ""
+    if written.endswith(".out") and not INCREMENTAL:
+        record = (
+            f"printf '%s\\n' {shlex.quote(wildcards.sample)} > "
+            f"{shlex.quote(written + '.sample')}"
+        )
+    if not INCREMENTAL:
+        return record
     sentinel = written[:-4] + ".ingested" if written.endswith(".out") else written + ".ingested"
     return (
         '"$PYTHON_PATH" -m samovar.combine_tables ingest '
         f"--out {shlex.quote(written)} "
         f"--annotations {shlex.quote(ANN_DIR)} "
         f"--sentinel {shlex.quote(sentinel)} "
+        f"--sample {shlex.quote(wildcards.sample)} "
         f"--split {SPLIT} "
         f"--truth-table {shlex.quote(TRUTH)}"
     )
@@ -148,10 +173,40 @@ rule all:
     input:
         get_all_expected_outputs()
 
+rule profile_tool:
+    wildcard_constraints:
+        sample = "(?:" + "|".join(re.escape(s) for s in SAMPLES) + ")",
+        run_name = "(?:" + "|".join(re.escape(n) for n, a in ANNOTATORS.items() if type(a).__name__ == "ProfileAnnotator") + ")"
+    input:
+        r1 = r1_input,
+        r2 = r2_input
+    output:
+        profile = config["output_dir"] + "/{sample}_{run_name}.profile.csv",
+        metadata = config["output_dir"] + "/{sample}_{run_name}.profile.csv.profile.json"
+    threads:
+        lambda wildcards: THREADS[wildcards.run_name]
+    resources:
+        mem_mb=rule_mem
+    log:
+        config["output_dir"] + "/logs/{sample}_{run_name}.profile.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/profile/{sample}.tsv"
+    params:
+        cmd = lambda wildcards, input, output: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [output.profile, output.metadata])
+    shell:
+        """
+        mkdir -p "$(dirname {output.profile:q})" "$(dirname {log:q})"
+        ( {params.cmd} ) 2> {log:q}
+        """
+
 # ==========================================
 # UNIVERSAL RULE FOR ALL CUSTOM TOOLS
 # ==========================================
 rule custom_tool:
+    wildcard_constraints:
+        sample = "(?:" + "|".join(re.escape(s) for s in SAMPLES) + ")",
+        run_name = "(?:" + "|".join(re.escape(n) for n in ANNOTATORS) + ")"
     input:
         r1 = r1_input,
         r2 = r2_input
@@ -164,6 +219,8 @@ rule custom_tool:
     priority: CUSTOM_PRIORITY
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.custom_{{tool_name}}.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/custom_{tool_name}/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, f"custom_{wildcards.tool_name}.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, f"custom_{wildcards.tool_name}.out"),
@@ -280,6 +337,8 @@ rule assembly:
     priority: annotator_priority("assembly")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.assembly.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/assembly/{sample}.tsv"
     params:
         environment = mapping_environment,
         written = lambda wildcards: disk_out(wildcards, "assembly.out"),
@@ -309,6 +368,8 @@ rule kraken2:
     priority: annotator_priority("kraken2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken2.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kraken2/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kraken2.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kraken2.out"),
@@ -337,6 +398,8 @@ if not BATCH_KAIJU:
         priority: annotator_priority("kaiju")
         log:
             f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kaiju.log"
+        benchmark:
+            config["output_dir"] + "/runtime/samples/{run_name}/kaiju/{sample}.tsv"
         params:
             written = lambda wildcards: disk_out(wildcards, "kaiju.out"),
             ingest = lambda wildcards: ingest_shell(wildcards, "kaiju.out"),
@@ -403,6 +466,8 @@ rule metaphlan4:
     priority: annotator_priority("metaphlan4")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.metaphlan4.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/metaphlan4/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "metaphlan4.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "metaphlan4.out"),
@@ -432,6 +497,8 @@ rule kmer2:
     priority: annotator_priority("kmer2")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer2.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kmer2/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kmer2.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kmer2.out"),
@@ -459,6 +526,8 @@ rule gc:
     priority: annotator_priority("gc")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.gc.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/gc/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "gc.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "gc.out"),
@@ -486,6 +555,8 @@ rule kmer_encoder:
     priority: annotator_priority("kmer_encoder")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_encoder.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kmer_encoder/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kmer_encoder.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kmer_encoder.out"),
@@ -513,6 +584,8 @@ rule kraken:
     priority: annotator_priority("kraken")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kraken.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/kraken/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "kraken.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "kraken.out"),
@@ -540,6 +613,8 @@ rule krakenuniq:
     priority: annotator_priority("krakenuniq")
     log:
         f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.krakenuniq.log"
+    benchmark:
+        config["output_dir"] + "/runtime/samples/{run_name}/krakenuniq/{sample}.tsv"
     params:
         written = lambda wildcards: disk_out(wildcards, "krakenuniq.out"),
         ingest = lambda wildcards: ingest_shell(wildcards, "krakenuniq.out"),

@@ -41,6 +41,8 @@ per-annotator regeneration. If both are available and no approved policy or
 explicit choice resolves them, ask; do not invent a scientific default. If only
 one appropriate mode is available, explain it and confirm the analysis choice.
 
+Ground truth has three equal inputs. Genome-based per-read taxids in FASTQ or FASTA headers are the default and preferred source. `--initial-ground-truth-table` is the explicit seq→taxid table and, with FASTQ, also a sample profile. `profile_truth` in the input YAML is the sample-level abundance or presence gold; it does not replace per-read labels. When several are set, profile scores stay separate and name `ground_truth`. A supplied-profile benchmark uses `profile_inputs` and `profile_truth` inside `--input_config`, with `--endpoint viz_initial`. Do not pass that per-read flag as a substitute for `profile_truth`.
+
 Translate choices into the public prepare CLI: supplied reads use `--input_dir`;
 generated data reuse their known output directory and generation config. Set
 `--cores`, regeneration depth/sample count, selected annotators and any stage

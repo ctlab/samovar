@@ -54,6 +54,27 @@ def n_sample_columns(frame: pd.DataFrame) -> List[str]:
     return [c for c in frame.columns if str(c).startswith("N_")]
 
 
+def generation_sample_names(table, n_samples=None):
+    """Literal safe IDs for generate --abundance; never sanitize or renumber."""
+    if isinstance(table, pd.DataFrame):
+        columns = list(table.columns)
+    else:
+        import csv
+        with Path(table).open(encoding="utf-8-sig", newline="") as handle:
+            columns = next(csv.reader(handle), [])
+    if len(columns) != len(set(columns)):
+        raise ValueError("Duplicate abundance columns; sample identities must be unique")
+    names = [str(c)[2:] for c in columns if str(c).startswith("N_")]
+    if "taxid" not in columns or not names:
+        raise ValueError("generate --abundance requires taxid and N_<sample> columns")
+    for name in names:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+            raise ValueError(f"Invalid abundance sample ID {name!r}; use letters/digits, underscores and hyphens, starting with a letter/digit")
+    if n_samples is not None and int(n_samples) != len(names):
+        raise ValueError(f"n_samples={n_samples} differs from the {len(names)} abundance samples")
+    return names
+
+
 def _id_column(frame: pd.DataFrame) -> Optional[str]:
     lower = {str(c).strip().lower(): c for c in frame.columns}
     for alias in _ID_ALIASES:
@@ -103,8 +124,8 @@ def _is_numeric_series(series: pd.Series) -> bool:
     return bool(coerced.notna().mean() >= 0.8)
 
 
-def normalize_abundance_table(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return ``taxid`` plus ``N_<sample>`` columns (numeric, zeros filled)."""
+def normalize_abundance_table(frame: pd.DataFrame, *, strict: bool = False) -> pd.DataFrame:
+    """Return ``taxid`` plus ``N_<sample>``; strict mode rejects invalid values."""
     if frame is None or frame.empty:
         return pd.DataFrame(columns=["taxid"])
     work = frame.copy()
@@ -130,7 +151,12 @@ def normalize_abundance_table(frame: pd.DataFrame) -> pd.DataFrame:
         n_cols = list(renamed.values())
     out = pd.DataFrame({"taxid": work[id_col].astype(str)})
     for col in n_cols:
-        out[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+        values = pd.to_numeric(work[col], errors="raise" if strict else "coerce")
+        if strict:
+            import numpy as np
+            if not np.isfinite(values.to_numpy(float)).all() or (values < 0).any():
+                raise ValueError("Abundance values must be finite and nonnegative")
+        out[col] = values.fillna(0.0)
     if n_cols:
         out = out[out[n_cols].sum(axis=1) > 0]
     return out.reset_index(drop=True)
@@ -212,7 +238,20 @@ def input_to_abundance_tables(
     """Accept Annotation, long annotation DataFrame, abundance table, or dict."""
     stored = getattr(data, "abundance_tables", None)
     if stored:
-        return {str(k): normalize_abundance_table(v) for k, v in stored.items() if v is not None}
+        meta = getattr(data, "profile_metadata", {})
+        if not meta:
+            return {str(k): normalize_abundance_table(v) for k, v in stored.items() if v is not None}
+        frame = getattr(data, "DataFrame", None)
+        out = annotation_to_abundance_tables(frame) if frame is not None and not frame.empty else {}
+        for key, value in stored.items():
+            if key not in meta and str(key) in out:
+                continue  # cached abundance derived from this same read table
+            if str(key) in out:
+                raise ValueError(f"Independent profile collides with per-read output: {key}")
+            if value is not None:
+                # Typed profiles preserve explicit empty samples and zero rows.
+                out[str(key)] = value.copy() if getattr(data, "profile_metadata", {}).get(key) else normalize_abundance_table(value)
+        return out
 
     frame = getattr(data, "DataFrame", data)
     if isinstance(data, dict) and not isinstance(data, pd.DataFrame):
@@ -282,7 +321,14 @@ def load_table_input(
         return Annotation.from_abundance_tables(tables)
 
     path = Path(source)
+    from samovar.profiles import MANIFEST, load_profile
+    if path.is_dir() and (path / MANIFEST).is_file():
+        return Annotation.from_annotation_dir(path)
     if path.is_file():
+        if Path(str(path) + ".profile.json").is_file() or path.suffix in {".profile", ".cami"}:
+            table, meta = load_profile(path)
+            identity = meta.get("identity", path.stem)
+            return Annotation.from_abundance_tables({identity: table}, {identity: meta})
         frame = pd.read_csv(path)
         if is_abundance_table(frame):
             return Annotation.from_abundance_tables({path.stem: frame})
@@ -364,7 +410,10 @@ def regenerated_abundance_dir(output_dir: PathLike) -> Path:
     return Path(output_dir) / REGENERATED_ABUNDANCE_DIR
 
 
-def write_abundance_dir(dest: PathLike, tables: Dict[str, pd.DataFrame]) -> Path:
+def write_abundance_dir(dest: PathLike, tables: Dict[str, pd.DataFrame], metadata=None) -> Path:
+    if metadata is not None:
+        from samovar.profiles import write_profiles
+        return write_profiles(dest, tables, metadata)
     from samovar.regenerate import _write_abundance_tables
 
     out = Path(dest)

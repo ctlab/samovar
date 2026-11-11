@@ -33,6 +33,18 @@ def _contract_repo_root() -> Path:
     return repo_root()
 
 CONTRACTS: Dict[str, Dict[str, str]] = {
+    "profiler": {
+        "in": "FASTQ -i/-I, database -d, profile CSV -o, threads -t (same launcher as annotators). "
+              "External wrappers need no native-tool changes. Python .py wrappers use the configured "
+              "SAMOVAR interpreter in both import --pytest and pipeline execution; executable wrappers run directly. "
+              "Native profilers use their registered profile adapters.",
+        "out": "taxid + N_<sample> CSV and <output>.profile.json metadata: kind, unit, basis, taxonomy, rank, normalization. "
+               "No seq or fabricated per-read assignments. Empty profiles retain explicit sample columns. "
+               "MultiQC consumes report_profiles(Annotation, dest, stage, config): the same versioned "
+               ".profiles.json + full taxid/N_sample tables, with stage/identity/source metadata and "
+               "per-sample inventory. No GT, taxonomy/basis conversion or pooling is required; "
+               "per-read binning enters this boundary as counts, rank=taxid, normalization=all.",
+    },
     "annotator": {
         "in": "FASTQ R1/R2 via CLI -i/-I, -d DB, -o out, -t threads "
         "(or Python parse_output(path) on a TSV). Feature extractors use the same CLI.",
@@ -54,6 +66,14 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "in": "Observed annotation/abundance plus generated tables "
         "(score_annotator(...) or score_table(observed, generated, config)).",
         "out": "dict with rank_value (and usually ok, pvalue, scorer).",
+    },
+    "concordance": {
+        "in": "Two square distance matrices indexed by sample id "
+        "(score(left, right, config)). config carries the scorer name, seed, "
+        "permutations, and the profile metric, rank, basis, normalization, stage, and tool identity.",
+        "out": "dict with method, version, statistic, pvalue when defined, n_samples, "
+        "seed, permutations, and status/reason when the comparison does not apply. "
+        "Extra numeric fields are kept.",
     },
     "sample_scoring": {
         "in": "Generated abundance table plus a reference/predicted table "
@@ -93,8 +113,9 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "Files at dest (dump) or an Annotation (load). convert(src, dest, config) is also accepted.",
     },
     "export": {
-        "in": "Annotation (per-read taxID_* / seq) plus dest and config. "
+        "in": "Annotation (per-read taxID_* / seq and/or independent typed sample profiles) plus dest and config. "
         "config may include reference (Annotation with taxID_true / true), "
+        "reference_truth (typed regenerated profile GT) and profile_model for profile_ratio/profile_joint, "
         "to (abundance|kraken2|cami|…), extra_argv. "
         "export(annotation, dest, config).",
         "out": "Abundance-like tables at dest (taxid + N_<sample>, or kraken2/cami reports).",
@@ -172,9 +193,11 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
 }
 
 GROUP_TO_TESTNODE = {
+    "profiler": "tests/test_tool_contracts.py::test_profiler_contract",
     "annotator": "tests/test_tool_contracts.py::test_annotator_contract",
     "table_reads_generator": "tests/test_tool_contracts.py::test_table_regenerator_contract",
     "table_scoring": "tests/test_tool_contracts.py::test_table_scoring_contract",
+    "concordance": "tests/test_tool_contracts.py::test_concordance_contract",
     "sample_scoring": "tests/test_tool_contracts.py::test_sample_scoring_contract",
     "sample_filtering": "tests/test_tool_contracts.py::test_sample_filtering_contract",
     "scoring": "tests/test_tool_contracts.py::test_scoring_contract",

@@ -15,6 +15,9 @@ def test_pipeline_config_from_args_file(tmp_path):
     read_length: 100
     coverage: 20
     email: test@example.com
+    multiqc:
+      sections: [composition, alpha]
+      stages: [initial]
     annotators:
       - run_name: k2-test
         type: kraken2
@@ -36,6 +39,8 @@ def test_pipeline_config_from_args_file(tmp_path):
         kaiju=None
     )
     config = PipelineConfig.from_args(args)
+    assert config.multiqc["sections"] == ["composition", "alpha"]
+    assert config.multiqc["stages"] == ["initial"]
     assert config.input_dir == str(Path("/path/to/input").resolve())
     assert config.output_dir == str(Path(test_output_dir).resolve())
     assert config.read_length == 100
@@ -290,7 +295,7 @@ def test_generate_pipeline(tmp_path):
         # Check config file paths
         assert f"out_dir=\"{Path(test_output_dir).resolve()}\"" in pipeline_content
         assert "_runtime-env" in pipeline_content
-        assert '[ -f "$CKPT/$1.done" ]' in pipeline_content
+        assert 'exec_control skip "$out_dir"' in pipeline_content
         assert "visualization failed; continuing" not in pipeline_content
         assert "XDG_CONFIG_HOME" in pipeline_content
         assert "samovar/env" in pipeline_content

@@ -49,6 +49,11 @@ KNOWN_TOOLS = (
     "krakenuniq",
     "metaphlan",
     "metaphlan4",
+    "motus",
+    "motus3",
+    "sylph",
+    "bracken",
+    "kmcp",
     "centrifuge",
     "metax",
     "iss",
@@ -297,7 +302,7 @@ def update_config(updates: Dict[str, Any], also_repo_build: bool = True) -> Dict
         apply_legacy_updates(cfg, updates)
         after = disk_payload(cfg)
         if before != after or not dest.is_file():
-            _write_config_unlocked(cfg, also_repo_build=also_repo_build)
+            _write_config_unlocked(cfg, also_repo_build=also_repo_build, replace_tools=True)
     return as_install_config(cfg)
 
 
@@ -587,9 +592,9 @@ def command_argv(command: str) -> List[str]:
 
 def resolve_executable(
     name_or_path: Optional[str], tool_key: Optional[str] = None,
-    cfg: Optional[Dict[str, Any]] = None,
+    cfg: Optional[Dict[str, Any]] = None, *, allow_python_script: bool = False,
 ) -> str:
-    """Return an absolute executable path when possible; otherwise the original token."""
+    """Resolve a tool path; interpreter-driven callers may allow non-executable .py files."""
     if not name_or_path:
         return ""
     raw = str(name_or_path).strip()
@@ -602,7 +607,7 @@ def resolve_executable(
     if (
         (token_path.is_absolute() or "/" in token)
         and token_path.is_file()
-        and os.access(token_path, os.X_OK)
+        and (os.access(token_path, os.X_OK) or (allow_python_script and token_path.suffix == ".py"))
     ):
         return shlex.join([str(token_path.resolve()), *rest]) if rest else str(token_path.resolve())
 
@@ -628,7 +633,7 @@ def resolve_executable(
         if not cand:
             continue
         path = Path(cand).expanduser()
-        if path.is_file() and os.access(path, os.X_OK):
+        if path.is_file() and (os.access(path, os.X_OK) or (allow_python_script and path.suffix == ".py")):
             resolved = str(path.resolve())
             return shlex.join([resolved, *rest]) if rest else resolved
         if path.is_absolute():
@@ -652,6 +657,7 @@ def _companion_siblings(name: str, tools_map: Dict[str, Any]) -> List[str]:
             continue
         parent_path = Path(parent).expanduser()
         found.append(str(parent_path.parent / name))
+        found.append(str(parent_path.parent / "src" / name))
         prefix = tool_entry_env_prefix(tools_map.get(spec.name), spec.name)
         if prefix:
             found.append(str(Path(prefix).expanduser() / "bin" / name))
@@ -707,18 +713,42 @@ def _writing_install_config(dest: Path) -> bool:
     return recorded is not None and _same_config_file(Path(override), recorded)
 
 
-def _merge_existing_config(dest: Path, data: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_existing_config(
+    dest: Path,
+    data: Dict[str, Any],
+    *,
+    replace_tools: bool = False,
+) -> Dict[str, Any]:
     """Fold ``data`` into the user config already on disk.
 
-    That file is the install the user already has. A parallel writer adds its
-    keys; it does not replace the file with a new document.
+    A parallel ``write_config`` adds its keys. ``update_config`` passes
+    ``replace_tools`` so a tool deleted from the loaded document stays deleted.
+    Bare names match versioned keys (``keep`` and ``keep:9.4``).
     """
     existing = _read_json(dest)
     if not existing:
         return data
     from samovar.main_config import apply_legacy_updates
 
-    return apply_legacy_updates(dict(existing), data)
+    merged = apply_legacy_updates(dict(existing), data)
+    if not replace_tools:
+        return merged
+    incoming = data.get("tools") if isinstance(data, dict) else None
+    tools = merged.get("tools") if isinstance(merged, dict) else None
+    if isinstance(incoming, dict) and isinstance(tools, dict):
+        from samovar.tool_spec import bare_tool_name
+
+        wanted = {
+            bare_tool_name(key).lower()
+            for key in incoming
+            if not str(key).startswith("_") and incoming[key] is not None
+        }
+        for key in list(tools):
+            if str(key).startswith("_"):
+                continue
+            if bare_tool_name(key).lower() not in wanted:
+                tools.pop(key, None)
+    return merged
 
 
 def _publish_text(dest: Path, text: str) -> None:
@@ -734,11 +764,16 @@ def _publish_text(dest: Path, text: str) -> None:
         checkpoint.unlink(missing_ok=True)
 
 
-def _write_config_unlocked(data: Dict[str, Any], also_repo_build: bool = True) -> Path:
+def _write_config_unlocked(
+    data: Dict[str, Any],
+    also_repo_build: bool = True,
+    *,
+    replace_tools: bool = False,
+) -> Path:
     dest = user_config_path()
     # SAMOVAR_CONFIG names a private file. The shared user config is merged.
     if _writing_install_config(dest):
-        data = _merge_existing_config(dest, data)
+        data = _merge_existing_config(dest, data, replace_tools=replace_tools)
     payload = disk_payload(data)
     payload.setdefault("version", PACKAGE_VERSION)
     payload.setdefault("root", str(repo_root()))
@@ -1192,6 +1227,10 @@ _STATUS_TOOL_KEYS = {
     "kraken2": ("kraken2",),
     "kaiju": ("kaiju",),
     "metaphlan": ("metaphlan", "metaphlan4"),
+    "motus": ("motus", "motus3"),
+    "sylph": ("sylph",),
+    "bracken": ("bracken",),
+    "kmcp": ("kmcp",),
     "centrifuge": ("centrifuge",),
     "metax": ("metax",),
     "OPAL": ("opal", "opal.py"),
@@ -1329,6 +1368,34 @@ def install_status_rows() -> List[Dict[str, Any]]:
             path=_existing_tool("metaphlan") or _existing_tool("metaphlan4"),
             config_key="tools.metaphlan / tool_envs.metaphlan",
             install="conda install -c bioconda metaphlan",
+        ),
+        row(
+            "motus", required=False, role="mOTUs3 sample-level profiler",
+            path=_existing_tool("motus"), config_key="tools.motus / tool_envs.motus",
+            install="./install.sh mOTUs3",
+        ),
+        row(
+            "kmcp", required=False, role="per-read taxonomic annotator / index builder",
+            path=_existing_tool("kmcp"), config_key="tools.kmcp / tool_envs.kmcp",
+            install="./install.sh KMCP",
+        ),
+        row(
+            "bracken", required=False, role="Kraken2 abundance profiler / distribution builder",
+            path=_existing_tool("bracken"), config_key="tools.bracken / tool_envs.bracken",
+            install="./install.sh Bracken",
+        ),
+        row(
+            "phanta", required=False, role="Phanta sample-level profiler",
+            path=_existing_tool("phanta"), config_key="tools.phanta",
+            install="./install.sh Phanta",
+        ),
+        row(
+            "sylph",
+            required=False,
+            role="sample-level profiler / sketch builder",
+            path=_existing_tool("sylph"),
+            config_key="tools.sylph / tool_envs.sylph",
+            install="./install.sh Sylph",
         ),
         row(
             "centrifuge",

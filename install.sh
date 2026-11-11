@@ -25,6 +25,11 @@
 #   ./install.sh SPAdes          optional SPAdes / metaSPAdes assembler (sidecar; included in full)
 #   ./install.sh metaFlye        optional Flye meta assembler (sidecar)
 #   ./install.sh Metax          optional Metax profiler (sidecar; custom.sh -p metax)
+#   ./install.sh mOTUs3         optional mOTUs3 sample-level profiler (reference DB separate)
+#   ./install.sh KMCP           optional native per-read annotator and index builder
+#   ./install.sh Bracken        optional Kraken2 + Bracken profiler and distribution builder
+#   ./install.sh Phanta         optional Phanta native profiler (reference DB separate)
+#   ./install.sh Sylph          optional sample-level profiler and sketch builder (sidecar)
 #   ./install.sh Prodigal        optional Prodigal gene caller (sidecar)
 #   ./install.sh minimap2        optional minimap2 + samtools (sidecar)
 #   ./install.sh CoverM          optional CoverM MAG quantifier (sidecar)
@@ -50,6 +55,7 @@
 #   SAMOVAR_INSTALL_OPAL=1     also install optional CAMI OPAL (same as ./install.sh OPAL)
 #   SAMOVAR_INSTALL_MULTIQC=1  also install optional MultiQC (same as ./install.sh MultiQC)
 #   SAMOVAR_INSTALL_CAMISIM=1  also clone optional CAMISIM (same as ./install.sh CAMISIM)
+#   SAMOVAR_INSTALL_PHANTA=1   also install Phanta source (included in full; database separate)
 #   SAMOVAR_INSTALL_NANOSIM=1  also sidecar-conda NanoSim (same as ./install.sh NanoSim)
 #   SAMOVAR_INSTALL_KRAKEN2=1  also install Kraken2 (included in full)
 #   SAMOVAR_INSTALL_KAIJU=1    also install Kaiju (included in full)
@@ -57,6 +63,10 @@
 #   SAMOVAR_INSTALL_SEQTK=1    also seqtk (same as ./install.sh seqtk)
 #   SAMOVAR_INSTALL_SPARSEDOSSA2=1 also install SparseDOSSA2 (same as ./install.sh SparseDOSSA2)
 #   SAMOVAR_INSTALL_SPADES=1   also sidecar-conda SPAdes (included in full; same as ./install.sh SPAdes)
+#   SAMOVAR_INSTALL_MOTUS=1    also sidecar-conda mOTUs3 (included in full)
+#   SAMOVAR_INSTALL_KMCP=1     also sidecar-conda KMCP (included in full)
+#   SAMOVAR_INSTALL_BRACKEN=1  also sidecar-conda Bracken (included in full)
+#   SAMOVAR_INSTALL_SYLPH=1    also sidecar-conda Sylph (included in full)
 #   SAMOVAR_INSTALL_CUML=1     also install cuML (same as ./install.sh cuml)
 #   SAMOVAR_CONDA              conda/mamba/micromamba executable for sidecar envs
 #   SAMOVAR_R_REPO             default ctlab/samovar
@@ -725,6 +735,11 @@ normalize_optional_arg() {
         gtdbtk|gtdb-tk|gtdb_tk) echo "gtdbtk" ;;
         sparsedossa2|sparsedossa|sd2) echo "sparsedossa2" ;;
         metax) echo "metax" ;;
+        sylph) echo "sylph" ;;
+        bracken) echo "bracken" ;;
+        phanta) echo "phanta" ;;
+        motus|motus3) echo "motus" ;;
+        kmcp) echo "kmcp" ;;
         cuml) echo "cuml" ;;
         full|all|everything) echo "full" ;;
         ask) echo "ask" ;;
@@ -775,6 +790,11 @@ run_optional_named() {
         sparsedossa2) install_sparsedossa2 ;;
         cuml) install_cuml ;;
         metax) "$PYTHON_PATH" -m samovar.sidecar metax ;;
+        sylph) "$PYTHON_PATH" -m samovar.sidecar sylph ;;
+        bracken) "$PYTHON_PATH" -m samovar.sidecar bracken ;;
+        phanta) "$PYTHON_PATH" -m samovar.sidecar phanta ;;
+        motus) "$PYTHON_PATH" -m samovar.sidecar motus ;;
+        kmcp) "$PYTHON_PATH" -m samovar.sidecar kmcp ;;
         *) return 1 ;;
     esac
 }
@@ -802,12 +822,17 @@ enable_full_install_flags() {
     export SAMOVAR_INSTALL_OPAL=1
     export SAMOVAR_INSTALL_MULTIQC=1
     export SAMOVAR_INSTALL_CAMISIM=1
+    export SAMOVAR_INSTALL_PHANTA=1
     export SAMOVAR_INSTALL_NANOSIM=1
     export SAMOVAR_INSTALL_ART=1
     export SAMOVAR_INSTALL_SEQTK=1
     export SAMOVAR_INSTALL_NEXTFLOW=1
     export SAMOVAR_INSTALL_SPARSEDOSSA2=1
     export SAMOVAR_INSTALL_METAX=1
+    export SAMOVAR_INSTALL_SYLPH=1
+    export SAMOVAR_INSTALL_BRACKEN=1
+    export SAMOVAR_INSTALL_MOTUS=1
+    export SAMOVAR_INSTALL_KMCP=1
     export SAMOVAR_INSTALL_SPADES=1
 }
 
@@ -1132,6 +1157,36 @@ if [ "${SAMOVAR_INSTALL_METAX:-0}" != "0" ]; then
     "$PYTHON_PATH" -m samovar.sidecar metax || echo "Warning: optional Metax sidecar install did not complete."
 else
     echo "Skipping Metax (not required). Use ./install.sh Metax for the custom.sh annotator."
+fi
+
+if [ "${SAMOVAR_INSTALL_MOTUS:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar motus || echo "Warning: optional mOTUs3 install did not complete."
+else
+    echo "Skipping mOTUs3 (not required). Use ./install.sh mOTUs3 for profiling."
+fi
+
+if [ "${SAMOVAR_INSTALL_KMCP:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar kmcp || echo "Warning: optional KMCP install did not complete."
+else
+    echo "Skipping KMCP (not required). Use ./install.sh KMCP for read annotation."
+fi
+
+if [ "${SAMOVAR_INSTALL_BRACKEN:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar bracken || echo "Warning: optional Bracken install did not complete."
+else
+    echo "Skipping Bracken (not required). Use ./install.sh Bracken for Kraken2 abundance profiles."
+fi
+
+if [ "${SAMOVAR_INSTALL_PHANTA:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar phanta || echo "Warning: optional Phanta install did not complete."
+else
+    echo "Skipping Phanta (not required). Use ./install.sh Phanta for native sample profiling."
+fi
+
+if [ "${SAMOVAR_INSTALL_SYLPH:-0}" != "0" ]; then
+    "$PYTHON_PATH" -m samovar.sidecar sylph || echo "Warning: optional Sylph install did not complete."
+else
+    echo "Skipping Sylph (not required). Use ./install.sh Sylph for sample-level profiling."
 fi
 
 if [ "${SAMOVAR_INSTALL_CUML:-0}" != "0" ]; then

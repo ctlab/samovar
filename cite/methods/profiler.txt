@@ -1,0 +1,3 @@
+contract: profiler
+md: Sample-level taxonomic profiles {verb} estimated with {items}{cite_md}.
+tex: Sample-level taxonomic profiles {verb} estimated with {items}{cite_tex}.

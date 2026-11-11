@@ -1,4 +1,5 @@
 import unittest
+import warnings
 import pandas as pd
 import numpy as np
 import os
@@ -32,6 +33,19 @@ class TestReprofiling(unittest.TestCase):
         import tempfile
         self.output_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.output_dir.cleanup)
+
+    def test_preprocess_numeric_taxid_na_stays_integer_zero(self):
+        df = pd.DataFrame({
+            "seq": ["a", "b"],
+            "taxID_kraken2_0": [562.0, np.nan],
+            "length": [100, 100],
+            "true": [562, 562],
+        })
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            processed = preprocess_data(df)
+        self.assertEqual(processed["taxid_kraken2"].dtype, np.dtype("int64"))
+        self.assertEqual(processed["taxid_kraken2"].tolist(), [562, 0])
 
     def test_preprocess_data(self):
         """Test data preprocessing"""

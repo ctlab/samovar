@@ -18,7 +18,7 @@ _has_run_dir() {
 }
 
 _find_cfg() {
-    if [ -n "${SAMOVAR_CONFIG:-}" ] && [ -f "$SAMOVAR_CONFIG" ]; then
+    if [ -n "${SAMOVAR_CONFIG:-}" ]; then
         echo "$SAMOVAR_CONFIG"
         return
     fi
@@ -69,12 +69,12 @@ show_usage() {
     echo ""
     echo "Commands:"
     echo "  prepare     Generate main pipeline configuration (alias: preprocess)"
-    echo "  build       Build Kaiju, Kraken2, KrakenUniq, or Centrifuge database from config (alias: build_database)"
+    echo "  build       Build Kaiju, Kraken2, KrakenUniq, Centrifuge, MetaPhlAn, Sylph, Bracken or KMCP database (alias: build_database)"
     echo "  exec        Execute the pipeline(s) (resumes from checkpoints; --redo reruns all)"
     echo "              Optional --startpoint / --endpoint slice the run (same names as prepare)"
     echo "  checkup     Verify outdir has inputs for --start-point (does not run the pipeline)"
     echo "  branch      Copy a run up to --start-point; prepare in the copy continues from there"
-    echo "  multiqc     Run the real MultiQC CLI on staged *_mqc files (pass-through after --)"
+    echo "  multiqc     Rebuild the report from a finished run (--sections/--exclude/--stages/--annotators; MultiQC flags after --)"
     echo "  generate    Generate ISS or CAMISIM test configuration and pipeline"
     echo "  tools       import a binary; --sort reads; --status (same as import status)"
     echo "  import      Alias of tools import"
@@ -153,6 +153,12 @@ else
     fi
     echo "Error: SamovaR is not installed (no ~/.config/samovar/config.json or build/config.json)."
     echo "Run ./install.sh from the SamovaR source tree."
+    exit 1
+fi
+
+if [ ! -f "$CFG" ]; then
+    printf 'Error: explicit SAMOVAR_CONFIG is not a regular file: %s\n' "$CFG" >&2
+    printf 'Run install.sh with this SAMOVAR_CONFIG to create it, or select an existing config.\n' >&2
     exit 1
 fi
 

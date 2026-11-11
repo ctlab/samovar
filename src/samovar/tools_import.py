@@ -137,6 +137,8 @@ def warn_direct_samovar_flags(path: str, *, name: str, flags_translate: str) -> 
     if str(flags_translate or "").strip():
         return
     exe = Path(path).expanduser()
+    if exe.name == "kmcp":
+        return  # Native search/profile adapter owns the SAMOVAR CLI contract.
     if not (exe.is_file() and os.access(exe, os.X_OK)):
         return
     try:
@@ -161,6 +163,113 @@ def warn_direct_samovar_flags(path: str, *, name: str, flags_translate: str) -> 
     )
 
 
+def _external_program(group: str, name: str) -> bool:
+    """True when install records this name as the external program, not an adapter."""
+    from samovar.install_ask import ASK_TOOLS
+
+    group = normalize_tool_group(group)
+    raw = str(name or "").strip().lower()
+    norm = raw.replace("-", "_")
+    for spec in ASK_TOOLS:
+        if normalize_tool_group(spec.type) != group:
+            continue
+        for token in (spec.name, *spec.which):
+            text = str(token or "").strip().lower()
+            if text == raw or text.replace("-", "_") == norm:
+                return True
+    return False
+
+
+def reserved_builtin(group: str, name: str) -> str:
+    """Builtin this import name would select instead of the adapter, or ``""``.
+
+    Names that install stores as an external program (``iss``, ``camisim``,
+    ``sparsedossa2``, ``multiqc``, …) are not reserved: that record is the
+    program path.
+    """
+    raw = str(name or "").strip()
+    if not raw or _external_program(group, raw):
+        return ""
+    group = normalize_tool_group(group)
+    low = raw.lower().replace("-", "_")
+    if group == "reprofiler":
+        from samovar.reprofilers import _BUILTIN_ALIASES
+
+        return _BUILTIN_ALIASES.get(low, "")
+    if group == "export":
+        from samovar.abundance_correctors import _BUILTIN_ALIASES as aliases
+
+        return aliases.get(low, "")
+    if group == "reads_generator":
+        from samovar.reads_generators import _BUILTIN_ALIASES as aliases
+
+        return aliases.get(low, "")
+    if group == "metagenome_generator":
+        from samovar.metagenome_generators import _BUILTIN_ALIASES as aliases
+
+        return aliases.get(low, "")
+    if group == "table_reads_generator":
+        from samovar.regenerate import resolve_regeneration_mode
+
+        kind, canon = resolve_regeneration_mode(raw)
+        return canon if kind == "builtin" else ""
+    if group == "feature_importance":
+        from samovar.feature_importance import BUILTIN_NAMES, NONE_TOKENS
+
+        folded = {str(item).lower().replace("-", "_") for item in BUILTIN_NAMES}
+        if low in folded:
+            return "builtin"
+        skipped = {str(item).lower().replace("-", "_") for item in NONE_TOKENS if item}
+        return "none" if low in skipped else ""
+    if group == "sample_filtering":
+        from samovar.sample_filters import BUILTIN_FILTERS
+
+        return BUILTIN_FILTERS.get(low) or BUILTIN_FILTERS.get(raw.lower(), "")
+    if group == "sample_scoring":
+        from samovar.sample_scorers import BUILTIN_SAMPLE_SCORERS
+
+        folded = {str(item).lower().replace("-", "_") for item in BUILTIN_SAMPLE_SCORERS}
+        return "bray_curtis" if low in folded else ""
+    if group == "table_scoring":
+        from samovar.table_scorers import BUILTIN_TABLE_SCORERS, canonicalize_table_scorer
+
+        folded = {str(item).lower().replace("-", "_") for item in BUILTIN_TABLE_SCORERS}
+        return canonicalize_table_scorer(raw) if low in folded else ""
+    if group == "concordance":
+        return "mantel" if low == "mantel" else ""
+    if group == "annotation_converter":
+        from samovar.annotation_convert import is_builtin_format, normalize_format
+
+        return normalize_format(raw) if is_builtin_format(raw) else ""
+    if group == "scoring":
+        from samovar.scorers import _is_builtin_scorer_name
+
+        return raw.lower() if _is_builtin_scorer_name(raw) else ""
+    return ""
+
+
+def reserved_import_error(group: str, name: str, canon: str) -> ValueError:
+    return ValueError(
+        f"{name!r} is reserved for the built-in {group} {canon!r}. "
+        "The import was not written. Choose another name. "
+        f"Remove an existing tools.{name} entry with "
+        f"`samovar tools import --remove -n {name}`."
+    )
+
+
+def remove_imported_tool(name: str, *, also_repo_build: bool = True) -> str:
+    """Delete ``tools.<name>`` (including ``name:version``) from the install config."""
+    from samovar.main_config import lookup_tool_record
+
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("--name is required with --remove")
+    if lookup_tool_record(load_config(), name) is None:
+        raise ValueError(f"tools.{name} is not in the install config")
+    update_config({"tools": {name: None}}, also_repo_build=also_repo_build)
+    return name
+
+
 def import_tool(
     *,
     name: str,
@@ -183,6 +292,9 @@ def import_tool(
     if not name:
         raise ValueError("--name is required")
     group = normalize_tool_group(tool_type)
+    canon = reserved_builtin(group, name)
+    if canon:
+        raise reserved_import_error(group, name, canon)
     env = str(env or "").strip()
     exe = str(exec_name or "").strip() or name
     path = resolve_import_path(name=name, exec_name=exe, exec_path=exec_path, env=env)
@@ -399,6 +511,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="List imported tools and databases (also: samovar import status).",
     )
     parser.add_argument(
+        "--remove",
+        action="store_true",
+        help="Delete tools.<name> from the install config, including name:version.",
+    )
+    parser.add_argument(
         "-n",
         "--name",
         default="",
@@ -588,9 +705,24 @@ def main(argv: Optional[list] = None) -> int:
     if args.status:
         print(format_status())
         return 0
+    if args.remove:
+        if not str(args.name or "").strip():
+            parser.error("-n/--name is required with --remove")
+        try:
+            remove_imported_tool(args.name)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Removed tools.{args.name}")
+        return 0
     if not str(args.name or "").strip() or not str(args.type or "").strip():
         parser.error("-n/--name and -t/--type are required unless --status")
     try:
+        if not is_database_type(args.type):
+            group = normalize_tool_group(args.type)
+            canon = reserved_builtin(group, args.name)
+            if canon:
+                raise reserved_import_error(group, args.name, canon)
         if is_database_type(args.type):
             lazy = args.lazy_download or args.lazy_install
             extra_file = str(
@@ -628,7 +760,7 @@ def main(argv: Optional[list] = None) -> int:
             db = str(getattr(args, "db_path", "") or "").strip()
             if not db:
                 db = os.environ.get("SAMOVAR_CONTRACT_DB", "").strip()
-            if not db and group == "annotator":
+            if not db and group in {"annotator", "profiler"}:
                 db = _imported_database_path(args.name)
             try:
                 code, output = run_contract_pytest(dest, group, db_path=db)

@@ -69,6 +69,28 @@ def test_bundle_multiqc_includes_plots_and_scores(tmp_path):
     assert "Raw" in next(p for p in jsons if "F1_kaiju" in p.name).read_text()
 
 
+def test_bundle_profiles_without_ground_truth(tmp_path):
+    import pandas as pd
+    from samovar.profiles import write_profiles, read_profiles
+
+    table = pd.DataFrame({"taxid": ["562", "0"], "N_patient_A": [8, 2]})
+    for phase in ("initial", "reprofiled"):
+        write_profiles(tmp_path / f"{phase}_profiles", {"baseline": table},
+                       {"baseline": {"normalization": "all", "database": "fixture"}})
+    staged = bundle_multiqc(tmp_path)
+    for phase, title in (("initial", "Raw"), ("reprofiled", "Reprofiled")):
+        tables, metas = read_profiles(staged / "profiles" / phase)
+        pd.testing.assert_frame_equal(tables["baseline"], table, check_dtype=False)
+        assert metas["baseline"]["stage"] == phase
+        payload = json.loads(next(staged.glob(f"*_{phase}_profile_inventory_mqc.json")).read_text())
+        assert payload["section_name"] == f"{title} — Profile inventory"
+        assert payload["data"]["0"]["unassigned_fraction"] == 0.2
+        assert payload["data"]["0"]["sample"] == "patient_A"
+    (staged / "profiles" / "initial" / "stale.csv").write_text("obsolete")
+    bundle_multiqc(tmp_path)
+    assert not (staged / "profiles" / "initial" / "stale.csv").exists()
+
+
 def test_write_heatmap_mqc_is_native_multiqc(tmp_path):
     import pandas as pd
 
@@ -174,6 +196,11 @@ def test_multiqc_render_is_adequate(tmp_path):
         )
     write_stage_report(tmp_path, "viz_initial")
     write_stage_report(tmp_path, "viz_regenerated")
+    from samovar.profiles import write_profiles
+    profile = pd.DataFrame({"taxid": ["1", "2", "3"], "N_a": [1, 0, 0], "N_b": [0, 1, 0],
+                            "N_c": [0, 0, 1], "N_d": [.5, .5, 0]})
+    write_profiles(tmp_path / "initial_profiles", {"first": profile, "second": profile},
+                   {name: {"unit": "fraction", "normalization": "all"} for name in ("first", "second")})
     staged = bundle_multiqc(tmp_path)
     out = tmp_path / "multiqc"
     proc = subprocess.run(
@@ -204,6 +231,10 @@ def test_multiqc_render_is_adequate(tmp_path):
     assert "samovar_raw_R2_" in keys
     assert "samovar_regenerated_R2_" in keys
     assert "samovar_raw_score_bars" in keys
+    grouped = next(v for k, v in plot_data.items() if "initial_beta_grouped_pcoa" in k)
+    assert len(grouped["datasets"]) == 1
+    assert len(grouped["datasets"][0]["points"]) == 8
+    assert {point["group"] for point in grouped["datasets"][0]["points"]} == {"first", "second"}
     assert html_path.stat().st_size > 50_000
 
 

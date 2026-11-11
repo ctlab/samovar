@@ -248,6 +248,10 @@ class ISSTestConfig:
         abundance = getattr(args, "abundance_table", None) or ""
         if abundance:
             abundance = absolute_path(abundance)
+        n_samples = args.n_samples
+        if abundance:
+            from samovar.abundance import generation_sample_names
+            n_samples = len(generation_sample_names(abundance, n_samples))
         extra = getattr(args, "extra_flags", None) or ""
         from samovar.genome_fetcher import parse_genome_skip_list, parse_max_genome_mb
 
@@ -267,7 +271,7 @@ class ISSTestConfig:
             genome_dir=absolute_path(args.genome_dir) if args.genome_dir else "",
             output_dir=absolute_path(args.output_dir),
             host_genome=absolute_path(args.host_genome) if args.host_genome else "",
-            n_samples=args.n_samples if args.n_samples is not None else 10,
+            n_samples=n_samples if n_samples is not None else 10,
             total_reads=args.total_reads if args.total_reads is not None else 2000,
             host_fraction=args.host_fraction if args.host_fraction is not None else "RANDOM",
             seed=args.seed if args.seed is not None else 42,
@@ -321,6 +325,8 @@ class ISSTestConfig:
             if self.metagenome_generator:
                 config['metagenome_generator_flags'] = self.extra_flags
         if self.abundance_table:
+            from samovar.abundance import generation_sample_names
+            config['sample_names'] = generation_sample_names(self.abundance_table, self.n_samples)
             config['abundance_table'] = self.abundance_table
         config['max_genome_mb'] = float(self.max_genome_mb)
         config['max_genomes'] = float(self.max_genomes)
@@ -416,8 +422,8 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     )
     
     # Optional arguments with defaults
-    parser.add_argument('--n_samples', type=int, default=10,
-                       help='Number of samples to generate')
+    parser.add_argument('--n_samples', type=int, default=None,
+                       help='Number of samples (ISS --abundance: column count by default; otherwise 10)')
     parser.add_argument('--total_reads', type=int, default=2000,
                        help=(
                            'Sequencing records per sample: paired fragments for '

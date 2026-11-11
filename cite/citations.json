@@ -57,6 +57,10 @@
     "samovar_chechenina2023.bib"
   ],
   "bash": [],
+  "bracken": [
+    "bracken_lu2017.bib",
+    "kraken2_wood2019.bib"
+  ],
   "bray-curtis": [
     "bray_curtis1957.bib"
   ],
@@ -106,6 +110,9 @@
   "kaiju": [
     "kaiju_menzel2016.bib"
   ],
+  "kmcp": [
+    "kmcp_shen2023.bib"
+  ],
   "kraken": [
     "kraken_wood2014.bib"
   ],
@@ -142,6 +149,12 @@
   "minimap2": [
     "minimap2_li2018.bib"
   ],
+  "motus": [
+    "motus_ruscheweyh2022.bib"
+  ],
+  "motus3": [
+    "motus_ruscheweyh2022.bib"
+  ],
   "multiqc": [
     "multiqc_ewels2016.bib"
   ],
@@ -166,6 +179,11 @@
     "opal_meyer2019.bib",
     "cami_sczyrba2017.bib",
     "cami2_meyer2022.bib"
+  ],
+  "phanta": [
+    "phanta_pinto2023.bib",
+    "kraken2_wood2019.bib",
+    "bracken_lu2017.bib"
   ],
   "prodigal": [
     "prodigal_hyatt2010.bib"
@@ -220,6 +238,9 @@
   "sparsedossa2-vaginal": [
     "sparsedossa2_ma2021.bib",
     "sparsedossa2_r_harvest.bib"
+  ],
+  "sylph": [
+    "sylph_shaw2024.bib"
   ],
   "trimmomatic": [
     "trimmomatic_bolger2014.bib"

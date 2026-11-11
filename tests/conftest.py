@@ -76,12 +76,20 @@ def mandatory_environment(request, tmp_path, monkeypatch, core_runtime):
     if request.node.get_closest_marker("optional") is not None:
         return
     import json
+    import os
     import socket
     import urllib.request
     from urllib.parse import urlsplit
 
     dump = Path(__file__).parent / "data" / "taxdump"
     config = {**core_runtime, "genomes": {"taxdump": str(dump.resolve())}}
+    if request.config.getoption('--tool') or os.environ.get('SAMOVAR_CONTRACT_TOOL'):
+        # A supplied native contract tool needs its configured companions too.
+        # Keep a private config and offline taxonomy, without dropping its catalog.
+        from samovar.paths import load_config
+        installed = load_config()
+        config['tools'] = installed.get('tools', {})
+        config['tool_envs'] = installed.get('tool_envs', {})
     target = tmp_path / "install.json"
     target.write_text(json.dumps(config))
     monkeypatch.setenv("SAMOVAR_CONFIG", str(target))

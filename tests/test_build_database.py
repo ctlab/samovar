@@ -1,13 +1,18 @@
 import gzip
+import bz2
+import json
 import os
+import pickle
 from pathlib import Path
 from unittest.mock import patch
+import pytest
 
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from samovar.build_database import (
+    build_database_from_config,
     find_local_proteome_or_gff,
     kaiju_protein_id,
     nucleotide_to_orf_records,
@@ -16,6 +21,81 @@ from samovar.build_database import (
     translate_cds_from_gff,
 )
 
+
+def test_metaphlan_build_checks_marker_pair_and_indexes_via_shared_runner(tmp_path, monkeypatch):
+    import yaml
+    fasta = tmp_path / "markers.fna"
+    fasta.write_text(">SGB1__gene\nACGT\n")
+    info = tmp_path / "markers.pkl"
+    with bz2.open(info, "wb") as handle:
+        pickle.dump({"taxonomy": {"s__example": ("562", 4)},
+                     "markers": {"SGB1__gene": {"len": 4}}}, handle)
+    cfg = tmp_path / "build.yaml"
+    cfg.write_text(yaml.safe_dump(dict(marker_fasta=str(fasta), marker_metadata=str(info))))
+    dest = tmp_path / "db with spaces"
+    calls = []
+
+    def build(cmd):
+        calls.append(cmd)
+        assert cmd[:3] == ["bowtie2-build", "--threads", "2"]
+        assert Path(cmd[-2]).read_text() == fasta.read_text()
+        for part in ("1", "2", "3", "4", "rev.1", "rev.2"):
+            Path(f"{cmd[-1]}.{part}.bt2l").write_bytes(b"index")
+
+    monkeypatch.setattr("samovar.build_database.run_command", build)
+    build_database_from_config(str(cfg), db_type="metaphlan", db_path=str(dest), threads=2)
+    manifest = json.loads((dest / "metaphlan.manifest.json").read_text())
+    assert manifest["marker_count"] == 1 and len(manifest["fasta_sha256"]) == 64
+    assert (dest / "markers.pkl").read_bytes() == info.read_bytes()
+    assert len(calls) == 1
+    fasta.write_text(">SGB1__gene\nAC\n")
+    with pytest.raises(ValueError, match="length"):
+        build_database_from_config(str(cfg), db_type="metaphlan", db_path=str(dest), threads=2)
+    assert len(calls) == 1
+
+
+
+def test_sylph_build_preserves_ncbi_mapping_and_resources(tmp_path, monkeypatch):
+    import yaml
+    genomes = tmp_path / "genomes with spaces"
+    genomes.mkdir()
+    (genomes / "562.fna").write_text(">contig\nACGTACGT\n")
+    cfg = tmp_path / "build.yaml"
+    cfg.write_text(yaml.safe_dump(dict(input_dir=[str(genomes)], compression=50)))
+    dest = tmp_path / "db with spaces"
+    calls = []
+
+    def sketch(cmd):
+        calls.append(cmd)
+        assert cmd[:3] == ["sylph", "sketch", "-l"]
+        assert Path(cmd[3]).read_text().splitlines() == [str(genomes / "562.fna")]
+        assert cmd[-4:] == ["-t", "3", "-c", "50"]
+        Path(cmd[cmd.index("-o") + 1] + ".syldb").write_bytes(b"index")
+
+    monkeypatch.setattr("samovar.build_database.run_command", sketch)
+    build_database_from_config(str(cfg), db_type="sylph", db_path=str(dest), threads=3)
+    assert (dest / "genomes.syldb").read_bytes() == b"index"
+    assert (dest / "genomes.syldb.taxonomy.tsv").read_text().splitlines() == [
+        "Genome_file\ttaxid", str(genomes / "562.fna") + "\t562"]
+    manifest = json.loads((dest / "sylph.manifest.json").read_text())
+    assert manifest["compression"] == 50 and manifest["genomes"][0]["taxid"] == "562"
+    assert len(calls) == 1
+
+
+def test_sylph_build_rejects_missing_index_and_unresolved_taxonomy(tmp_path, monkeypatch):
+    from samovar.build_database import build_database_sylph
+    genome = tmp_path / "genome.fna"
+    genome.write_text(">contig\nACGTACGT\n")
+    dest = tmp_path / "db"
+    monkeypatch.setattr("samovar.build_database.run_command", lambda cmd: None)
+    with pytest.raises(ValueError, match="positive NCBI taxid"):
+        build_database_sylph({str(genome): "SGB1"}, str(dest))
+    with pytest.raises(RuntimeError, match="did not create"):
+        build_database_sylph({str(genome): "562"}, str(dest))
+    assert not (dest / "genomes.syldb.taxonomy.tsv").exists()
+    genome.write_text(">protein\nMKKLL\n")
+    with pytest.raises(ValueError, match="No nucleotide genomes"):
+        build_database_sylph({str(genome): "562"}, str(dest))
 
 def test_kaiju_protein_id_puts_taxid_last():
     assert kaiju_protein_id("9606") == "9606"
@@ -140,3 +220,24 @@ def test_process_fasta_kraken2_keeps_all_contigs(tmp_path):
     assert len(recs) == 2
     assert recs[0].id == "seq0|kraken:taxid|562"
     assert recs[1].id == "seq1|kraken:taxid|562"
+
+def test_bracken_build_uses_configured_native_steps_and_publishes_distribution(tmp_path, monkeypatch):
+    from samovar.build_database import build_database_bracken
+    for name in ('hash.k2d', 'taxo.k2d', 'opts.k2d', 'seqid2taxid.map', 'taxonomy/nodes.dmp', 'library/genome.fna'):
+        p = tmp_path / name; p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('>seq|kraken:taxid|562\nACGTACGT\n' if p.suffix == '.fna' else 'fixture')
+    calls = []
+    def run(argv):
+        calls.append(argv)
+        if '-o' in argv:
+            Path(argv[argv.index('-o') + 1]).write_text('distribution')
+    monkeypatch.setattr('samovar.build_database.run_command', run)
+    monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: '/configured/generate_kmer_distribution.py')
+    build_database_bracken(dict(read_lengths=[100, 126]), tmp_path, threads=3)
+    assert len(calls) == 5 and calls[0][:2] == ['kraken2', '--db']
+    assert calls[0][calls[0].index('--threads') + 1] == '3'
+    assert calls[1][0] == 'kmer2read_distr' and calls[1][-4:] == ['-l', '100', '-t', '3']
+    assert calls[2][1] == '/configured/generate_kmer_distribution.py'
+    assert (tmp_path / 'database126mers.kmer_distrib').read_text() == 'distribution'
+    assert not list((tmp_path / '.tmp').iterdir())
+    assert json.loads((tmp_path / 'bracken.manifest.json').read_text())['read_lengths'] == [100, 126]

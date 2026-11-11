@@ -53,10 +53,12 @@ TOOL_GROUPS = (
     "runtime",
     "compiler",
     "annotator",
+    "profiler",
     "reads_generator",
     "metagenome_generator",
     "table_reads_generator",
     "table_scoring",
+    "concordance",
     "sample_scoring",
     "sample_filtering",
     "scoring",
@@ -104,6 +106,9 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "table_scoring": "table_scoring",
     "table_score": "table_scoring",
     "tablescoring": "table_scoring",
+    "concordance": "concordance",
+    "beta_concordance": "concordance",
+    "beta-concordance": "concordance",
     "sample_scoring": "sample_scoring",
     "sample-scoring": "sample_scoring",
     "sample_score": "sample_scoring",
@@ -126,6 +131,8 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "visualisations": "scoring",
     "plots": "scoring",
     "ml": "reprofiler",
+    "profiler": "profiler",
+    "profiling": "profiler",
     "reprofile": "reprofiler",
     "reprofiler": "reprofiler",
     "reprofiling": "reprofiler",
@@ -200,6 +207,12 @@ TOOL_GROUP_BY_NAME: Dict[str, str] = {
     "krakenuniq": "annotator",
     "metaphlan": "annotator",
     "metaphlan4": "annotator",
+    "motus": "profiler",
+    "motus3": "profiler",
+    "sylph": "profiler",
+    "bracken": "profiler",
+    "phanta": "profiler",
+    "kmcp": "annotator",
     "centrifuge": "annotator",
     "metax": "annotator",
     "iss": "reads_generator",
@@ -553,6 +566,23 @@ def lookup_tool_record(cfg: Dict[str, Any], name: str) -> Optional[Dict[str, Any
         if bare_tool_name(key).lower() == want:
             return rec
     return None
+
+
+def drop_tool(cfg: Dict[str, Any], name: str) -> None:
+    """Remove ``tools.<name>`` and any ``name:version`` key. Other tools stay."""
+    from samovar.tool_spec import bare_tool_name
+
+    tools = cfg.get("tools")
+    if not isinstance(tools, dict):
+        return
+    want = bare_tool_name(name).lower()
+    if not want:
+        return
+    for key in list(tools):
+        if str(key).startswith("_"):
+            continue
+        if bare_tool_name(key).lower() == want:
+            tools.pop(key, None)
 
 
 def set_tool(
@@ -1172,6 +1202,9 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
             if isinstance(value, dict):
                 for name, entry in value.items():
                     if str(name).startswith("_"):
+                        continue
+                    if entry is None:
+                        drop_tool(cfg, str(name))
                         continue
                     from samovar.tool_spec import parse_tool_record
 

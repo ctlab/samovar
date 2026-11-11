@@ -5,6 +5,31 @@ from pathlib import Path
 from src.samovar.iss_config import ISSTestConfig, setup_iss_test
 import yaml
 
+
+@pytest.mark.parametrize("names", [("0", "1"), ("1", "2"), ("patient_A", "batch-02")])
+def test_abundance_sample_names_and_count_are_preserved(tmp_path, names):
+    from samovar.iss_config import parse_args
+    import pandas as pd
+    table = tmp_path / "profile.csv"
+    pd.DataFrame({"taxid": [562], **{"N_" + name: [1] for name in names}}).to_csv(table, index=False)
+    args = parse_args(["--genome_dir", str(tmp_path), "--output_dir", str(tmp_path / "run"), "--abundance", str(table)])
+    config = ISSTestConfig.from_args(args)
+    assert config.n_samples == 2
+    saved = yaml.safe_load(Path(config.generate_config(config.output_dir)).read_text())
+    assert saved["sample_names"] == list(names) and saved["n_samples"] == 2
+    args.n_samples = 3
+    with pytest.raises(ValueError, match="differs"):
+        ISSTestConfig.from_args(args)
+
+
+@pytest.mark.parametrize("header", ["taxid,N_,N_ok", "taxid,N_a/b,N_ok", "taxid,N_a b,N_ok", "taxid,N_a,N_a"])
+def test_abundance_rejects_ambiguous_or_unsafe_names_before_generation(tmp_path, header):
+    from samovar.abundance import generation_sample_names
+    table = tmp_path / "profile.csv"
+    table.write_text(header + "\n562,1,1\n")
+    with pytest.raises(ValueError, match="Invalid|Duplicate"):
+        generation_sample_names(table)
+
 def test_iss_config_from_args(tmp_path):
     test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)

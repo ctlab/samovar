@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from unittest.mock import patch
 
 import pandas as pd
@@ -34,6 +35,48 @@ def _is_iss_cmd(cmd):
 def test_scale_amounts_preserves_requested_total():
     assert _scale_amounts([1, 1, 1], 200) == [67, 67, 66]
     assert sum(_scale_amounts([3, 2, 1], 17)) == 17
+
+
+@pytest.mark.parametrize("values,settings,expected,phyloseq", [
+    ([0.2, 0.8], None, [12, 48], False),
+    ([20, 80], {"unit": "percent"}, [12, 48], False),
+    ([50, 50], {"unit": "percent", "basis": "organisms"}, [20, 40], False),
+    ([2, 8], None, [12, 48], True),
+])
+def test_iss_allocates_profile_before_integer_rounding(tmp_path, monkeypatch, values, settings, expected, phyloseq):
+    from samovar.table2iss import generate_iss_from_abundance_table
+
+    genomes = [_write_fasta(tmp_path / f"{tax}.fa", tax, seq="ACGT" * length)
+               for tax, length in [("562", 1000), ("4932", 2000)]]
+    path = tmp_path / "profile.csv"
+    column = "patient_A" if phyloseq else "N_patient_A"
+    pd.DataFrame({"taxid": ["562", "4932"], column: values}).to_csv(path, index=False)
+    if settings:
+        Path(str(path) + ".profile.json").write_text(json.dumps(settings))
+
+    def pool(**kwargs):
+        assert kwargs["amount"] == expected
+        files = []
+        for mate in ("R1", "R2"):
+            dest = Path(kwargs["output_dir"]) / f"pool_full_{mate}.fastq"
+            dest.write_text("".join(
+                f"@taxid:{tax}_{i}\nACGT\n+\nIIII\n"
+                for tax, count in zip(kwargs["genome_ids"], kwargs["amount"])
+                for i in range(count)
+            ))
+            files.append(str(dest))
+        return files
+
+    monkeypatch.setattr("samovar.table2iss.generate_reads_metagenome", pool)
+    out = tmp_path / "output"
+    outputs = generate_iss_from_abundance_table(
+        str(path), str(tmp_path), str(out), total_reads=60, genomes=genomes,
+    )
+    assert {Path(p).name for p in outputs} == {"patient_A_full_R1.fastq", "patient_A_full_R2.fastq"}
+    assert all(_count_fastq_records(p) == 60 for p in outputs)
+    converted = json.loads((out / ".profile_conversion.json").read_text())
+    assert converted["basis"] == "reads" and converted["depth"] == 60
+    assert converted["source_metadata"]["basis"] == (settings or {}).get("basis", "reads")
 
 
 def test_generate_reads_metagenome_single_iss_call(tmp_path):

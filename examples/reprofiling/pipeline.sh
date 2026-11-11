@@ -12,7 +12,7 @@ output_dir="$(samovar_example_outdir)"
 rm -rf "$output_dir/"
 
 chmod +x "${SCRIPT_DIR}/linear_classifier.py"
-samovar tools import -n linear \
+samovar tools import -n linear_classifier \
   --exec-path "${SCRIPT_DIR}/linear_classifier.py" \
   --type ml \
   --flags "--max-iter 500"
@@ -35,8 +35,8 @@ samovar prepare \
     --output_dir "$output_dir" \
     --test-genomes \
     --N_reads 200 \
-    --reprofiler linear \
-    --flags linear "--max-iter 400" \
+    --reprofiler linear_classifier \
+    --flags linear_classifier "--max-iter 400" \
     --kraken2-test "kraken2 toy" \
     --kaiju-test "kaiju toy"
 

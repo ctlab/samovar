@@ -31,4 +31,4 @@ def test_generated_exec_pipeline_is_python_only(tmp_path):
     for step in ("setup_reads", "abundance_tables", "regenerate_tables", "score_regenerated_tables", "regenerate_reads", "reprofile"):
         assert f"ckpt_skip {step}" in script
     assert "visualization failed; continuing" not in script
-    assert '[ -f "$CKPT/$1.done" ]' in script
+    assert 'exec_control skip "$out_dir"' in script

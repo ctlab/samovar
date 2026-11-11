@@ -81,6 +81,10 @@ class MissingReprofilerError(ValueError):
     """``tools.<name>`` is missing or is not a reprofiler."""
 
 
+class EmptyReprofileError(ValueError):
+    """A custom reprofiler returned no tables. The true column is not copied."""
+
+
 @dataclass
 class ReprofileResult:
     """Tables to write plus the trained model (and optional extras)."""
@@ -226,6 +230,36 @@ def load_csv_tables(
         if any(path.name.startswith(prefix) for prefix in skip):
             continue
         tables[path.stem] = read_csv_memmap(path)
+    return tables
+
+
+def load_initial_tables(directory: Optional[PathLike]) -> Dict[str, pd.DataFrame]:
+    """Per-sample annotation CSVs, or one combined table split on ``sample``.
+
+    ``combined_annotation_table`` is not a sample. When it is the only CSV,
+    each ``sample`` value becomes its own table and that column is dropped,
+    matching files laid out as ``S1.csv`` and ``S2.csv``.
+    """
+    tables = load_csv_tables(directory)
+    if tables or not directory:
+        return tables
+    root = Path(directory)
+    if not root.is_dir():
+        return {}
+    for path in sorted(root.glob("combined_annotation_table*.csv")):
+        frame = read_csv_memmap(path)
+        if frame is None or frame.empty:
+            continue
+        if "sample" not in frame.columns:
+            tables[path.stem] = frame
+            continue
+        for sample, group in frame.groupby("sample", sort=False):
+            key = str(sample)
+            part = group.drop(columns=["sample"]).reset_index(drop=True)
+            if key in tables:
+                tables[key] = pd.concat([tables[key], part], ignore_index=True)
+            else:
+                tables[key] = part
     return tables
 
 
@@ -747,7 +781,7 @@ def run_reprofiler(
     if kind == "builtin":
         init = initial
     else:
-        init = initial if initial is not None else load_csv_tables(initial_dir)
+        init = initial if initial is not None else load_initial_tables(initial_dir)
     regen, init = _align_ml_tables(regen, init, initial_dir)
     cfg["features_df"] = cfg.get("features_df")
     if cfg.get("features") and cfg["features_df"] is None:
@@ -759,6 +793,11 @@ def run_reprofiler(
         result = _run_custom(canon, regen, truth, init, cfg)
     wrote = bool((result.extras or {}).get("wrote_tables"))
     if not result.tables and not wrote:
+        if kind != "builtin":
+            raise EmptyReprofileError(
+                f"Reprofiler {canon!r} returned no tables. "
+                "Refusing to copy the true column into taxid_SAMOVAR."
+            )
         src = initial_dir or cfg.get("initial_dir")
         if src:
             passthrough_reprofile_tables(
@@ -992,7 +1031,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             output_dir=args.output_dir,
             config=cfg,
         )
-    except (MissingReprofilerError, GpuNotSupported, subprocess.CalledProcessError, FileNotFoundError) as exc:
+    except (MissingReprofilerError, EmptyReprofileError, GpuNotSupported, subprocess.CalledProcessError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 0

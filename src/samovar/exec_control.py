@@ -2,7 +2,16 @@
 
 Completed steps write ``$output_dir/.log/checkpoints/<name>.done``. A later
 ``samovar exec`` skips those steps unless ``--redo`` (or ``SAMOVAR_REDO=1``).
-``--cleanup-tmp`` removes scratch dirs such as ``.tmp`` and ``.iss_full``.
+A profile run also reruns ``annotate_initial`` when a per-sample
+``initial_reports/<sample>_<run>.profile.csv`` is gone, and then reruns
+``combine_initial`` and ``viz_initial``. Those later steps also rerun when
+``initial_profiles`` or ``initial_annotations_plots/profile_quality_scores.csv``
+is gone. A per-read binner does the same for its expected report: a missing
+file reruns ``annotate_initial`` and clears the two later markers. A missing
+``initial_annotations/combined_annotation_table.csv`` reruns ``combine_initial``,
+and a missing ``initial_annotations_plots/quality_scores.csv`` reruns
+``viz_initial``. An empty FASTQ does not count as a missing binner file.
+Header-only truth is included. ``--cleanup-tmp`` removes scratch dirs such as ``.tmp`` and ``.iss_full``.
 """
 
 from __future__ import annotations
@@ -123,10 +132,175 @@ def redo_requested(explicit: Optional[bool] = None) -> bool:
     return os.environ.get("SAMOVAR_REDO", "0") not in {"", "0", "false", "False", "no"}
 
 
+def _load_yaml(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _profile_run_names(root: Path) -> List[str]:
+    init = _load_yaml(root / ".log" / "configs" / "config_init.yaml")
+    names = []
+    for run in init.get("run_config") or []:
+        if isinstance(run, dict) and run.get("output_level") == "profile" and run.get("run_name"):
+            names.append(str(run["run_name"]))
+    return names
+
+
+def _init_config(root: Path) -> dict:
+    return _load_yaml(root / ".log" / "configs" / "config_init.yaml")
+
+
+def _sample_folder(root: Path) -> Path:
+    folder = Path(str(_init_config(root).get("r1_dir") or ""))
+    if not folder.is_dir():
+        folder = root / "initial_trimmed"
+    if not folder.is_dir():
+        folder = root / "initial"
+    return folder
+
+
+def _profile_samples(root: Path) -> List[str]:
+    from samovar.seqio import list_fastq_samples
+
+    folder = _sample_folder(root)
+    if not folder.is_dir():
+        return []
+    return list_fastq_samples(folder)
+
+
+def _samples_with_reads(root: Path) -> List[str]:
+    from samovar.seqio import fastq_has_reads, find_fastq_mate
+
+    folder = _sample_folder(root)
+    found = []
+    for sample in _profile_samples(root):
+        path = find_fastq_mate(folder, sample)
+        if path is not None and fastq_has_reads(path):
+            found.append(sample)
+    return found
+
+
+def _read_runs(root: Path) -> List[dict]:
+    runs = []
+    for run in _init_config(root).get("run_config") or []:
+        if not isinstance(run, dict) or not run.get("run_name"):
+            continue
+        if run.get("output_level") == "profile":
+            continue
+        runs.append(run)
+    return runs
+
+
+def _incremental_annotations(root: Path) -> bool:
+    flag = str(_init_config(root).get("incremental_annotations", True)).strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
+def _missing_binner_outputs(root: Path) -> List[str]:
+    """Expected per-read reports for samples that actually contain reads."""
+    from samovar.annotators_wrapper import get_annotator_instance
+
+    init = _init_config(root)
+    raw_reports = str(init.get("output_dir") or "").strip()
+    reports = Path(raw_reports) if raw_reports else root / "initial_reports"
+    incremental = _incremental_annotations(root)
+    missing = []
+    for run in _read_runs(root):
+        ann = get_annotator_instance(str(run.get("type") or ""), run, init)
+        for sample in _samples_with_reads(root):
+            for raw in ann.get_expected_outputs(sample, str(reports)):
+                path = Path(raw)
+                if incremental and path.name.endswith(".out"):
+                    path = path.with_name(path.name[:-4] + ".ingested")
+                if path.is_file():
+                    continue
+                try:
+                    missing.append(str(path.resolve().relative_to(root.resolve())))
+                except ValueError:
+                    missing.append(str(path))
+    return missing
+
+
+def missing_read_checkpoint_outputs(output_dir: PathLike, name: str) -> List[str]:
+    """Per-read artifacts this step must leave behind, when they are absent."""
+    if name not in {"annotate_initial", "combine_initial", "viz_initial"}:
+        return []
+    root = as_path(output_dir)
+    if not _read_runs(root) or not _samples_with_reads(root):
+        return []
+    if name == "annotate_initial":
+        return _missing_binner_outputs(root)
+    rel = (
+        "initial_annotations/combined_annotation_table.csv"
+        if name == "combine_initial"
+        else "initial_annotations_plots/quality_scores.csv"
+    )
+    if (root / rel).is_file():
+        return []
+    return [rel]
+
+
+def expects_profile_artifacts(output_dir: PathLike) -> bool:
+    """True when this run writes sample profiles that later stages must rebuild."""
+    root = as_path(output_dir)
+    scoring = _load_yaml(root / ".log" / "configs" / "config_scoring.yaml")
+    if scoring.get("profile_inputs") or scoring.get("profile_truth"):
+        return True
+    return bool(_profile_run_names(root))
+
+
+def missing_profiler_reports(output_dir: PathLike) -> List[str]:
+    """Per-sample profiler csvs named in config_init that are not on disk."""
+    root = as_path(output_dir)
+    missing = []
+    for sample in _profile_samples(root):
+        for run in _profile_run_names(root):
+            rel = f"initial_reports/{sample}_{run}.profile.csv"
+            if not (root / rel).is_file():
+                missing.append(rel)
+    return missing
+
+
+def missing_profile_checkpoint_outputs(output_dir: PathLike, name: str) -> List[str]:
+    """Profile artifacts this step must leave behind, when they are absent.
+
+    A profiler run counts even when the only gold standard is read-header taxids.
+    A missing per-sample csv also invalidates the combined profile and its scores.
+    """
+    if name not in {"annotate_initial", "combine_initial", "viz_initial"}:
+        return []
+    root = as_path(output_dir)
+    if not expects_profile_artifacts(root):
+        return []
+    missing = missing_profiler_reports(root)
+    if name == "annotate_initial":
+        return missing
+    rel = (
+        "initial_profiles"
+        if name == "combine_initial"
+        else "initial_annotations_plots/profile_quality_scores.csv"
+    )
+    if not (root / rel).exists():
+        missing.append(rel)
+    return missing
+
+
 def should_skip(output_dir: PathLike, name: str, redo: Optional[bool] = None) -> bool:
     if redo_requested(redo):
         return False
-    return (checkpoint_dir(output_dir) / f"{name}.done").is_file()
+    if not (checkpoint_dir(output_dir) / f"{name}.done").is_file():
+        return False
+    return not (
+        missing_profile_checkpoint_outputs(output_dir, name)
+        or missing_read_checkpoint_outputs(output_dir, name)
+    )
 
 
 def mark_done(output_dir: PathLike, name: str) -> Path:
@@ -307,13 +481,18 @@ def needs_regen_early_exit(
 def _has_out_reports(directory: Path) -> bool:
     if not directory.is_dir():
         return False
-    for pattern in ("*.out", "*.ingested"):
+    for pattern in ("*.out", "*.ingested", "*.profile.csv"):
         if any(path.is_file() for path in directory.rglob(pattern)):
             return True
     return False
 
 
 def _has_csv_tables(directory: Path) -> bool:
+    if directory.name.endswith("_annotations"):
+        from samovar.profiles import read_profiles
+        profiles = directory.with_name(directory.name.removesuffix("_annotations") + "_profiles")
+        if read_profiles(profiles)[0]:
+            return True
     if not directory.is_dir():
         return False
     return any(path.is_file() and path.suffix == ".csv" for path in directory.glob("*.csv"))
@@ -331,6 +510,17 @@ def startpoint_gaps(
 
     src = input_dir if input_dir not in (None, "") else os.environ.get("SAMOVAR_INPUT_DIR")
     gaps: List[str] = []
+    initial_config = root / ".log" / "configs" / "config_init.yaml"
+    if start_s in {"setup_reads", "qc_initial", "annotate_initial", "combine_initial"} and initial_config.is_file():
+        import yaml
+        settings = yaml.safe_load(initial_config.read_text()) or {}
+        supplied = settings.get("profile_inputs") or {}
+        if supplied:
+            from samovar.profiles import load_profile
+            for info in supplied.values():
+                load_profile(info["path"], info)
+            if not any(run.get("output_level", "read") == "read" for run in settings.get("run_config", [])):
+                return []
     if start_s == "setup_reads":
         generate_sh = root / ".generate" / "generate.sh"
         if not (
@@ -661,7 +851,22 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     if args.command == "skip":
-        return 0 if should_skip(args.output_dir, args.name) else 1
+        missing = (
+            missing_profile_checkpoint_outputs(args.output_dir, args.name)
+            + missing_read_checkpoint_outputs(args.output_dir, args.name)
+        )
+        if should_skip(args.output_dir, args.name):
+            return 0
+        if missing and (checkpoint_dir(args.output_dir) / f"{args.name}.done").is_file():
+            print(
+                f"[checkpoint] {args.name} is marked done but missing "
+                f"{', '.join(missing)}; rerunning",
+                file=sys.stderr,
+            )
+            if args.name == "annotate_initial":
+                clear_checkpoints(args.output_dir, "combine_initial")
+                clear_checkpoints(args.output_dir, "viz_initial")
+        return 1
     if args.command == "mark":
         mark_done(args.output_dir, args.name)
         return 0

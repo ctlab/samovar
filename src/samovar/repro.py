@@ -562,18 +562,119 @@ def rewrite_output_dir_argv(argv: Sequence[str], output_dir: str) -> List[str]:
     return out
 
 
+# Input paths recorded as the user typed them. output_dir is not here: reproduce
+# rewrites it to the caller's --output_dir and leaves it relative to that cwd.
+_RECORDED_INPUT_FLAGS = frozenset({
+    "--input_config",
+    "--input_dir",
+    "--input-dir",
+    "-i",
+    "--genome_dir",
+    "--genome-dir",
+    "-g",
+    "--host_genome",
+    "--host-genome",
+    "--abundance",
+    "--abundance_table",
+    "--camisim-config",
+    "--initial-ground-truth-table",
+    "--initial-annotation-ground-truth-table",
+    "--samples-metadata",
+    "--samples_metadata",
+    "--taxdump",
+})
+
+
+def _recorded_cwd(snap: Any, hydra_root: Path) -> str:
+    """Working directory of the original command (hydra.yaml, then env.cwd)."""
+    meta_path = Path(hydra_root) / "hydra.yaml"
+    if meta_path.is_file():
+        try:
+            meta = OmegaConf.to_container(OmegaConf.load(meta_path), resolve=False) or {}
+        except Exception:
+            meta = {}
+        if isinstance(meta, dict):
+            runtime = ((meta.get("hydra") or {}).get("runtime") or {})
+            cwd = str(runtime.get("cwd") or "").strip()
+            if cwd:
+                return cwd
+    env = _plain(snap.get("env"), {}) or {}
+    if isinstance(env, dict):
+        return str(env.get("cwd") or "").strip()
+    return ""
+
+
+def _resolve_input_path(value: str, base: Optional[Path], flag: str) -> Tuple[str, Optional[str]]:
+    raw = str(value).strip()
+    if not raw:
+        return raw, None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        if base is None:
+            return raw, (
+                f"Error: recorded input {flag} {raw} is relative, "
+                "and the snapshot has no runtime cwd"
+            )
+        path = base / path
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path.absolute()
+    if not resolved.exists():
+        return str(resolved), f"Error: recorded input not found: {resolved} ({flag} {raw})"
+    return str(resolved), None
+
+
+def resolve_recorded_inputs(
+    argv: Sequence[str], cwd: str
+) -> Tuple[List[str], Optional[str]]:
+    """Join relative recorded inputs to the original cwd. Leave --output_dir alone."""
+    base = Path(cwd).expanduser() if str(cwd or "").strip() else None
+    out: List[str] = []
+    tokens = [str(tok) for tok in argv]
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        flag = tok.split("=", 1)[0]
+        if flag in _RECORDED_INPUT_FLAGS and "=" in tok:
+            resolved, err = _resolve_input_path(tok.split("=", 1)[1], base, flag)
+            if err:
+                return out, err
+            out.append(f"{flag}={resolved}")
+            i += 1
+            continue
+        if tok in _RECORDED_INPUT_FLAGS:
+            out.append(tok)
+            i += 1
+            if i < len(tokens) and not tokens[i].startswith("-"):
+                resolved, err = _resolve_input_path(tokens[i], base, tok)
+                if err:
+                    return out, err
+                out.append(resolved)
+                i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return out, None
+
+
 def run_recorded_stage(
     stage: str,
     block: Mapping[str, Any],
     output_dir: str,
     *,
     dry_run: bool = False,
+    recorded_cwd: str = "",
 ) -> int:
     argv = list(block.get("argv") or [])
     if not argv:
         args = dict(block.get("args") or {})
         argv = _argv_from_args(stage, args)
     argv = rewrite_output_dir_argv(argv, output_dir)
+    argv, missing = resolve_recorded_inputs(argv, recorded_cwd)
+    if missing:
+        print(missing, file=sys.stderr)
+        return 1
     used = list(block.get("used_genomes") or [])
     if stage == "generate" and used:
         tokens = []
@@ -831,7 +932,9 @@ def _bundle_readme(mode: str) -> str:
         f"mode: {mode}\n\n"
         "Hydra saved the composed config in .hydra/ (config.yaml, overrides.yaml).\n"
         "Used genomes are listed under genomes.used (not packed as FASTA).\n"
-        "Databases are recorded as lazy-download recipes, not copied.\n\n"
+        "Databases are recorded as lazy-download recipes, not copied.\n"
+        "Relative inputs are resolved from the working directory saved in .hydra,\n"
+        "not from this folder. --output_dir is relative to where you run the command.\n\n"
         "  bash install.sh\n"
         "  samovar reproduce . --output_dir ./rerun\n"
     )
@@ -899,6 +1002,7 @@ def reproduce(
         wanted = [str(snap.get("command") or "")]
     wanted = [s for s in wanted if s]
     extra = [str(x) for x in (extra_overrides or []) if str(x).strip()]
+    origin = _recorded_cwd(snap, hydra_root)
     code = 0
     for stage in wanted:
         block = _plain(snap.get(stage), {}) or {}
@@ -916,7 +1020,9 @@ def reproduce(
         genomes = _plain(snap.get("genomes"), {}) or {}
         if stage == "generate" and isinstance(genomes, dict):
             block["used_genomes"] = genomes.get("used") or []
-        code = run_recorded_stage(stage, block, output_dir, dry_run=dry_run)
+        code = run_recorded_stage(
+            stage, block, output_dir, dry_run=dry_run, recorded_cwd=origin
+        )
         if code != 0:
             break
     if tmp:
