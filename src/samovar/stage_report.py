@@ -2143,8 +2143,12 @@ def _write_concordance(
     return written
 
 
+def _csv_cell(value: Any) -> Any:
+    return "" if value is None else value
+
+
 def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) -> None:
-    """Box plot of per-sample seconds and a table of means plus stage wall clocks."""
+    """Box plots of per-sample seconds and peak RSS, plus means and stage wall clocks."""
     import csv
 
     from samovar.multiqc_report import _matches
@@ -2166,19 +2170,21 @@ def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) 
         return
     folder = dest / "runtime"
     folder.mkdir(parents=True, exist_ok=True)
+    sample_fields = ["phase", "run_name", "rule", "sample", "elapsed_s", "max_rss_mb"]
     with (folder / "samples.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["phase", "run_name", "rule", "sample", "elapsed_s"])
+        writer = csv.DictWriter(handle, fieldnames=sample_fields, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(samples)
+        writer.writerows({key: _csv_cell(row.get(key)) for key in sample_fields} for row in samples)
     with (folder / "stages.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["stage", "elapsed_s"])
         writer.writeheader()
         writer.writerows(stages)
     means = mean_per_run(samples)
+    mean_fields = ["phase", "run_name", "n", "mean_elapsed_s", "mean_max_rss_mb"]
     with (folder / "means.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["phase", "run_name", "n", "mean_elapsed_s"])
+        writer = csv.DictWriter(handle, fieldnames=mean_fields)
         writer.writeheader()
-        writer.writerows(means)
+        writer.writerows({key: _csv_cell(row.get(key)) for key in mean_fields} for row in means)
     if samples:
         grouped: Dict[str, List[float]] = {}
         for row in samples:
@@ -2200,14 +2206,39 @@ def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) 
             "data": grouped,
         }
         _emit_mqc(payload, dest / "runtime_box_mqc.json")
+        memory: Dict[str, List[float]] = {}
+        for row in samples:
+            if row.get("max_rss_mb") is None:
+                continue
+            memory.setdefault(f"{row['phase']}: {row['run_name']}", []).append(row["max_rss_mb"])
+        if memory:
+            payload = {
+                "id": "samovar_runtime_memory_box",
+                "section_name": "Peak memory per sample",
+                "description": (
+                    "Each point is one sample's Snakemake benchmark max_rss, in MB, "
+                    "for that annotator or profiler. The mean is the per-sample peak. "
+                    "A missing max_rss is absent, not zero."
+                ),
+                "plot_type": "box",
+                "pconfig": {
+                    "id": "samovar_runtime_memory_box_plot",
+                    "title": "Peak RSS per sample",
+                    "ylab": "MB",
+                },
+                "data": memory,
+            }
+            _emit_mqc(payload, dest / "runtime_memory_box_mqc.json")
     rows: Dict[str, Dict[str, Any]] = {}
     for row in means:
+        rss = row.get("mean_max_rss_mb")
         rows[str(len(rows))] = {
             "kind": "per_sample_mean",
             "stage": row["phase"],
             "name": row["run_name"],
             "n": row["n"],
             "elapsed_s": round(row["mean_elapsed_s"], 6),
+            "max_rss_mb": "" if rss is None else round(rss, 6),
         }
     for row in stages:
         rows[str(len(rows))] = {
@@ -2216,12 +2247,17 @@ def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) 
             "name": row["stage"],
             "n": "",
             "elapsed_s": round(row["elapsed_s"], 6),
+            "max_rss_mb": "",
         }
     if rows:
         payload = {
             "id": "samovar_runtime_table",
             "section_name": "Runtime summary",
-            "description": "per_sample_mean is the average sample elapsed. absolute is the stage wall clock.",
+            "description": (
+                "per_sample_mean is the average sample elapsed and, when the benchmark "
+                "recorded it, the average peak RSS in MB. absolute is the stage wall clock "
+                "and has no peak memory."
+            ),
             "plot_type": "table",
             "pconfig": {"id": "samovar_runtime_summary", "title": "Runtime", "col1_header": "Row"},
             "data": rows,

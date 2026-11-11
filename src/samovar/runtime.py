@@ -1,8 +1,8 @@
 """Elapsed time for a checkpoint and for one annotator or profiler sample.
 
 Absolute time is the wall clock of a checkpoint, not the sum of its jobs.
-Per-sample time is the Snakemake benchmark of that sample. A missing file is
-not a measured zero.
+Per-sample time and peak RSS come from that sample's Snakemake benchmark.
+A missing file or a missing ``max_rss`` is not a measured zero.
 """
 
 from __future__ import annotations
@@ -33,20 +33,30 @@ def record_stage(output_dir: str, stage: str, started: str, finished: str) -> Pa
     return dest
 
 
-def _elapsed_seconds(path: Path) -> Optional[float]:
+def _benchmark_row(path: Path) -> Optional[tuple]:
+    """``(elapsed_s, max_rss_mb or None)``. No ``s`` column means the row is unused."""
     lines = path.read_text(encoding="utf-8").splitlines()
     if len(lines) < 2:
         return None
     header = lines[0].split("\t")
+    fields = lines[1].split("\t")
     if "s" not in header:
         return None
     try:
-        value = float(lines[1].split("\t")[header.index("s")])
+        elapsed = float(fields[header.index("s")])
     except (ValueError, IndexError):
         return None
-    if value < 0:
+    if elapsed < 0:
         return None
-    return value
+    rss = None
+    if "max_rss" in header:
+        try:
+            rss = float(fields[header.index("max_rss")])
+        except (ValueError, IndexError):
+            rss = None
+        if rss is not None and rss < 0:
+            rss = None
+    return elapsed, rss
 
 
 def load_sample_runtimes(root: Path) -> List[Dict[str, Any]]:
@@ -59,9 +69,10 @@ def load_sample_runtimes(root: Path) -> List[Dict[str, Any]]:
         if not base.is_dir():
             continue
         for path in sorted(base.glob("*/*/*.tsv")):
-            elapsed = _elapsed_seconds(path)
-            if elapsed is None:
+            measured = _benchmark_row(path)
+            if measured is None:
                 continue
+            elapsed, rss = measured
             rows.append(
                 {
                     "phase": phase,
@@ -69,6 +80,7 @@ def load_sample_runtimes(root: Path) -> List[Dict[str, Any]]:
                     "rule": path.parts[-2],
                     "sample": path.stem,
                     "elapsed_s": elapsed,
+                    "max_rss_mb": rss,
                 }
             )
     return rows
@@ -93,16 +105,23 @@ def load_stage_runtimes(root: Path) -> List[Dict[str, Any]]:
 
 def mean_per_run(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     grouped: Dict[tuple, List[float]] = {}
+    memory: Dict[tuple, List[float]] = {}
     for row in rows:
-        grouped.setdefault((row["phase"], row["run_name"]), []).append(float(row["elapsed_s"]))
+        key = (row["phase"], row["run_name"])
+        grouped.setdefault(key, []).append(float(row["elapsed_s"]))
+        rss = row.get("max_rss_mb")
+        if rss is not None:
+            memory.setdefault(key, []).append(float(rss))
     out = []
     for (phase, run_name), values in sorted(grouped.items()):
+        rss_values = memory.get((phase, run_name))
         out.append(
             {
                 "phase": phase,
                 "run_name": run_name,
                 "n": len(values),
                 "mean_elapsed_s": sum(values) / len(values),
+                "mean_max_rss_mb": (sum(rss_values) / len(rss_values)) if rss_values else None,
             }
         )
     return out
