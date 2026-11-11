@@ -6,7 +6,12 @@ A profile run also reruns ``annotate_initial`` when a per-sample
 ``initial_reports/<sample>_<run>.profile.csv`` is gone, and then reruns
 ``combine_initial`` and ``viz_initial``. Those later steps also rerun when
 ``initial_profiles`` or ``initial_annotations_plots/profile_quality_scores.csv``
-is gone. Header-only truth is included. ``--cleanup-tmp`` removes scratch dirs such as ``.tmp`` and ``.iss_full``.
+is gone. A per-read binner does the same for its expected report: a missing
+file reruns ``annotate_initial`` and clears the two later markers. A missing
+``initial_annotations/combined_annotation_table.csv`` reruns ``combine_initial``,
+and a missing ``initial_annotations_plots/quality_scores.csv`` reruns
+``viz_initial``. An empty FASTQ does not count as a missing binner file.
+Header-only truth is included. ``--cleanup-tmp`` removes scratch dirs such as ``.tmp`` and ``.iss_full``.
 """
 
 from __future__ import annotations
@@ -148,18 +153,98 @@ def _profile_run_names(root: Path) -> List[str]:
     return names
 
 
-def _profile_samples(root: Path) -> List[str]:
-    from samovar.seqio import list_fastq_samples
+def _init_config(root: Path) -> dict:
+    return _load_yaml(root / ".log" / "configs" / "config_init.yaml")
 
-    init = _load_yaml(root / ".log" / "configs" / "config_init.yaml")
-    folder = Path(str(init.get("r1_dir") or ""))
+
+def _sample_folder(root: Path) -> Path:
+    folder = Path(str(_init_config(root).get("r1_dir") or ""))
     if not folder.is_dir():
         folder = root / "initial_trimmed"
     if not folder.is_dir():
         folder = root / "initial"
+    return folder
+
+
+def _profile_samples(root: Path) -> List[str]:
+    from samovar.seqio import list_fastq_samples
+
+    folder = _sample_folder(root)
     if not folder.is_dir():
         return []
     return list_fastq_samples(folder)
+
+
+def _samples_with_reads(root: Path) -> List[str]:
+    from samovar.seqio import fastq_has_reads, find_fastq_mate
+
+    folder = _sample_folder(root)
+    found = []
+    for sample in _profile_samples(root):
+        path = find_fastq_mate(folder, sample)
+        if path is not None and fastq_has_reads(path):
+            found.append(sample)
+    return found
+
+
+def _read_runs(root: Path) -> List[dict]:
+    runs = []
+    for run in _init_config(root).get("run_config") or []:
+        if not isinstance(run, dict) or not run.get("run_name"):
+            continue
+        if run.get("output_level") == "profile":
+            continue
+        runs.append(run)
+    return runs
+
+
+def _incremental_annotations(root: Path) -> bool:
+    flag = str(_init_config(root).get("incremental_annotations", True)).strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
+def _missing_binner_outputs(root: Path) -> List[str]:
+    """Expected per-read reports for samples that actually contain reads."""
+    from samovar.annotators_wrapper import get_annotator_instance
+
+    init = _init_config(root)
+    raw_reports = str(init.get("output_dir") or "").strip()
+    reports = Path(raw_reports) if raw_reports else root / "initial_reports"
+    incremental = _incremental_annotations(root)
+    missing = []
+    for run in _read_runs(root):
+        ann = get_annotator_instance(str(run.get("type") or ""), run, init)
+        for sample in _samples_with_reads(root):
+            for raw in ann.get_expected_outputs(sample, str(reports)):
+                path = Path(raw)
+                if incremental and path.name.endswith(".out"):
+                    path = path.with_name(path.name[:-4] + ".ingested")
+                if path.is_file():
+                    continue
+                try:
+                    missing.append(str(path.resolve().relative_to(root.resolve())))
+                except ValueError:
+                    missing.append(str(path))
+    return missing
+
+
+def missing_read_checkpoint_outputs(output_dir: PathLike, name: str) -> List[str]:
+    """Per-read artifacts this step must leave behind, when they are absent."""
+    if name not in {"annotate_initial", "combine_initial", "viz_initial"}:
+        return []
+    root = as_path(output_dir)
+    if not _read_runs(root) or not _samples_with_reads(root):
+        return []
+    if name == "annotate_initial":
+        return _missing_binner_outputs(root)
+    rel = (
+        "initial_annotations/combined_annotation_table.csv"
+        if name == "combine_initial"
+        else "initial_annotations_plots/quality_scores.csv"
+    )
+    if (root / rel).is_file():
+        return []
+    return [rel]
 
 
 def expects_profile_artifacts(output_dir: PathLike) -> bool:
@@ -212,7 +297,10 @@ def should_skip(output_dir: PathLike, name: str, redo: Optional[bool] = None) ->
         return False
     if not (checkpoint_dir(output_dir) / f"{name}.done").is_file():
         return False
-    return not missing_profile_checkpoint_outputs(output_dir, name)
+    return not (
+        missing_profile_checkpoint_outputs(output_dir, name)
+        or missing_read_checkpoint_outputs(output_dir, name)
+    )
 
 
 def mark_done(output_dir: PathLike, name: str) -> Path:
@@ -763,7 +851,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     if args.command == "skip":
-        missing = missing_profile_checkpoint_outputs(args.output_dir, args.name)
+        missing = (
+            missing_profile_checkpoint_outputs(args.output_dir, args.name)
+            + missing_read_checkpoint_outputs(args.output_dir, args.name)
+        )
         if should_skip(args.output_dir, args.name):
             return 0
         if missing and (checkpoint_dir(args.output_dir) / f"{args.name}.done").is_file():

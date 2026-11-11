@@ -109,6 +109,60 @@ def test_deleted_profiler_csv_reruns_annotate_and_downstream(tmp_path):
         raise AssertionError("partial profiler output was collected")
 
 
+def test_deleted_per_read_outputs_rerun_their_owner(tmp_path):
+    reads = tmp_path / "initial"
+    reads.mkdir()
+    (reads / "A.fastq").write_text("@a|taxid:562\nACGT\n+\nIIII\n", encoding="utf-8")
+    (reads / "E.fastq").write_text("", encoding="utf-8")
+    configs = tmp_path / ".log" / "configs"
+    configs.mkdir(parents=True)
+    (configs / "config_init.yaml").write_text(
+        "r1_dir: " + str(reads) + "\n"
+        "output_dir: " + str(tmp_path / "initial_reports") + "\n"
+        "incremental_annotations: true\n"
+        "run_config:\n"
+        "  - {run_name: k2, type: kraken2, output_level: read, cmd: kraken2}\n",
+        encoding="utf-8",
+    )
+    reports = tmp_path / "initial_reports"
+    reports.mkdir()
+    (reports / "A_k2.kraken2.report").write_text("report\n", encoding="utf-8")
+    (reports / "A_k2.kraken2.ingested").write_text("ok\n", encoding="utf-8")
+    (tmp_path / "initial_annotations").mkdir()
+    (tmp_path / "initial_annotations" / "combined_annotation_table.csv").write_text(
+        "seq\n", encoding="utf-8"
+    )
+    plots = tmp_path / "initial_annotations_plots"
+    plots.mkdir()
+    (plots / "quality_scores.csv").write_text("annotator\n", encoding="utf-8")
+    for name in ("annotate_initial", "combine_initial", "viz_initial"):
+        mark_done(tmp_path, name)
+    assert should_skip(tmp_path, "annotate_initial")
+    assert should_skip(tmp_path, "combine_initial")
+    assert should_skip(tmp_path, "viz_initial")
+
+    (reports / "A_k2.kraken2.ingested").unlink()
+    assert not should_skip(tmp_path, "annotate_initial")
+    assert exec_control_main(["skip", str(tmp_path), "annotate_initial"]) == 1
+    assert not (tmp_path / ".log" / "checkpoints" / "combine_initial.done").is_file()
+    assert not (tmp_path / ".log" / "checkpoints" / "viz_initial.done").is_file()
+    (reports / "A_k2.kraken2.ingested").write_text("ok\n", encoding="utf-8")
+    mark_done(tmp_path, "combine_initial")
+    mark_done(tmp_path, "viz_initial")
+    assert should_skip(tmp_path, "annotate_initial")
+
+    (plots / "quality_scores.csv").unlink()
+    assert should_skip(tmp_path, "annotate_initial")
+    assert should_skip(tmp_path, "combine_initial")
+    assert not should_skip(tmp_path, "viz_initial")
+    (plots / "quality_scores.csv").write_text("annotator\n", encoding="utf-8")
+
+    (tmp_path / "initial_annotations" / "combined_annotation_table.csv").unlink()
+    assert should_skip(tmp_path, "annotate_initial")
+    assert should_skip(tmp_path, "viz_initial")
+    assert not should_skip(tmp_path, "combine_initial")
+
+
 @pytest.mark.optional
 def test_exec_restores_deleted_profile_outputs(tmp_path):
     import os
