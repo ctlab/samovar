@@ -381,6 +381,37 @@ def canonicalize_step(name: str) -> str:
     )
 
 
+PIPELINE_MODES = ("full", "benchmark")
+BENCHMARK_END = "viz_initial"
+
+
+def normalize_mode(raw: Optional[str]) -> str:
+    """``full`` is the current pipeline. ``benchmark`` is not a MultiQC section."""
+    key = str(raw or "full").strip().lower()
+    if key not in PIPELINE_MODES:
+        raise ValueError(f"Unknown pipeline mode {raw!r}. Use full or benchmark.")
+    return key
+
+
+def benchmark_window(
+    start: Optional[str],
+    end: Optional[str],
+    *,
+    endpoint_explicit: bool,
+) -> tuple:
+    """Initial stages only. An omitted endpoint stops at ``viz_initial``."""
+    if not endpoint_explicit:
+        end = BENCHMARK_END
+    start_s, end_s = resolve_window(start, end)
+    limit = CHECKPOINT_STEPS.index(BENCHMARK_END)
+    if CHECKPOINT_STEPS.index(start_s) > limit or CHECKPOINT_STEPS.index(end_s) > limit:
+        raise ValueError(
+            f"benchmark mode stays on initial stages through {BENCHMARK_END}; "
+            f"got startpoint {start_s}, endpoint {end_s}"
+        )
+    return start_s, end_s
+
+
 def resolve_window(
     start: Optional[str] = None,
     end: Optional[str] = None,

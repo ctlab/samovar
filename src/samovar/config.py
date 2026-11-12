@@ -439,6 +439,7 @@ class PipelineConfig:
     qc_tool_flags: Optional[Dict[str, str]] = None
     startpoint: str = "setup_reads"
     endpoint: str = "viz_reprofiled"
+    mode: str = "full"
     export_formats: Optional[List[str]] = None
     export_taxdump: Optional[str] = None
     export_taxonomy: Optional[str] = None
@@ -791,6 +792,11 @@ class PipelineConfig:
                 )
                 if yaml_end:
                     config.endpoint = str(yaml_end)
+                yaml_mode = input_config.get("mode")
+                if yaml_mode:
+                    from samovar.exec_control import normalize_mode
+
+                    config.mode = normalize_mode(str(yaml_mode))
                 yaml_gt = (
                     input_config.get("initial_ground_truth_table")
                     or input_config.get("initial-ground-truth-table")
@@ -1457,9 +1463,27 @@ class PipelineConfig:
         cli_end = getattr(args, "endpoint", None)
         if cli_end:
             config.endpoint = str(cli_end)
-        config.startpoint, config.endpoint = resolve_window(
-            config.startpoint, config.endpoint
-        )
+        cli_mode = getattr(args, "mode", None)
+        if cli_mode:
+            from samovar.exec_control import normalize_mode
+
+            config.mode = normalize_mode(str(cli_mode))
+        if config.mode == "benchmark":
+            from samovar.exec_control import benchmark_window
+
+            config.startpoint, config.endpoint = benchmark_window(
+                config.startpoint,
+                config.endpoint,
+                endpoint_explicit=bool(cli_end) or bool(
+                    input_config.get("endpoint")
+                    or input_config.get("end_point")
+                    or input_config.get("end")
+                ),
+            )
+        else:
+            config.startpoint, config.endpoint = resolve_window(
+                config.startpoint, config.endpoint
+            )
         from samovar.annotation_convert import formats_from_prepare_args, parse_export_formats
 
         cli_export = formats_from_prepare_args(args)
@@ -1815,7 +1839,7 @@ class PipelineConfig:
                 raise ValueError(f"Regenerated profiles need profilers with matching run_name identities: {sorted(missing)}; use endpoint viz_initial for benchmark-only inputs")
         window_path = base_path / ".log" / "window.env"
         window_path.write_text(
-            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\n",
+            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\nexport SAMOVAR_MODE={self.mode}\n",
             encoding="utf-8",
         )
         configs["window"] = str(window_path)
@@ -1833,11 +1857,27 @@ class PipelineConfig:
 
         return configs
 
-    def _annotation_export_bash(self, src_rel: str, stage: str) -> str:
+    def _annotation_export_bash(self, src_rel: str, stage: str, method: Optional[str] = None) -> str:
         """Corrected Annotation → abundance-like tables after combine/reprofile."""
+        from samovar.abundance_correctors import is_identity_export
+
+        chosen = method or self.export_corrector
+        if (
+            method is None
+            and self.mode == "benchmark"
+            and stage == "initial"
+            and not is_skipped_export(chosen)
+            and not is_identity_export(chosen)
+        ):
+            notice = (
+                f'\necho "benchmark: export corrector {chosen} needs a regenerated '
+                f'reference and a trained model; writing uncorrected initial tables" '
+                f'| tee "$out_dir/.log/benchmark_export.txt"\n'
+            )
+            return notice + self._annotation_export_bash(src_rel, stage, method="identity")
         if (self.profile_inputs or any(a.output_level == "profile" for a in self.annotators)) and not any(a.output_level == "read" for a in self.annotators):
             return ""  # profile exports are already materialized without a read table
-        if is_skipped_export(self.export_corrector):
+        if is_skipped_export(chosen):
             return ""
         formats = list(self.export_formats or [])
         if not formats:
@@ -1850,13 +1890,18 @@ class PipelineConfig:
             tax = " --taxdump " + shlex.quote(str(self.export_taxdump))
         if self.export_taxonomy:
             tax += " --taxonomy " + shlex.quote(str(self.export_taxonomy))
-        method = shlex.quote(str(self.export_corrector or "logistic"))
+        method = shlex.quote(str(chosen or "logistic"))
         stage_q = shlex.quote(str(stage))
+        trained = ""
+        if not is_identity_export(chosen):
+            trained = (
+                '    --reference "$out_dir/regenerated_annotations" \\\n'
+                '    --model "$out_dir/reprofiled_annotations/trained_model.joblib" \\\n'
+            )
         return (
             f"\n\"$PYTHON_PATH\" -m samovar.abundance_correctors \\\n"
             f'    -i "$out_dir/{src_rel}" -o "$out_dir/exports/{stage}" \\\n'
-            f'    --reference "$out_dir/regenerated_annotations" \\\n'
-            f'    --model "$out_dir/reprofiled_annotations/trained_model.joblib" \\\n'
+            f"{trained}"
             f'    --config "$out_dir/.log/configs/config_export.yaml" \\\n'
             f'    --output_dir "$out_dir" --stage {stage_q} \\\n'
             f"    --export {method}{tax} \\\n"
@@ -1875,7 +1920,7 @@ class PipelineConfig:
         pipeline_path = log_dir / name
         start_s, end_s = resolve_window(self.startpoint, self.endpoint)
         (log_dir / "window.env").write_text(
-            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\n",
+            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\nexport SAMOVAR_MODE={self.mode}\n",
             encoding="utf-8",
         )
         
@@ -1910,6 +1955,7 @@ class PipelineConfig:
             if (sample_qc_on or name not in {"score_sample_qc_full", "score_sample_qc_final"})
             and (filter_full_on or name != "filter_sample_qc_full")
             and (filter_final_on or name != "filter_sample_qc_final")
+            and (self.mode != "benchmark" or CHECKPOINT_STEPS.index(name) <= CHECKPOINT_STEPS.index("viz_initial"))
         ]
         step_names = " ".join(listed_steps)
         extra_genome_dirs = ":".join(self.genome_dirs or [])
@@ -2073,9 +2119,8 @@ fi
     --resources mem_mb=$MEM_MB""",
         )
 
-        combine_initial = _checkpoint_block(
-            "combine_initial",
-            (_annotation_combine_bash(
+        combine_body = (
+            _annotation_combine_bash(
                 f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/initial_reports" \\
     -o "$out_dir/initial_annotations"{gt_initial}""",
@@ -2084,7 +2129,13 @@ fi
                 gt_initial,
                 self.incremental_annotations,
             )
-            + self._annotation_export_bash("initial_annotations", "initial") if has_read_tools or not profile_mode else "")
+            if has_read_tools or not profile_mode
+            else ""
+        )
+        combine_initial = _checkpoint_block(
+            "combine_initial",
+            combine_body
+            + self._annotation_export_bash("initial_annotations", "initial")
             + collect_profiles("initial"),
         )
 
@@ -2280,15 +2331,16 @@ cleanup_tmp_if_requested
                 qc_initial = _checkpoint_block("qc_initial", for_stage)
                 annotate_initial = _checkpoint_block("annotate_initial", for_stage)
 
-        pipeline_content = "\n".join(
-            part
-            for part in [
-                header,
-                setup_reads,
-                qc_initial,
-                annotate_initial,
-                combine_initial,
-                viz_initial,
+        stages = [
+            header,
+            setup_reads,
+            qc_initial,
+            annotate_initial,
+            combine_initial,
+            viz_initial,
+        ]
+        if self.mode != "benchmark":
+            stages.extend([
                 abundance_tables,
                 regenerate_tables,
                 score_sample_qc_full,
@@ -2306,10 +2358,9 @@ cleanup_tmp_if_requested
                 viz_regenerated,
                 reprofile,
                 viz_reprofiled,
-                footer,
-            ]
-            if part
-        )
+            ])
+        stages.append(footer)
+        pipeline_content = "\n".join(part for part in stages if part)
 
         with open(pipeline_path, 'w') as f:
             f.write(pipeline_content)

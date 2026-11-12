@@ -437,6 +437,17 @@ def main():
         help='Keep per-read annotator files and combine them in one batch',
     )
     parser.add_argument(
+        '--mode',
+        choices=('full', 'benchmark'),
+        default=None,
+        help=(
+            'full (default) keeps the pipeline through viz_reprofiled. '
+            'benchmark stops after initial profiles, exports, scores and reports '
+            '(viz_initial) and does not regenerate, train, or reprofile. '
+            'This is not the MultiQC benchmark section and not regeneration_mode.'
+        ),
+    )
+    parser.add_argument(
         '--startpoint',
         '--start-point',
         dest='startpoint',
@@ -616,7 +627,7 @@ def main():
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",
-        "startpoint", "start-point", "endpoint", "end-point",
+        "startpoint", "start-point", "endpoint", "end-point", "mode",
         "scoring", "reprofiler", "ml",
         "feature-importance", "feature_importance", "no-feature-importance",
         "feature-importance-all",
