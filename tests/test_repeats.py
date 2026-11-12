@@ -309,6 +309,115 @@ def test_generator_failure_is_recorded_without_fake_reads(tmp_path):
     assert list((root / "out_0002").rglob("*.fastq")) == []
 
 
+def _prepared_args(tmp_path, output, **extra):
+    import argparse
+
+    fields = dict(
+        input_config=None,
+        input_dir=None,
+        output_dir=str(output),
+        threads=None,
+        cores=1,
+        mem_mb=None,
+        custom_cli_flags={},
+        repeat=None,
+        add_annotator=False,
+        mode=None,
+    )
+    fields.update(extra)
+    return argparse.Namespace(**fields)
+
+
+def test_prepare_inherits_manifest_and_rejects_a_different_n(tmp_path, monkeypatch):
+    from samovar.config import setup_pipeline
+    from samovar.paths import write_config
+    from samovar.repeats import publish_package
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
+    root = tmp_path / "pkg"
+    publish_package(root, count=2, base_seed=42, kind="generated", identity="g")
+    setup_pipeline(_prepared_args(tmp_path, root, mode="benchmark"))
+    assert (root / "out_0001" / ".log" / "samovar.sh").is_file()
+    assert (root / "out_0002" / ".log" / "samovar.sh").is_file()
+    assert "viz_initial" in (root / "out_0001" / ".log" / "window.env").read_text()
+    full = tmp_path / "full"
+    publish_package(full, count=1, base_seed=42, kind="generated", identity="g")
+    setup_pipeline(_prepared_args(tmp_path, full, mode="full"))
+    assert "viz_reprofiled" in (full / "out_0001" / ".log" / "window.env").read_text()
+    with pytest.raises(SystemExit):
+        setup_pipeline(_prepared_args(tmp_path, root, repeat=9))
+    assert not (root / "out_0009").exists()
+
+
+def test_existing_fastq_cannot_be_repeated(tmp_path, monkeypatch):
+    from samovar.config import setup_pipeline
+    from samovar.paths import write_config
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    out = tmp_path / "out"
+    with pytest.raises(SystemExit):
+        setup_pipeline(_prepared_args(tmp_path, out, input_dir=str(reads), repeat=3))
+    assert not (out / "out_0001").exists()
+
+
+def test_exec_continues_after_one_failure_and_resume_skips_successes(tmp_path):
+    from samovar.repeats import exec_package, publish_package
+
+    root = tmp_path / "pkg"
+    publish_package(root, count=3, base_seed=42, kind="generated", identity="g")
+    before = (root / ".log" / "repeats.json").read_bytes()
+    log = root / "ran.txt"
+    for name, code in (("out_0001", 0), ("out_0002", 1), ("out_0003", 0)):
+        script = root / name / ".log" / "samovar.sh"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(
+            f"#!/bin/bash\necho {name} >> {log}\nexit {code}\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        (root / name / "keep.txt").write_text(name, encoding="utf-8")
+    assert exec_package(root) == 1
+    summary = json.loads((root / "summary" / "status.json").read_text())
+    assert summary["status"] == "incomplete"
+    assert summary["n_expected"] == 3
+    assert summary["n_success"] == 2
+    assert summary["errors"][0]["repeat_id"] == "0002"
+    assert "mean" not in summary
+    assert log.read_text().split() == ["out_0001", "out_0002", "out_0003"]
+    script = root / "out_0002" / ".log" / "samovar.sh"
+    script.write_text(f"#!/bin/bash\necho out_0002 >> {log}\nexit 0\n", encoding="utf-8")
+    assert exec_package(root) == 0
+    assert log.read_text().split() == ["out_0001", "out_0002", "out_0003", "out_0002"]
+    assert (root / ".log" / "repeats.json").read_bytes() != before
+    again = json.loads((root / ".log" / "repeats.json").read_text())
+    assert [row["seed"] for row in again["repeats"]] == [
+        json.loads(before)["repeats"][i]["seed"] for i in range(3)
+    ]
+    assert (root / "out_0003" / "keep.txt").read_text() == "out_0003"
+    summary = json.loads((root / "summary" / "status.json").read_text())
+    assert summary["status"] == "complete"
+    assert summary["n_success"] == 3
+
+
+def test_status_with_no_success_is_no_data(tmp_path):
+    from samovar.repeats import publish_package, set_repeat_state, write_status_summary
+
+    root = tmp_path / "pkg"
+    publish_package(root, count=1, base_seed=7, kind="generated", identity="g")
+    set_repeat_state(root, "0001", "failed", "generate failed", "pipeline")
+    payload = json.loads(write_status_summary(root).read_text())
+    assert payload == {
+        "errors": [{"error": "generate failed", "repeat_id": "0001"}],
+        "n_expected": 1,
+        "n_success": 0,
+        "status": "no data",
+    }
+
+
 def test_ont_repeat_keeps_the_ont_contract(tmp_path):
     import yaml
 

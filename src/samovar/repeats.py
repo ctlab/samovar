@@ -220,8 +220,14 @@ def record_generator_plan(root: Path, planned: list) -> None:
     _atomic_json(manifest_path(root), data)
 
 
-def set_repeat_state(root: Path, repeat_id: str, state: str, error: str = "") -> None:
-    """Record a generate outcome. Does not create reads or truth."""
+def set_repeat_state(
+    root: Path,
+    repeat_id: str,
+    state: str,
+    error: str = "",
+    stage: str = "generate",
+) -> None:
+    """Record one stage. Does not create reads or truth."""
     data = load_manifest(root)
     if data is None:
         raise ValueError(f"repeat manifest is missing: {root}")
@@ -229,13 +235,14 @@ def set_repeat_state(root: Path, repeat_id: str, state: str, error: str = "") ->
     for row in data["repeats"]:
         if row["repeat_id"] != str(repeat_id):
             continue
-        row["state"] = state
         stages = dict(row.get("stages") or {})
-        stages["generate"] = state
+        stages[stage] = state
         row["stages"] = stages
+        if stage == "generate":
+            row["state"] = state
         if error:
             row["error"] = error
-        else:
+        elif stage == "pipeline" and state == "succeeded":
             row.pop("error", None)
         found = True
     if not found:
@@ -354,27 +361,156 @@ def main(argv: Optional[list] = None) -> None:
     mark.add_argument("--repeat-id", required=True)
     mark.add_argument("--state", required=True)
     mark.add_argument("--error", default="")
+    mark.add_argument("--stage", default="generate")
+    run = sub.add_parser("exec")
+    run.add_argument("--root", required=True)
+    run.add_argument("--redo", action="store_true")
+    run.add_argument("--startpoint", default=None)
+    run.add_argument("--endpoint", default=None)
     args = parser.parse_args(argv)
     if args.cmd == "mark":
         try:
-            set_repeat_state(Path(args.root), args.repeat_id, args.state, args.error)
+            set_repeat_state(Path(args.root), args.repeat_id, args.state, args.error, args.stage)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
+    elif args.cmd == "exec":
+        raise SystemExit(exec_package(
+            Path(args.root),
+            redo=args.redo,
+            startpoint=args.startpoint,
+            endpoint=args.endpoint,
+        ))
+
+
+def _supplied_repeat_blocked(kind: str, count: int) -> None:
+    if count > 1 and kind in {"reads", "profiles"}:
+        raise ValueError(
+            "resampling existing FASTQ or a saved profile is not supported yet; "
+            "--repeat 1 prepares one run and does not create independent replicates"
+        )
+
+
+def write_status_summary(root: Path) -> Path:
+    """Counts only. A partial package is incomplete; none succeeded is no data."""
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    errors = []
+    success = 0
+    for row in data["repeats"]:
+        stages = row.get("stages") or {}
+        if stages.get("pipeline") == "succeeded":
+            success += 1
+            continue
+        if stages.get("pipeline") == "failed" or stages.get("generate") in {"error", "failed"} or row.get("error"):
+            errors.append({
+                "repeat_id": row["repeat_id"],
+                "error": row.get("error") or stages.get("pipeline") or stages.get("generate") or "failed",
+            })
+    expected = len(data["repeats"])
+    if success == 0:
+        status = "no data"
+    elif success < expected:
+        status = "incomplete"
+    else:
+        status = "complete"
+    path = Path(root) / "summary" / "status.json"
+    _atomic_json(path, {
+        "status": status,
+        "n_expected": expected,
+        "n_success": success,
+        "errors": errors,
+    })
+    return path
+
+
+def exec_package(
+    root: Path,
+    *,
+    redo: bool = False,
+    startpoint: Optional[str] = None,
+    endpoint: Optional[str] = None,
+) -> int:
+    """Run each child through the existing exec, one at a time."""
+    import subprocess
+
+    from samovar.paths import repo_root
+
+    root = Path(root)
+    manifest = load_manifest(root)
+    if manifest is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    from samovar.seqio import has_r1_reads
+
+    failed = 0
+    env_base = dict(os.environ)
+    exec_script = repo_root() / "bin" / "samovar_exec"
+    for row in manifest["repeats"]:
+        stages = row.get("stages") or {}
+        generate_state = stages.get("generate") or row.get("state")
+        child = root / row["out_dir"]
+        child_generate = child / ".generate" / "generate.sh"
+        if (
+            child_generate.is_file()
+            and generate_state not in {"generated", "succeeded"}
+            and not has_r1_reads(child / "initial")
+        ):
+            set_repeat_state(root, row["repeat_id"], "running", stage="generate")
+            generated = subprocess.run(
+                ["bash", str(child_generate), "--directory", str(child)],
+                check=False,
+            )
+            if generated.returncode != 0:
+                set_repeat_state(root, row["repeat_id"], "failed", "generate failed", "generate")
+                set_repeat_state(root, row["repeat_id"], "failed", "generate failed", "pipeline")
+                failed += 1
+                continue
+            set_repeat_state(root, row["repeat_id"], "succeeded", stage="generate")
+            generate_state = "succeeded"
+        if generate_state in {"error", "failed"}:
+            set_repeat_state(root, row["repeat_id"], "failed", row.get("error") or "generate failed", "pipeline")
+            failed += 1
+            continue
+        if stages.get("pipeline") == "succeeded" and not redo:
+            continue
+        set_repeat_state(root, row["repeat_id"], "running", stage="pipeline")
+        cmd = ["bash", str(exec_script), "--directory", str(child)]
+        if redo:
+            cmd.append("--redo")
+        if startpoint:
+            cmd.extend(["--startpoint", startpoint])
+        if endpoint:
+            cmd.extend(["--endpoint", endpoint])
+        result = subprocess.run(cmd, check=False, env=env_base)
+        if result.returncode == 0:
+            set_repeat_state(root, row["repeat_id"], "succeeded", stage="pipeline")
+        else:
+            set_repeat_state(
+                root, row["repeat_id"], "failed",
+                f"exec exited {result.returncode}", "pipeline",
+            )
+            failed += 1
+    write_status_summary(root)
+    return 1 if failed else 0
 
 
 def prepare_package(config: Any) -> Optional[Path]:
     """Return the manifest when this prepare is a package. None keeps the single-run layout."""
+    if getattr(config, "_repeat_child", False):
+        return None
     root = Path(config.output_dir)
     repeat = parse_repeat(getattr(config, "repeat", None))
     existing = load_manifest(root) if root.exists() else None
     if repeat is None:
-        if existing:
-            raise ValueError(
-                f"{root} is a repeat package ({existing['repeat']} repeats); "
-                "pass the same --repeat, or choose another output directory"
-            )
-        return None
+        if existing is None:
+            return None
+        repeat = int(existing["repeat"])
+    elif existing is not None and int(existing["repeat"]) != int(repeat):
+        raise ValueError(
+            "repeat package does not match this request: "
+            f"manifest repeat={existing['repeat']}, request repeat={repeat}"
+        )
     identity = prepare_identity(config)
     own_initial = (root / "initial").resolve()
     generated_here = (
@@ -400,6 +536,7 @@ def prepare_package(config: Any) -> Optional[Path]:
     else:
         kind, ident = identity
         adopt = False
+    _supplied_repeat_blocked(kind, int(repeat))
     return publish_package(
         root,
         count=repeat,

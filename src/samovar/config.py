@@ -798,7 +798,7 @@ class PipelineConfig:
                     from samovar.exec_control import normalize_mode
 
                     config.mode = normalize_mode(str(yaml_mode))
-                if "repeat" in input_config:
+                if "repeat" in input_config and not getattr(args, "_repeat_child", False):
                     from samovar.repeats import parse_repeat
 
                     config.repeat = parse_repeat(input_config.get("repeat"))
@@ -1473,7 +1473,10 @@ class PipelineConfig:
             from samovar.exec_control import normalize_mode
 
             config.mode = normalize_mode(str(cli_mode))
-        if getattr(args, "repeat", None) is not None:
+        if getattr(args, "_repeat_child", False):
+            config.repeat = None
+            config._repeat_child = True
+        elif getattr(args, "repeat", None) is not None:
             from samovar.repeats import parse_repeat
 
             config.repeat = parse_repeat(args.repeat)
@@ -2458,6 +2461,19 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     if repeat_manifest is not None:
+        from samovar.repeats import load_manifest
+
+        manifest = load_manifest(config.output_dir)
+        root = Path(config.output_dir)
+        for row in manifest["repeats"]:
+            child_args = argparse.Namespace(**vars(args))
+            child_args.output_dir = str(root / row["out_dir"])
+            child_args.repeat = None
+            child_args._repeat_child = True
+            child_initial = root / row["out_dir"] / "initial"
+            if not getattr(child_args, "input_dir", None) and child_initial.is_dir():
+                child_args.input_dir = str(child_initial)
+            setup_pipeline(child_args)
         print(f"Repeat package: {repeat_manifest}")
         return {"repeats": str(repeat_manifest)}
     try:

@@ -9,6 +9,8 @@ Apply only to SAMOVAR run execution, checkup and resume. Read
 [scientific integrity](references/rules/scientific-integrity-samovar.md) and
 [code reuse](references/rules/code-usage.md).
 
+A directory with `.log/repeats.json` is a package. `samovar exec` on that root runs each `out_XXXX` one after another with the same core and memory budget. A failed repeat does not stop the others. Resume leaves successful checkpoints and seeds alone. `--redo` applies inside the selected run only.
+
 Require the run directory from the request or the preceding prepare result.
 An unspecified directory is a clarification/error, never the current directory
 by assumption. Inspect `samovar checkup --help` and `samovar exec --help` and
