@@ -205,8 +205,119 @@ def prepare_identity(config: Any) -> Optional[tuple]:
     return kind, "|".join(parts)
 
 
+def record_generator_plan(root: Path, planned: list) -> None:
+    """Remember the seed each existing generator will receive. Does not run it."""
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    by_id = {row["repeat_id"]: row for row in data["repeats"]}
+    for item in planned:
+        row = by_id[item["repeat_id"]]
+        row["generator_seed"] = int(item["generator_seed"])
+        row["generator_namespace"] = item["namespace"]
+        row["abundance"] = item.get("abundance") or ""
+        row["state"] = "planned"
+    _atomic_json(manifest_path(root), data)
+
+
+def set_repeat_state(root: Path, repeat_id: str, state: str, error: str = "") -> None:
+    """Record a generate outcome. Does not create reads or truth."""
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    found = False
+    for row in data["repeats"]:
+        if row["repeat_id"] != str(repeat_id):
+            continue
+        row["state"] = state
+        stages = dict(row.get("stages") or {})
+        stages["generate"] = state
+        row["stages"] = stages
+        if error:
+            row["error"] = error
+        else:
+            row.pop("error", None)
+        found = True
+    if not found:
+        raise ValueError(f"repeat {repeat_id} is not in {manifest_path(root)}")
+    _atomic_json(manifest_path(root), data)
+
+
+def write_repeat_orchestrator(root: Path, rows: list) -> None:
+    """Root generate.sh runs each child's existing generate.sh and keeps going."""
+    from samovar.paths import python_path, repo_root, shell_source_install_env_snippet
+
+    root = Path(root)
+    lines = [
+        "#!/bin/bash",
+        "set -u",
+        f'export SAMOVAR_ROOT="{repo_root()}"',
+        shell_source_install_env_snippet().rstrip(),
+        'export PYTHONPATH="' + str(repo_root() / "src") + '${PYTHONPATH:+:$PYTHONPATH}"',
+        f'PYTHON_PATH="${{PYTHON_PATH:-{python_path()}}}"',
+        f'root="{root.resolve()}"',
+        "fail=0",
+        "mark()",
+        "{",
+        '  "$PYTHON_PATH" -m samovar.repeats mark --root "$root" --repeat-id "$1" --state "$2" --error "${3:-}"',
+        "}",
+    ]
+    for row in rows:
+        child = root / row["out_dir"]
+        lines.extend([
+            f'if bash "{child.resolve() / ".generate" / "generate.sh"}" --directory "{child.resolve()}"; then',
+            f'  mark {row["repeat_id"]} generated',
+            "else",
+            f'  mark {row["repeat_id"]} error "generate failed"',
+            "  fail=1",
+            "fi",
+        ])
+    lines.append('exit "$fail"')
+    script = root / ".generate" / "generate.sh"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.chmod(script, 0o755)
+
+
+def materialize_repeat_generations(args: Any) -> None:
+    """Write one existing generator workflow per repeat. Does not execute it."""
+    import argparse
+
+    from samovar.iss_config import setup_iss_test
+
+    root = Path(args.output_dir)
+    manifest = load_manifest(root)
+    if manifest is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    abundance = str(getattr(args, "abundance_table", None) or "")
+    namespace = "reads" if abundance else "community"
+    base = int(getattr(args, "seed", None) if getattr(args, "seed", None) is not None else 42)
+    planned = []
+    for row in manifest["repeats"]:
+        index = int(row["repeat_id"])
+        seed = repeat_seed(base, index, namespace)
+        child = root / row["out_dir"]
+        child_args = argparse.Namespace(**vars(args))
+        child_args.output_dir = str(child)
+        child_args.seed = seed
+        child_args.repeat = None
+        child_args._repeat_count = None
+        child_args._writing_repeat_child = True
+        setup_iss_test(child_args)
+        planned.append({
+            "repeat_id": row["repeat_id"],
+            "generator_seed": seed,
+            "namespace": namespace,
+            "abundance": str(Path(abundance).resolve()) if abundance else "",
+        })
+    record_generator_plan(root, planned)
+    write_repeat_orchestrator(root, manifest["repeats"])
+
+
 def guard_generate(args: Any) -> Optional[int]:
     """Reject a bad generate target before the generator writes anything."""
+    if getattr(args, "_writing_repeat_child", False):
+        return None
     count = parse_repeat(getattr(args, "repeat", None))
     root = Path(getattr(args, "output_dir", ""))
     if _parent_package(root):
@@ -230,6 +341,26 @@ def guard_generate(args: Any) -> Optional[int]:
     elif _occupied(root):
         raise ValueError(f"{root} is not empty and has no repeat manifest; refusing to overwrite")
     return count
+
+
+def main(argv: Optional[list] = None) -> None:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(prog="samovar.repeats")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    mark = sub.add_parser("mark")
+    mark.add_argument("--root", required=True)
+    mark.add_argument("--repeat-id", required=True)
+    mark.add_argument("--state", required=True)
+    mark.add_argument("--error", default="")
+    args = parser.parse_args(argv)
+    if args.cmd == "mark":
+        try:
+            set_repeat_state(Path(args.root), args.repeat_id, args.state, args.error)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
 
 def prepare_package(config: Any) -> Optional[Path]:
@@ -278,3 +409,7 @@ def prepare_package(config: Any) -> Optional[Path]:
         settings={"mode": getattr(config, "mode", "full")},
         adopt_without_identity=adopt,
     )
+
+
+if __name__ == "__main__":
+    main()

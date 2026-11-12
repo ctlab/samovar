@@ -219,3 +219,114 @@ def test_generate_repeat_package_and_single_seed(tmp_path):
             )
         )
     assert not (batch / "out_0003").exists()
+
+
+def _generate_args(tmp_path, output, **extra):
+    import argparse
+
+    fields = dict(
+        genome_dir=str(tmp_path / "genomes"),
+        output_dir=str(output),
+        host_genome="",
+        n_samples=2,
+        total_reads=20,
+        host_fraction="0",
+        seed=42,
+        model="hiseq",
+        repeat=2,
+    )
+    fields.update(extra)
+    return argparse.Namespace(**fields)
+
+
+def test_fixed_abundance_is_shared_and_seeds_differ(tmp_path):
+    import yaml
+
+    from samovar.iss_config import setup_iss_test
+    from samovar.repeats import repeat_seed
+
+    table = tmp_path / "abundance.csv"
+    original = "taxid,N_A,N_B\n562,10,0\n9606,0,4\n"
+    table.write_text(original, encoding="utf-8")
+    batch = tmp_path / "batch"
+    setup_iss_test(_generate_args(tmp_path, batch, abundance_table=str(table)))
+    assert table.read_text(encoding="utf-8") == original
+    seeds = []
+    for name in ("out_0001", "out_0002"):
+        cfg = yaml.safe_load((batch / name / ".generate" / "configs" / "iss_config.yaml").read_text())
+        assert Path(cfg["abundance_table"]).resolve() == table.resolve()
+        assert cfg["sample_names"] == ["A", "B"]
+        assert cfg["output_dir"].endswith(f"{name}/initial")
+        seeds.append(cfg["seed"])
+        script = (batch / name / ".generate" / "generate.sh").read_text()
+        assert "workflow/iss_test/Snakefile" in script
+    assert seeds == [repeat_seed(42, 1, "reads"), repeat_seed(42, 2, "reads")]
+    root_script = (batch / ".generate" / "generate.sh").read_text()
+    assert "out_0001" in root_script and "out_0002" in root_script
+    assert "mark" in root_script
+
+
+def test_community_repeats_use_the_community_seed(tmp_path):
+    import yaml
+
+    from samovar.iss_config import setup_iss_test
+    from samovar.repeats import repeat_seed
+
+    batch = tmp_path / "drawn"
+    setup_iss_test(_generate_args(tmp_path, batch))
+    cfg = yaml.safe_load((batch / "out_0002" / ".generate" / "configs" / "iss_config.yaml").read_text())
+    assert cfg["seed"] == repeat_seed(42, 2, "community")
+    assert "abundance_table" not in cfg
+    again = tmp_path / "drawn-again"
+    setup_iss_test(_generate_args(tmp_path, again))
+    cfg2 = yaml.safe_load((again / "out_0002" / ".generate" / "configs" / "iss_config.yaml").read_text())
+    assert cfg2["seed"] == cfg["seed"]
+
+
+def test_generator_failure_is_recorded_without_fake_reads(tmp_path):
+    import subprocess
+
+    from samovar.repeats import publish_package, write_repeat_orchestrator
+
+    root = tmp_path / "pkg"
+    publish_package(root, count=2, base_seed=42, kind="generated", identity="g")
+    rows = [
+        {"repeat_id": "0001", "out_dir": "out_0001"},
+        {"repeat_id": "0002", "out_dir": "out_0002"},
+    ]
+    for row, code in zip(rows, (0, 1)):
+        script = root / row["out_dir"] / ".generate" / "generate.sh"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(f"#!/bin/bash\nexit {code}\n", encoding="utf-8")
+        script.chmod(0o755)
+    write_repeat_orchestrator(root, rows)
+    result = subprocess.run(["bash", str(root / ".generate" / "generate.sh")], check=False, text=True)
+    manifest = json.loads((root / ".log" / "repeats.json").read_text(encoding="utf-8"))
+    states = {row["repeat_id"]: row["state"] for row in manifest["repeats"]}
+    assert result.returncode != 0
+    assert states == {"0001": "generated", "0002": "error"}
+    assert manifest["repeats"][1]["error"] == "generate failed"
+    assert list((root / "out_0002").rglob("*.fastq")) == []
+
+
+def test_ont_repeat_keeps_the_ont_contract(tmp_path):
+    import yaml
+
+    from samovar.iss_config import setup_iss_test
+    from samovar.repeats import repeat_seed
+
+    genomes = Path("data/test_genomes/meta")
+    batch = tmp_path / "ont"
+    setup_iss_test(
+        _generate_args(
+            tmp_path,
+            batch,
+            repeat=1,
+            genome_dir=str(genomes.resolve()),
+            reads_generator="ont",
+            simulator="camisim",
+        )
+    )
+    cfg = yaml.safe_load((batch / "out_0001" / ".generate" / "configs" / "camisim.yaml").read_text())
+    assert str(cfg.get("camisim_mode") or cfg.get("mode")) == "ont"
+    assert cfg["seed"] == repeat_seed(42, 1, "community")

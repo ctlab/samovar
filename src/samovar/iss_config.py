@@ -184,6 +184,9 @@ def _finish_generate(args, result):
             settings={"simulator": str(getattr(args, "simulator", None) or "iss")},
             allow_template=True,
         )
+        from samovar.repeats import materialize_repeat_generations
+
+        materialize_repeat_generations(args)
     try:
         from samovar.repro import _argv_from_args, _ns_to_dict, record_stage
 
