@@ -437,6 +437,16 @@ def main():
         help='Keep per-read annotator files and combine them in one batch',
     )
     parser.add_argument(
+        '--repeat',
+        default=None,
+        help=(
+            'Positive integer. Omit it to keep one run directory. '
+            '1 or more writes .log/repeats.json and out_0001… and does not '
+            'prepare a pipeline in the package root. CLI overrides YAML repeat. '
+            'A generated package must already come from samovar generate.'
+        ),
+    )
+    parser.add_argument(
         '--mode',
         choices=('full', 'benchmark'),
         default=None,
@@ -627,7 +637,7 @@ def main():
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",
-        "startpoint", "start-point", "endpoint", "end-point", "mode",
+        "startpoint", "start-point", "endpoint", "end-point", "mode", "repeat",
         "scoring", "reprofiler", "ml",
         "feature-importance", "feature_importance", "no-feature-importance",
         "feature-importance-all",
@@ -696,6 +706,8 @@ def main():
     args._offer_imports = True
     offer_prepare_imports(args)
     result = setup_pipeline(args)
+    if result.get("repeats"):
+        return
     print(f"Generated configs: {result['configs']}")
     print(f"Generated pipeline: {result['pipeline']}")
 

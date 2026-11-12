@@ -440,6 +440,7 @@ class PipelineConfig:
     startpoint: str = "setup_reads"
     endpoint: str = "viz_reprofiled"
     mode: str = "full"
+    repeat: Optional[int] = None
     export_formats: Optional[List[str]] = None
     export_taxdump: Optional[str] = None
     export_taxonomy: Optional[str] = None
@@ -797,6 +798,10 @@ class PipelineConfig:
                     from samovar.exec_control import normalize_mode
 
                     config.mode = normalize_mode(str(yaml_mode))
+                if "repeat" in input_config:
+                    from samovar.repeats import parse_repeat
+
+                    config.repeat = parse_repeat(input_config.get("repeat"))
                 yaml_gt = (
                     input_config.get("initial_ground_truth_table")
                     or input_config.get("initial-ground-truth-table")
@@ -1468,6 +1473,10 @@ class PipelineConfig:
             from samovar.exec_control import normalize_mode
 
             config.mode = normalize_mode(str(cli_mode))
+        if getattr(args, "repeat", None) is not None:
+            from samovar.repeats import parse_repeat
+
+            config.repeat = parse_repeat(args.repeat)
         if config.mode == "benchmark":
             from samovar.exec_control import benchmark_window
 
@@ -2442,9 +2451,15 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
 
     try:
         config = PipelineConfig.from_args(args)
+        from samovar.repeats import prepare_package
+
+        repeat_manifest = prepare_package(config)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    if repeat_manifest is not None:
+        print(f"Repeat package: {repeat_manifest}")
+        return {"repeats": str(repeat_manifest)}
     try:
         from samovar.genome_cache import remember_prepare_genome_paths
 

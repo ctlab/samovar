@@ -35,6 +35,8 @@ explicitly. ISS counts paired fragments; ONT counts single reads. Do not change
 the simulator or drop host/taxa to make an unavailable mode work. Display and
 record the exact argv and its interpretation in the run audit.
 
+`--repeat N` records a package (`.log/repeats.json` and `out_0001`…) without running those repeats. Omit `--repeat` for the single directory. Do not point `--repeat` at an existing single run or at a child `out_XXXX`.
+
 `generate` prepares a generation workflow; it does not itself prove reads exist.
 Execute the generated workflow through `samovar exec` only if authorized. A
 generation-only directory can produce reads and then report that the main

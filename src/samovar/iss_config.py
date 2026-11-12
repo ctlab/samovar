@@ -171,6 +171,19 @@ def _genomes_from_generate_yaml(config_path: Optional[str]) -> Dict[str, Any]:
 
 
 def _finish_generate(args, result):
+    repeat = getattr(args, "_repeat_count", None)
+    if repeat:
+        from samovar.repeats import generated_identity, publish_package
+
+        publish_package(
+            Path(args.output_dir),
+            count=int(repeat),
+            base_seed=int(getattr(args, "seed", None) or 42),
+            kind="generated",
+            identity=generated_identity(args),
+            settings={"simulator": str(getattr(args, "simulator", None) or "iss")},
+            allow_template=True,
+        )
     try:
         from samovar.repro import _argv_from_args, _ns_to_dict, record_stage
 
@@ -433,6 +446,15 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
                        help='Fraction of host reads')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed for reproducibility')
+    parser.add_argument(
+        '--repeat',
+        default=None,
+        help=(
+            'Positive integer. Omit it for one output directory. '
+            '1 or more writes a package: .log/repeats.json and out_0001… '
+            'This does not run the repeats; it records them.'
+        ),
+    )
     parser.add_argument('--model', default="hiseq",
                        help='Sequencing model to use')
     parser.add_argument(
@@ -562,6 +584,12 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     """Main function to set up the ISS or CAMISIM generate configuration"""
     if args is None:
         args = parse_args()
+    from samovar.repeats import guard_generate
+
+    try:
+        args._repeat_count = guard_generate(args)
+    except ValueError as exc:
+        raise SystemExit(f"Error: {exc}") from exc
 
     from samovar.main_config import merge_flag_strings
     from samovar.metagenome_generators import (
