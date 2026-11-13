@@ -1,19 +1,18 @@
-"""Repeat-package contract: manifest and out_XXXX directories.
+"""Repeat-package contract: manifest, sequential exec, and long summary tables.
 
-Per-repeat generation and execution are later stages. This module only
-records the package. Seeds come from SHA-256 of the base seed, the
-1-based repeat index and a namespace, so they do not depend on Python's
-hash or on the order of execution.
+Seeds come from SHA-256 of the base seed, the 1-based repeat index and a
+namespace, so they do not depend on Python's hash or on the order of execution.
 """
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 SCHEMA = 1
 SEED_RULE = "sha256-v1"
@@ -367,6 +366,8 @@ def main(argv: Optional[list] = None) -> None:
     run.add_argument("--redo", action="store_true")
     run.add_argument("--startpoint", default=None)
     run.add_argument("--endpoint", default=None)
+    tables = sub.add_parser("tables")
+    tables.add_argument("--root", required=True)
     args = parser.parse_args(argv)
     if args.cmd == "mark":
         try:
@@ -381,6 +382,12 @@ def main(argv: Optional[list] = None) -> None:
             startpoint=args.startpoint,
             endpoint=args.endpoint,
         ))
+    elif args.cmd == "tables":
+        try:
+            write_long_tables(Path(args.root))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
 
 def _supplied_repeat_blocked(kind: str, count: int) -> None:
@@ -423,6 +430,240 @@ def write_status_summary(root: Path) -> Path:
         "errors": errors,
     })
     return path
+
+
+_PHASES = ("initial", "regenerated", "reprofiled")
+_DESC = ("kind", "taxonomy", "rank", "unit", "basis", "normalization")
+_PROFILE_FIELDS = (
+    "repeat_id", "sample_id", "seed", "phase", "run_name", *_DESC, "taxon", "value",
+)
+_RESULT_FIELDS = (
+    "repeat_id", "sample_id", "seed", "phase", "run_name", *_DESC,
+    "metric", "value", "truth_source", "reason",
+)
+_SCORE_IDS = {
+    "annotator", "ground_truth", "truth_source", "sample", "sample_id", "reason",
+    "phase", "run_name", *_DESC,
+}
+
+
+def _atomic_csv(path: Path, rows: List[Mapping[str, Any]], fields: tuple) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def _cell(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value != value:
+        return ""
+    return str(value)
+
+
+def _blank_desc() -> Dict[str, str]:
+    return {key: "" for key in _DESC}
+
+
+def _desc(info: Mapping[str, Any]) -> Dict[str, str]:
+    return {key: _cell(info.get(key, "")) for key in _DESC}
+
+
+def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed: Any) -> None:
+    plots = child / f"{phase}_annotations_plots"
+    for name in ("profile_quality_scores.csv", "quality_scores.csv"):
+        path = plots / name
+        if not path.is_file():
+            continue
+        with path.open(encoding="utf-8", newline="") as handle:
+            for rec in csv.DictReader(handle):
+                reason = rec.get("reason") or ""
+                base = {
+                    "repeat_id": repeat_id,
+                    "sample_id": rec.get("sample") or rec.get("sample_id") or "",
+                    "seed": seed,
+                    "phase": phase,
+                    "run_name": rec.get("annotator") or rec.get("run_name") or "",
+                    "truth_source": rec.get("ground_truth") or rec.get("truth_source") or "",
+                    "reason": reason,
+                    **_desc(rec),
+                }
+                metrics = []
+                for key, raw in rec.items():
+                    if not key or key in _SCORE_IDS or raw is None or str(raw).strip() == "":
+                        continue
+                    try:
+                        value = float(raw)
+                    except ValueError:
+                        continue
+                    if value != value:
+                        continue
+                    metrics.append((key, value))
+                if not metrics:
+                    if reason:
+                        rows.append({**base, "metric": "", "value": ""})
+                    continue
+                for metric, value in metrics:
+                    rows.append({**base, "metric": metric, "value": value})
+
+
+def _runtime_rows(rows: List[dict], child: Path, repeat_id: str, seed: Any) -> None:
+    from samovar.runtime import load_sample_runtimes, load_stage_runtimes
+
+    for rec in load_sample_runtimes(child):
+        for metric in ("elapsed_s", "max_rss_mb"):
+            if rec.get(metric) is None:
+                continue
+            rows.append({
+                "repeat_id": repeat_id,
+                "sample_id": rec.get("sample") or "",
+                "seed": seed,
+                "phase": rec.get("phase") or "",
+                "run_name": rec.get("run_name") or "",
+                "metric": metric,
+                "value": rec[metric],
+                "truth_source": "",
+                "reason": "",
+                **_blank_desc(),
+            })
+    for rec in load_stage_runtimes(child):
+        rows.append({
+            "repeat_id": repeat_id,
+            "sample_id": "",
+            "seed": seed,
+            "phase": "",
+            "run_name": "",
+            "metric": "stage_elapsed_s",
+            "value": rec["elapsed_s"],
+            "truth_source": "",
+            "reason": rec.get("stage") or "",
+            **_blank_desc(),
+        })
+
+
+def write_long_tables(root: Path) -> Dict[str, Path]:
+    """Rewrite summary long tables from successful child artifacts.
+
+    A missing taxon is 0 only inside one complete abundance namespace.
+    Failed repeats, missing samples and missing tools stay absent.
+    """
+    root = Path(root)
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    from samovar.abundance import n_sample_columns
+    from samovar.profiles import read_profiles
+
+    groups: Dict[tuple, List[dict]] = {}
+    profile_rows: List[dict] = []
+    result_rows: List[dict] = []
+    for row in data["repeats"]:
+        if (row.get("stages") or {}).get("pipeline") != "succeeded":
+            continue
+        child = root / row["out_dir"]
+        seed = row.get("seed", "")
+        repeat_id = row["repeat_id"]
+        for phase in _PHASES:
+            tables, metas = read_profiles(child / f"{phase}_profiles")
+            for name, table in tables.items():
+                info = metas[name]
+                key = (phase, name) + tuple(_desc(info)[item] for item in _DESC)
+                samples = {}
+                for col in n_sample_columns(table):
+                    samples[col[2:]] = {
+                        str(taxid): value
+                        for taxid, value in zip(table["taxid"].astype(str), table[col])
+                    }
+                groups.setdefault(key, []).append({
+                    "repeat_id": repeat_id,
+                    "seed": seed,
+                    "info": info,
+                    "samples": samples,
+                })
+            _score_rows(result_rows, child, phase, repeat_id, seed)
+        _runtime_rows(result_rows, child, repeat_id, seed)
+
+    for key, observations in groups.items():
+        phase, run_name = key[0], key[1]
+        kind = key[2]
+        if kind == "abundance":
+            taxa = sorted({
+                taxon
+                for item in observations
+                for values in item["samples"].values()
+                for taxon in values
+                if taxon != "0" and not str(taxon).startswith("unmapped:")
+            })
+        else:
+            taxa = None
+        for item in observations:
+            info = _desc(item["info"])
+            for sample, values in sorted(item["samples"].items()):
+                listed = taxa if taxa is not None else sorted(values)
+                for taxon in listed:
+                    if taxon not in values and taxa is None:
+                        continue
+                    profile_rows.append({
+                        "repeat_id": item["repeat_id"],
+                        "sample_id": sample,
+                        "seed": item["seed"],
+                        "phase": phase,
+                        "run_name": run_name,
+                        "taxon": taxon,
+                        "value": values.get(taxon, 0),
+                        **info,
+                    })
+                if taxa is not None:
+                    for taxon, value in values.items():
+                        if taxon == "0" or str(taxon).startswith("unmapped:"):
+                            profile_rows.append({
+                                "repeat_id": item["repeat_id"],
+                                "sample_id": sample,
+                                "seed": item["seed"],
+                                "phase": phase,
+                                "run_name": run_name,
+                                "taxon": taxon,
+                                "value": value,
+                                **info,
+                            })
+    descriptors: Dict[tuple, tuple] = {}
+    for key in groups:
+        descriptors.setdefault((key[0], key[1]), key[2:])
+    for item in result_rows:
+        if item.get("kind") or item["metric"] in {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}:
+            continue
+        desc = descriptors.get((item["phase"], item["run_name"]))
+        if desc is None:
+            continue
+        item.update(dict(zip(_DESC, desc)))
+    profile_rows.sort(key=lambda item: (
+        item["repeat_id"], item["phase"], item["run_name"], item["sample_id"], item["taxon"],
+    ))
+    result_rows.sort(key=lambda item: (
+        item["repeat_id"], item["phase"], item["run_name"], item["sample_id"],
+        item["metric"], item["truth_source"], item["reason"],
+    ))
+    summary = root / "summary"
+    profiles = summary / "profiles_long.csv"
+    results = summary / "results_long.csv"
+    _atomic_csv(profiles, profile_rows, _PROFILE_FIELDS)
+    _atomic_csv(results, result_rows, _RESULT_FIELDS)
+    _atomic_json(summary / "tables.json", {
+        "schema": 1,
+        "built_from": "saved child artifacts",
+        "profiles": "profiles_long.csv",
+        "results": "results_long.csv",
+        "profile_columns": list(_PROFILE_FIELDS),
+        "result_columns": list(_RESULT_FIELDS),
+        "zero_fill": "missing taxon is 0 only inside one complete abundance namespace",
+    })
+    return {"profiles": profiles, "results": results}
 
 
 def exec_package(
@@ -492,6 +733,7 @@ def exec_package(
             )
             failed += 1
     write_status_summary(root)
+    write_long_tables(root)
     return 1 if failed else 0
 
 

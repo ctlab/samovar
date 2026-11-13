@@ -439,3 +439,113 @@ def test_ont_repeat_keeps_the_ont_contract(tmp_path):
     cfg = yaml.safe_load((batch / "out_0001" / ".generate" / "configs" / "camisim.yaml").read_text())
     assert str(cfg.get("camisim_mode") or cfg.get("mode")) == "ont"
     assert cfg["seed"] == repeat_seed(42, 1, "community")
+
+
+def _profile(taxids, columns):
+    import pandas as pd
+
+    frame = {"taxid": taxids}
+    frame.update(columns)
+    return pd.DataFrame(frame)
+
+
+def test_long_tables_keep_successful_repeats(tmp_path):
+    import csv
+
+    from samovar.profiles import write_profiles
+    from samovar.repeats import publish_package, set_repeat_state, write_long_tables
+
+    root = tmp_path / "pkg"
+    publish_package(root, count=4, base_seed=42, kind="generated", identity="generated:long")
+    species = dict(kind="abundance", unit="counts", basis="reads", taxonomy="ncbi",
+                   rank="species", normalization="all")
+    genus = dict(kind="abundance", unit="counts", basis="reads", taxonomy="ncbi",
+                 rank="genus", normalization="classified")
+    presence = dict(kind="presence", unit="binary", basis="presence", taxonomy="ncbi",
+                    rank="species", normalization="classified")
+
+    stored = {}
+
+    def put(repeat, phase, tool, table, meta):
+        stored.setdefault((repeat, phase), {})[tool] = (table, meta)
+
+    for repeat, a_562, a_4932 in (("0001", 10, 5), ("0002", 7, 1), ("0003", 8, None)):
+        columns = {"N_A": [a_562, a_4932] if a_4932 is not None else [a_562]}
+        taxids = ["562", "4932"] if a_4932 is not None else ["562"]
+        if repeat == "0001":
+            taxids = ["562", "4932", "0"]
+            columns = {"N_A": [10, 5, 1], "N_B": [4, 6, 2]}
+        elif repeat == "0002":
+            columns["N_B"] = [3, 9]
+        put(repeat, "initial", "kraken", _profile(taxids, columns), species)
+        sylph_cols = {"N_A": [1 if repeat != "0003" else 3]}
+        if repeat != "0003":
+            sylph_cols["N_B"] = [1]
+        put(repeat, "initial", "sylph", _profile(["2"], sylph_cols), genus)
+        set_repeat_state(root, repeat, "succeeded", stage="pipeline")
+    put("0001", "initial", "bracken", _profile(["562"], {"N_A": [4]}), species)
+    put("0001", "initial", "present", _profile(["562"], {"N_A": [1]}), presence)
+    put("0001", "regenerated", "kraken", _profile(["562"], {"N_A": [11]}), species)
+    put("0004", "initial", "kraken", _profile(["999"], {"N_A": [50], "N_B": [50]}), species)
+    for (repeat, phase), tools in stored.items():
+        write_profiles(
+            root / f"out_{repeat}" / f"{phase}_profiles",
+            {name: table for name, (table, _meta) in tools.items()},
+            {name: meta for name, (_table, meta) in tools.items()},
+        )
+    set_repeat_state(root, "0004", "failed", "exec failed", "pipeline")
+    plots = root / "out_0001" / "initial_annotations_plots"
+    plots.mkdir()
+    (plots / "profile_quality_scores.csv").write_text(
+        "annotator,reason\nkraken,no profile gold standard available\n", encoding="utf-8"
+    )
+    runtime = root / "out_0001" / "initial_reports" / "runtime" / "samples" / "kraken" / "classify"
+    runtime.mkdir(parents=True)
+    for sample, seconds, rss in (("A", 1.5, 10), ("B", 2.5, 20)):
+        (runtime / f"{sample}.tsv").write_text(f"s\tmax_rss\n{seconds}\t{rss}\n", encoding="utf-8")
+    (root / "out_0001" / "runtime" / "stages").mkdir(parents=True)
+    (root / "out_0001" / "runtime" / "stages" / "viz.json").write_text(
+        '{"stage": "viz_initial", "elapsed_s": 4}\n', encoding="utf-8"
+    )
+    marker = root / "out_0001" / ".log" / "checkpoints" / "keep"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("stay", encoding="utf-8")
+    before = marker.read_bytes()
+
+    written = write_long_tables(root)
+    first = written["profiles"].read_bytes()
+    assert write_long_tables(root)["profiles"].read_bytes() == first
+    assert marker.read_bytes() == before
+    assert not any(row["taxon"] == "999" for row in csv.DictReader(first.decode().splitlines()))
+
+    with written["profiles"].open(encoding="utf-8", newline="") as handle:
+        profiles = list(csv.DictReader(handle))
+    kraken = [row for row in profiles if row["run_name"] == "kraken" and row["phase"] == "initial"]
+    assert {(row["repeat_id"], row["sample_id"]) for row in kraken} == {
+        ("0001", "A"), ("0001", "B"), ("0002", "A"), ("0002", "B"), ("0003", "A"),
+    }
+    filled = next(row for row in kraken if row["repeat_id"] == "0003" and row["taxon"] == "4932")
+    assert float(filled["value"]) == 0
+    assert not any(row["repeat_id"] == "0003" and row["sample_id"] == "B" and row["run_name"] == "kraken" for row in profiles)
+    assert not any(row["run_name"] == "bracken" and row["repeat_id"] != "0001" for row in profiles)
+    unclassified = next(row for row in kraken if row["repeat_id"] == "0001" and row["sample_id"] == "A" and row["taxon"] == "0")
+    assert float(unclassified["value"]) == 1
+    assert not any(row["repeat_id"] == "0003" and row["taxon"] == "0" for row in kraken)
+    sylph = [row for row in profiles if row["run_name"] == "sylph"]
+    assert {row["rank"] for row in sylph} == {"genus"}
+    assert {row["rank"] for row in kraken} == {"species"}
+    assert sum(1 for row in sylph if row["sample_id"] == "A") == 3
+    present = [row for row in profiles if row["run_name"] == "present"]
+    assert [(row["taxon"], row["value"]) for row in present] == [("562", "1.0")]
+    regenerated = [row for row in profiles if row["phase"] == "regenerated"]
+    assert [(row["repeat_id"], row["sample_id"], float(row["value"])) for row in regenerated] == [("0001", "A", 11)]
+    assert {float(row["value"]) for row in kraken if row["taxon"] == "562" and row["sample_id"] == "A"} == {10, 7, 8}
+
+    with written["results"].open(encoding="utf-8", newline="") as handle:
+        results = list(csv.DictReader(handle))
+    absent = [row for row in results if row["reason"] == "no profile gold standard available"]
+    assert len(absent) == 1 and absent[0]["value"] == "" and absent[0]["metric"] == ""
+    assert absent[0]["rank"] == "species" and absent[0]["normalization"] == "all"
+    rss = [float(row["value"]) for row in results if row["metric"] == "max_rss_mb"]
+    assert rss == [10.0, 20.0]
+    assert [row["reason"] for row in results if row["metric"] == "stage_elapsed_s"] == ["viz_initial"]
