@@ -157,10 +157,37 @@ def test_deleted_per_read_outputs_rerun_their_owner(tmp_path):
     assert not should_skip(tmp_path, "viz_initial")
     (plots / "quality_scores.csv").write_text("annotator\n", encoding="utf-8")
 
+    (reads / "B.fastq").write_text("@b|taxid:4932\nACGT\n+\nIIII\n", encoding="utf-8")
+    (reports / "B_k2.kraken2.ingested").write_text("ok\n", encoding="utf-8")
+    (reports / "A_k2.kraken2.ingested").unlink()
+    assert not should_skip(tmp_path, "annotate_initial")
+    assert not (reports / "B_k2.kraken2.ingested").exists()
+    (reports / "A_k2.kraken2.ingested").write_text("ok\n", encoding="utf-8")
+    (reports / "B_k2.kraken2.ingested").write_text("ok\n", encoding="utf-8")
+    mark_done(tmp_path, "annotate_initial")
+    mark_done(tmp_path, "combine_initial")
+    mark_done(tmp_path, "viz_initial")
+
     (tmp_path / "initial_annotations" / "combined_annotation_table.csv").unlink()
-    assert should_skip(tmp_path, "annotate_initial")
+    assert not should_skip(tmp_path, "annotate_initial")
+    assert not (reports / "A_k2.kraken2.ingested").exists()
+    assert not (reports / "B_k2.kraken2.ingested").exists()
     assert should_skip(tmp_path, "viz_initial")
     assert not should_skip(tmp_path, "combine_initial")
+    (reports / "A_k2.kraken2.ingested").write_text("ok\n", encoding="utf-8")
+    (reports / "B_k2.kraken2.ingested").write_text("ok\n", encoding="utf-8")
+    (tmp_path / "initial_annotations" / "combined_annotation_table.csv").write_text(
+        "seq\n", encoding="utf-8"
+    )
+    mark_done(tmp_path, "annotate_initial")
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("SAMOVAR_REDO", "1")
+    try:
+        assert exec_control_main(["skip", str(tmp_path), "annotate_initial"]) == 1
+    finally:
+        monkeypatch.undo()
+    assert not (reports / "A_k2.kraken2.ingested").exists()
+    assert not (reports / "B_k2.kraken2.ingested").exists()
 
 
 @pytest.mark.optional

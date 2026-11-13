@@ -7,10 +7,13 @@ A profile run also reruns ``annotate_initial`` when a per-sample
 ``combine_initial`` and ``viz_initial``. Those later steps also rerun when
 ``initial_profiles`` or ``initial_annotations_plots/profile_quality_scores.csv``
 is gone. A per-read binner does the same for its expected report: a missing
-file reruns ``annotate_initial`` and clears the two later markers. A missing
-``initial_annotations/combined_annotation_table.csv`` reruns ``combine_initial``,
-and a missing ``initial_annotations_plots/quality_scores.csv`` reruns
-``viz_initial``. An empty FASTQ does not count as a missing binner file.
+file reruns ``annotate_initial`` and clears the two later markers. In
+incremental mode the per-sample tables are deleted at finalize, so a missing
+``combined_annotation_table.csv`` or a missing ``*.ingested`` sentinel drops
+every sentinel and reruns annotation for every sample that has reads.
+``--redo`` drops those sentinels too. A missing
+``initial_annotations_plots/quality_scores.csv`` reruns ``viz_initial``.
+An empty FASTQ does not count as a missing binner file.
 Header-only truth is included. ``--cleanup-tmp`` removes scratch dirs such as ``.tmp`` and ``.iss_full``.
 """
 
@@ -203,15 +206,19 @@ def _incremental_annotations(root: Path) -> bool:
     return flag not in {"0", "false", "no", "off"}
 
 
-def _missing_binner_outputs(root: Path) -> List[str]:
-    """Expected per-read reports for samples that actually contain reads."""
+def _reports_dir(root: Path) -> Path:
+    raw_reports = str(_init_config(root).get("output_dir") or "").strip()
+    return Path(raw_reports) if raw_reports else root / "initial_reports"
+
+
+def _expected_read_outputs(root: Path) -> List[Path]:
+    """Per-read targets for samples that contain reads."""
     from samovar.annotators_wrapper import get_annotator_instance
 
     init = _init_config(root)
-    raw_reports = str(init.get("output_dir") or "").strip()
-    reports = Path(raw_reports) if raw_reports else root / "initial_reports"
+    reports = _reports_dir(root)
     incremental = _incremental_annotations(root)
-    missing = []
+    expected = []
     for run in _read_runs(root):
         ann = get_annotator_instance(str(run.get("type") or ""), run, init)
         for sample in _samples_with_reads(root):
@@ -219,12 +226,40 @@ def _missing_binner_outputs(root: Path) -> List[str]:
                 path = Path(raw)
                 if incremental and path.name.endswith(".out"):
                     path = path.with_name(path.name[:-4] + ".ingested")
-                if path.is_file():
-                    continue
-                try:
-                    missing.append(str(path.resolve().relative_to(root.resolve())))
-                except ValueError:
-                    missing.append(str(path))
+                expected.append(path)
+    return expected
+
+
+def _drop_read_ingested(root: Path) -> None:
+    """Remove incremental sentinels so every read sample is annotated again."""
+    reports = _reports_dir(root)
+    if not reports.is_dir():
+        return
+    for path in reports.glob("*.ingested"):
+        path.unlink()
+
+
+def _missing_binner_outputs(root: Path) -> List[str]:
+    """Expected per-read reports for samples that actually contain reads.
+
+    Incremental finalize deletes the per-sample CSVs. A later combine then has
+    nothing to read unless every sentinel is cleared and annotation reruns.
+    """
+    expected = _expected_read_outputs(root)
+    missing_paths = [path for path in expected if not path.is_file()]
+    if _incremental_annotations(root) and expected:
+        reports = _reports_dir(root)
+        survivors = reports.is_dir() and any(reports.glob("*.ingested"))
+        table = root / "initial_annotations" / "combined_annotation_table.csv"
+        if survivors and (missing_paths or not table.is_file()):
+            _drop_read_ingested(root)
+            missing_paths = [path for path in expected if not path.is_file()]
+    missing = []
+    for path in missing_paths:
+        try:
+            missing.append(str(path.resolve().relative_to(root.resolve())))
+        except ValueError:
+            missing.append(str(path))
     return missing
 
 
@@ -882,6 +917,14 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     if args.command == "skip":
+        root = as_path(args.output_dir)
+        if (
+            args.name == "annotate_initial"
+            and redo_requested()
+            and _incremental_annotations(root)
+            and _read_runs(root)
+        ):
+            _drop_read_ingested(root)
         missing = (
             missing_profile_checkpoint_outputs(args.output_dir, args.name)
             + missing_read_checkpoint_outputs(args.output_dir, args.name)
