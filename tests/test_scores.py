@@ -3,14 +3,17 @@
 import pandas as pd
 import pytest
 
+from samovar.kreport import KReportTaxonomy
 from samovar.opal import opal_style_metrics
 from samovar.scores import (
     accuracy_purity,
     annotation_scores,
+    classify_call,
     f1_purity,
     majority_vote,
     purity_by_taxon,
     score_annotators,
+    score_rank_fragments,
 )
 from samovar.viz_annotation import viz_annotation
 
@@ -298,3 +301,86 @@ def test_selected_metrics_skip_unused_computations(monkeypatch):
     assert result.loc[0, "accuracy"] == 0.5
     assert result["r2"].isna().all() and result["f1_purity"].isna().all()
     assert result.loc[0, "n_reads"] == 2
+
+
+_RANK_TREE = KReportTaxonomy({
+    1: (1, "no rank"),
+    2: (1, "superkingdom"),
+    1236: (2, "family"),
+    561: (1236, "genus"),
+    562: (561, "species"),
+    5621: (562, "no rank"),
+    4930: (2, "genus"),
+    4932: (4930, "species"),
+})
+
+
+def test_genus_calls_match_the_hand_table():
+    assert classify_call(_RANK_TREE, 562, 561, "genus")[0] == "tp"
+    assert classify_call(_RANK_TREE, 562, 5621, "genus")[0] == "tp"
+    assert classify_call(_RANK_TREE, 562, 1236, "genus")[0] == "vp"
+    assert classify_call(_RANK_TREE, 562, 4930, "genus")[0] == "fp"
+    assert classify_call(_RANK_TREE, 562, 0, "genus")[0] == "fn"
+    assert classify_call(_RANK_TREE, 9999, 562, "genus") == ("unscorable", "unknown true lineage")
+    assert classify_call(_RANK_TREE, 562, "missing-node", "genus") == ("unscorable", "unresolved prediction")
+    assert classify_call(_RANK_TREE, 562, 5621, "species")[0] == "tp"
+    assert classify_call(_RANK_TREE, 562, 561, "species")[0] == "vp"
+    assert classify_call(_RANK_TREE, 562, 4932, "species")[0] == "fp"
+
+
+def test_manual_rank_counts_and_undefined_ratios():
+    frame = pd.DataFrame({
+        "true": [562, 562, 562, 562, 562],
+        "taxID_k2_0": [561, 5621, 4930, 0, 1236],
+        "sample": ["A"] * 5,
+    })
+    row = score_rank_fragments(frame, _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2")[0]
+    assert (row["tp"], row["fp"], row["fn"], row["vp"], row["total"]) == (2, 1, 1, 1, 5)
+    assert row["ppv"] == pytest.approx(2 / 3)
+    assert row["sensitivity"] == pytest.approx(2 / 5)
+    assert row["f1"] == pytest.approx(1 / 2)
+    assert row["coverage"] == pytest.approx(4 / 5)
+    assert row["classified_at_rank"] == pytest.approx(3 / 5)
+    assert row["schema"] == "kraken2-rank-v1"
+
+    only_fn = score_rank_fragments(
+        pd.DataFrame({"true": [562], "taxID_k2_0": [0]}),
+        _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2",
+    )[0]
+    assert only_fn["ppv"] == "" and only_fn["f1"] == ""
+    assert "undefined PPV" in only_fn["reason"]
+    assert only_fn["sensitivity"] == 0
+
+    missing = score_rank_fragments(
+        pd.DataFrame({"true": ["", "9999"], "taxID_k2_0": [562, 562]}),
+        _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2",
+    )[0]
+    assert missing["total"] == 0 and missing["unscorable"] == 2
+    assert missing["sensitivity"] == "" and "no evaluated fragments" in missing["reason"]
+
+
+def test_pairs_count_once_and_sources_stay_separate():
+    paired = pd.DataFrame({
+        "seq": ["r/1", "r/2", "s/1", "s/2", "ont1"],
+        "true": [562, 562, 562, 4932, 562],
+        "taxID_k2_0": [561, 561, 561, 561, 0],
+    })
+    row = score_rank_fragments(paired, _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2")[0]
+    assert row["unit"] == "mixed"
+    assert row["tp"] == 1 and row["unscorable"] == 1 and row["fn"] == 1
+    assert row["total"] == 2
+    with pytest.raises(ValueError, match="read-level"):
+        score_rank_fragments(
+            pd.DataFrame({"taxid": [562], "N_A": [1]}),
+            _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2",
+        )
+    frame = pd.DataFrame({"true": [562], "table_true": [4932], "taxID_k2_0": [562]})
+    reads = score_rank_fragments(
+        frame, _RANK_TREE, rank="species", pred_col="taxID_k2_0", tool="k2", truth_source="reads",
+    )[0]
+    table = score_rank_fragments(
+        frame, _RANK_TREE, rank="species", pred_col="taxID_k2_0", tool="k2",
+        truth_col="table_true", truth_source="per-read-table",
+    )[0]
+    assert reads["tp"] == 1 and table["fp"] == 1
+    assert reads["truth_source"] != table["truth_source"]

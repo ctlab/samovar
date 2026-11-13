@@ -4,6 +4,9 @@ Accuracy purity asks: among reads that truly come from one taxid, how much of
 that mass did the tool pile onto a single predicted label (the majority call)?
 F1 purity keeps that recall and penalises other true taxa that were also
 assigned to the same majority label.
+
+``score_rank_fragments`` is the separate Kraken 2 rank count. It does not
+replace the per-read accuracy column named ``f1``.
 """
 
 from __future__ import annotations
@@ -806,3 +809,240 @@ def save_scores_altair(table: pd.DataFrame, path, display: Optional[Dict[str, st
             path.with_suffix(".json").write_text(chart.to_json())
         except Exception:
             pass
+
+
+RANK_SCHEMA = "kraken2-rank-v1"
+_RANK_FIELDS = (
+    "rank", "schema", "taxonomy", "taxonomy_version", "sample", "tool", "unit",
+    "truth_source", "tp", "vp", "fn", "fp", "unscorable", "total",
+    "ppv", "sensitivity", "f1", "coverage", "classified_at_rank", "reason",
+)
+_RANK_MISSING = {"", "nan", "none", "na", "unknown"}
+_RANK_UNCLASSIFIED = {"0", "unclassified"}
+
+
+def _rank_node(tree, value):
+    """Taxid on this tree. Unknown tokens stay unknown; ``resolve`` would call them 0."""
+    text = "" if value is None else str(value).strip()
+    low = text.lower()
+    if low in _RANK_MISSING:
+        return None
+    if low in _RANK_UNCLASSIFIED:
+        return 0
+    if low in tree.aliases:
+        taxid = int(tree.aliases[low])
+    else:
+        token = text[:-2] if text.endswith(".0") and text[:-2].lstrip("-").isdigit() else text
+        if not token.lstrip("-").isdigit():
+            return None
+        taxid = int(token)
+    if taxid == 0:
+        return 0
+    if taxid not in tree.tree:
+        return None
+    return taxid
+
+
+def _at_rank(tree, taxid: int, rank: str) -> int:
+    return next((node for node in tree.ancestors_inclusive(taxid) if tree.rank_of(node) == rank), 0)
+
+
+def classify_call(tree, true, pred, rank: str):
+    """Kraken 2 label at ``rank``: tp, vp, fn, fp, or unscorable."""
+    true_id = _rank_node(tree, true)
+    pred_id = _rank_node(tree, pred)
+    if true_id in {None, 0}:
+        missing = true_id == 0 or str(true).strip().lower() in _RANK_MISSING
+        return "unscorable", "missing truth" if missing else "unknown true lineage"
+    if pred_id is None:
+        return "unscorable", "unresolved prediction"
+    target = _at_rank(tree, true_id, rank)
+    if not target:
+        return "unscorable", f"true lineage has no {rank}"
+    if pred_id == 0:
+        return "fn", ""
+    if target in tree.ancestors_inclusive(pred_id):
+        return "tp", ""
+    if pred_id in tree.ancestors_inclusive(true_id):
+        return "vp", ""
+    return "fp", ""
+
+
+def _fragment_units(frame, id_col, true_col: str, pred_col: str, sample_col: str):
+    from samovar.seqio import strip_mate_suffix
+
+    rows = []
+    grouped = {}
+    order = []
+    for _, row in frame.iterrows():
+        sample = "" if sample_col not in frame.columns else str(row[sample_col])
+        item = {"sample": sample, "true": row[true_col], "pred": row[pred_col]}
+        if not id_col or id_col not in frame.columns:
+            rows.append({**item, "unit": "read", "label": None, "reason": ""})
+            continue
+        text = str(row[id_col]).strip()
+        if text.startswith("@"):
+            text = text[1:]
+        text = text.split()[0] if text else ""
+        mate = text[-1] if len(text) >= 2 and text[-2] == "/" and text[-1] in "12" else ""
+        base = strip_mate_suffix(text)
+        key = ("se", sample, base) if not mate else ("pe", sample, base)
+        if key not in grouped:
+            order.append(key)
+        grouped.setdefault(key, []).append({**item, "mate": mate})
+    for key in order:
+        bucket = grouped[key]
+        sample = bucket[0]["sample"]
+        if key[0] == "se":
+            if len(bucket) > 1:
+                rows.append({"sample": sample, "unit": "read", "label": "unscorable", "reason": "duplicate read id"})
+            else:
+                rows.append({**bucket[0], "unit": "read", "label": None, "reason": ""})
+            continue
+        mates = {item["mate"] for item in bucket}
+        if mates != {"1", "2"} or any(sum(item["mate"] == side for item in bucket) != 1 for side in "12"):
+            reason = "missing mate" if mates < {"1", "2"} else "duplicate read id"
+            rows.append({"sample": sample, "unit": "fragment", "label": "unscorable", "reason": reason})
+            continue
+        first, second = bucket
+        if str(first["true"]) != str(second["true"]) or str(first["pred"]) != str(second["pred"]):
+            rows.append({"sample": sample, "unit": "fragment", "label": "unscorable", "reason": "paired mates disagree"})
+            continue
+        rows.append({**first, "unit": "fragment", "label": None, "reason": ""})
+    return rows
+
+
+def score_rank_fragments(
+    frame,
+    tree,
+    *,
+    rank: str,
+    pred_col: str,
+    tool: str,
+    truth_col: str = "true",
+    truth_source: str = "reads",
+    id_col: str = "seq",
+    sample_col: str = "sample",
+    taxonomy: str = "ncbi",
+    taxonomy_version: str = "",
+):
+    """One row per sample. A profile table has no read labels and is refused."""
+    if truth_col not in frame.columns or pred_col not in frame.columns:
+        raise ValueError("profile input has no read-level labels")
+    units = _fragment_units(frame, id_col if id_col in frame.columns else None, truth_col, pred_col, sample_col)
+    by_sample = {}
+    for unit in units:
+        by_sample.setdefault(unit["sample"], []).append(unit)
+    if not by_sample:
+        by_sample[""] = []
+    scored = []
+    for sample, group in by_sample.items():
+        counts = {name: 0 for name in ("tp", "vp", "fn", "fp", "unscorable")}
+        reasons = []
+        names = {unit["unit"] for unit in group}
+        unit_name = "mixed" if len(names) > 1 else (next(iter(names)) if names else "read")
+        for unit in group:
+            if unit["label"] == "unscorable":
+                counts["unscorable"] += 1
+                if unit["reason"]:
+                    reasons.append(unit["reason"])
+                continue
+            label, reason = classify_call(tree, unit["true"], unit["pred"], rank)
+            counts[label] += 1
+            if reason:
+                reasons.append(reason)
+        total = counts["tp"] + counts["vp"] + counts["fn"] + counts["fp"]
+        ppv = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else None
+        sensitivity = counts["tp"] / total if total else None
+        if ppv is None or sensitivity is None or ppv + sensitivity == 0:
+            f1 = None
+        else:
+            f1 = 2 * ppv * sensitivity / (ppv + sensitivity)
+        coverage = (counts["tp"] + counts["vp"] + counts["fp"]) / total if total else None
+        at_rank = (counts["tp"] + counts["fp"]) / total if total else None
+        if total == 0:
+            reasons.append("no evaluated fragments")
+        elif ppv is None:
+            reasons.append("undefined PPV: no true or false positive")
+        if f1 is None and ppv is not None and sensitivity == 0:
+            reasons.append("undefined F1: PPV and sensitivity are zero")
+        elif f1 is None and total and ppv is None:
+            reasons.append("undefined F1: PPV is undefined")
+        elif f1 is None and total == 0:
+            reasons.append("undefined F1: no evaluated fragments")
+        scored.append({
+            "rank": rank,
+            "schema": RANK_SCHEMA,
+            "taxonomy": taxonomy,
+            "taxonomy_version": taxonomy_version,
+            "sample": sample,
+            "tool": tool,
+            "unit": unit_name,
+            "truth_source": truth_source,
+            "tp": counts["tp"],
+            "vp": counts["vp"],
+            "fn": counts["fn"],
+            "fp": counts["fp"],
+            "unscorable": counts["unscorable"],
+            "total": total,
+            "ppv": "" if ppv is None else ppv,
+            "sensitivity": "" if sensitivity is None else sensitivity,
+            "f1": "" if f1 is None else f1,
+            "coverage": "" if coverage is None else coverage,
+            "classified_at_rank": "" if at_rank is None else at_rank,
+            "reason": "; ".join(dict.fromkeys(reasons)),
+        })
+    return scored
+
+
+def write_rank_scores(path, rows) -> None:
+    import csv
+    from pathlib import Path
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_RANK_FIELDS, extrasaction="ignore", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+    import hashlib
+    from pathlib import Path
+
+    from samovar.kreport import KReportTaxonomy
+
+    parser = argparse.ArgumentParser(prog="samovar.scores")
+    parser.add_argument("--table", required=True)
+    parser.add_argument("--taxdump", required=True)
+    parser.add_argument("--rank", required=True)
+    parser.add_argument("--pred", required=True)
+    parser.add_argument("--true", default="true")
+    parser.add_argument("--id", default="seq")
+    parser.add_argument("--tool", required=True)
+    parser.add_argument("--truth-source", default="reads")
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args(argv)
+    nodes = Path(args.taxdump)
+    nodes_file = nodes if nodes.is_file() else nodes / "nodes.dmp"
+    frame = pd.read_csv(args.table, dtype=str, keep_default_na=False)
+    rows = score_rank_fragments(
+        frame,
+        KReportTaxonomy.from_taxdump(nodes),
+        rank=args.rank,
+        pred_col=args.pred,
+        tool=args.tool,
+        truth_col=args.true,
+        truth_source=args.truth_source,
+        id_col=args.id,
+        taxonomy="ncbi",
+        taxonomy_version=hashlib.sha256(nodes_file.read_bytes()).hexdigest()[:12],
+    )
+    write_rank_scores(args.output, rows)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
