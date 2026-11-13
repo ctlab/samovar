@@ -4,7 +4,6 @@ import pandas as pd
 import pytest
 
 from samovar.kreport import KReportTaxonomy
-from samovar.opal import opal_style_metrics
 from samovar.scores import (
     accuracy_purity,
     annotation_scores,
@@ -161,25 +160,45 @@ def test_false_taxids_stay_in_the_profile_counts():
     assert len(gold & called) == 1
     assert len(called - gold) == 2
     assert len(gold - called) == 1
-    direct = opal_style_metrics(y, p)
-    assert (direct["opal_tp"], direct["opal_fp"], direct["opal_fn"]) == (1, 2, 1)
-    assert direct["opal_purity"] == pytest.approx(1 / 3)
-    assert direct["completeness"] == pytest.approx(1 / 2)
-    assert direct["opal_f1"] == pytest.approx(0.4)
+    from samovar.profiles import metadata
+    from samovar.scores import profile_scores
+
+    meta = metadata({"rank": "taxid", "normalization": "all"})
+    native = profile_scores(
+        pd.DataFrame({"taxid": ["562", "111", "222", "0"], "N_s": [1, 1, 1, 1]}),
+        pd.DataFrame({"taxid": ["562", "9606"], "N_s": [2, 2]}),
+        meta,
+        meta,
+    ).iloc[0]
+    assert (native["tp"], native["fp"], native["fn"]) == (1, 2, 1)
+    assert native["precision"] == pytest.approx(1 / 3)
+    assert native["recall"] == pytest.approx(1 / 2)
+    assert native["f1"] == pytest.approx(0.4)
+    assert native["l1_norm"] == pytest.approx(1.25)
     frame = pd.DataFrame({"true": y, "taxID_test_0": p, "sample": ["A", "A", "B", "B"]})
     table = score_annotators(frame, ["taxID_test_0"], include_consensus=False, opal=True)
     row = table.iloc[0]
     assert row["opal_tp"] == 1 and row["opal_fp"] == 2 and row["opal_fn"] == 1
     assert row["opal_f1"] == pytest.approx(0.4)
+    assert row["l1_norm"] == pytest.approx(native["l1_norm"])
     assert list(frame["taxID_test_0"]) == p
-    repeated = opal_style_metrics(["562", "562"], ["111", "111"])
-    assert repeated["opal_fp"] == 1
-    literal = opal_style_metrics(y, ["562", "other", "other", "0"])
-    assert literal["opal_fp"] == 0 and literal["opal_tp"] == 1
-    blank = opal_style_metrics(y, ["0", "0", "0", "0"])
-    assert blank["opal_fp"] == 0 and blank["opal_fn"] == 2
-    assert blank["opal_purity"] != blank["opal_purity"]
-    assert blank["opal_f1"] != blank["opal_f1"]
+    repeated = score_annotators(
+        pd.DataFrame({"true": ["562", "562"], "taxID_test_0": ["111", "111"]}),
+        ["taxID_test_0"], include_consensus=False, opal=True,
+    )
+    assert repeated.iloc[0]["opal_fp"] == 1
+    literal = score_annotators(
+        pd.DataFrame({"true": y, "taxID_test_0": ["562", "other", "other", "0"]}),
+        ["taxID_test_0"], include_consensus=False, opal=True,
+    )
+    assert literal.iloc[0]["opal_fp"] == 0 and literal.iloc[0]["opal_tp"] == 1
+    blank = score_annotators(
+        pd.DataFrame({"true": y, "taxID_test_0": ["0", "0", "0", "0"]}),
+        ["taxID_test_0"], include_consensus=False, opal=True,
+    )
+    assert blank.iloc[0]["opal_fp"] == 0 and blank.iloc[0]["opal_fn"] == 2
+    assert blank.iloc[0]["opal_purity"] != blank.iloc[0]["opal_purity"]
+    assert blank.iloc[0]["opal_f1"] != blank.iloc[0]["opal_f1"]
     partial = score_annotators(
         pd.DataFrame({"true": ["562", "0"], "taxID_test_0": ["111", "333"]}),
         ["taxID_test_0"],
@@ -187,6 +206,17 @@ def test_false_taxids_stay_in_the_profile_counts():
         opal=True,
     )
     assert partial.iloc[0]["opal_fp"] == 1
+
+
+def test_same_short_name_keeps_both_profile_identities():
+    from samovar.abundance import annotation_to_abundance_tables
+
+    tables = annotation_to_abundance_tables(pd.DataFrame({
+        "taxID_k2_0": ["562", "9606"],
+        "taxID_k2_1": ["111", "222"],
+    }))
+    assert set(tables) == {"taxID_k2_0", "taxID_k2_1"}
+    assert set(tables["taxID_k2_1"]["taxid"]) == {"111", "222"}
 
 
 def test_score_annotators_without_ground_truth():

@@ -207,6 +207,7 @@ def annotation_to_abundance_tables(frame: pd.DataFrame) -> Dict[str, pd.DataFram
         work = work.copy()
         work["sample"] = "1"
     result: Dict[str, pd.DataFrame] = {}
+    short_column: Dict[str, str] = {}
     for col in taxid_annotation_columns(work):
         piece = work[[col, "sample"]].copy()
         from samovar.taxonomy import require_regeneration_taxids
@@ -227,7 +228,14 @@ def annotation_to_abundance_tables(frame: pd.DataFrame) -> Dict[str, pd.DataFram
             if "sample" in work.columns and len(work.index):
                 sample = str(work["sample"].iloc[0])
             out = pd.DataFrame({"taxid": ["0"], f"N_{sample}": [0]})
-        result[annotator_name(col)] = out.reset_index(drop=True)
+        short = annotator_name(col)
+        key = short
+        if short in short_column:
+            result[short_column.pop(short)] = result.pop(short)
+            key = str(col)
+        else:
+            short_column[short] = str(col)
+        result[key] = out.reset_index(drop=True)
     return result
 
 

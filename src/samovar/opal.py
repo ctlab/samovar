@@ -1,11 +1,10 @@
-"""Optional CAMI OPAL integration and OPAL-style profiling metrics.
+"""Optional CAMI OPAL integration.
 
-OPAL (https://github.com/CAMI-challenge/OPAL) scores *taxonomic profiles*
-(presence and relative abundance of taxa), not per-read labels. SamovaR:
-
-* always computes the same presence / abundance metrics in Python
-* if ``opal.py`` is installed (``./install.sh OPAL``), also writes CAMI
-  ``.profile`` files and runs OPAL into ``<plots>/opal/``
+Built-in presence and abundance numbers come from
+``samovar.scores.profile_scores``. If ``opal.py`` is installed
+(``./install.sh OPAL``), this module still writes CAMI profiles and runs
+that program into ``<plots>/opal/``. A missing program is a skipped
+comparison, not a passing one.
 """
 
 from __future__ import annotations
@@ -49,18 +48,6 @@ def _taxon_helpers():
     from samovar.viz_annotation import is_special_taxon, normalize_taxon_token  # noqa: F401
 
     return is_special_taxon, normalize_taxon_token
-
-
-def normalize_series(values):
-    from samovar.viz_annotation import normalize_series as _f
-
-    return _f(values)
-
-
-def special_mask(values):
-    from samovar.viz_annotation import special_mask as _f
-
-    return _f(values)
 
 
 def cami_rank(rank: Optional[str]) -> str:
@@ -182,61 +169,6 @@ def confusion_rates(true: Iterable, pred: Iterable) -> Dict[str, float]:
         "fp_pct": 100.0 * fpr,
         "tp_pct": 100.0 * tpr,
     }
-
-
-def opal_style_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
-    """CAMI/OPAL profiling metrics at the current taxid resolution.
-
-    Presence metrics use the sets of classified taxa. Unclassified (``0``) and
-    the display token ``other`` are neither a classified taxon nor a false
-    positive. A ratio with a zero denominator is NaN; the counts stay numeric.
-    L1 and Bray–Curtis use relative abundances over all classified reads.
-    Bray–Curtis is NaN when no classified read remains.
-    """
-    is_special_taxon, normalize_taxon_token = _taxon_helpers()
-    y = normalize_series(true)
-    p = normalize_series(pred)
-    gold = {t for t in pd.unique(y) if not is_special_taxon(t)}
-    pred_set = {t for t in pd.unique(p) if not is_special_taxon(t)}
-    tp = float(len(gold & pred_set))
-    fp = float(len(pred_set - gold))
-    fn = float(len(gold - pred_set))
-    completeness = tp / (tp + fn) if (tp + fn) else float("nan")
-    purity = tp / (tp + fp) if (tp + fp) else float("nan")
-    denom = completeness + purity
-    f1 = float("nan") if denom == 0 or denom != denom else 2 * completeness * purity / denom
-    union = tp + fp + fn
-    jaccard = tp / union if union else float("nan")
-
-    y_c = y[~special_mask(y)]
-    p_c = p[~special_mask(p)]
-    taxa = sorted(gold | pred_set)
-    yt = y_c.value_counts(normalize=True) if len(y_c) else pd.Series(dtype=float)
-    pt = p_c.value_counts(normalize=True) if len(p_c) else pd.Series(dtype=float)
-    l1 = 0.0
-    bray_num = 0.0
-    bray_den = 0.0
-    for t in taxa:
-        a = float(yt.get(t, 0.0))
-        b = float(pt.get(t, 0.0))
-        l1 += abs(a - b)
-        bray_num += abs(a - b)
-        bray_den += a + b
-    bray = bray_num / bray_den if bray_den else float("nan")
-
-    out = {
-        "opal_tp": tp,
-        "opal_fp": fp,
-        "opal_fn": fn,
-        "completeness": completeness,
-        "opal_purity": purity,
-        "opal_f1": f1,
-        "jaccard": jaccard,
-        "l1_norm": l1,
-        "bray_curtis": bray,
-    }
-    out.update(confusion_rates(y, p))
-    return out
 
 
 def write_profiles_for_annotators(

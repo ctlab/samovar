@@ -45,8 +45,12 @@ def profile_scores(predicted, reference, predicted_metadata, reference_metadata)
     for col in n_sample_columns(predicted):
         p, r = pred[col] > 0, ref[col] > 0
         tp, fp, fn = int((p & r).sum()), int((p & ~r).sum()), int((~p & r).sum())
-        row = dict(sample=col[2:], tp=tp, fp=fp, fn=fn, precision=ratio(tp, tp + fp),
-                   recall=ratio(tp, tp + fn), f1=ratio(2 * tp, 2 * tp + fp + fn),
+        precision, recall = ratio(tp, tp + fp), ratio(tp, tp + fn)
+        f1 = float("nan")
+        if precision == precision and recall == recall and precision + recall > 0:
+            f1 = ratio(2 * tp, 2 * tp + fp + fn)
+        row = dict(sample=col[2:], tp=tp, fp=fp, fn=fn, precision=precision,
+                   recall=recall, f1=f1,
                    jaccard=ratio(tp, tp + fp + fn), l1_norm=float("nan"), bray_curtis=float("nan"),
                    reason="undefined ratios have zero denominator")
         if quantitative and px[col].sum() > 0 and ry[col].sum() > 0:
@@ -57,7 +61,9 @@ def profile_scores(predicted, reference, predicted_metadata, reference_metadata)
         else:
             row["reason"] = "empty abundance has no quantitative composition"
         rows.append(row)
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    frame["scorer"] = "profile_scores"
+    return frame
 
 
 def _taxon_helpers():
@@ -338,6 +344,45 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
     return float(np.dot(table["f1"].to_numpy(dtype=float), weights) / denom)
 
 
+def _read_profile_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
+    """Presence and abundance for one read vector, from ``profile_scores``.
+
+    Special display tokens become taxid 0 before counting. The table uses the
+    per-read profile contract: rank taxid, normalization all. Unclassified
+    stays in that denominator and is not a presence taxon.
+    """
+    from samovar.abundance import annotation_to_abundance_tables
+    from samovar.opal import confusion_rates
+    from samovar.profiles import metadata
+
+    is_special_taxon, _normalize = _taxon_helpers()
+
+    def counts(values):
+        labels = normalize_series(values).astype(str).map(
+            lambda token: "0" if is_special_taxon(token) else token
+        )
+        if len(labels) == 0:
+            return pd.DataFrame({"taxid": ["0"], "N_1": [0.0]})
+        tables = annotation_to_abundance_tables(pd.DataFrame({"taxid_x": labels}))
+        return next(iter(tables.values()))
+
+    meta = metadata({"rank": "taxid", "normalization": "all"})
+    row = profile_scores(counts(pred), counts(true), meta, meta).iloc[0]
+    mapped = {
+        "opal_tp": row["tp"],
+        "opal_fp": row["fp"],
+        "opal_fn": row["fn"],
+        "completeness": row["recall"],
+        "opal_purity": row["precision"],
+        "opal_f1": row["f1"],
+        "jaccard": row["jaccard"],
+        "l1_norm": row["l1_norm"],
+        "bray_curtis": row["bray_curtis"],
+    }
+    mapped.update(confusion_rates(normalize_series(true), normalize_series(pred)))
+    return mapped
+
+
 def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = False,
                       include_classification: bool = True) -> Dict[str, float]:
     true_s = pd.Series(list(true) if not isinstance(true, pd.Series) else true.reset_index(drop=True))
@@ -356,9 +401,7 @@ def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = Fa
         stats["r2"] = _r2_abundance(true_s, pred_s)
         stats.update(standard_classification_metrics(true_s, pred_s))
     if include_opal:
-        from samovar.opal import opal_style_metrics
-
-        stats.update(opal_style_metrics(true_s, pred_s))
+        stats.update(_read_profile_metrics(true_s, pred_s))
     return stats
 
 
@@ -513,9 +556,7 @@ def score_annotators(
             "opal_tp", "opal_fp", "opal_fn",
             "tpr", "tnr", "fpr", "fnr", "tp_pct", "tn_pct", "fp_pct", "fn_pct",
         }):
-            from samovar.opal import opal_style_metrics
-
-            stats.update(opal_style_metrics(true, aligned))
+            stats.update(_read_profile_metrics(true, aligned))
         if wanted is not None:
             for key in list(stats):
                 if key not in wanted and key not in {"n_reads", "n_taxa"}:

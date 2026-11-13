@@ -86,7 +86,7 @@ def stage_tables(root, stage):
     tables = input_to_abundance_tables(ann)
     meta = dict(ann.profile_metadata)
     for name in tables:
-        meta.setdefault(name, metadata({"rank": "taxid"}))
+        meta.setdefault(name, metadata({"rank": "taxid", "normalization": "all"}))
         if stage == "reprofiled":
             tables[name], meta[name] = _drop_reprofiled_suffix(tables[name], meta[name])
     return tables, meta
@@ -308,23 +308,13 @@ def ground_truth(root, stage, config):
     return found[0][1], found[0][2]
 
 
-def _taxdump_present(taxdump) -> bool:
-    from samovar.kreport import resolve_taxdump_files
-
-    try:
-        resolve_taxdump_files(taxdump or None)
-    except FileNotFoundError:
-        return False
-    return True
-
-
 def align_truth(pred, pm, truth, tm, root, config):
     if pm["taxonomy"] != tm["taxonomy"]:
         raise ValueError(f"Incompatible profile taxonomy: {pm['taxonomy']} vs {tm['taxonomy']}; supply an explicit taxonomy mapping")
     taxdump = config.get("taxdump") or None
-    # Per-read tables and read-header truth are both rank taxid. Species
-    # rollup needs a taxdump; without one, compare the taxids as stored.
-    if pm["rank"] == "taxid" and tm["rank"] == "taxid" and not _taxdump_present(taxdump):
+    # Two taxid profiles compare the stored ids, including false taxids.
+    # A taxid profile against a named rank still rolls up when a taxdump exists.
+    if pm["rank"] == "taxid" and tm["rank"] == "taxid":
         rank = "taxid"
     else:
         rank = pm["rank"] if pm["rank"] != "taxid" else "species"
@@ -364,7 +354,9 @@ def score(root, stage, config):
     rows = []
     if not gts:
         for name in tables:
-            rows.append(pd.DataFrame([dict(annotator=name, reason="no profile gold standard available")]))
+            rows.append(pd.DataFrame([dict(
+                annotator=name, reason="no profile gold standard available", scorer="profile_scores",
+            )]))
     for gt_name, truth, tm in gts:
         for name, table in tables.items():
             pred, pm, aligned, aligned_meta = align_truth(table, metas[name], truth, tm, root, config)
