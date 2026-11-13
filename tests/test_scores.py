@@ -36,14 +36,14 @@ def test_current_f1_equals_accuracy_and_macro_is_standard():
     true = ["A", "A", "A", "B", "B", "B"]
     pred = ["A", "A", "A", "A", "B", "B"]
     stats = annotation_scores(true, pred)
-    assert stats["f1"] == pytest.approx(5 / 6)
+    assert stats["legacy_closed_set_f1_accuracy"] == pytest.approx(5 / 6)
     assert stats["accuracy"] == pytest.approx(5 / 6)
     assert stats["f1_micro"] == pytest.approx(5 / 6)
     f1_a = 2 * 0.75 * 1.0 / 1.75
     f1_b = 2 * 1.0 * (2 / 3) / (1.0 + 2 / 3)
     assert stats["f1_macro"] == pytest.approx(0.5 * f1_a + 0.5 * f1_b)
     std = standard_classification_metrics(true, pred)
-    caption = format_f1_caption(stats["f1"], std)
+    caption = format_f1_caption(stats["legacy_closed_set_f1_accuracy"], std)
     assert "TP/N" in caption
     assert "F1-macro" in caption
     assert "1 −" in format_r2_caption(0.5) or "SS" in format_r2_caption(0.5)
@@ -63,7 +63,7 @@ def test_consistent_wrong_label_is_pure_but_not_accurate():
     pred = ["X", "X", "Y", "Y"]
     assert accuracy_purity(true, pred) == pytest.approx(1.0)
     assert f1_purity(true, pred) == pytest.approx(1.0)
-    assert annotation_scores(true, pred)["f1"] == pytest.approx(0.0)
+    assert annotation_scores(true, pred)["legacy_closed_set_f1_accuracy"] == pytest.approx(0.0)
 
 
 def test_shared_majority_label_lowers_f1_purity():
@@ -111,7 +111,9 @@ def test_default_scores_skip_opal_and_split_read_types_once():
     full = score_annotators(df.drop(columns=["read_type"]), ["kaiju", "kraken2"], opal=True)
     plain = score_annotators(df, ["kaiju", "kraken2"])
     overall = plain[plain["read_type"] == "all"]
-    assert overall["completeness"].isna().all()
+    assert "completeness" not in plain.columns
+    assert "completeness" not in full.columns
+    assert overall["schema"].eq("read-quality-v1").all()
     assert overall["accuracy"].tolist() == full["accuracy"].tolist()
     assert set(plain["read_type"]) == {"all", "illumina", "ont"}
     sampled = score_annotators(df.drop(columns=["read_type"]), ["kaiju"], metrics_sample=2, seed=1)
@@ -133,8 +135,12 @@ def test_score_annotators_adds_consensus_and_keeps_samovar():
     assert names.count("SAMOVAR") == 1
     assert "consensus" not in names
     assert "kaiju" in names and "kraken2" in names
-    assert (table["accuracy_purity"] >= 0).all()
-    assert (table["f1_purity"] >= 0).all()
+    assert "accuracy_purity" not in table.columns
+    diagnosed = score_annotators(
+        df, ["kaiju", "kraken2", "SAMOVAR"], metrics=["accuracy_purity", "f1_purity"],
+    )
+    assert (diagnosed["accuracy_purity"] >= 0).all()
+    assert (diagnosed["f1_purity"] >= 0).all()
 
 
 def test_score_annotators_names_majority_vote_samovar():
@@ -177,35 +183,22 @@ def test_false_taxids_stay_in_the_profile_counts():
     assert native["l1_norm"] == pytest.approx(1.25)
     frame = pd.DataFrame({"true": y, "taxID_test_0": p, "sample": ["A", "A", "B", "B"]})
     table = score_annotators(frame, ["taxID_test_0"], include_consensus=False, opal=True)
-    row = table.iloc[0]
-    assert row["opal_tp"] == 1 and row["opal_fp"] == 2 and row["opal_fn"] == 1
-    assert row["opal_f1"] == pytest.approx(0.4)
-    assert row["l1_norm"] == pytest.approx(native["l1_norm"])
+    assert "opal_tp" not in table.columns and "l1_norm" not in table.columns
     assert list(frame["taxID_test_0"]) == p
-    repeated = score_annotators(
-        pd.DataFrame({"true": ["562", "562"], "taxID_test_0": ["111", "111"]}),
-        ["taxID_test_0"], include_consensus=False, opal=True,
-    )
-    assert repeated.iloc[0]["opal_fp"] == 1
-    literal = score_annotators(
-        pd.DataFrame({"true": y, "taxID_test_0": ["562", "other", "other", "0"]}),
-        ["taxID_test_0"], include_consensus=False, opal=True,
-    )
-    assert literal.iloc[0]["opal_fp"] == 0 and literal.iloc[0]["opal_tp"] == 1
-    blank = score_annotators(
-        pd.DataFrame({"true": y, "taxID_test_0": ["0", "0", "0", "0"]}),
-        ["taxID_test_0"], include_consensus=False, opal=True,
-    )
-    assert blank.iloc[0]["opal_fp"] == 0 and blank.iloc[0]["opal_fn"] == 2
-    assert blank.iloc[0]["opal_purity"] != blank.iloc[0]["opal_purity"]
-    assert blank.iloc[0]["opal_f1"] != blank.iloc[0]["opal_f1"]
-    partial = score_annotators(
-        pd.DataFrame({"true": ["562", "0"], "taxID_test_0": ["111", "333"]}),
-        ["taxID_test_0"],
-        include_consensus=False,
-        opal=True,
-    )
-    assert partial.iloc[0]["opal_fp"] == 1
+    repeated = profile_scores(
+        pd.DataFrame({"taxid": ["111"], "N_s": [2]}),
+        pd.DataFrame({"taxid": ["562"], "N_s": [2]}),
+        meta, meta,
+    ).iloc[0]
+    assert repeated["fp"] == 1
+    blank = profile_scores(
+        pd.DataFrame({"taxid": ["0"], "N_s": [4]}),
+        pd.DataFrame({"taxid": ["562", "9606"], "N_s": [2, 2]}),
+        meta, meta,
+    ).iloc[0]
+    assert blank["fp"] == 0 and blank["fn"] == 2
+    assert blank["precision"] != blank["precision"]
+    assert blank["f1"] != blank["f1"]
 
 
 def test_same_short_name_keeps_both_profile_identities():
@@ -230,7 +223,7 @@ def test_score_annotators_without_ground_truth():
     names = list(table["annotator"].astype(str))
     assert "kaiju" in names and "kraken2" in names
     assert names[-1] == "SAMOVAR"
-    assert table["f1"].isna().all()
+    assert table["legacy_closed_set_f1_accuracy"].isna().all()
     assert table["r2"].isna().all()
     assert (table["n_reads"] == 4).all()
 
@@ -263,25 +256,24 @@ def test_viz_annotation_writes_scores_barplot(tmp_path, monkeypatch, opal):
     assert not results["scores"].empty
     assert (out / "scores.png").is_file()
     assert (out / "quality_scores.csv").is_file()
-    assert (out / "purity_by_taxon.csv").is_file()
+    assert not (out / "purity_by_taxon.csv").exists()
     csv = pd.read_csv(out / "quality_scores.csv")
-    assert "accuracy_purity" in csv.columns
-    assert "f1_purity" in csv.columns
+    assert "accuracy_purity" not in csv.columns
+    assert "completeness" not in csv.columns
     assert "accuracy" in csv.columns
     assert "f1_macro" in csv.columns
-    assert "tnr" in csv.columns
-    assert "completeness" in csv.columns
-    assert (out / "opal_scores.png").is_file() == opal
-    assert (out / "opal_scores.html").is_file() == opal
+    assert csv["schema"].eq("read-quality-v1").all()
+    assert "legacy_closed_set_f1_accuracy" in csv.columns
+    assert not (out / "opal_scores.png").exists()
+    assert not (out / "opal_scores.html").exists()
     assert bool(calls) == opal
-    assert csv["completeness"].notna().all() if opal else csv["completeness"].isna().all()
     import matplotlib.image as mpimg
 
-    for name in (("scores.png", "opal_scores.png") if opal else ("scores.png",)):
+    for name in ("scores.png",):
         arr = mpimg.imread(out / name)
         assert arr.shape[1] >= 1400, f"{name} width {arr.shape[1]} is too low-res"
         assert arr.shape[0] >= 700, f"{name} height {arr.shape[0]} is too low-res"
-    assert "f1" in csv.columns
+    assert "legacy_closed_set_f1_accuracy" in csv.columns
     assert "r2" in csv.columns
     assert "SAMOVAR" in set(csv["annotator"].astype(str))
     assert "consensus" not in set(csv["annotator"].astype(str))
@@ -329,7 +321,8 @@ def test_selected_metrics_skip_unused_computations(monkeypatch):
     frame = pd.DataFrame({"kaiju": ["562", "0"], "true": ["562", "562"]})
     result = scores.score_annotators(frame, ["kaiju"], metrics=["accuracy"])
     assert result.loc[0, "accuracy"] == 0.5
-    assert result["r2"].isna().all() and result["f1_purity"].isna().all()
+    assert result["r2"].isna().all()
+    assert "f1_purity" not in result.columns
     assert result.loc[0, "n_reads"] == 2
 
 

@@ -34,7 +34,7 @@ def main(argv=None) -> int:
         "--opal",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Fill OPAL profile columns and write opal_scores.png. Default leaves them empty.",
+        help="Run optional external OPAL when it is installed. Profile metrics stay in profile_quality_scores.csv.",
     )
     parser.add_argument(
         "--viz-metrics-sample",

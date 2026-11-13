@@ -475,6 +475,20 @@ def _desc(info: Mapping[str, Any]) -> Dict[str, str]:
     return {key: _cell(info.get(key, "")) for key in _DESC}
 
 
+def _adapt_quality_row(rec: Dict[str, Any]) -> Dict[str, Any]:
+    from samovar.scores import LEGACY_CLOSED_SET_F1, LEGACY_READ_WARNING, READ_QUALITY_SCHEMA
+
+    if rec.get("schema") == READ_QUALITY_SCHEMA:
+        return rec
+    if "f1" not in rec or LEGACY_CLOSED_SET_F1 in rec:
+        return rec
+    adapted = dict(rec)
+    adapted[LEGACY_CLOSED_SET_F1] = adapted.pop("f1")
+    adapted["schema"] = "legacy-read-quality"
+    adapted["warning"] = LEGACY_READ_WARNING
+    return adapted
+
+
 def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed: Any) -> None:
     plots = child / f"{phase}_annotations_plots"
     for name in ("profile_quality_scores.csv", "quality_scores.csv"):
@@ -483,7 +497,9 @@ def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed:
             continue
         with path.open(encoding="utf-8", newline="") as handle:
             for rec in csv.DictReader(handle):
-                reason = rec.get("reason") or ""
+                if name == "quality_scores.csv":
+                    rec = _adapt_quality_row(rec)
+                reason = rec.get("reason") or rec.get("warning") or ""
                 base = {
                     "repeat_id": repeat_id,
                     "sample_id": rec.get("sample") or rec.get("sample_id") or "",

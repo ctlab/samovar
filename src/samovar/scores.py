@@ -63,6 +63,7 @@ def profile_scores(predicted, reference, predicted_metadata, reference_metadata)
         rows.append(row)
     frame = pd.DataFrame(rows)
     frame["scorer"] = "profile_scores"
+    frame["schema"] = PROFILE_SCHEMA
     return frame
 
 
@@ -88,8 +89,18 @@ COMBINATION_ANNOTATORS = frozenset({"samovar", "consensus"})
 PLATFORM_READ_TYPE_RE = re.compile(r"^[a-z][a-z0-9_+-]{1,31}$", re.I)
 INVALID_READ_TYPES = frozenset({"", "nan", "none", "na", "all", "0", "unclassified"})
 
+READ_QUALITY_SCHEMA = "read-quality-v1"
+PROFILE_SCHEMA = "profile-v1"
+LEGACY_CLOSED_SET_F1 = "legacy_closed_set_f1_accuracy"
+LEGACY_READ_WARNING = (
+    "Column f1 is closed-set accuracy (TP/N), not rank F1 or profile set-F1. "
+    "The stored value was not recalculated."
+)
+_PURITY_COLUMNS = ("accuracy_purity", "f1_purity")
+_RATE_COLUMNS = ("tpr", "tnr", "fpr", "fnr", "tn_pct", "fn_pct", "fp_pct", "tp_pct")
 SCORE_COLUMNS = (
     "annotator",
+    "schema",
     "n_reads",
     "n_taxa",
     "accuracy",
@@ -98,27 +109,8 @@ SCORE_COLUMNS = (
     "f1_micro",
     "f1_macro",
     "f1_weighted",
-    "f1",
+    LEGACY_CLOSED_SET_F1,
     "r2",
-    "accuracy_purity",
-    "f1_purity",
-    "tpr",
-    "tnr",
-    "fpr",
-    "fnr",
-    "tn_pct",
-    "fn_pct",
-    "fp_pct",
-    "tp_pct",
-    "opal_tp",
-    "opal_fp",
-    "opal_fn",
-    "completeness",
-    "opal_purity",
-    "opal_f1",
-    "jaccard",
-    "l1_norm",
-    "bray_curtis",
 )
 
 
@@ -344,43 +336,16 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
     return float(np.dot(table["f1"].to_numpy(dtype=float), weights) / denom)
 
 
-def _read_profile_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
-    """Presence and abundance for one read vector, from ``profile_scores``.
-
-    Special display tokens become taxid 0 before counting. The table uses the
-    per-read profile contract: rank taxid, normalization all. Unclassified
-    stays in that denominator and is not a presence taxon.
-    """
-    from samovar.abundance import annotation_to_abundance_tables
-    from samovar.opal import confusion_rates
-    from samovar.profiles import metadata
-
-    is_special_taxon, _normalize = _taxon_helpers()
-
-    def counts(values):
-        labels = normalize_series(values).astype(str).map(
-            lambda token: "0" if is_special_taxon(token) else token
-        )
-        if len(labels) == 0:
-            return pd.DataFrame({"taxid": ["0"], "N_1": [0.0]})
-        tables = annotation_to_abundance_tables(pd.DataFrame({"taxid_x": labels}))
-        return next(iter(tables.values()))
-
-    meta = metadata({"rank": "taxid", "normalization": "all"})
-    row = profile_scores(counts(pred), counts(true), meta, meta).iloc[0]
-    mapped = {
-        "opal_tp": row["tp"],
-        "opal_fp": row["fp"],
-        "opal_fn": row["fn"],
-        "completeness": row["recall"],
-        "opal_purity": row["precision"],
-        "opal_f1": row["f1"],
-        "jaccard": row["jaccard"],
-        "l1_norm": row["l1_norm"],
-        "bray_curtis": row["bray_curtis"],
-    }
-    mapped.update(confusion_rates(normalize_series(true), normalize_series(pred)))
-    return mapped
+def adapt_quality_scores(table: pd.DataFrame) -> pd.DataFrame:
+    """Read a saved read-quality table without turning its old ``f1`` into set-F1."""
+    work = table.copy()
+    if "schema" in work.columns and work["schema"].astype(str).eq(READ_QUALITY_SCHEMA).all():
+        return work
+    if "f1" in work.columns and LEGACY_CLOSED_SET_F1 not in work.columns:
+        work = work.rename(columns={"f1": LEGACY_CLOSED_SET_F1})
+        work["schema"] = "legacy-read-quality"
+        work["warning"] = LEGACY_READ_WARNING
+    return work
 
 
 def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = False,
@@ -397,11 +362,9 @@ def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = Fa
         "f1_purity": float(np.dot(table["f1"], table["n_true"]) / weight) if weight else 0.0,
     }
     if include_classification:
-        stats["f1"] = _f1_accuracy(true_s, pred_s)
+        stats[LEGACY_CLOSED_SET_F1] = _f1_accuracy(true_s, pred_s)
         stats["r2"] = _r2_abundance(true_s, pred_s)
         stats.update(standard_classification_metrics(true_s, pred_s))
-    if include_opal:
-        stats.update(_read_profile_metrics(true_s, pred_s))
     return stats
 
 
@@ -470,6 +433,7 @@ def order_annotators(names: Sequence[str]) -> List[str]:
 def _empty_score_row(name: str, n_reads: float, n_taxa: float) -> Dict[str, float]:
     row = {col: np.nan for col in SCORE_COLUMNS}
     row["annotator"] = name
+    row["schema"] = READ_QUALITY_SCHEMA
     row["n_reads"] = float(n_reads)
     row["n_taxa"] = float(n_taxa)
     return row
@@ -499,9 +463,11 @@ def score_annotators(
     not added again. When ground truth is missing or all-unclassified, F1 / R²
     and related metrics are left as NaN; ``n_reads`` / ``n_taxa`` are still filled.
 
-    ``opal=False`` leaves OPAL profile columns NaN. ``metrics`` limits which
-    score columns are filled. ``metrics_sample`` above 0 draws a seeded subset
-    and records ``n_sampled``; 0 scores every row.
+    Profile presence and abundance are not copied here. ``opal`` is accepted
+    for existing callers and does not add a second profile table.
+    ``accuracy_purity`` and ``f1_purity`` are filled only when ``metrics``
+    names them. ``metrics_sample`` above 0 draws a seeded subset and records
+    ``n_sampled``; 0 scores every row.
     """
     names = [n for n in annotators if str(n).lower() != "read_type" and not is_feat_column(n)]
     names = select_scoring_annotators(work, names)
@@ -526,7 +492,9 @@ def score_annotators(
                 frame[col] = normalize_series(frame[col].astype("category"))
     scored = rows_with_usable_truth(frame, true_col) if frame is not None else None
     true = scored[true_col] if scored is not None else None
-    wanted = None if metrics is None else {str(name) for name in metrics}
+    wanted = None if metrics is None else {
+        LEGACY_CLOSED_SET_F1 if str(name) == "f1" else str(name) for name in metrics
+    }
     rows = []
 
     def _add(name: str, pred: pd.Series) -> None:
@@ -540,23 +508,21 @@ def score_annotators(
             rows.append(row)
             return
         aligned = pred.reindex(scored.index)
-        if wanted is None or wanted & {"accuracy_purity", "f1_purity"}:
+        if wanted is not None and wanted & set(_PURITY_COLUMNS):
             stats = annotation_scores(true, aligned, include_classification=False)
         else:
             n_reads, n_taxa = _pred_counts(true)
             stats = {"n_reads": n_reads, "n_taxa": n_taxa}
-        if wanted is None or "f1" in wanted:
-            stats["f1"] = _f1_accuracy(true, aligned)
+        if wanted is None or LEGACY_CLOSED_SET_F1 in wanted:
+            stats[LEGACY_CLOSED_SET_F1] = _f1_accuracy(true, aligned)
         if wanted is None or "r2" in wanted:
             stats["r2"] = _r2_abundance(true, aligned)
         if wanted is None or wanted & {"accuracy", "precision_macro", "recall_macro", "f1_micro", "f1_macro", "f1_weighted"}:
             stats.update(standard_classification_metrics(true, aligned))
-        if opal and (wanted is None or wanted & {
-            "completeness", "opal_purity", "opal_f1", "jaccard", "l1_norm", "bray_curtis",
-            "opal_tp", "opal_fp", "opal_fn",
-            "tpr", "tnr", "fpr", "fnr", "tp_pct", "tn_pct", "fp_pct", "fn_pct",
-        }):
-            stats.update(_read_profile_metrics(true, aligned))
+        if wanted is not None and wanted & set(_RATE_COLUMNS):
+            from samovar.opal import confusion_rates
+
+            stats.update(confusion_rates(true, aligned))
         if wanted is not None:
             for key in list(stats):
                 if key not in wanted and key not in {"n_reads", "n_taxa"}:
@@ -594,7 +560,9 @@ def score_annotators(
     for col in list(SCORE_COLUMNS) + ["n_sampled"]:
         if col not in table.columns:
             table[col] = np.nan
-    table = table[list(SCORE_COLUMNS) + ["n_sampled"]]
+    table["schema"] = READ_QUALITY_SCHEMA
+    extras = [col for col in (*_PURITY_COLUMNS, *_RATE_COLUMNS) if col in table.columns]
+    table = table[list(SCORE_COLUMNS) + extras + ["n_sampled"]]
     ordered = order_annotators(list(table["annotator"]))
     table["annotator"] = pd.Categorical(table["annotator"], categories=ordered, ordered=True)
     table = table.sort_values("annotator").reset_index(drop=True)
@@ -634,8 +602,8 @@ SCORE_DISPLAY = {
     "precision_macro": "P-macro",
     "recall_macro": "R-macro",
     "f1_macro": "F1-macro",
-    "f1": "F1 (current)",
-    "r2": "R² (current)",
+    LEGACY_CLOSED_SET_F1: "Closed-set accuracy",
+    "r2": "R²",
     "tnr": "TN rate",
     "fnr": "FN rate",
     "accuracy_purity": "Accuracy purity",
@@ -661,7 +629,7 @@ BAR_COLORS = {
     "precision_macro": "#E6AB02",
     "recall_macro": "#A6761D",
     "f1_macro": "#1F78B4",
-    "f1": "#7570B3",
+    LEGACY_CLOSED_SET_F1: "#7570B3",
     "r2": "#E7298A",
     "tnr": "#80B1D3",
     "fnr": "#FB8072",

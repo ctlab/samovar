@@ -39,7 +39,7 @@ PALETTE_F1 = [
 
 def normalize_viz_config(settings=None) -> dict:
     """Validate the shared prepare/workflow visualization settings."""
-    from samovar.scores import SCORE_COLUMNS
+    from samovar.scores import LEGACY_CLOSED_SET_F1, SCORE_COLUMNS, _PURITY_COLUMNS, _RATE_COLUMNS
 
     out = dict(full=False, opal=False, metrics_sample=0, metrics=None)
     if settings is not None:
@@ -67,9 +67,16 @@ def normalize_viz_config(settings=None) -> dict:
             names = None
         elif names == ["none"]:
             names = []
-        elif set(names) - (set(SCORE_COLUMNS) - {"annotator"}):
-            unknown = set(names) - (set(SCORE_COLUMNS) - {"annotator"})
-            raise ValueError(f"Unknown viz metrics: {', '.join(sorted(unknown))}")
+        else:
+            allowed = (
+                (set(SCORE_COLUMNS) - {"annotator", "schema"})
+                | set(_PURITY_COLUMNS)
+                | set(_RATE_COLUMNS)
+                | {"f1", LEGACY_CLOSED_SET_F1}
+            )
+            unknown = set(names) - allowed
+            if unknown:
+                raise ValueError(f"Unknown viz metrics: {', '.join(sorted(unknown))}")
         out["metrics"] = names
     return out
 
@@ -728,7 +735,6 @@ def viz_annotation(
 
     if types & {"scores", "score", "purity"}:
         from samovar.scores import (
-            OPAL_DISPLAY,
             purity_by_taxon,
             save_scores_altair,
             save_scores_barplot,
@@ -748,20 +754,7 @@ def viz_annotation(
                 title=f"Annotation quality{caption_rank}",
             )
             save_scores_altair(scores_table, out_dir / "scores.html")
-            if opal:
-                save_scores_barplot(
-                    scores_table,
-                    out_dir / "opal_scores.png",
-                    title=f"OPAL-style profile metrics{caption_rank}",
-                    display=OPAL_DISPLAY,
-                    ymax=2.0,
-                )
-                save_scores_altair(
-                    scores_table,
-                    out_dir / "opal_scores.html",
-                    display=OPAL_DISPLAY,
-                )
-            if truth_frame is not None and (metrics is None or set(metrics) & {"accuracy_purity", "f1_purity"}):
+            if truth_frame is not None and metrics is not None and set(metrics) & {"accuracy_purity", "f1_purity"}:
                 taxon_frames = []
                 tools = tool_annotators(annotators)
                 seen = set()

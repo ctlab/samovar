@@ -22,8 +22,10 @@ from samovar.exec_control import CHECKPOINT_STEPS
 from samovar.paths import PACKAGE_VERSION
 from samovar.scores import (
     ENSEMBLE_NAME,
+    LEGACY_CLOSED_SET_F1,
     OPAL_DISPLAY,
     SCORE_DISPLAY,
+    adapt_quality_scores,
     canonical_annotator_name,
     is_platform_read_type,
 )
@@ -285,26 +287,15 @@ ANNOTATOR_COLOR_FALLBACK = (
 
 BAR_METRIC_ORDER = (
     "accuracy",
-    "f1",
+    LEGACY_CLOSED_SET_F1,
     "f1_macro",
-    "accuracy_purity",
-    "f1_purity",
-    "completeness",
-    "opal_purity",
-    "opal_f1",
-    "jaccard",
-    "bray_curtis",
 )
 
 CONCLUSION_METRICS = (
-    "f1",
+    LEGACY_CLOSED_SET_F1,
     "accuracy",
     "f1_macro",
     "r2",
-    "accuracy_purity",
-    "f1_purity",
-    "completeness",
-    "opal_f1",
 )
 
 
@@ -372,7 +363,7 @@ def _read_scores_table(plots: Path) -> List[Dict[str, Any]]:
     try:
         import pandas as pd
 
-        table = pd.read_csv(csv)
+        table = adapt_quality_scores(pd.read_csv(csv))
     except Exception:
         return []
     rows = []
@@ -1233,6 +1224,7 @@ def _write_score_plots(
         return written
     data, headers = _table_payload(rows)
     if data:
+        warning = next((str(row.get("warning")) for row in rows if row.get("warning")), "")
         payload = {
             "id": f"{parent_id}_quality_scores",
             "section_id": f"{parent_id}_quality_scores",
@@ -1240,7 +1232,7 @@ def _write_score_plots(
             "parent_name": parent_name,
             "parent_description": parent_description,
             "section_name": f"{parent_name} — quality scores",
-            "description": "",
+            "description": warning,
             "plot_type": "table",
             "pconfig": {
                 "id": f"{parent_id}_quality_scores_table",
@@ -1415,7 +1407,7 @@ def _best_tool_row(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
     def _rank(row: Dict[str, Any]) -> tuple:
         vals = []
-        for key in ("f1", "accuracy", "f1_macro", "completeness"):
+        for key in (LEGACY_CLOSED_SET_F1, "accuracy", "f1_macro"):
             val = row.get(key)
             vals.append(float(val) if _is_finite_number(val) else -1e9)
         return tuple(vals)

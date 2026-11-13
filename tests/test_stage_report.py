@@ -54,6 +54,7 @@ def test_bundle_multiqc_includes_plots_and_scores(tmp_path):
     jsons = list(staged.glob("*_mqc.json"))
     assert jsons
     scores = json.loads(next(p for p in jsons if "quality_scores" in p.name).read_text())
+    assert "not recalculated" in scores["description"]
     assert "kaiju" in scores["data"] and "kraken2" in scores["data"]
     assert "SAMOVAR" in scores["data"]
     assert "consensus" not in scores["data"]

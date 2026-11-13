@@ -177,7 +177,7 @@ def test_viz_annotation_without_true_keeps_cv(tmp_path):
     assert "R2" not in results
     assert "correlation" in results
     assert "scores" in results
-    assert results["scores"]["f1"].isna().all()
+    assert results["scores"]["legacy_closed_set_f1_accuracy"].isna().all()
     assert list(out.glob("spearman_correlation_mqc.json"))
     assert not list(out.glob("CV_*_mqc.json"))
     assert not list(out.glob("F1_*_mqc.json"))
