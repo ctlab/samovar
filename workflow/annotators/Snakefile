@@ -3,7 +3,7 @@ import shlex
 import re
 
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
-from samovar.memory import annotator_mem_mb
+from samovar.memory import annotator_job_threads, annotator_mem_mb, index_reserve_mb
 from samovar.tool_spec import annotator_priority, memory_tool_name
 from samovar.combine_tables import ambiguous_sample_run_stems
 from samovar.seqio import find_fastq_mate, list_fastq_samples
@@ -79,6 +79,15 @@ MACHINE_CORES = max(1, int(config.get("cores") or os.environ.get("SAMOVAR_CORES"
 MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None
 
 
+def rule_db(wildcards):
+    ann = ANNOTATORS.get(wildcards.run_name)
+    if ann is None:
+        return ""
+    if type(ann).__name__ == "KaijuAnnotator":
+        return ann._database_and_nodes()[0]
+    return str(getattr(ann, "db_path", "") or "")
+
+
 def rule_mem(wildcards):
     tool = TOOL_TYPES.get(wildcards.run_name, "")
     ann = ANNOTATORS.get(wildcards.run_name)
@@ -88,6 +97,24 @@ def rule_mem(wildcards):
         THREADS.get(wildcards.run_name, 1),
         MACHINE_CORES,
         MEM_LIMIT,
+        db_path=rule_db(wildcards),
+    )
+
+
+def rule_threads(wildcards):
+    tool = memory_tool_name(
+        TOOL_TYPES.get(wildcards.run_name, ""),
+        getattr(ANNOTATORS.get(wildcards.run_name), "extra", "") or "",
+    )
+    if tool not in {"kaiju", "kraken2"}:
+        return THREADS.get(wildcards.run_name, 1)
+    db = rule_db(wildcards)
+    return annotator_job_threads(
+        tool,
+        MACHINE_CORES,
+        rule_mem(wildcards),
+        MEM_LIMIT,
+        index_known=index_reserve_mb(tool, db) is not None,
     )
 
 
@@ -362,7 +389,7 @@ rule kraken2:
         report = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.report",
         out = marker_output("kraken2.out")
     threads:
-        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        rule_threads
     resources:
         mem_mb=rule_mem,
     priority: annotator_priority("kraken2")
@@ -392,7 +419,7 @@ if not BATCH_KAIJU:
         output:
             out = marker_output("kaiju.out")
         threads:
-            lambda wildcards: THREADS.get(wildcards.run_name, 1)
+            rule_threads
         resources:
             mem_mb=rule_mem,
         priority: annotator_priority("kaiju")
@@ -416,6 +443,21 @@ if not BATCH_KAIJU:
 
 if BATCH_KAIJU:
     for _kaiju_run in KAIJU_RUNS:
+        _kaiju_db = ANNOTATORS[_kaiju_run]._database_and_nodes()[0]
+        _kaiju_mem = annotator_mem_mb(
+            "kaiju",
+            THREADS.get(_kaiju_run, 1),
+            MACHINE_CORES,
+            MEM_LIMIT,
+            db_path=_kaiju_db,
+        )
+        _kaiju_threads = annotator_job_threads(
+            "kaiju",
+            MACHINE_CORES,
+            _kaiju_mem,
+            MEM_LIMIT,
+            index_known=index_reserve_mb("kaiju", _kaiju_db) is not None,
+        )
         rule:
             name:
                 f"kaiju_multi_{_kaiju_run}"
@@ -425,11 +467,9 @@ if BATCH_KAIJU:
                     sample=SAMPLES,
                 )
             threads:
-                THREADS.get(_kaiju_run, 1)
+                _kaiju_threads
             resources:
-                mem_mb=annotator_mem_mb(
-                    "kaiju", THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT
-                ),
+                mem_mb=_kaiju_mem,
             priority: annotator_priority("kaiju")
             log:
                 f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"

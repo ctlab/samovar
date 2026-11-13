@@ -187,6 +187,8 @@ def test_kaiju_and_kraken2_commands_support_single_end_fastq(tmp_path):
     outputs = kraken.get_expected_outputs("ont", str(tmp_path))
     kraken_cmd = kraken.get_snakemake_shell_cmd(r1, r2, outputs)
     assert "fastq_has_reads" in kraken_cmd
+    assert "--memory-mapping" in kraken_cmd
+    assert "--memory-mapping --memory-mapping" not in kraken_cmd
     assert f"--paired {r1} {r2}" in kraken_cmd
     assert f"else {kraken.cmd}" in kraken_cmd
     se = kraken.get_snakemake_shell_cmd(r1, "", outputs)

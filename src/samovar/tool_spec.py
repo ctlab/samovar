@@ -137,8 +137,8 @@ SCHEDULER_THREAD_CAP = {
 }
 DEFAULT_SCHEDULER_CAP = 8
 
-# RSS is the database. One of these jobs takes the whole memory ceiling, so
-# Kraken2 and MetaX cannot run beside each other.
+# Unmeasured database RSS takes the whole ceiling. A found Kraken2 hash.k2d
+# or Kaiju .fmi reserves 1.1× that file instead.
 HEAVY_DB_TOOLS = frozenset({
     "kraken2", "kraken", "krakenuniq", "metax", "flye", "metaflye",
 })

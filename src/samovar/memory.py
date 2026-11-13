@@ -9,6 +9,7 @@ per chunk, and its thread ceiling is separate.
 from __future__ import annotations
 
 import argparse
+import glob
 import math
 import os
 import re
@@ -258,17 +259,103 @@ def job_mem_mb(threads: int, cores: int, limit_mb: Optional[int] = None) -> int:
     return max(1, min(limit, (limit * slots) // width))
 
 
-def annotator_mem_mb(tool: str, threads: int, cores: int, limit_mb: Optional[int] = None) -> int:
+def _tool_key(tool: str) -> str:
+    return str(tool or "").strip().lower().replace("-", "_")
+
+
+def _index_file(tool: str, raw: str) -> Optional[Path]:
+    """Kaiju ``.fmi`` or Kraken2 ``hash.k2d``. None when the file is not there."""
+    path = Path(raw)
+    if tool == "kraken2":
+        if path.is_file() and path.name.endswith(".k2d"):
+            return path
+        candidate = path / "hash.k2d"
+        return candidate if candidate.is_file() else None
+    if "*" in raw or "?" in raw:
+        hits = sorted(glob.glob(raw))
+        if len(hits) != 1:
+            return None
+        path = Path(hits[0])
+    if path.is_file():
+        return path
+    if path.is_dir():
+        hits = sorted(path.glob("*.fmi"))
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
+def index_reserve_mb(tool: str, db_path: Optional[str] = None) -> Optional[int]:
+    """MiB for one measured Kaiju or Kraken2 index: ``ceil(bytes × 1.1)``.
+
+    None when this tool has no index file to measure. The ceiling is applied
+    by the caller.
+    """
+    key = _tool_key(tool)
+    raw = str(db_path or "").strip()
+    if key not in {"kaiju", "kraken2"} or not raw:
+        return None
+    path = _index_file(key, raw)
+    if path is None:
+        return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size <= 0:
+        return None
+    mib = 1024 * 1024
+    return max(1, (size * 11 + 10 * mib - 1) // (10 * mib))
+
+
+def annotator_mem_mb(
+    tool: str,
+    threads: int,
+    cores: int,
+    limit_mb: Optional[int] = None,
+    db_path: Optional[str] = None,
+) -> int:
     """Memory one annotator job may take.
 
-    Kraken2, KrakenUniq, MetaX, and Flye take the whole ceiling and run alone.
-    Other tools keep a thread share and can run side by side.
+    A measured Kaiju ``.fmi`` or Kraken2 ``hash.k2d`` reserves 1.1× that file,
+    capped by the ceiling. Without the file, Kraken2, KrakenUniq, MetaX, and
+    Flye take the whole ceiling. Other tools keep a thread share.
     """
     from samovar.tool_spec import heavy_db_tool
 
+    reserve = index_reserve_mb(tool, db_path)
+    if reserve is not None:
+        return min(memory_limit_mb(limit_mb), reserve)
     if heavy_db_tool(tool):
         return memory_limit_mb(limit_mb)
     return job_mem_mb(threads, cores, limit_mb)
+
+
+def annotator_job_threads(
+    tool: str,
+    cores: int,
+    mem_mb: int,
+    limit_mb: Optional[int] = None,
+    *,
+    index_known: bool = False,
+) -> int:
+    """Cores for one Kaiju or Kraken2 job.
+
+    A measured index that does not leave room for a second copy uses every
+    core. Otherwise the tool keeps its scheduler cap. An unmeasured index
+    keeps that cap too.
+    """
+    from samovar.tool_spec import scheduler_threads
+
+    width = max(1, int(cores or 1))
+    cap = scheduler_threads(tool, width)
+    if not index_known or _tool_key(tool) not in {"kaiju", "kraken2"}:
+        return cap
+    limit = memory_limit_mb(limit_mb)
+    reserve = max(1, int(mem_mb or 1))
+    if max(1, limit // reserve) == 1:
+        return width
+    return cap
 
 
 def translated_mem_flag(
