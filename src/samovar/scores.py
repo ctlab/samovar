@@ -493,21 +493,18 @@ def score_annotators(
             row["n_sampled"] = float(n_sampled)
             rows.append(row)
             return
-        from samovar.viz_annotation import _collapse_other
-
         aligned = pred.reindex(scored.index)
-        collapsed = _collapse_other(aligned, true)
         if wanted is None or wanted & {"accuracy_purity", "f1_purity"}:
             stats = annotation_scores(true, aligned, include_classification=False)
         else:
             n_reads, n_taxa = _pred_counts(true)
             stats = {"n_reads": n_reads, "n_taxa": n_taxa}
         if wanted is None or "f1" in wanted:
-            stats["f1"] = _f1_accuracy(true, collapsed)
+            stats["f1"] = _f1_accuracy(true, aligned)
         if wanted is None or "r2" in wanted:
-            stats["r2"] = _r2_abundance(true, collapsed)
+            stats["r2"] = _r2_abundance(true, aligned)
         if wanted is None or wanted & {"accuracy", "precision_macro", "recall_macro", "f1_micro", "f1_macro", "f1_weighted"}:
-            stats.update(standard_classification_metrics(true, collapsed))
+            stats.update(standard_classification_metrics(true, aligned))
         if opal and (wanted is None or wanted & {
             "completeness", "opal_purity", "opal_f1", "jaccard", "l1_norm", "bray_curtis",
             "opal_tp", "opal_fp", "opal_fn",
@@ -515,7 +512,7 @@ def score_annotators(
         }):
             from samovar.opal import opal_style_metrics
 
-            stats.update(opal_style_metrics(true, collapsed))
+            stats.update(opal_style_metrics(true, aligned))
         if wanted is not None:
             for key in list(stats):
                 if key not in wanted and key not in {"n_reads", "n_taxa"}:

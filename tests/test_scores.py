@@ -3,6 +3,7 @@
 import pandas as pd
 import pytest
 
+from samovar.opal import opal_style_metrics
 from samovar.scores import (
     accuracy_purity,
     annotation_scores,
@@ -146,6 +147,43 @@ def test_score_annotators_names_majority_vote_samovar():
     names = list(table["annotator"].astype(str))
     assert names[-1] == "SAMOVAR"
     assert "consensus" not in names
+
+
+def test_false_taxids_stay_in_the_profile_counts():
+    """Two distinct false taxids are two false positives; 0 and other are not."""
+    y = ["562", "562", "9606", "9606"]
+    p = ["562", "111", "222", "0"]
+    gold = {t for t in y if t != "0"}
+    called = {t for t in p if t not in {"0", "other"}}
+    assert len(gold & called) == 1
+    assert len(called - gold) == 2
+    assert len(gold - called) == 1
+    direct = opal_style_metrics(y, p)
+    assert (direct["opal_tp"], direct["opal_fp"], direct["opal_fn"]) == (1, 2, 1)
+    assert direct["opal_purity"] == pytest.approx(1 / 3)
+    assert direct["completeness"] == pytest.approx(1 / 2)
+    assert direct["opal_f1"] == pytest.approx(0.4)
+    frame = pd.DataFrame({"true": y, "taxID_test_0": p, "sample": ["A", "A", "B", "B"]})
+    table = score_annotators(frame, ["taxID_test_0"], include_consensus=False, opal=True)
+    row = table.iloc[0]
+    assert row["opal_tp"] == 1 and row["opal_fp"] == 2 and row["opal_fn"] == 1
+    assert row["opal_f1"] == pytest.approx(0.4)
+    assert list(frame["taxID_test_0"]) == p
+    repeated = opal_style_metrics(["562", "562"], ["111", "111"])
+    assert repeated["opal_fp"] == 1
+    literal = opal_style_metrics(y, ["562", "other", "other", "0"])
+    assert literal["opal_fp"] == 0 and literal["opal_tp"] == 1
+    blank = opal_style_metrics(y, ["0", "0", "0", "0"])
+    assert blank["opal_fp"] == 0 and blank["opal_fn"] == 2
+    assert blank["opal_purity"] != blank["opal_purity"]
+    assert blank["opal_f1"] != blank["opal_f1"]
+    partial = score_annotators(
+        pd.DataFrame({"true": ["562", "0"], "taxID_test_0": ["111", "333"]}),
+        ["taxID_test_0"],
+        include_consensus=False,
+        opal=True,
+    )
+    assert partial.iloc[0]["opal_fp"] == 1
 
 
 def test_score_annotators_without_ground_truth():

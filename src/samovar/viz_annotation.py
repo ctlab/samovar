@@ -809,8 +809,15 @@ def viz_annotation(
         true_levels_last: List[str] = []
         f1_work = truth_frame
         for name in annotators:
-            pred = _collapse_other(f1_work[name], f1_work["true"])
             true = normalize_series(f1_work["true"])
+            raw = normalize_series(f1_work[name])
+            raw_counts = pd.DataFrame({"true": true, "pred": raw}).value_counts().rename("Freq").reset_index()
+            f1 = _f1_from_counts(raw_counts)
+            std = standard_classification_metrics(true, raw)
+            from samovar.opal import confusion_rates
+
+            std.update(confusion_rates(true, raw))
+            pred = _collapse_other(raw, true)
             counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
             if reord == "fpc":
                 fpc_core = fpc_taxon_order(counts, "pred", "true")
@@ -819,11 +826,6 @@ def viz_annotation(
             true_levels = axis_levels_from_fpc(true, fpc_core)
             pred_levels = axis_levels_from_fpc(pred, fpc_core)
             true_levels_last = true_levels
-            f1 = _f1_from_counts(counts)
-            std = standard_classification_metrics(true, pred)
-            from samovar.opal import confusion_rates
-
-            std.update(confusion_rates(true, pred))
             caption = format_f1_caption(f1, std, rank_used)
             matrix = _trim_matrix(_pivot_matrix(counts, "true", "pred", true_levels, pred_levels))
             gglist[name] = {"f1": f1, "metrics": std, "matrix": matrix}
@@ -889,7 +891,7 @@ def viz_annotation(
         gglist = {}
         r2_work = truth_frame
         for name in annotators:
-            pred = _collapse_other(r2_work[name], r2_work["true"])
+            pred = normalize_series(r2_work[name])
             true = normalize_series(r2_work["true"])
             table, r2 = _r2_table(true, pred)
             if np.isnan(r2):
@@ -917,7 +919,7 @@ def viz_annotation(
                 if sub.empty:
                     continue
                 for name in annotators:
-                    pred = _collapse_other(sub[name], sub["true"])
+                    pred = normalize_series(sub[name])
                     true = normalize_series(sub["true"])
                     table, r2 = _r2_table(true, pred)
                     if np.isnan(r2):

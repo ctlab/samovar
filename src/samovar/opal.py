@@ -187,8 +187,11 @@ def confusion_rates(true: Iterable, pred: Iterable) -> Dict[str, float]:
 def opal_style_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
     """CAMI/OPAL profiling metrics at the current taxid resolution.
 
-    Presence metrics use the sets of classified taxa (unclassified ignored).
+    Presence metrics use the sets of classified taxa. Unclassified (``0``) and
+    the display token ``other`` are neither a classified taxon nor a false
+    positive. A ratio with a zero denominator is NaN; the counts stay numeric.
     L1 and Bray–Curtis use relative abundances over all classified reads.
+    Bray–Curtis is NaN when no classified read remains.
     """
     is_special_taxon, normalize_taxon_token = _taxon_helpers()
     y = normalize_series(true)
@@ -198,15 +201,12 @@ def opal_style_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
     tp = float(len(gold & pred_set))
     fp = float(len(pred_set - gold))
     fn = float(len(gold - pred_set))
-    completeness = tp / (tp + fn) if (tp + fn) else 0.0
-    purity = tp / (tp + fp) if (tp + fp) else 0.0
-    f1 = (
-        0.0
-        if completeness + purity == 0
-        else 2 * completeness * purity / (completeness + purity)
-    )
+    completeness = tp / (tp + fn) if (tp + fn) else float("nan")
+    purity = tp / (tp + fp) if (tp + fp) else float("nan")
+    denom = completeness + purity
+    f1 = float("nan") if denom == 0 or denom != denom else 2 * completeness * purity / denom
     union = tp + fp + fn
-    jaccard = tp / union if union else 0.0
+    jaccard = tp / union if union else float("nan")
 
     y_c = y[~special_mask(y)]
     p_c = p[~special_mask(p)]
@@ -222,7 +222,7 @@ def opal_style_metrics(true: Iterable, pred: Iterable) -> Dict[str, float]:
         l1 += abs(a - b)
         bray_num += abs(a - b)
         bray_den += a + b
-    bray = bray_num / bray_den if bray_den else 0.0
+    bray = bray_num / bray_den if bray_den else float("nan")
 
     out = {
         "opal_tp": tp,
