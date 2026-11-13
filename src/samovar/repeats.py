@@ -758,6 +758,8 @@ def prepare_package(config: Any) -> Optional[Path]:
     if getattr(config, "_repeat_child", False):
         return None
     root = Path(config.output_dir)
+    if _parent_package(root):
+        raise ValueError(f"{root} is already a repeat directory; refusing to nest another package")
     repeat = parse_repeat(getattr(config, "repeat", None))
     existing = load_manifest(root) if root.exists() else None
     if repeat is None:

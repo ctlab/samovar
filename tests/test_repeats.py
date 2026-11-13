@@ -95,6 +95,11 @@ def test_refuse_nonempty_and_nested(tmp_path):
     publish_package(root, count=1, base_seed=42, kind="generated", identity="g")
     with pytest.raises(ValueError, match="nest"):
         publish_package(root / "out_0001", count=2, base_seed=42, kind="reads", identity="reads:/in")
+    from samovar.config import PipelineConfig
+    from samovar.repeats import prepare_package
+
+    with pytest.raises(ValueError, match="nest"):
+        prepare_package(PipelineConfig(output_dir=str(root / "out_0001"), input_dir=str(tmp_path / "reads")))
     assert list((root / "out_0001").iterdir()) == []
 
 
