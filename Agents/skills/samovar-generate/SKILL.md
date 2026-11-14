@@ -35,7 +35,7 @@ explicitly. ISS counts paired fragments; ONT counts single reads. Do not change
 the simulator or drop host/taxa to make an unavailable mode work. Display and
 record the exact argv and its interpretation in the run audit.
 
-`--repeat N` records a package and writes each `out_XXXX/.generate` through the existing generator. A supplied abundance table stays byte-for-byte that file; only the simulator seed changes. Omit `--repeat` for the single directory. Do not point `--repeat` at an existing single run or at a child `out_XXXX`. Executing the package script runs the child generators; it does not prepare the main pipeline.
+`--repeat N` records a package and writes each `out_XXXX/.generate` through the existing generator. A supplied abundance table stays byte-for-byte that file; only the simulator seed changes. Omit `--repeat` for the single directory. `--repeat 1` is a package whose child seed is derived from the base seed, so it is not the same draw as omitting `--repeat`. A path with spaces is a normal output directory. The package script runs the children in order, records a generator failure, exits non-zero, and does not invent FASTQ. Do not point `--repeat` at an existing single run or at a child `out_XXXX`. Executing the package script runs the child generators; it does not prepare the main pipeline. ISS still needs ART before any reads exist.
 
 `generate` prepares a generation workflow; it does not itself prove reads exist.
 Execute the generated workflow through `samovar exec` only if authorized. A

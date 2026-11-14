@@ -665,3 +665,91 @@ def test_statistics_uses_whole_repeats_and_known_moments():
     assert {item["run_name"]: float(item["mean"]) for item in stages} == {
         "viz_initial": 4, "qc_initial": 9,
     }
+
+
+def test_public_cli_repeat_package_preserves_single_run_semantics(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    import yaml
+
+    from samovar.repeats import repeat_seed
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "root": str(Path(__file__).resolve().parents[1]),
+        "compilers": {"python": sys.executable},
+        "tools": {},
+        "custom-flags": [],
+    }), encoding="utf-8")
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(config))
+    samovar = Path(__file__).resolve().parents[1] / "bin" / "samovar"
+    genomes = tmp_path / "genomes"
+    genomes.mkdir()
+    abundance = tmp_path / "abundance.csv"
+    original = "taxid,N_A,N_B\n562,10,0\n9606,0,4\n"
+    abundance.write_text(original, encoding="utf-8")
+
+    def generate(dest, *extra):
+        result = subprocess.run(
+            [str(samovar), "generate", "--genome_dir", str(genomes), "--host_genome", "",
+             "--n_samples", "2", "--total_reads", "20", "--host_fraction", "0",
+             "--seed", "42", "--model", "hiseq", "--autoimport", "0",
+             "--directory", str(dest), *extra],
+            check=False, text=True, capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr
+        return result
+
+    single = tmp_path / "single"
+    package = tmp_path / "batch dir"
+    generate(single, "--abundance", str(abundance))
+    generate(package, "--abundance", str(abundance), "--repeat", "2")
+    assert abundance.read_text(encoding="utf-8") == original
+    assert not (single / ".log" / "repeats.json").exists()
+    single_cfg = yaml.safe_load((single / ".generate" / "configs" / "iss_config.yaml").read_text())
+    child_cfg = yaml.safe_load(
+        (package / "out_0001" / ".generate" / "configs" / "iss_config.yaml").read_text()
+    )
+    assert single_cfg["seed"] == 42
+    assert child_cfg["seed"] == repeat_seed(42, 1, "reads")
+    assert child_cfg["sample_names"] == ["A", "B"]
+    assert Path(child_cfg["abundance_table"]).resolve() == abundance.resolve()
+    assert "out_0001/initial" in child_cfg["output_dir"].replace("\\", "/")
+
+    drawn = tmp_path / "drawn"
+    generate(drawn, "--repeat", "1")
+    drawn_cfg = yaml.safe_load((drawn / "out_0001" / ".generate" / "configs" / "iss_config.yaml").read_text())
+    assert drawn_cfg["seed"] == repeat_seed(42, 1, "community")
+    assert "abundance_table" not in drawn_cfg
+
+    def prepare(dest, mode):
+        result = subprocess.run(
+            [str(samovar), "prepare", "--directory", str(dest), "--mode", mode,
+             "--cores", "1", "--autoimport", "0"],
+            check=False, text=True, capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+    prepare(package, "benchmark")
+    assert not (package / ".log" / "samovar.sh").exists()
+    for name in ("out_0001", "out_0002"):
+        window = (package / name / ".log" / "window.env").read_text()
+        script = (package / name / ".log" / "samovar.sh").read_text()
+        assert "viz_initial" in window
+        assert "viz_reprofiled" not in window
+        assert "trained_model.joblib" not in script
+        assert name in script
+    other = (package / "out_0001" / ".log" / "samovar.sh").read_text()
+    assert "out_0002" not in other
+
+    prepare(drawn, "full")
+    full_window = (drawn / "out_0001" / ".log" / "window.env").read_text()
+    assert "viz_reprofiled" in full_window
+
+    refused = subprocess.run(
+        [str(samovar), "prepare", "--directory", str(package), "--repeat", "9", "--autoimport", "0"],
+        check=False, text=True, capture_output=True,
+    )
+    assert refused.returncode != 0
+    assert not (package / "out_0009").exists()
