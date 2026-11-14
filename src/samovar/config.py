@@ -879,6 +879,16 @@ class PipelineConfig:
         if config.input_dir:
             config.input_dir = absolute_path(config.input_dir)
         config.output_dir = absolute_path(config.output_dir or DEFAULT_OUTPUT_DIR)
+        if getattr(args, "_repeat_child", False):
+            from samovar.repeats import load_manifest
+
+            parent = Path(config.output_dir).parent
+            manifest = load_manifest(parent)
+            if manifest and (manifest.get("input") or {}).get("kind") == "fastq-bootstrap":
+                config.input_dir = str(Path(config.output_dir) / "initial")
+                rewritten = Path(config.output_dir) / ".log" / "bootstrap_truth.tsv"
+                if rewritten.is_file():
+                    config.initial_ground_truth_table = str(rewritten)
         from samovar.profiles import validate_profile_settings
         (
             config.profile_inputs,
@@ -2465,13 +2475,27 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
 
         manifest = load_manifest(config.output_dir)
         root = Path(config.output_dir)
+        if (manifest.get("input") or {}).get("kind") == "fastq-bootstrap":
+            from samovar.repeats import write_fastq_bootstrap
+
+            write_fastq_bootstrap(
+                root,
+                args.input_dir,
+                getattr(config, "initial_ground_truth_table", None),
+            )
+            manifest = load_manifest(root)
         for row in manifest["repeats"]:
             child_args = argparse.Namespace(**vars(args))
             child_args.output_dir = str(root / row["out_dir"])
             child_args.repeat = None
             child_args._repeat_child = True
             child_initial = root / row["out_dir"] / "initial"
-            if not getattr(child_args, "input_dir", None) and child_initial.is_dir():
+            if (manifest.get("input") or {}).get("kind") == "fastq-bootstrap":
+                child_args.input_dir = str(child_initial)
+                rewritten = child_initial.parent / ".log" / "bootstrap_truth.tsv"
+                if rewritten.is_file():
+                    child_args.initial_ground_truth_table = str(rewritten)
+            elif not getattr(child_args, "input_dir", None) and child_initial.is_dir():
                 child_args.input_dir = str(child_initial)
             setup_pipeline(child_args)
         print(f"Repeat package: {repeat_manifest}")

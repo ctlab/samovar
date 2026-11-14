@@ -138,6 +138,7 @@ def test_prepare_cli_overrides_yaml_and_skips_root_pipeline(tmp_path, monkeypatc
     write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
     reads = tmp_path / "reads"
     reads.mkdir()
+    (reads / "S_R1.fastq").write_text("@a taxid:562\nA\n+\nI\n", encoding="utf-8")
     spec = tmp_path / "in.yaml"
     spec.write_text(
         f"repeat: 3\nseed: 42\ninput_dir: {reads}\n",
@@ -753,3 +754,109 @@ def test_public_cli_repeat_package_preserves_single_run_semantics(tmp_path, monk
     )
     assert refused.returncode != 0
     assert not (package / "out_0009").exists()
+
+
+def test_fastq_bootstrap_draws_with_replacement_and_keeps_pairs(tmp_path, monkeypatch):
+    import numpy as np
+
+    from samovar.config import setup_pipeline
+    from samovar.paths import write_config
+    from samovar.repeats import repeat_seed, statistics_rows
+    from samovar.seqio import bootstrap_fastq_directory
+
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "S_illumina_R1.fastq").write_text("@a taxid:562\nAC\n+\nII\n@b taxid:9606\nTT\n+\nJJ\n", encoding="utf-8")
+    (reads / "S_illumina_R2.fastq").write_text("@a taxid:562\nGG\n+\nHH\n@b taxid:9606\nCC\n+\nKK\n", encoding="utf-8")
+    (reads / "S_ont.fastq").write_text("@c taxid:562\nN\n+\nI\n", encoding="utf-8")
+    table = tmp_path / "truth.tsv"
+    table.write_text("seq\ttaxid\na\t562\nb\t9606\nc\t562\n", encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in reads.iterdir()}
+    seed = repeat_seed(42, 1, "fastq-bootstrap")
+    bootstrap_fastq_directory(
+        reads, tmp_path / "child" / "initial", seed=seed, repeat_id="0001", truth_table=table,
+    )
+    assert {path.name: path.read_bytes() for path in reads.iterdir()} == before
+    assert table.read_bytes().startswith(b"seq")
+    draws = np.random.Generator(np.random.PCG64(seed)).integers(0, 2, size=2)
+    # The ONT partition consumes the next draw. Rebuild both from one generator.
+    rng = np.random.Generator(np.random.PCG64(seed))
+    pair = [int(item) for item in rng.integers(0, 2, size=2)]
+    ont = [int(item) for item in rng.integers(0, 1, size=1)]
+    assert list(draws) == pair
+    sources = ["a", "b"]
+    left = ["AC", "TT"]
+    right = ["GG", "CC"]
+    out_left = (tmp_path / "child" / "initial" / "S_illumina_R1.fastq").read_text().splitlines()
+    out_right = (tmp_path / "child" / "initial" / "S_illumina_R2.fastq").read_text().splitlines()
+    assert len(out_left) == 8 and len(out_right) == 8
+    for draw, choice in enumerate(pair):
+        one = out_left[draw * 4:(draw + 1) * 4]
+        two = out_right[draw * 4:(draw + 1) * 4]
+        assert one[1] == left[choice] and two[1] == right[choice]
+        assert one[0].split()[0] == two[0].split()[0]
+        assert f"src:{sources[choice]}" in one[0]
+        assert f"taxid:{'562' if choice == 0 else '9606'}" in one[0]
+    ont_text = (tmp_path / "child" / "initial" / "S_ont.fastq").read_text()
+    assert ont_text.splitlines()[1] == "N"
+    assert "src:c" in ont_text
+    assert ont == [0]
+    illumina = (tmp_path / "child" / "initial" / "S_illumina_R1.fastq").read_text()
+    assert "\nN\n" not in illumina
+    pooled = (tmp_path / "child" / "initial" / "S_full.fastq").read_text()
+    assert "N" in pooled and ("AC" in pooled or "TT" in pooled)
+    again = tmp_path / "again" / "initial"
+    bootstrap_fastq_directory(reads, again, seed=seed, repeat_id="0001", truth_table=table)
+    assert (again / "S_illumina_R1.fastq").read_bytes() == (tmp_path / "child" / "initial" / "S_illumina_R1.fastq").read_bytes()
+    truth_out = (tmp_path / "child" / ".log" / "bootstrap_truth.tsv").read_text()
+    assert truth_out.count("src:a") == 2
+    assert "9606" not in truth_out
+    assert any(
+        len(set(np.random.Generator(np.random.PCG64(repeat_seed(extra, 1, "fastq-bootstrap"))).integers(0, 2, size=2))) == 1
+        for extra in range(40)
+    )
+
+    duplicate = tmp_path / "duplicate"
+    duplicate.mkdir()
+    (duplicate / "S_R1.fastq").write_text("@a\nA\n+\nI\n@a\nC\n+\nI\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate"):
+        bootstrap_fastq_directory(duplicate, tmp_path / "bad-dup", seed=1, repeat_id="0001")
+    short = tmp_path / "short"
+    short.mkdir()
+    (short / "S_R1.fastq").write_text("@a\nA\n+\nI\n", encoding="utf-8")
+    (short / "S_R2.fastq").write_text("@a\nA\n+\nI\n@b\nC\n+\nI\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="different record counts"):
+        bootstrap_fastq_directory(short, tmp_path / "bad-len", seed=1, repeat_id="0001")
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "S_R1.fastq").write_text("@a\nAC\n+\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid FASTQ"):
+        bootstrap_fastq_directory(broken, tmp_path / "bad-fast", seed=1, repeat_id="0001")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="empty FASTQ"):
+        bootstrap_fastq_directory(empty, tmp_path / "bad-empty", seed=1, repeat_id="0001")
+
+    rows = statistics_rows(
+        [],
+        [
+            {"repeat_id": "0001", "sample_id": "S", "metric": "accuracy", "value": 1},
+            {"repeat_id": "0002", "sample_id": "S", "metric": "accuracy", "value": 3},
+        ],
+        n_expected=2, n_success=2, base_seed=42, input_kind="fastq-bootstrap",
+    )
+    assert rows[0]["n_valid"] == 2
+    assert "supplied FASTQ" in rows[0]["limitation"]
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
+    package = tmp_path / "pkg"
+    setup_pipeline(_prepared_args(tmp_path, package, input_dir=str(reads), repeat=2, mode="benchmark"))
+    manifest = json.loads((package / ".log" / "repeats.json").read_text())
+    assert manifest["input"]["kind"] == "fastq-bootstrap"
+    assert manifest["input"]["method"] == "index-with-replacement"
+    assert "viz_initial" in (package / "out_0001" / ".log" / "window.env").read_text()
+    assert "viz_reprofiled" not in (package / "out_0001" / ".log" / "window.env").read_text()
+    assert not (package / "out_0001" / "initial" / "S_illumina_R1.fastq").is_symlink()
+    assert (reads / "S_illumina_R1.fastq").read_bytes() == before["S_illumina_R1.fastq"]
+    assert (package / "out_0001" / ".log" / "fastq_bootstrap.tsv").is_file()

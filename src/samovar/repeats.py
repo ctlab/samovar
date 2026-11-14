@@ -391,11 +391,36 @@ def main(argv: Optional[list] = None) -> None:
 
 
 def _supplied_repeat_blocked(kind: str, count: int) -> None:
-    if count > 1 and kind in {"reads", "profiles"}:
+    if count > 1 and kind == "profiles":
         raise ValueError(
-            "resampling existing FASTQ or a saved profile is not supported yet; "
+            "resampling a saved profile is not supported; "
             "--repeat 1 prepares one run and does not create independent replicates"
         )
+
+
+def write_fastq_bootstrap(root: Path, src: str, truth_table: Optional[str] = None) -> None:
+    """Fill each child ``initial/`` with a with-replacement draw of ``src``."""
+    from samovar.seqio import bootstrap_fastq_directory
+
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    base = int(data["base_seed"])
+    for row in data["repeats"]:
+        seed = repeat_seed(base, int(row["repeat_id"]), "fastq-bootstrap")
+        info = bootstrap_fastq_directory(
+            src,
+            Path(root) / row["out_dir"] / "initial",
+            seed=seed,
+            repeat_id=row["repeat_id"],
+            truth_table=truth_table or None,
+        )
+        row["generator_seed"] = seed
+        row["generator_namespace"] = "fastq-bootstrap"
+        row["bootstrap"] = info
+    data["input"]["method"] = "index-with-replacement"
+    data["input"]["draw"] = "source-count"
+    _atomic_json(manifest_path(root), data)
 
 
 def write_status_summary(root: Path) -> Path:
@@ -630,13 +655,16 @@ def _limitation(
     *,
     fixed_abundance: bool,
     zero_width: bool,
+    input_kind: str = "",
 ) -> str:
     parts = []
     if 2 <= n_valid < 5:
         parts.append("n_valid<5; the interval is a limited description of these repeats")
     if n_success < n_expected:
         parts.append("incomplete repeats can bias this interval")
-    if fixed_abundance:
+    if input_kind == "fastq-bootstrap":
+        parts.append("with-replacement resampling of the supplied FASTQ, not a population interval")
+    elif fixed_abundance:
         parts.append(
             "conditional simulation variability given a fixed abundance, not biological uncertainty"
         )
@@ -715,6 +743,7 @@ def statistics_rows(
             limitation = _limitation(
                 n_valid, n_success, n_expected,
                 fixed_abundance=fixed_abundance, zero_width=zero_width,
+                input_kind=input_kind,
             )
         record = dict(zip(_STAT_FIELDS[:12], key))
         record.update({
@@ -994,6 +1023,14 @@ def prepare_package(config: Any) -> Optional[Path]:
     else:
         kind, ident = identity
         adopt = False
+    if kind == "reads":
+        from samovar.seqio import assert_bootstrap_fastq
+
+        assert_bootstrap_fastq(
+            config.input_dir,
+            getattr(config, "initial_ground_truth_table", None),
+        )
+        kind = "fastq-bootstrap"
     _supplied_repeat_blocked(kind, int(repeat))
     return publish_package(
         root,
