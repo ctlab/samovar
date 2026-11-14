@@ -441,6 +441,15 @@ _RESULT_FIELDS = (
     "repeat_id", "sample_id", "seed", "phase", "run_name", *_DESC,
     "metric", "value", "truth_source", "reason",
 )
+_STAT_FIELDS = (
+    "sample_id", "phase", "run_name", *_DESC, "metric", "taxon", "truth_source",
+    "n_expected", "n_success", "n_valid",
+    "mean", "sd", "ci_low", "ci_high",
+    "reason", "limitation",
+    "bootstrap_method", "bootstrap_seed", "n_resamples",
+)
+_N_RESAMPLES = 10000
+_BOOTSTRAP = "percentile"
 _SCORE_IDS = {
     "annotator", "ground_truth", "truth_source", "sample", "sample_id", "reason",
     "phase", "run_name", *_DESC,
@@ -563,6 +572,169 @@ def _runtime_rows(rows: List[dict], child: Path, repeat_id: str, seed: Any) -> N
         })
 
 
+def summary_seed(base_seed: int) -> int:
+    """Seed for the summary bootstrap. It is not one of the repeat seeds."""
+    return repeat_seed(int(base_seed), 0, "summary")
+
+
+def _finite(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or abs(number) == float("inf"):
+        return None
+    return number
+
+
+def _observation(row: Mapping[str, Any], source: str) -> tuple:
+    metric = str(row.get("metric") or "")
+    taxon = str(row.get("taxon") or "")
+    truth = str(row.get("truth_source") or "")
+    run_name = str(row.get("run_name") or "")
+    if source == "profile":
+        metric, truth = "", ""
+    else:
+        taxon = ""
+        if metric == "stage_elapsed_s" and not run_name:
+            run_name = str(row.get("reason") or "")
+    key = (
+        str(row.get("sample_id") or ""),
+        str(row.get("phase") or ""),
+        run_name,
+        *(str(row.get(name) or "") for name in _DESC),
+        metric,
+        taxon,
+        truth,
+    )
+    return key, str(row.get("repeat_id") or ""), _finite(row.get("value"))
+
+
+def _one_per_repeat(by_repeat: Mapping[str, List[Optional[float]]]) -> tuple:
+    values = []
+    dropped = False
+    for repeat_id in sorted(by_repeat):
+        finite = [item for item in by_repeat[repeat_id] if item is not None]
+        if len(set(finite)) > 1:
+            dropped = True
+            continue
+        if finite:
+            values.append(finite[0])
+    return values, dropped
+
+
+def _limitation(
+    n_valid: int,
+    n_success: int,
+    n_expected: int,
+    *,
+    fixed_abundance: bool,
+    zero_width: bool,
+) -> str:
+    parts = []
+    if 2 <= n_valid < 5:
+        parts.append("n_valid<5; the interval is a limited description of these repeats")
+    if n_success < n_expected:
+        parts.append("incomplete repeats can bias this interval")
+    if fixed_abundance:
+        parts.append(
+            "conditional simulation variability given a fixed abundance, not biological uncertainty"
+        )
+    else:
+        parts.append("variability of the selected generator, not a population interval")
+    if zero_width:
+        parts.append("zero-width interval is not evidence of no uncertainty")
+    return " ".join(parts)
+
+
+def _num(value: float) -> str:
+    return format(float(value), ".12g")
+
+
+def statistics_rows(
+    profile_rows: List[Mapping[str, Any]],
+    result_rows: List[Mapping[str, Any]],
+    *,
+    n_expected: int,
+    n_success: int,
+    base_seed: int,
+    input_kind: str = "",
+    fixed_abundance: bool = False,
+) -> List[dict]:
+    """Mean, sample SD and a percentile CI over whole repeat ids.
+
+    Row order does not matter. NaN and inf are excluded, not turned into 0.
+    A saved profile or supplied FASTQ copied across repeats is not a replicate.
+    """
+    import numpy as np
+
+    groups: Dict[tuple, Dict[str, List[Optional[float]]]] = {}
+    for source, rows in (("profile", profile_rows), ("result", result_rows)):
+        for row in rows:
+            key, repeat_id, value = _observation(row, source)
+            groups.setdefault(key, {}).setdefault(repeat_id, []).append(value)
+    seed = summary_seed(base_seed)
+    copied = input_kind in {"profiles", "reads"}
+    copy_reason = (
+        "no-data: saved profile is not an independent replicate"
+        if input_kind == "profiles"
+        else "no-data: supplied reads are not independent replicates"
+    )
+    written = []
+    for key in sorted(groups):
+        values, dropped = _one_per_repeat(groups[key])
+        n_valid = 0 if copied else len(values)
+        mean = sd = low = high = ""
+        zero_width = False
+        if copied:
+            reason = copy_reason
+        elif dropped and n_valid == 0:
+            reason = "no-data: duplicate repeat rows excluded"
+        elif n_valid == 0:
+            reason = "no-data"
+        elif n_valid == 1:
+            mean = _num(values[0])
+            reason = "n_valid=1"
+            if dropped:
+                reason += ": duplicate repeat rows excluded"
+        else:
+            array = np.asarray(values, dtype=float)
+            mean = _num(float(array.mean()))
+            sd = _num(float(array.std(ddof=1)))
+            group_seed = repeat_seed(seed, 1, "\x1f".join(key))
+            rng = np.random.default_rng(group_seed)
+            drawn = rng.integers(0, n_valid, size=(_N_RESAMPLES, n_valid))
+            means = array[drawn].mean(axis=1)
+            q_low, q_high = np.quantile(means, [0.025, 0.975])
+            low, high = _num(float(q_low)), _num(float(q_high))
+            zero_width = low == high
+            reason = "duplicate repeat rows excluded" if dropped else ""
+        if copied:
+            limitation = reason
+        else:
+            limitation = _limitation(
+                n_valid, n_success, n_expected,
+                fixed_abundance=fixed_abundance, zero_width=zero_width,
+            )
+        record = dict(zip(_STAT_FIELDS[:12], key))
+        record.update({
+            "n_expected": n_expected,
+            "n_success": n_success,
+            "n_valid": n_valid,
+            "mean": mean,
+            "sd": sd,
+            "ci_low": low,
+            "ci_high": high,
+            "reason": reason,
+            "limitation": limitation,
+            "bootstrap_method": "" if n_valid < 2 else _BOOTSTRAP,
+            "bootstrap_seed": "" if n_valid < 2 else seed,
+            "n_resamples": "" if n_valid < 2 else _N_RESAMPLES,
+        })
+        written.append(record)
+    return written
+
+
 def write_long_tables(root: Path) -> Dict[str, Path]:
     """Rewrite summary long tables from successful child artifacts.
 
@@ -668,18 +840,44 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
     summary = root / "summary"
     profiles = summary / "profiles_long.csv"
     results = summary / "results_long.csv"
+    statistics = summary / "statistics.csv"
     _atomic_csv(profiles, profile_rows, _PROFILE_FIELDS)
     _atomic_csv(results, result_rows, _RESULT_FIELDS)
+    expected = len(data["repeats"])
+    success = sum(
+        1 for row in data["repeats"] if (row.get("stages") or {}).get("pipeline") == "succeeded"
+    )
+    fixed_abundance = any(
+        row.get("abundance") or row.get("generator_namespace") == "reads"
+        for row in data["repeats"]
+    )
+    stat_rows = statistics_rows(
+        profile_rows,
+        result_rows,
+        n_expected=expected,
+        n_success=success,
+        base_seed=int(data.get("base_seed") or 0),
+        input_kind=str((data.get("input") or {}).get("kind") or ""),
+        fixed_abundance=fixed_abundance,
+    )
+    _atomic_csv(statistics, stat_rows, _STAT_FIELDS)
     _atomic_json(summary / "tables.json", {
         "schema": 1,
         "built_from": "saved child artifacts",
         "profiles": "profiles_long.csv",
         "results": "results_long.csv",
+        "statistics": "statistics.csv",
         "profile_columns": list(_PROFILE_FIELDS),
         "result_columns": list(_RESULT_FIELDS),
+        "statistic_columns": list(_STAT_FIELDS),
         "zero_fill": "missing taxon is 0 only inside one complete abundance namespace",
+        "bootstrap_method": _BOOTSTRAP,
+        "bootstrap_seed": summary_seed(int(data.get("base_seed") or 0)),
+        "n_resamples": _N_RESAMPLES,
+        "group_seed": "sha256-v1 of bootstrap_seed, index 1, and the group key",
+        "replicates": "whole repeat_id; a saved profile or supplied FASTQ is not an independent replicate",
     })
-    return {"profiles": profiles, "results": results}
+    return {"profiles": profiles, "results": results, "statistics": statistics}
 
 
 def exec_package(

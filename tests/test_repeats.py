@@ -456,6 +456,7 @@ def _profile(taxids, columns):
 
 def test_long_tables_keep_successful_repeats(tmp_path):
     import csv
+    import math
 
     from samovar.profiles import write_profiles
     from samovar.repeats import publish_package, set_repeat_state, write_long_tables
@@ -554,3 +555,113 @@ def test_long_tables_keep_successful_repeats(tmp_path):
     rss = [float(row["value"]) for row in results if row["metric"] == "max_rss_mb"]
     assert rss == [10.0, 20.0]
     assert [row["reason"] for row in results if row["metric"] == "stage_elapsed_s"] == ["viz_initial"]
+    with written["statistics"].open(encoding="utf-8", newline="") as handle:
+        stats = list(csv.DictReader(handle))
+    taxon_562 = next(
+        row for row in stats
+        if row["run_name"] == "kraken" and row["sample_id"] == "A"
+        and row["phase"] == "initial" and row["taxon"] == "562"
+    )
+    assert math.isclose(float(taxon_562["mean"]), (10 + 7 + 8) / 3)
+    assert (taxon_562["n_expected"], taxon_562["n_success"], taxon_562["n_valid"]) == ("4", "3", "3")
+    assert not any(row["taxon"] == "999" for row in stats)
+
+
+def test_statistics_uses_whole_repeats_and_known_moments():
+    import math
+
+    import numpy as np
+
+    from samovar.repeats import repeat_seed, statistics_rows, summary_seed
+
+    def row(repeat, taxon, value, **extra):
+        base = {
+            "repeat_id": repeat, "sample_id": "A", "phase": "initial", "run_name": "kraken",
+            "kind": "abundance", "taxonomy": "ncbi", "rank": "species", "unit": "counts",
+            "basis": "reads", "normalization": "all", "taxon": taxon, "value": value,
+        }
+        base.update(extra)
+        return base
+
+    rows = [
+        row("0003", "562", 3),
+        row("0001", "562", 1),
+        row("0002", "562", 2),
+        row("0001", "one", 7),
+        row("0001", "bad", "inf"),
+        row("0002", "bad", "nan"),
+        row("0003", "bad", ""),
+        row("0001", "flat", 5),
+        row("0002", "flat", 5),
+        row("0003", "flat", 5),
+        row("0001", "pair", 10),
+        row("0002", "pair", 14),
+        row("0001", "split", 1, sample_id="A"),
+        row("0001", "split", 100, sample_id="B"),
+        row("0001", "dup", 4),
+        row("0001", "dup", 4),
+        row("0002", "dup", 6),
+    ]
+    kwargs = dict(
+        n_expected=4, n_success=3, base_seed=42,
+        input_kind="generated", fixed_abundance=True,
+    )
+    first = {item["taxon"] + item["sample_id"]: item for item in statistics_rows(rows, [], **kwargs)}
+    second = {item["taxon"] + item["sample_id"]: item for item in statistics_rows(list(reversed(rows)), [], **kwargs)}
+    assert first["562A"]["ci_low"] == second["562A"]["ci_low"]
+    assert first["562A"]["ci_high"] == second["562A"]["ci_high"]
+
+    got = first["562A"]
+    assert float(got["mean"]) == 2
+    assert float(got["sd"]) == 1
+    assert got["n_valid"] == 3
+    assert "n_valid<5" in got["limitation"]
+    assert "incomplete" in got["limitation"]
+    assert "fixed abundance" in got["limitation"]
+    key = (
+        "A", "initial", "kraken", "abundance", "ncbi", "species", "counts",
+        "reads", "all", "", "562", "",
+    )
+    seed = repeat_seed(summary_seed(42), 1, "\x1f".join(key))
+    values = np.array([1.0, 2.0, 3.0])
+    drawn = np.random.default_rng(seed).integers(0, 3, size=(10000, 3))
+    low, high = np.quantile(values[drawn].mean(axis=1), [0.025, 0.975])
+    assert got["ci_low"] == format(float(low), ".12g")
+    assert got["ci_high"] == format(float(high), ".12g")
+    assert got["n_resamples"] == 10000
+    assert got["bootstrap_method"] == "percentile"
+
+    assert float(first["oneA"]["mean"]) == 7
+    assert first["oneA"]["sd"] == "" and first["oneA"]["ci_low"] == ""
+    assert first["oneA"]["reason"] == "n_valid=1"
+    assert first["badA"]["n_valid"] == 0 and first["badA"]["mean"] == ""
+    assert first["badA"]["reason"] == "no-data"
+    assert float(first["flatA"]["mean"]) == 5 and float(first["flatA"]["sd"]) == 0
+    assert first["flatA"]["ci_low"] == first["flatA"]["ci_high"]
+    assert "zero-width" in first["flatA"]["limitation"]
+    pair_sd = math.sqrt(((10 - 12) ** 2 + (14 - 12) ** 2) / 1)
+    assert float(first["pairA"]["mean"]) == 12
+    assert math.isclose(float(first["pairA"]["sd"]), pair_sd)
+    assert float(first["splitA"]["mean"]) == 1 and float(first["splitB"]["mean"]) == 100
+    assert first["dupA"]["n_valid"] == 2 and float(first["dupA"]["mean"]) == 5
+
+    copies = statistics_rows(
+        [row(f"{i:04d}", "562", 9) for i in range(1, 4)],
+        [],
+        n_expected=3, n_success=3, base_seed=42, input_kind="profiles",
+    )
+    assert copies[0]["n_valid"] == 0 and copies[0]["mean"] == ""
+    assert "not an independent replicate" in copies[0]["reason"]
+    plain = statistics_rows(
+        rows[:3], [], n_expected=3, n_success=3, base_seed=42, input_kind="generated",
+    )
+    assert "population interval" in plain[0]["limitation"]
+    assert "fixed abundance" not in plain[0]["limitation"]
+
+    stages = statistics_rows([], [
+        {"repeat_id": "0001", "metric": "stage_elapsed_s", "value": 4, "reason": "viz_initial"},
+        {"repeat_id": "0001", "metric": "stage_elapsed_s", "value": 9, "reason": "qc_initial"},
+    ], n_expected=1, n_success=1, base_seed=1, input_kind="generated")
+    assert {item["run_name"]: float(item["mean"]) for item in stages} == {
+        "viz_initial": 4, "qc_initial": 9,
+    }
