@@ -1,10 +1,11 @@
 """Runtime is a measured elapsed time, not a quality score and not a filled-in zero."""
 
 import json
+from pathlib import Path
 
 from samovar.config import _checkpoint_block
 from samovar.multiqc_report import effective_settings
-from samovar.runtime import load_sample_runtimes, mean_per_run, record_stage
+from samovar.runtime import load_sample_runtimes, mean_per_run, publish_shared_benchmark, record_stage
 from samovar.stage_report import bundle_multiqc
 
 
@@ -54,3 +55,19 @@ def test_per_sample_mean_is_not_the_stage_wall_clock(tmp_path):
     assert by_kind["absolute"]["max_rss_mb"] == ""
     hidden = bundle_multiqc(tmp_path, effective_settings([{"sections": ["profiles"], "exclude": ["runtime"]}]))
     assert not list(hidden.glob("runtime*"))
+
+
+def test_batch_benchmark_is_copied_onto_each_sample(tmp_path):
+    source = tmp_path / "batch.tsv"
+    _benchmark(source, 9, rss=400)
+    reports = tmp_path / "initial_reports" / "runtime" / "samples" / "kj" / "kaiju"
+    publish_shared_benchmark(source, [reports / "A.tsv", reports / "B.tsv"])
+    rows = load_sample_runtimes(tmp_path)
+    assert [(row["sample"], row["elapsed_s"], row["max_rss_mb"]) for row in rows] == [
+        ("A", 9.0, 400.0),
+        ("B", 9.0, 400.0),
+    ]
+    assert mean_per_run(rows)[0]["mean_elapsed_s"] == 9.0
+    text = (Path(__file__).resolve().parents[1] / "workflow" / "annotators" / "Snakefile").read_text(encoding="utf-8")
+    assert "runtime/batches/{_kaiju_run}.kaiju.tsv" in text
+    assert "publish_shared_benchmark" in text

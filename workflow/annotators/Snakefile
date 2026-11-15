@@ -137,6 +137,8 @@ KAIJU_RUNS = [
 # One kaiju-multi job loads the FM-index once for the cohort. A wildcard
 # rule that also writes the same files would be ambiguous, so it is omitted.
 BATCH_KAIJU = use_kaiju_multi(len(SAMPLES)) and bool(KAIJU_RUNS)
+# Filled while the batch rules are declared. rule all reads it later.
+KAIJU_RUNTIME = []
 
 # Default: fold each finished annotator into a per-sample CSV and drop the per-read file.
 # The Snakemake target is then a sentinel, so a deleted *.out is not rerun.
@@ -196,9 +198,14 @@ def get_all_expected_outputs():
                 outputs.append(path)
     return outputs
 
+
+def all_inputs(wildcards):
+    del wildcards
+    return get_all_expected_outputs() + KAIJU_RUNTIME
+
 rule all:
     input:
-        get_all_expected_outputs()
+        all_inputs
 
 rule profile_tool:
     wildcard_constraints:
@@ -473,6 +480,8 @@ if BATCH_KAIJU:
             priority: annotator_priority("kaiju")
             log:
                 f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"
+            benchmark:
+                f"{config['output_dir']}/runtime/batches/{_kaiju_run}.kaiju.tsv"
             params:
                 cmd = lambda wildcards, output, run_name=_kaiju_run: ANNOTATORS[run_name].batch_shell(
                     SAMPLES, config["r1_dir"], config["r2_dir"], config["output_dir"]
@@ -490,6 +499,35 @@ if BATCH_KAIJU:
                 {params.cmd} 2> {log:q}
                 {params.ingest}
                 """
+
+        _kaiju_samples = [
+            f"{config['output_dir']}/runtime/samples/{_kaiju_run}/kaiju/{sample}.tsv"
+            for sample in SAMPLES
+        ]
+        KAIJU_RUNTIME.extend(_kaiju_samples)
+
+        rule:
+            name:
+                f"kaiju_runtime_{_kaiju_run}"
+            input:
+                expand(
+                    marker_output("kaiju.out").replace("{run_name}", _kaiju_run),
+                    sample=SAMPLES,
+                )
+            output:
+                _kaiju_samples
+            threads:
+                1
+            resources:
+                mem_mb=128
+            params:
+                bench = f"{config['output_dir']}/runtime/batches/{_kaiju_run}.kaiju.tsv"
+            run:
+                from pathlib import Path
+
+                from samovar.runtime import publish_shared_benchmark
+
+                publish_shared_benchmark(Path(params.bench), [Path(path) for path in output])
 
 rule metaphlan4:
     input:

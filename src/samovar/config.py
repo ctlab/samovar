@@ -2480,7 +2480,7 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
 
             write_fastq_bootstrap(
                 root,
-                args.input_dir,
+                args.input_dir or config.input_dir,
                 getattr(config, "initial_ground_truth_table", None),
             )
             manifest = load_manifest(root)

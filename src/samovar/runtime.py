@@ -59,6 +59,22 @@ def _benchmark_row(path: Path) -> Optional[tuple]:
     return elapsed, rss
 
 
+def publish_shared_benchmark(source: Path, destinations: Iterable[Path]) -> None:
+    """Copy one launch benchmark onto each sample.
+
+    A batch job has one wall clock and one peak RSS. Dividing either would
+    report a sample cost the process did not measure.
+    """
+    source = Path(source)
+    if _benchmark_row(source) is None:
+        raise ValueError(f"benchmark has no usable row: {source}")
+    text = source.read_text(encoding="utf-8")
+    for dest in destinations:
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+
+
 def load_sample_runtimes(root: Path) -> List[Dict[str, Any]]:
     """One row per sample job. ``run_name`` is the annotator or profiler identity."""
     rows: List[Dict[str, Any]] = []
