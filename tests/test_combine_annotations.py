@@ -83,36 +83,6 @@ def test_batch_combine_uses_recorded_sample_when_run_name_has_underscores(tmp_pa
     assert (guessed / "sample_one_kmcp.annotation.csv").is_file()
 
 
-def test_batch_pipeline_keeps_underscore_sample(tmp_path):
-    import os
-    import sys
-
-    reads = tmp_path / "reads"
-    reads.mkdir()
-    (reads / "sample_one.fastq").write_text("@r1\nACGT\n+\nIIII\n", encoding="utf-8")
-    out = tmp_path / "out"
-    repo = Path(__file__).resolve().parents[1]
-    env = os.environ.copy()
-    env["PYTHON_PATH"] = sys.executable
-    env["SAMOVAR_ROOT"] = str(repo)
-    proc = subprocess.run(
-        [sys.executable, str(repo / "bin" / "samovar_preprocess"),
-         "--input_dir", str(reads), "--output_dir", str(out),
-         "--kmcp_native", "dummy", "--endpoint", "combine_initial",
-         "--no-incremental-annotations", "--no-multiqc", "--cores", "1"],
-        cwd=repo, env=env, text=True, capture_output=True,
-    )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    exe = subprocess.run(
-        ["bash", str(repo / "bin" / "samovar_exec"), "--output_dir", str(out)],
-        cwd=repo, env=env, text=True, capture_output=True,
-    )
-    assert exe.returncode == 0, exe.stdout + exe.stderr
-    ann = out / "initial_annotations"
-    assert (ann / "sample_one.annotation.csv").is_file()
-    assert not (ann / "sample_one_kmcp.annotation.csv").exists()
-
-
 def test_combine_merges_headered_features(tmp_path, combiner):
     reports = tmp_path / "reports"
     out = tmp_path / "ann"

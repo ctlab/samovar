@@ -356,6 +356,9 @@ def test_bundle_multiqc_includes_table_score(tmp_path):
 
 def test_package_summary_multiqc_keeps_repeats_distinct(tmp_path):
     import pandas as pd
+    import pytest
+
+    pytest.importorskip("multiqc", reason="MultiQC is not installed")
 
     from samovar.multiqc_report import effective_settings
     from samovar.profiles import write_profiles
