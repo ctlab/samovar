@@ -237,7 +237,7 @@ def set_repeat_state(
         stages = dict(row.get("stages") or {})
         stages[stage] = state
         row["stages"] = stages
-        if stage == "generate":
+        if stage in {"generate", "pipeline"}:
             row["state"] = state
         if error:
             row["error"] = error
@@ -932,7 +932,15 @@ def exec_package(
     exec_script = repo_root() / "bin" / "samovar_exec"
     for row in manifest["repeats"]:
         stages = row.get("stages") or {}
-        generate_state = stages.get("generate") or row.get("state")
+        # state is the pipeline result once that stage exists. A bootstrap
+        # package has no generate stage, so a failed pipeline must stay rerunnable.
+        generate_stage = stages.get("generate")
+        if generate_stage:
+            generate_state = generate_stage
+        elif "pipeline" in stages:
+            generate_state = ""
+        else:
+            generate_state = row.get("state") or ""
         child = root / row["out_dir"]
         child_generate = child / ".generate" / "generate.sh"
         if (

@@ -407,6 +407,11 @@ def test_exec_continues_after_one_failure_and_resume_skips_successes(tmp_path):
     summary = json.loads((root / "summary" / "status.json").read_text())
     assert summary["status"] == "complete"
     assert summary["n_success"] == 3
+    assert {row["repeat_id"]: row["state"] for row in again["repeats"]} == {
+        "0001": "succeeded",
+        "0002": "succeeded",
+        "0003": "succeeded",
+    }
 
 
 def test_status_with_no_success_is_no_data(tmp_path):
