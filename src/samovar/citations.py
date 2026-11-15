@@ -733,7 +733,10 @@ def _annotator_tool_names(ann: Any) -> List[str]:
         "constant_taxid",
     }
     if run and run.lower() not in dummy_alias and run.lower() != typ.lower():
-        names.append(run)
+        # A database label such as k2full is not a missing paper when its type is cited.
+        # With no type, the run name is the tool and can still be missing.
+        if not typ or bibtex_entries_for_refs(citation_refs_for_tool(run)):
+            names.append(run)
     _add_cmd_token(names, str(getattr(ann, "cmd", "") or ""))
     extra = str(getattr(ann, "extra", "") or "")
     if extra and typ.lower() in {"assembly", "assembly_profiling"}:
