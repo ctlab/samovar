@@ -489,13 +489,16 @@ def references_from_generate(output_dir):
         data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
         raw = data.get("genomes") or []
         if isinstance(raw, list) and raw:
-            listed = raw
-            break
-        genome_dir = data.get("genome_dir")
-        if genome_dir:
-            from samovar.iss_config import list_generate_genome_paths
+            listed = list(raw)
+        else:
+            genome_dir = data.get("genome_dir")
+            if genome_dir:
+                from samovar.iss_config import list_generate_genome_paths
 
-            listed = list_generate_genome_paths(str(genome_dir))
+                listed = list(list_generate_genome_paths(str(genome_dir)))
+        if data.get("host_genome") and listed:
+            listed.append(data["host_genome"])
+        if listed:
             break
     from samovar.seqio import taxid_from_fasta_name
 

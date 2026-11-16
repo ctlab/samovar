@@ -270,6 +270,8 @@ def test_prepare_reuses_generate_genomes_as_profile_references(tmp_path, monkeyp
     genomes.mkdir()
     _write_fasta(genomes / "562.fna", 12)
     _write_fasta(genomes / "4932.fna", 8)
+    host = tmp_path / "9606.fna"
+    _write_fasta(host, 16)
     other = tmp_path / "other.fna"
     _write_fasta(other, 4)
     out = tmp_path / "out"
@@ -278,6 +280,7 @@ def test_prepare_reuses_generate_genomes_as_profile_references(tmp_path, monkeyp
     (cfg_dir / "iss_config.yaml").write_text(yaml.safe_dump({
         "genome_dir": str(genomes),
         "genomes": [str(genomes / "562.fna"), str(genomes / "4932.fna")],
+        "host_genome": str(host),
     }), encoding="utf-8")
     (tmp_path / "reads").mkdir()
     config = PipelineConfig.from_args(Namespace(
@@ -286,6 +289,7 @@ def test_prepare_reuses_generate_genomes_as_profile_references(tmp_path, monkeyp
     ))
     assert config.profile_references["562"].endswith("562.fna")
     assert config.profile_references["4932"].endswith("4932.fna")
+    assert config.profile_references["9606"].endswith("9606.fna")
     assert reference_lengths({"562", "4932"}, out / "genomes", {
         "profile_references": config.profile_references,
     }) == {"562": 12, "4932": 8}
