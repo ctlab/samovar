@@ -127,6 +127,18 @@ def _flags_with_import_mem(
 _SHORT_OPTION = re.compile(r"(?<![\w-])-([A-Za-z])\b")
 
 
+def warn_if_not_executable(path: str, *, name: str) -> None:
+    """An annotator is executed as this file. A missing +x fails later with an empty log."""
+    exe = Path(path).expanduser()
+    if not exe.is_file() or os.access(exe, os.X_OK):
+        return
+    print(
+        f"[WARNING] {name}: Permission denied: {exe} is not executable. "
+        f"chmod +x {exe} before samovar exec.",
+        file=sys.stderr,
+    )
+
+
 def warn_direct_samovar_flags(path: str, *, name: str, flags_translate: str) -> None:
     """Warn when a custom annotator binary's ``--help`` has no ``-i`` and ``-o``.
 
@@ -299,6 +311,7 @@ def import_tool(
     exe = str(exec_name or "").strip() or name
     path = resolve_import_path(name=name, exec_name=exe, exec_path=exec_path, env=env)
     if group == "annotator":
+        warn_if_not_executable(path, name=name)
         warn_direct_samovar_flags(path, name=name, flags_translate=flags_translate)
     workflow = env if env else "bash"
     glob = str(inputs or "").strip()

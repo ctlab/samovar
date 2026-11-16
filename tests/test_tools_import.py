@@ -264,6 +264,47 @@ def test_imported_annotator_invokes_binary_not_custom_sh(tmp_path):
     assert "-p clf" not in cmd
 
 
+def test_nonexecutable_annotator_is_named_before_launch(tmp_path, capsys):
+    script = tmp_path / "const562.py"
+    script.write_text("#!/usr/bin/env python3\n")
+    script.chmod(0o644)
+    cfg = tmp_path / "config.json"
+    from samovar.paths import write_config
+
+    import os
+    old = os.environ.get("SAMOVAR_CONFIG")
+    os.environ["SAMOVAR_CONFIG"] = str(cfg)
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    try:
+        import_tool(
+            name="const562",
+            tool_type="annotator",
+            exec_path=str(script),
+            also_repo_build=False,
+        )
+    finally:
+        if old is None:
+            os.environ.pop("SAMOVAR_CONFIG", None)
+        else:
+            os.environ["SAMOVAR_CONFIG"] = old
+    warning = capsys.readouterr().err
+    assert "Permission denied" in warning
+    assert str(script) in warning
+    inst = get_annotator_instance(
+        "const562",
+        {
+            "run_name": "c562",
+            "type": "const562",
+            "cmd": str(script),
+            "db_path": ".",
+            "threads": 1,
+        },
+        {},
+    )
+    with pytest.raises(PermissionError, match="Permission denied"):
+        inst.get_snakemake_shell_cmd("a_R1.fastq", "", ["/tmp/out.out"])
+
+
 def test_custom_annotator_appends_extra_flags(tmp_path):
     script = tmp_path / "clf"
     script.write_text("#!/bin/sh\nexit 0\n")

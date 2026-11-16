@@ -798,6 +798,12 @@ class CustomAnnotator(BaseAnnotator):
         except OSError:
             direct = False
         if direct:
+            exe = Path(first).expanduser()
+            if not os.access(exe, os.X_OK):
+                raise PermissionError(
+                    f"Permission denied: {exe} is not executable. "
+                    f"chmod +x {exe} before running custom_tool."
+                )
             return (
                 f"{self.cmd} "
                 f"-i {shlex.quote(str(input_r1))} "
