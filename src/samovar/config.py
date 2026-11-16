@@ -2173,15 +2173,33 @@ fi
             + collect_profiles("initial"),
         )
 
-        viz_initial = _checkpoint_block(
-            "viz_initial",
-            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
-    --annotation_dir "$out_dir/initial_annotations" \\
-    --output_dir "$out_dir/initial_annotations_plots" \\
-    --show_top 0 --config {configs['scoring']}
-"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_initial \\
-    --config {configs['scoring']}""",
-        )
+        score_bin = shlex.quote(str(root / "bin" / "samovar"))
+
+        def _viz_body(stage: str, *, csv: bool) -> str:
+            lines = []
+            if has_read_tools:
+                csv_flag = (
+                    f'\n    --csv "$out_dir/{stage}_annotations/combined_annotation_table.csv"'
+                    if csv else ""
+                )
+                lines.append(
+                    f"{score_bin} score annotators \\\n"
+                    f'    --annotation-dir "$out_dir/{stage}_annotations" \\\n'
+                    f'    --output-dir "$out_dir/{stage}_annotations_plots"{csv_flag} \\\n'
+                    f"    --show-top 0 --config {configs['scoring']}"
+                )
+            lines.append(
+                f"{score_bin} score profiles \\\n"
+                f'    --output-dir "$out_dir" --stage {stage} \\\n'
+                f"    --config {configs['scoring']}"
+            )
+            lines.append(
+                f'"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_{stage} \\\n'
+                f"    --config {configs['scoring']}"
+            )
+            return "\n".join(lines)
+
+        viz_initial = _checkpoint_block("viz_initial", _viz_body("initial", csv=False))
 
         abundance_tables = _checkpoint_block(
             "abundance_tables",
@@ -2299,16 +2317,7 @@ fi
             combine_regen_body,
         )
 
-        viz_regenerated = _checkpoint_block(
-            "viz_regenerated",
-            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
-    --annotation_dir "$out_dir/regenerated_annotations" \\
-    --output_dir "$out_dir/regenerated_annotations_plots" \\
-    --csv "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
-    --show_top 0 --config {configs['scoring']}
-"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_regenerated \\
-    --config {configs['scoring']}""",
-        )
+        viz_regenerated = _checkpoint_block("viz_regenerated", _viz_body("regenerated", csv=True))
 
         gpu_line = " \\\n    --gpu" if self.gpu else ""
         reprofile_body = f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
@@ -2335,16 +2344,7 @@ fi
                 f'\n"$PYTHON_PATH" -m samovar.profiles correct --output-dir "$out_dir" --config {configs["scoring"]}\n')
         reprofile = _checkpoint_block("reprofile", reprofile_body)
 
-        viz_reprofiled = _checkpoint_block(
-            "viz_reprofiled",
-            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
-    --annotation_dir "$out_dir/reprofiled_annotations" \\
-    --output_dir "$out_dir/reprofiled_annotations_plots" \\
-    --csv "$out_dir/reprofiled_annotations/combined_annotation_table.csv" \\
-    --show_top 0 --config {configs['scoring']}
-"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_reprofiled \\
-    --config {configs['scoring']}""",
-        )
+        viz_reprofiled = _checkpoint_block("viz_reprofiled", _viz_body("reprofiled", csv=True))
 
         footer = """"$PYTHON_PATH" -m samovar.stage_report overview "$out_dir" || true
 "$PYTHON_PATH" -m samovar.stage_report bundle "$out_dir" || true

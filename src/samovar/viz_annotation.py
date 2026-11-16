@@ -1067,3 +1067,158 @@ def compare_annotations(
         Path(csv_file).parent.mkdir(parents=True, exist_ok=True)
         data.to_csv(csv_file, index=False)
     return data
+
+
+def _viz_from_args(args):
+    """Stage YAML plus the CLI overrides compare_annotations already accepts."""
+    import yaml
+
+    config = {}
+    if getattr(args, "config", None):
+        with open(args.config) as handle:
+            config = yaml.safe_load(handle) or {}
+    settings = normalize_viz_config(config.get("viz"))
+    for key, value in (
+        ("full", args.full),
+        ("opal", args.opal),
+        ("metrics_sample", args.viz_metrics_sample),
+        ("metrics", args.viz_metrics),
+    ):
+        if value is not None:
+            settings[key] = value
+    return config, normalize_viz_config(settings)
+
+
+def _run_annotator_compare(args, config, viz) -> None:
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    compare_annotations(
+        annotation_dir=args.annotation_dir,
+        output_dir=args.output_dir,
+        csv_file=args.csv_file,
+        show_top=args.show_top,
+        types=("f1", "R2", "cv", "scores") if viz["full"] else ("scores",),
+        rank=args.rank,
+        split=args.split,
+        spearman_full=True if args.spearman_full else None,
+        opal=viz["opal"],
+        metrics_sample=viz["metrics_sample"],
+        metrics=viz["metrics"],
+        seed=args.seed if args.seed is not None else int(config.get("seed", 42)),
+        threads=args.threads if args.threads is not None else int(config.get("cores", 1)),
+    )
+
+
+def _add_annotator_score_flags(parser) -> None:
+    import argparse
+
+    parser.add_argument("--annotation-dir", "--annotation_dir", dest="annotation_dir", required=True)
+    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", default=None)
+    parser.add_argument("--csv", dest="csv_file", default=None)
+    parser.add_argument("--show-top", "--show_top", dest="show_top", type=int, default=0)
+    parser.add_argument("--rank", default="genus")
+    parser.add_argument("--split", action="store_true")
+    parser.add_argument("--config", help="Stage YAML containing a viz mapping")
+    parser.add_argument("--threads", "--cores", type=int, default=None,
+                        help="Native Spearman threads; scalar metrics use vectorized counts")
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--viz-metrics", action="append", default=None,
+                        help="Comma-separated score column names; all or none")
+    parser.add_argument(
+        "--full", action=argparse.BooleanOptionalAction, default=None,
+        help="Also write F1, R2, and CV plots. Default is the scores table and bar plot.",
+    )
+    parser.add_argument(
+        "--opal", action=argparse.BooleanOptionalAction, default=None,
+        help="Run optional external OPAL when it is installed.",
+    )
+    parser.add_argument("--viz-metrics-sample", type=int, default=None,
+                        help="Score a seeded subset of this many rows. 0 scores every row.")
+    parser.add_argument("--spearman-full", action="store_true",
+                        help="Spearman on the concatenated per-read table")
+
+
+def score_annotators_main(argv=None) -> int:
+    """Score per-read annotators. A missing or empty directory is not a failure."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="samovar score annotators")
+    _add_annotator_score_flags(parser)
+    args = parser.parse_args(argv)
+    path = Path(args.annotation_dir)
+    if path.exists() and not path.is_dir():
+        parser.error(f"annotation_dir is not a directory: {path}")
+    if not path.is_dir():
+        print(
+            f"no per-sample annotation rows in {path} "
+            "(expected non-empty *.csv other than combined_annotation_table*); "
+            "skipping visualization",
+            file=sys.stderr,
+        )
+        return 0
+    try:
+        config, viz = _viz_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    _run_annotator_compare(args, config, viz)
+    return 0
+
+
+def score_profiles_main(argv=None) -> int:
+    """Score saved profiles. Each profile keeps its own rank. Nothing to score is success."""
+    import argparse
+
+    from samovar.profile_pipeline import score
+
+    parser = argparse.ArgumentParser(prog="samovar score profiles")
+    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", required=True)
+    parser.add_argument("--stage", required=True, choices=("initial", "regenerated", "reprofiled"))
+    parser.add_argument("--config", help="Stage YAML containing a viz mapping")
+    parser.add_argument("--full", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--opal", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--viz-metrics", action="append", default=None)
+    parser.add_argument("--viz-metrics-sample", type=int, default=None)
+    args = parser.parse_args(argv)
+    try:
+        config, viz = _viz_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    score(Path(args.output_dir), args.stage, {**config, "viz": viz})
+    return 0
+
+
+def score_main(argv=None) -> int:
+    """``samovar score annotators`` or ``samovar score profiles``."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="samovar score")
+    sub = parser.add_subparsers(dest="group", required=True)
+    sub.add_parser("annotators", help="Per-read annotator scores", add_help=False)
+    sub.add_parser("profiles", help="Profile scores, including annotations converted to profiles", add_help=False)
+    args, rest = parser.parse_known_args(argv)
+    if args.group == "annotators":
+        return score_annotators_main(rest)
+    return score_profiles_main(rest)
+
+
+def legacy_compare_main(argv=None) -> int:
+    """Previous ``workflow/compare_annotations.py``: profiles, then per-read scores."""
+    import argparse
+
+    from samovar.annotation_io import read_annotation_dir
+    from samovar.profile_pipeline import score
+
+    parser = argparse.ArgumentParser(description="Visualize SamovaR annotation tables")
+    _add_annotator_score_flags(parser)
+    args = parser.parse_args(argv)
+    try:
+        config, viz = _viz_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    root = Path(args.annotation_dir).parent
+    stage = Path(args.annotation_dir).name.removesuffix("_annotations")
+    has_profiles = score(root, stage, {**config, "viz": viz})
+    if has_profiles and read_annotation_dir(args.annotation_dir).empty:
+        return 0
+    _run_annotator_compare(args, config, viz)
+    return 0

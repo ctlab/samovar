@@ -338,7 +338,10 @@ def test_compare_cli_viz_config_and_overrides(tmp_path, monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     calls = []
-    monkeypatch.setattr(module, "compare_annotations", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(
+        "samovar.viz_annotation.compare_annotations",
+        lambda **kwargs: calls.append(kwargs) or __import__("pandas").DataFrame(),
+    )
     cfg = tmp_path / "viz.yaml"
     cfg.write_text(yaml.safe_dump({"viz": {"full": True, "opal": True, "metrics_sample": 50000},
                                    "cores": 3, "seed": 17}))
