@@ -417,9 +417,12 @@ def test_package_summary_multiqc_keeps_repeats_distinct(tmp_path):
     html_report = html_path.read_text(encoding="utf-8")
     assert "Repeat status" in html_report
     assert "samovar_repeat_composition" in html_report
-    assert "samovar_plots_benchmark_points_accuracy" in html_report
-    assert "samovar_plots_runtime_points_elapsed_s" in html_report
-    assert "samovar_plots_beta_points_bray_curtis" in html_report
+    assert "samovar_plots_scores_benchmark_unit" in html_report
+    assert "Read-level scores: scores from 0 to 1" in html_report
+    assert "samovar_plots_scores_runtime_seconds" in html_report
+    assert "samovar_plots_scores_beta_unit" in html_report
+    assert "benchmark accuracy" not in html_report
+    assert "benchmark f1_macro" not in html_report
     assert "individual report" in html_report
     assert "statistics.csv" in html_report
     staged = root / "summary" / "multiqc_samovar"
@@ -429,11 +432,9 @@ def test_package_summary_multiqc_keeps_repeats_distinct(tmp_path):
         if name.startswith("A |") and "| 562 |" in f" {name} "
     )
     assert mean == 20
-    points = json.loads(next(staged.glob("alpha_points_shannon_mqc.json")).read_text())
-    names = list(points["data"])
-    assert sum("0001" in name and name.startswith("A |") for name in names) == 1
-    assert sum("0002" in name and name.startswith("A |") for name in names) == 1
-    assert any(name.startswith("B |") for name in names)
+    alpha_charts = "\n".join(path.read_text(encoding="utf-8") for path in staged.glob("scores_alpha_*_mqc.html"))
+    assert "Shannon diversity" in alpha_charts
+    assert "A" in alpha_charts and "B" in alpha_charts
 
     run_multiqc(root, extra_args=["--exclude", "composition"])
     assert marker.read_bytes() == before

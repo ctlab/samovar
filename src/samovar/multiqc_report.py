@@ -94,10 +94,23 @@ def parse_multiqc_block(block: Any) -> Dict[str, Any]:
 
 
 def effective_settings(layers: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
-    """Later layers win. ``include`` adds and ``exclude`` removes sections."""
+    """Later layers win. ``include`` adds and ``exclude`` removes sections.
+
+    ``explicit`` is the section names a layer actually listed. The built-in
+    ``sections: all`` is not a request for an empty diversity section.
+    """
+    explicit = set()
     merged: Dict[str, Any] = dict(DEFAULT_SETTINGS)
     for layer in layers:
-        merged.update(parse_multiqc_block(layer))
+        parsed = parse_multiqc_block(layer)
+        for key in ("sections", "include"):
+            if key not in parsed:
+                continue
+            if parsed[key] == "all":
+                explicit.update(SECTIONS)
+            else:
+                explicit.update(parsed[key])
+        merged.update(parsed)
     sections = set(SECTIONS) if merged["sections"] == "all" else set(merged["sections"])
     include = [] if merged["include"] == "all" else list(merged["include"])
     if merged["include"] == "all":
@@ -116,6 +129,7 @@ def effective_settings(layers: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         "exclude": exclude,
         "stages": stages,
         "annotators": annotators,
+        "explicit": explicit,
     }
 
 
@@ -358,10 +372,12 @@ def apply_selection(dest: Path, settings: Mapping[str, Any]) -> set:
 
 def missing_sections(settings: Mapping[str, Any], produced: Iterable[str]) -> List[tuple]:
     have = set(produced)
+    explicit = settings.get("explicit")
     return [
         (name, _MISSING[name])
         for name in SECTIONS
         if name in settings["sections"] and name not in have
+        and (explicit is None or name in explicit)
     ]
 
 

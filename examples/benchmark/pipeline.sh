@@ -16,9 +16,9 @@ threads="${SAMOVAR_CORES:-1}"
 community=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
 library=("${community[@]}" GCF_000867865.1)
 
-mkdir -p "$db/src"
+mkdir -p "$db/src" "$db/proteins"
 ready=1
-for tool in kraken2 kaiju centrifuge bracken; do
+for tool in kraken2 centrifuge bracken; do
   if ! samovar import --status | grep -Eq "^${tool}"$'\t'"phage_bench(:[^[:space:]]*)?"$'\t'"ok"$'\t'; then
     ready=0
   fi
@@ -34,7 +34,7 @@ if [[ "$ready" -eq 0 ]]; then
     echo "genome download produced no FASTA under $db/src" >&2
     exit 1
   fi
-  for type in kraken2 kaiju centrifuge; do
+  for type in kraken2 centrifuge; do
     cat > "$db/${type}.yaml" << EOF
 input_dir:
   - ${db}/src
@@ -65,6 +65,61 @@ EOF
     --threads "$threads" \
     --index phage_bench --flags "" --no-example-omit
   samovar import -n phage_bench --type database --tool bracken --exec-path "$db/bracken_db"
+fi
+
+# Kaiju indexes proteins. The nucleotide genomes above are for Kraken2, Centrifuge, and Bracken.
+if [[ ! -f "$db/kaiju_db/.built_from_faa" ]]; then
+  python - "$db/proteins" "${library[@]}" <<'PY'
+import gzip
+import sys
+from pathlib import Path
+
+from Bio import SeqIO
+
+from samovar.build_database import nucleotide_to_orf_records
+from samovar.genome_index import numeric_taxid_for, processed_storage_dir, proteome_storage_dir
+
+dest = Path(sys.argv[1])
+dest.mkdir(parents=True, exist_ok=True)
+proteomes = proteome_storage_dir()
+genomes = processed_storage_dir()
+for accession in sys.argv[2:]:
+    out = dest / f"{accession}.faa.gz"
+    if out.is_file() and out.stat().st_size > 0:
+        continue
+    if out.is_symlink():
+        out.unlink()
+    taxid = numeric_taxid_for(accession)
+    cached = proteomes / f"{taxid}.faa.gz"
+    if cached.is_file() and cached.stat().st_size > 0:
+        out.symlink_to(cached.resolve())
+        continue
+    genome = genomes / f"{accession}.fa.gz"
+    if not genome.is_file():
+        genome = genomes / f"{taxid}.fa.gz"
+    if not genome.is_file():
+        raise SystemExit(f"no protein FASTA or nucleotide genome for {accession}")
+    records = nucleotide_to_orf_records(str(genome), taxid)
+    if not records:
+        raise SystemExit(f"no proteins translated for {accession}")
+    with gzip.open(out, "wt") as handle:
+        SeqIO.write(records, handle, "fasta")
+PY
+  rm -rf "$db/kaiju_db" "$db/kaiju_prep"
+  cat > "$db/kaiju.yaml" << EOF
+input_dir:
+  - ${db}/proteins
+output_dir: ${db}/kaiju_prep
+mutation_rate: 0.0
+include_percent: 100.0
+EOF
+  samovar build --type kaiju \
+    --config_path "$db/kaiju.yaml" \
+    --db_path "$db/kaiju_db" \
+    --threads "$threads" \
+    --index phage_bench --flags "" --no-example-omit
+  samovar import -n phage_bench --type database --tool kaiju --exec-path "$db/kaiju_db"
+  touch "$db/kaiju_db/.built_from_faa"
 fi
 
 samovar generate \

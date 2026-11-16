@@ -99,7 +99,37 @@ def load_sample_runtimes(root: Path) -> List[Dict[str, Any]]:
                     "max_rss_mb": rss,
                 }
             )
-    return rows
+    return _add_bracken_kraken(root, rows)
+
+
+def _add_bracken_kraken(root: Path, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Bracken's reported cost is its own sample job plus the Kraken2 job it needs."""
+    kraken: Dict[tuple, List[Dict[str, Any]]] = {}
+    for row in rows:
+        if row["rule"] == "kraken2":
+            kraken.setdefault((row["phase"], row["sample"]), []).append(row)
+    summed = []
+    for row in rows:
+        marker = (
+            root / f"{row['phase']}_reports"
+            / f"{row['sample']}_{row['run_name']}.profile.csv.bracken.tsv"
+        )
+        partners = kraken.get((row["phase"], row["sample"]), [])
+        chosen = next((item for item in partners if item["run_name"] == "kraken2"), None)
+        if chosen is None and len(partners) == 1:
+            chosen = partners[0]
+        if row["rule"] != "profile" or not marker.is_file() or chosen is None:
+            summed.append(row)
+            continue
+        item = dict(row)
+        item["elapsed_s"] = float(row["elapsed_s"]) + float(chosen["elapsed_s"])
+        rss, other = row.get("max_rss_mb"), chosen.get("max_rss_mb")
+        if rss is not None and other is not None:
+            item["max_rss_mb"] = float(rss) + float(other)
+        elif other is not None:
+            item["max_rss_mb"] = float(other)
+        summed.append(item)
+    return summed
 
 
 def load_stage_runtimes(root: Path) -> List[Dict[str, Any]]:
