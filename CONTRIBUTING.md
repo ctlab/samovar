@@ -100,6 +100,8 @@ If a step cannot be written as a `samovar` command and needs a large helper, sto
 
 Keep each example small. Changes to public CLI, configuration, contracts, or workflow semantics also update the README or Wiki.
 
+Update the Wiki only when the change is something a person needs in order to run SAMOVAR: a command, a config field, a contract, or what a stage writes. A bugfix that restores already documented behavior does not need a Wiki edit. Do not put task ids, commit hashes, local paths, test names, or a narrative of how the bug was found into the Wiki or into this file. The Wiki explains how to work with the tool.
+
 ## 6. Optional tools in `install.sh` and `ask`
 
 A new installer option is a row in the lists that already exist. Do not add `install_<tool>.sh`, a second installer, or a conda/pip command copied into a launch script. `cami_resume.sh` and the other launchers call `./install.sh <name>`.
