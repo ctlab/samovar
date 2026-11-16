@@ -563,6 +563,30 @@ def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed:
                     rows.append({**base, "metric": metric, "value": value})
 
 
+def _custom_score_rows(rows: List[dict], child: Path, repeat_id: str, seed: Any) -> None:
+    """Ingest `{name}_scores/scores.csv` (metric, value, optional sample_id)."""
+    for path in sorted(child.glob("*_scores/scores.csv")):
+        tool = path.parent.name[: -len("_scores")]
+        with path.open(encoding="utf-8", newline="") as handle:
+            for rec in csv.DictReader(handle):
+                metric = str(rec.get("metric") or "").strip()
+                value = _finite(rec.get("value"))
+                if not metric or value is None:
+                    continue
+                rows.append({
+                    "repeat_id": repeat_id,
+                    "sample_id": rec.get("sample") or rec.get("sample_id") or "",
+                    "seed": seed,
+                    "phase": rec.get("phase") or "",
+                    "run_name": rec.get("run_name") or rec.get("annotator") or tool,
+                    "metric": metric,
+                    "value": value,
+                    "truth_source": rec.get("truth_source") or rec.get("ground_truth") or "",
+                    "reason": rec.get("reason") or "",
+                    **_blank_desc(),
+                })
+
+
 def _runtime_rows(rows: List[dict], child: Path, repeat_id: str, seed: Any) -> None:
     from samovar.runtime import load_sample_runtimes, load_stage_runtimes
 
@@ -805,6 +829,7 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
                 })
             _score_rows(result_rows, child, phase, repeat_id, seed)
         _runtime_rows(result_rows, child, repeat_id, seed)
+        _custom_score_rows(result_rows, child, repeat_id, seed)
 
     for key, observations in groups.items():
         phase, run_name = key[0], key[1]

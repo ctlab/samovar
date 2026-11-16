@@ -573,6 +573,52 @@ def test_long_tables_keep_successful_repeats(tmp_path):
     assert not any(row["taxon"] == "999" for row in stats)
 
 
+def test_custom_scorer_scores_csv_reaches_repeat_summary(tmp_path):
+    import csv
+
+    from samovar.repeats import publish_package, set_repeat_state, write_long_tables
+
+    root = tmp_path / "pkg"
+    publish_package(root, count=3, base_seed=7, kind="generated", identity="generated:scores")
+    for repeat, n_files in (("0001", 4), ("0002", 6)):
+        dest = root / f"out_{repeat}" / "counts_scores"
+        dest.mkdir(parents=True)
+        (dest / "file_counts.tsv").write_text("path\tn_files\nann\t1\n", encoding="utf-8")
+        (dest / "scores.csv").write_text(
+            f"sample_id,metric,value\ninitial_annotations,n_files,{n_files}\n",
+            encoding="utf-8",
+        )
+        set_repeat_state(root, repeat, "succeeded", stage="pipeline")
+    skipped = root / "out_0003" / "counts_scores"
+    skipped.mkdir(parents=True)
+    (skipped / "scores.csv").write_text(
+        "sample_id,metric,value\ninitial_annotations,n_files,99\n", encoding="utf-8"
+    )
+    set_repeat_state(root, "0003", "failed", "exec failed", "pipeline")
+    only_tsv = root / "out_0001" / "other_scores"
+    only_tsv.mkdir()
+    (only_tsv / "file_counts.tsv").write_text("path\tn_files\nx\t1\n", encoding="utf-8")
+
+    written = write_long_tables(root)
+    with written["results"].open(encoding="utf-8", newline="") as handle:
+        results = [
+            row for row in csv.DictReader(handle)
+            if row["metric"] == "n_files"
+        ]
+    assert {(row["repeat_id"], row["run_name"], row["sample_id"], row["value"]) for row in results} == {
+        ("0001", "counts", "initial_annotations", "4.0"),
+        ("0002", "counts", "initial_annotations", "6.0"),
+    }
+    with written["statistics"].open(encoding="utf-8", newline="") as handle:
+        stat = next(
+            row for row in csv.DictReader(handle)
+            if row["run_name"] == "counts" and row["metric"] == "n_files"
+        )
+    assert stat["mean"] == "5"
+    assert stat["n_valid"] == "2"
+    assert not any(row["run_name"] == "other" for row in results)
+
+
 def test_statistics_uses_whole_repeats_and_known_moments():
     import math
 
