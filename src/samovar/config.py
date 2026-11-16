@@ -288,9 +288,15 @@ def _portable_annotator_cmd(cmd: str) -> str:
         return shlex.join([python_path(), "-m", module, *rest])
     path = Path(token).expanduser()
     if path.is_file():
+        from samovar.tools_import import refuse_nonexecutable_annotator
+
+        refuse_nonexecutable_annotator(text)
         return text
     resolved = (command_argv(resolve_executable(token, allow_python_script=True)) or [""])[0]
     if resolved and Path(resolved).expanduser().is_file():
+        from samovar.tools_import import refuse_nonexecutable_annotator
+
+        refuse_nonexecutable_annotator(resolved)
         return text
     if shutil.which(token):
         return text

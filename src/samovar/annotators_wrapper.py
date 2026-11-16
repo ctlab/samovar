@@ -151,6 +151,9 @@ class BaseAnnotator:
         if len(parts) >= 3 and parts[1] == "-m" and parts[2].startswith("samovar."):
             raw_cmd = shlex.join([python_path(), *parts[1:]])
         first = command_argv(raw_cmd)[0] if raw_cmd else ""
+        from samovar.tools_import import refuse_nonexecutable_annotator
+
+        refuse_nonexecutable_annotator(raw_cmd)
         self.cmd = shlex.join(command_argv(resolve_executable(raw_cmd, tool_key=Path(first).name if first else None)))
 
     @property

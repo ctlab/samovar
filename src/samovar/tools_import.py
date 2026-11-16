@@ -19,6 +19,7 @@ from samovar.main_config import (
     normalize_tool_group,
     parse_tool_entry,
     set_tool,
+    tool_path,
 )
 from samovar.paths import load_config, update_config
 from samovar.tool_contracts import format_contract, run_contract_pytest
@@ -125,6 +126,31 @@ def _flags_with_import_mem(
 
 
 _SHORT_OPTION = re.compile(r"(?<![\w-])-([A-Za-z])\b")
+
+
+def refuse_nonexecutable_annotator(command: str) -> None:
+    """Stop before launch when this command is a file without ``+x``.
+
+    ``resolve_executable`` skips that file and the run falls through to
+    ``custom.sh``, whose error never reaches the task log.
+    """
+    from samovar.paths import command_argv, load_config
+
+    token = command_argv(command)[0] if command else ""
+    if not token or token in {"python", "python3"}:
+        return
+    path = Path(token).expanduser()
+    candidates = [path] if path.is_file() else []
+    if not candidates:
+        tools = iter_tools(load_config())
+        mapped = tool_path(tools.get(path.name) or tools.get(path.stem), path.name)
+        if mapped:
+            candidates.append(Path(mapped).expanduser())
+    for exe in candidates:
+        if exe.is_file() and not os.access(exe, os.X_OK):
+            raise PermissionError(
+                f"Permission denied: {exe} is not executable. chmod +x {exe}"
+            )
 
 
 def warn_if_not_executable(path: str, *, name: str) -> None:

@@ -290,19 +290,31 @@ def test_nonexecutable_annotator_is_named_before_launch(tmp_path, capsys):
     warning = capsys.readouterr().err
     assert "Permission denied" in warning
     assert str(script) in warning
-    inst = get_annotator_instance(
-        "const562",
-        {
-            "run_name": "c562",
-            "type": "const562",
-            "cmd": str(script),
-            "db_path": ".",
-            "threads": 1,
-        },
-        {},
-    )
-    with pytest.raises(PermissionError, match="Permission denied"):
-        inst.get_snakemake_shell_cmd("a_R1.fastq", "", ["/tmp/out.out"])
+    from samovar.config import _portable_annotator_cmd
+
+    os.environ["SAMOVAR_CONFIG"] = str(cfg)
+    try:
+        with pytest.raises(PermissionError, match="Permission denied") as named:
+            _portable_annotator_cmd("const562")
+        assert str(script) in str(named.value)
+        with pytest.raises(PermissionError, match="Permission denied") as launched:
+            get_annotator_instance(
+                "const562",
+                {
+                    "run_name": "c562",
+                    "type": "const562",
+                    "cmd": "const562",
+                    "db_path": ".",
+                    "threads": 1,
+                },
+                {},
+            )
+        assert str(script) in str(launched.value)
+    finally:
+        if old is None:
+            os.environ.pop("SAMOVAR_CONFIG", None)
+        else:
+            os.environ["SAMOVAR_CONFIG"] = old
 
 
 def test_custom_annotator_appends_extra_flags(tmp_path):
@@ -332,6 +344,7 @@ def test_prepare_merges_import_and_launch_annotator_flags(tmp_path, monkeypatch)
 
     binary = tmp_path / "myclf.py"
     binary.write_text("#!/usr/bin/env python3\n")
+    binary.chmod(0o755)
     cfg = tmp_path / "config.json"
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
