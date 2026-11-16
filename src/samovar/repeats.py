@@ -74,7 +74,7 @@ def _occupied(root: Path, *, allow_template: bool = False) -> bool:
     if not root.exists():
         return False
     for path in root.iterdir():
-        if allow_template and path.name in {".generate", ".log"}:
+        if allow_template and path.name in {".generate", ".log", ".genomes"}:
             continue
         return True
     return False

@@ -10,13 +10,13 @@ cd "$SAMOVAR"
 samovar_setup_env
 
 out="$(samovar_example_outdir)"
-db="${SAMOVAR}/examples_outdir/benchmark/database"
+db="${SAMOVAR}/examples_outdir/benchmark_db"
 total_reads="${TOTAL_READS:-2000}"
 threads="${SAMOVAR_CORES:-1}"
 community=(GCF_000819615.1 GCF_000840245.1 GCF_000836945.1 GCF_000844825.1)
 library=("${community[@]}" GCF_000867865.1)
 
-mkdir -p "$db"
+mkdir -p "$db/src"
 ready=1
 for tool in kraken2 kaiju centrifuge bracken; do
   if ! samovar import --status | grep -Eq "^${tool}"$'\t'"phage_bench(:[^[:space:]]*)?"$'\t'"ok"$'\t'; then
@@ -24,7 +24,16 @@ for tool in kraken2 kaiju centrifuge bracken; do
   fi
 done
 if [[ "$ready" -eq 0 ]]; then
-  samovar genome download --output-dir "$db/src" "${library[@]}"
+  # Already indexed genomes are reused from the shared store and are not copied
+  # into --output-dir. Link them so build sees a FASTA directory.
+  while IFS= read -r genome; do
+    [[ -f "$genome" ]] || continue
+    ln -sfn "$genome" "$db/src/$(basename "$genome")"
+  done < <(samovar genome download --output-dir "$db/src" "${library[@]}")
+  if ! compgen -G "$db/src/*" > /dev/null; then
+    echo "genome download produced no FASTA under $db/src" >&2
+    exit 1
+  fi
   for type in kraken2 kaiju centrifuge; do
     cat > "$db/${type}.yaml" << EOF
 input_dir:
@@ -37,7 +46,7 @@ EOF
       --config_path "$db/${type}.yaml" \
       --db_path "$db/${type}_db" \
       --threads "$threads" \
-      --index phage_bench --flags ""
+      --index phage_bench --flags "" --no-example-omit
     samovar import -n phage_bench --type database --tool "$type" --exec-path "$db/${type}_db"
   done
   cat > "$db/bracken.yaml" << EOF
@@ -54,7 +63,7 @@ EOF
     --config_path "$db/bracken.yaml" \
     --db_path "$db/bracken_db" \
     --threads "$threads" \
-    --index phage_bench --flags ""
+    --index phage_bench --flags "" --no-example-omit
   samovar import -n phage_bench --type database --tool bracken --exec-path "$db/bracken_db"
 fi
 
@@ -78,3 +87,19 @@ samovar prepare \
   --bracken "bracken phage_bench"
 samovar exec --output_dir "$out"
 samovar multiqc --output_dir "$out"
+# Package plots live under summary/ and out_XXXX/, not the single-run folders
+# samovar_harvest_example expects.
+python - "$out" "$SCRIPT_DIR" <<'PY'
+import shutil, sys
+from pathlib import Path
+run, example = Path(sys.argv[1]), Path(sys.argv[2])
+figures, report = example / "figures", example / "multiqc"
+figures.mkdir(parents=True, exist_ok=True)
+report.mkdir(parents=True, exist_ok=True)
+html = run / "summary" / "multiqc" / "SAMOVAR_multiqc_report.html"
+if html.is_file():
+    shutil.copy2(html, report / "multiqc_report.html")
+for src in sorted(run.glob("out_*/initial_annotations_plots/scores.png")):
+    shutil.copy2(src, figures / f"{src.parents[1].name}_scores.png")
+print("harvest", report / "multiqc_report.html")
+PY
