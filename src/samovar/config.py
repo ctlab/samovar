@@ -896,6 +896,12 @@ class PipelineConfig:
             config.profile_corrector,
             config.profile_references,
         ) = validate_profile_settings(input_config)
+        if not config.profile_references:
+            from samovar.profiles import references_from_generate
+
+            found = references_from_generate(config.output_dir)
+            if found:
+                config.profile_references = found
         if config.input_dir:
             from samovar.seqio import link_or_copy_reads
 

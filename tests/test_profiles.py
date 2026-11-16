@@ -256,6 +256,66 @@ def test_profile_scores_count_taxa_not_artificial_reads():
         profile_scores(pred, gt, metadata(), metadata({"basis": "organisms"}))
 
 
+def test_prepare_reuses_generate_genomes_as_profile_references(tmp_path, monkeypatch):
+    import yaml
+    from argparse import Namespace
+
+    from samovar.config import PipelineConfig
+    from samovar.paths import write_config
+    from samovar.profiles import reference_lengths
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
+    genomes = tmp_path / "genomes"
+    genomes.mkdir()
+    _write_fasta(genomes / "562.fna", 12)
+    _write_fasta(genomes / "4932.fna", 8)
+    other = tmp_path / "other.fna"
+    _write_fasta(other, 4)
+    out = tmp_path / "out"
+    cfg_dir = out / ".generate" / "configs"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "iss_config.yaml").write_text(yaml.safe_dump({
+        "genome_dir": str(genomes),
+        "genomes": [str(genomes / "562.fna"), str(genomes / "4932.fna")],
+    }), encoding="utf-8")
+    (tmp_path / "reads").mkdir()
+    config = PipelineConfig.from_args(Namespace(
+        input_config=None, input_dir=str(tmp_path / "reads"), output_dir=str(out),
+        threads=None, cores=1, mem_mb=None, custom_cli_flags={},
+    ))
+    assert config.profile_references["562"].endswith("562.fna")
+    assert config.profile_references["4932"].endswith("4932.fna")
+    assert reference_lengths({"562", "4932"}, out / "genomes", {
+        "profile_references": config.profile_references,
+    }) == {"562": 12, "4932": 8}
+
+    spec = tmp_path / "refs.yaml"
+    spec.write_text(yaml.safe_dump({"profile_references": {"562": str(other)}}), encoding="utf-8")
+    kept = PipelineConfig.from_args(Namespace(
+        input_config=str(spec), input_dir=str(tmp_path / "reads"), output_dir=str(out),
+        threads=None, cores=1, mem_mb=None, custom_cli_flags={},
+    ))
+    assert kept.profile_references == {"562": str(other.resolve())}
+
+    (cfg_dir / "iss_config.yaml").write_text(yaml.safe_dump({
+        "genomes": [str(genomes / "562.fna"), str(genomes / "562.fasta")],
+    }), encoding="utf-8")
+    _write_fasta(genomes / "562.fasta", 6)
+    bare = tmp_path / "bare"
+    (bare / "reads").mkdir(parents=True)
+    bare_out = tmp_path / "bare_out"
+    (bare_out / ".generate" / "configs").mkdir(parents=True)
+    (bare_out / ".generate" / "configs" / "iss_config.yaml").write_text(
+        (cfg_dir / "iss_config.yaml").read_text(), encoding="utf-8"
+    )
+    skipped = PipelineConfig.from_args(Namespace(
+        input_config=None, input_dir=str(bare / "reads"), output_dir=str(bare_out),
+        threads=None, cores=1, mem_mb=None, custom_cli_flags={},
+    ))
+    assert "562" not in (skipped.profile_references or {})
+
+
 def test_length_conversion_and_exact_fragment_allocation():
     frame = table([50, 50])
     info = metadata(dict(unit="percent", basis="organisms"))

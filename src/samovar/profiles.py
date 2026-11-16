@@ -472,6 +472,52 @@ def read_counts(table, info, depth, lengths=None):
     return table, {**converted, "unit": "counts", "depth": int(depth)}
 
 
+def references_from_generate(output_dir):
+    """Taxid → FASTA from the genomes ``generate`` already selected.
+
+    A taxid with two different files is left out. The caller keeps the
+    explicit missing-reference error instead of picking one.
+    """
+    root = Path(output_dir)
+    listed = []
+    for name in ("iss_config.yaml", "camisim.yaml"):
+        cfg = root / ".generate" / "configs" / name
+        if not cfg.is_file():
+            continue
+        import yaml
+
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        raw = data.get("genomes") or []
+        if isinstance(raw, list) and raw:
+            listed = raw
+            break
+        genome_dir = data.get("genome_dir")
+        if genome_dir:
+            from samovar.iss_config import list_generate_genome_paths
+
+            listed = list_generate_genome_paths(str(genome_dir))
+            break
+    from samovar.seqio import taxid_from_fasta_name
+
+    chosen = {}
+    ambiguous = set()
+    for item in listed:
+        path = Path(str(item)).expanduser()
+        if not path.is_file():
+            continue
+        taxid = str(taxid_from_fasta_name(path) or path.stem).split(".")[0]
+        if not taxid or taxid in ambiguous:
+            continue
+        resolved = str(path.resolve())
+        previous = chosen.get(taxid)
+        if previous and previous != resolved:
+            chosen.pop(taxid, None)
+            ambiguous.add(taxid)
+            continue
+        chosen[taxid] = resolved
+    return chosen
+
+
 def validate_profile_settings(config):
     inputs = config.get("profile_inputs") or {}
     if not isinstance(inputs, dict):
