@@ -303,7 +303,11 @@ def _r2_table(true: pd.Series, pred: pd.Series) -> Tuple[pd.DataFrame, float]:
         return table, 0.0
     ss_tot = ((table["true_n"] - table["true_n"].mean()) ** 2).sum()
     ss_res = ((table["pred_n"] - table["true_n"]) ** 2).sum()
-    r2 = 0.0 if ss_tot == 0 else float(1 - ss_res / ss_tot)
+    if ss_tot == 0:
+        # A flat truth has no variance. Matching it is a perfect fit.
+        r2 = 1.0 if ss_res == 0 else float("nan")
+    else:
+        r2 = float(1 - ss_res / ss_tot)
     return table, r2
 
 

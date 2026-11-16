@@ -1,5 +1,7 @@
 """Accuracy purity, F1 purity, and annotator quality barplots."""
 
+import math
+
 import pandas as pd
 import pytest
 
@@ -47,6 +49,13 @@ def test_current_f1_equals_accuracy_and_macro_is_standard():
     assert "TP/N" in caption
     assert "F1-macro" in caption
     assert "1 −" in format_r2_caption(0.5) or "SS" in format_r2_caption(0.5)
+    from samovar.scores import _r2_abundance
+    from samovar.viz_annotation import _r2_table
+    flat = pd.Series(["A", "A", "B", "B"])
+    assert _r2_abundance(flat, flat) == 1.0
+    assert math.isnan(_r2_abundance(flat, pd.Series(["A", "A", "A", "A"])))
+    _, plotted = _r2_table(flat, flat)
+    assert plotted == 1.0
 
 
 def test_f1_purity_penalises_external_calls_into_majority():

@@ -233,7 +233,9 @@ def _r2_abundance(true: pd.Series, pred: pd.Series) -> float:
     ss_tot = float(((y - y.mean()) ** 2).sum())
     ss_res = float(((x - y) ** 2).sum())
     if ss_tot == 0:
-        return 0.0
+        # A flat truth has no variance. Matching it is a perfect fit; any
+        # other prediction cannot be compared with the usual ratio.
+        return 1.0 if ss_res == 0 else float("nan")
     return float(1.0 - ss_res / ss_tot)
 
 
