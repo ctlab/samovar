@@ -692,7 +692,9 @@ def viz_annotation(
 
     selected = annotator_columns(work)
     work = _strip_annotator_prefixes(work)
+    stripped_columns = set(work.columns)
     work = _rename_runs(work, out_dir)
+    renamed_columns = set(work.columns) - stripped_columns
     annotators = []
     skip_meta = {"length", "sample", "true", "seq", "read_type"}
     renamed_selected = []
@@ -710,7 +712,7 @@ def viz_annotation(
             continue
         annotators.append(col)
     if renamed_selected:
-        keep = [c for c in annotators if c in renamed_selected or c in selected]
+        keep = [c for c in annotators if c in renamed_selected or c in selected or c in renamed_columns]
         if keep:
             annotators = keep
 

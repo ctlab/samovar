@@ -447,6 +447,20 @@ def test_quality_scores_use_run_names_not_tool_index(tmp_path):
     assert set(scores["annotator"]) >= {"k2a", "k2b"}
     assert not scores["annotator"].astype(str).str.startswith("kraken2_").any()
 
+    mixed = tmp_path / "mixed"
+    mixed_plots = mixed / "initial_annotations_plots"
+    mixed_cfg = mixed / ".log" / "configs"
+    mixed_cfg.mkdir(parents=True)
+    (mixed_cfg / "config_init.yaml").write_text(yaml.safe_dump({"run_config": [
+        {"run_name": "kraken2", "type": "kraken2"},
+        {"run_name": "k2b", "type": "kraken2"},
+    ]}), encoding="utf-8")
+    viz_annotation(
+        frame, type=("scores",), output_dir=str(mixed_plots), rank="none", use_names=False, plot=False,
+    )
+    mixed_scores = pd.read_csv(mixed_plots / "quality_scores.csv")
+    assert set(mixed_scores["annotator"]) >= {"kraken2", "k2b", "SAMOVAR"}
+
     root = tmp_path / "pkg"
     publish_package(root, count=1, base_seed=1, kind="generated", identity="generated:names")
     set_repeat_state(root, "0001", "succeeded", stage="pipeline")
