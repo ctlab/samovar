@@ -99,7 +99,9 @@ report.mkdir(parents=True, exist_ok=True)
 html = run / "summary" / "multiqc" / "SAMOVAR_multiqc_report.html"
 if html.is_file():
     shutil.copy2(html, report / "multiqc_report.html")
-for src in sorted(run.glob("out_*/initial_annotations_plots/scores.png")):
-    shutil.copy2(src, figures / f"{src.parents[1].name}_scores.png")
+for name in ("annotators.png", "profilers.png"):
+    src = run / "summary" / "figures" / name
+    if src.is_file():
+        shutil.copy2(src, figures / name)
 print("harvest", report / "multiqc_report.html")
 PY

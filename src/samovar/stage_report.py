@@ -2556,7 +2556,19 @@ def bundle_package_report(root: Path, settings: Dict[str, Any]) -> Path:
             row for row in results
             if row.get("metric") and row.get("metric") not in _RUNTIME_METRICS
         ]
-        _points("benchmark", score_stats, score_obs)
+        def _profile_score(row: Mapping[str, Any]) -> bool:
+            return bool(str(row.get("kind") or "").strip())
+
+        _points(
+            "benchmark",
+            [row for row in score_stats if not _profile_score(row)],
+            [row for row in score_obs if not _profile_score(row)],
+        )
+        _points(
+            "profilers",
+            [row for row in score_stats if _profile_score(row)],
+            [row for row in score_obs if _profile_score(row)],
+        )
     if "runtime" in enabled:
         _points(
             "runtime",

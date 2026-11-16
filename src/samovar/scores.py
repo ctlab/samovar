@@ -12,7 +12,7 @@ replace the per-read accuracy column named ``f1``.
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -759,6 +759,118 @@ def save_scores_barplot(
         edgecolor="none",
     )
     plt.close("all")
+
+
+def _bar_label(row: Mapping[str, Any], *, phase: bool, sample: bool, truth: bool) -> str:
+    parts = [str(row.get("run_name") or "")]
+    if phase:
+        parts.append(str(row.get("phase") or ""))
+    if sample:
+        parts.append(str(row.get("sample_id") or ""))
+    if truth:
+        parts.append(str(row.get("truth_source") or ""))
+    return " ".join(part for part in parts if part)
+
+
+def save_repeat_errorbars(
+    rows: Sequence[Mapping[str, Any]],
+    path,
+    *,
+    title: str,
+    metrics: Sequence[str],
+    labels: Optional[Dict[str, str]] = None,
+) -> None:
+    """One figure: mean across repeats, with the saved interval as the error bar."""
+    from math import ceil
+    from pathlib import Path
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from samovar.viz_annotation import _setup_cns
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    chosen = [metric for metric in metrics if any(str(row.get("metric") or "") == metric for row in rows)]
+    if not chosen:
+        return
+    used = [row for row in rows if str(row.get("metric") or "") in chosen]
+    phases = {str(row.get("phase") or "") for row in used}
+    samples = {str(row.get("sample_id") or "") for row in used}
+    truths = {str(row.get("truth_source") or "") for row in used}
+    flags = {"phase": len(phases) > 1, "sample": len(samples) > 1, "truth": len(truths) > 1}
+    names: List[str] = []
+    for row in used:
+        label = _bar_label(row, **flags)
+        if label and label not in names:
+            names.append(label)
+    if not names:
+        return
+    lookup = {
+        (_bar_label(row, **flags), str(row.get("metric") or "")): row
+        for row in used
+    }
+    shown = labels or {}
+    _setup_cns()
+    n_ann = len(names)
+    n_met = len(chosen)
+    ncols = min(3, n_met)
+    nrows = ceil(n_met / ncols)
+    panel_w = max(3.4, 0.72 * n_ann + 1.8)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(panel_w * ncols, 2.85 * nrows + 0.55), squeeze=False,
+    )
+    x = np.arange(n_ann, dtype=float)
+    for i, metric in enumerate(chosen):
+        ax = axes[i // ncols][i % ncols]
+        means, lows, highs = [], [], []
+        for name in names:
+            row = lookup.get((name, metric), {})
+            mean = _optional_plot_float(row.get("mean"))
+            low = _optional_plot_float(row.get("ci_low"))
+            high = _optional_plot_float(row.get("ci_high"))
+            means.append(0.0 if mean is None else mean)
+            if mean is None or low is None or high is None:
+                lows.append(0.0)
+                highs.append(0.0)
+            else:
+                lows.append(max(0.0, mean - low))
+                highs.append(max(0.0, high - mean))
+        vals = np.asarray(means, dtype=float)
+        ax.bar(x, vals, width=0.72, color=BAR_COLORS.get(metric, "0.45"), edgecolor="white", linewidth=0.6)
+        ax.errorbar(x, vals, yerr=np.vstack([lows, highs]), fmt="none", ecolor="0.15", elinewidth=1, capsize=3)
+        ax.set_title(shown.get(metric, metric))
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=30, ha="right")
+        ax.set_xlim(-0.7, n_ann - 0.3)
+        span = np.concatenate([vals - np.asarray(lows), vals + np.asarray(highs)])
+        ax.set_ylim(*_panel_ylim(span))
+        ax.axhline(0, color="0.55", linewidth=0.7)
+        ax.set_axisbelow(True)
+        ax.yaxis.grid(True, linestyle=":", linewidth=0.6, color="0.78")
+        if i % ncols == 0:
+            ax.set_ylabel("Score")
+    for j in range(n_met, nrows * ncols):
+        axes[j // ncols][j % ncols].set_visible(False)
+    fig.suptitle(title)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.88, bottom=0.14, hspace=0.38, wspace=0.28)
+    fig.savefig(
+        path, dpi=_SCORE_SAVE_DPI, bbox_inches="tight", pad_inches=0.25,
+        facecolor="white", transparent=False, edgecolor="none",
+    )
+    plt.close("all")
+
+
+def _optional_plot_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
 
 
 def format_f1_caption(f1: float, std: Dict[str, float], rank: Optional[str] = None) -> str:

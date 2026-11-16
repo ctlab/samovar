@@ -983,3 +983,60 @@ def test_three_ground_truths_score_independently(tmp_path):
     present = present[present["ground_truth"] == "profile_truth"]
     assert present["reason"].str.contains("presence gold standard").all()
     assert present["bray_curtis"].isna().all()
+
+
+def test_profile_comparison_includes_annotators_on_each_stage(tmp_path, monkeypatch):
+    import samovar.profile_pipeline as pipe
+    from samovar.profiles import metadata, write_profiles
+    from samovar.repeats import publish_package, set_repeat_state, write_long_tables
+    from samovar.scores import score_annotators
+
+    monkeypatch.setattr(
+        pipe, "at_rank",
+        lambda table, info, rank, taxdump=None: (table, {**info, "rank": rank}),
+    )
+    fields = metadata({
+        "kind": "abundance", "unit": "counts", "basis": "reads",
+        "taxonomy": "ncbi", "rank": "species", "normalization": "classified",
+    })
+    pkg = tmp_path / "pkg"
+    publish_package(pkg, count=1, base_seed=1, kind="generated", identity="mix")
+    child = pkg / "out_0001"
+    set_repeat_state(pkg, "0001", "succeeded", stage="pipeline")
+    reads = "@r1|taxid:562\nACGT\n+\nIIII\n"
+    for stage in ("initial", "regenerated", "reprofiled"):
+        read_stage = "initial" if stage == "reprofiled" else stage
+        folder = child / read_stage
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "A.fastq").write_text(reads, encoding="utf-8")
+        ann = child / f"{stage}_annotations"
+        ann.mkdir()
+        name = "A_reprofiled.csv" if stage == "reprofiled" else "A.csv"
+        table = pd.DataFrame({"seq": ["r1"], "taxID_kraken2_0": [562], "true": [562]})
+        table.to_csv(ann / name, index=False)
+        write_profiles(
+            child / f"{stage}_profiles",
+            {"ext": pd.DataFrame({"taxid": ["562"], "N_A": [1.0]})},
+            {"ext": fields},
+        )
+        assert pipe.score(child, stage, {})
+        scores = pd.read_csv(child / f"{stage}_annotations_plots" / "profile_quality_scores.csv")
+        assert set(scores["annotator"]) == {"kraken2", "ext"}
+        assert set(scores.loc[scores["annotator"] == "kraken2", "rank"]) == {"taxid"}
+        assert set(scores.loc[scores["annotator"] == "ext", "rank"]) == {"species"}
+        assert (child / f"{stage}_annotations_plots" / "profile_scores.png").is_file()
+        assert not (child / f"{stage}_profiles" / "kraken2.csv").exists()
+        read = score_annotators(table, ["taxID_kraken2_0"], include_consensus=False)
+        assert "ext" not in set(read["annotator"].astype(str))
+        assert not read.empty
+    plots = child / "initial_annotations_plots"
+    (plots / "quality_scores.csv").write_text(
+        "annotator,schema,accuracy,r2\nkraken2,read-quality-v1,1,1\n",
+        encoding="utf-8",
+    )
+    profiles = pd.read_csv(write_long_tables(pkg)["profiles"])
+    for stage in ("initial", "regenerated", "reprofiled"):
+        assert set(profiles.loc[profiles["phase"] == stage, "run_name"]) == {"kraken2", "ext"}
+    figures = pkg / "summary" / "figures"
+    assert (figures / "annotators.png").is_file()
+    assert (figures / "profilers.png").is_file()

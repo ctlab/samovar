@@ -6,13 +6,11 @@ Four de novo phage indexes (Kraken2, Kaiju, Centrifuge, Kraken2+Bracken) and one
 bash examples/benchmark/pipeline.sh
 ```
 
-The package report is the repeat summary: one point per repeat, the mean and its interval, and composition. Each child also keeps its own score bar. Benchmark mode does not write the single-run F1 heatmap.
+The package summary writes `summary/figures/annotators.png` and, when a profiler ran, `summary/figures/profilers.png`. Each file is one bar chart of the mean across repeats with the 95% interval. These charts are not part of the MultiQC report.
 
-![repeat 1](figures/out_0001_scores.png)
+![annotators](figures/annotators.png)
 
-![repeat 2](figures/out_0002_scores.png)
-
-![repeat 3](figures/out_0003_scores.png)
+![profilers](figures/profilers.png)
 
 [multiqc/multiqc_report.html](multiqc/multiqc_report.html)
 

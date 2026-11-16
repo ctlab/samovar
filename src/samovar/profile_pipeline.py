@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from samovar.abundance import input_to_abundance_tables, n_sample_columns
+from samovar.abundance import n_sample_columns
 from samovar.profiles import (at_rank, change_basis, load_profile, metadata, read_counts,
                               read_profiles, reference_lengths, write_profiles)
 
@@ -83,7 +83,7 @@ def _drop_reprofiled_suffix(table, meta):
 
 def stage_tables(root, stage):
     ann = stage_annotation(root, stage)
-    tables = input_to_abundance_tables(ann)
+    tables = ann.to_abundance()
     meta = dict(ann.profile_metadata)
     for name in tables:
         meta.setdefault(name, metadata({"rank": "taxid", "normalization": "all"}))
@@ -368,6 +368,8 @@ def score(root, stage, config):
         for name, table in tables.items():
             pred, pm, aligned, aligned_meta = align_truth(table, metas[name], truth, tm, root, config)
             result = profile_scores(pred, aligned, pm, aligned_meta)
+            for key in ("kind", "taxonomy", "rank", "unit", "basis", "normalization"):
+                result[key] = pm.get(key, "")
             result.insert(0, "ground_truth", gt_name)
             result.insert(0, "annotator", _shown(name))
             rows.append(result)
@@ -375,6 +377,25 @@ def score(root, stage, config):
     dest.mkdir(parents=True, exist_ok=True)
     result = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     result.to_csv(dest / "profile_quality_scores.csv", index=False)
+    if "f1" in result.columns:
+        from samovar.scores import save_scores_barplot
+
+        plot = result.loc[result["f1"].notna()].copy()
+        if not plot.empty and plot["sample"].nunique() > 1:
+            plot["annotator"] = plot["annotator"].astype(str) + " " + plot["sample"].astype(str)
+        save_scores_barplot(
+            plot,
+            dest / "profile_scores.png",
+            title="Profile comparison",
+            display={
+                "precision": "Precision",
+                "recall": "Recall",
+                "f1": "F1",
+                "jaccard": "Jaccard",
+                "l1_norm": "L1",
+                "bray_curtis": "Bray–Curtis",
+            },
+        )
     data = {str(i): {k: (None if pd.isna(v) else v) for k, v in row.items()}
             for i, row in result.iterrows()}
     content = dict(id=f"{stage}_profile_scores", section_name="Taxonomic profiles",

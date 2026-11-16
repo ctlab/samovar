@@ -12,7 +12,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 SCHEMA = 1
 SEED_RULE = "sha256-v1"
@@ -542,6 +542,7 @@ def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed:
                     "run_name": rec.get("annotator") or rec.get("run_name") or "",
                     "truth_source": rec.get("ground_truth") or rec.get("truth_source") or "",
                     "reason": reason,
+                    "_group": "read" if name == "quality_scores.csv" else "profile",
                     **_desc(rec),
                 }
                 metrics = []
@@ -788,6 +789,45 @@ def statistics_rows(
     return written
 
 
+_RUNTIME_METRICS = {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}
+_PROFILE_BAR_METRICS = ("precision", "recall", "f1", "jaccard", "l1_norm", "bray_curtis")
+
+
+def _write_summary_figures(dest: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Repeat means as ordinary bar charts. Not part of the MultiQC report."""
+    from samovar.scores import SCORE_DISPLAY, save_repeat_errorbars
+
+    scored = [
+        row for row in rows
+        if row.get("metric") and row.get("metric") not in _RUNTIME_METRICS and not row.get("taxon")
+    ]
+    read_rows = [row for row in scored if not str(row.get("kind") or "").strip()]
+    profile_rows = [row for row in scored if str(row.get("kind") or "").strip()]
+    dest.mkdir(parents=True, exist_ok=True)
+    pairs = (
+        (read_rows, dest / "annotators.png", "Annotators", tuple(SCORE_DISPLAY), SCORE_DISPLAY),
+        (
+            profile_rows,
+            dest / "profilers.png",
+            "Profilers",
+            _PROFILE_BAR_METRICS,
+            {
+                "precision": "Precision",
+                "recall": "Recall",
+                "f1": "F1",
+                "jaccard": "Jaccard",
+                "l1_norm": "L1",
+                "bray_curtis": "Bray–Curtis",
+            },
+        ),
+    )
+    for group, path, title, metrics, labels in pairs:
+        if group:
+            save_repeat_errorbars(group, path, title=title, metrics=metrics, labels=labels)
+        elif path.is_file():
+            path.unlink()
+
+
 def write_long_tables(root: Path) -> Dict[str, Path]:
     """Rewrite summary long tables from successful child artifacts.
 
@@ -804,6 +844,26 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
     groups: Dict[tuple, List[dict]] = {}
     profile_rows: List[dict] = []
     result_rows: List[dict] = []
+    descriptors: Dict[tuple, tuple] = {}
+
+    def _observe(phase, name, table, info, repeat_id, seed, native):
+        shown = str(info.get("run_name") or name)
+        key = (phase, shown) + tuple(_desc(info)[item] for item in _DESC)
+        samples = {}
+        for col in n_sample_columns(table):
+            samples[col[2:]] = {
+                str(taxid): value
+                for taxid, value in zip(table["taxid"].astype(str), table[col])
+            }
+        groups.setdefault(key, []).append({
+            "repeat_id": repeat_id,
+            "seed": seed,
+            "info": info,
+            "samples": samples,
+        })
+        if native:
+            descriptors.setdefault((phase, shown), key[2:])
+
     for row in data["repeats"]:
         if (row.get("stages") or {}).get("pipeline") != "succeeded":
             continue
@@ -813,21 +873,16 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
         for phase in _PHASES:
             tables, metas = read_profiles(child / f"{phase}_profiles")
             for name, table in tables.items():
-                info = metas[name]
-                shown = str(info.get("run_name") or name)
-                key = (phase, shown) + tuple(_desc(info)[item] for item in _DESC)
-                samples = {}
-                for col in n_sample_columns(table):
-                    samples[col[2:]] = {
-                        str(taxid): value
-                        for taxid, value in zip(table["taxid"].astype(str), table[col])
-                    }
-                groups.setdefault(key, []).append({
-                    "repeat_id": repeat_id,
-                    "seed": seed,
-                    "info": info,
-                    "samples": samples,
-                })
+                _observe(phase, name, table, metas[name], repeat_id, seed, True)
+            ann_dir = child / f"{phase}_annotations"
+            if ann_dir.is_dir():
+                from samovar.profile_pipeline import stage_tables
+
+                converted, converted_meta = stage_tables(child, phase)
+                for name, table in converted.items():
+                    if name in tables:
+                        continue
+                    _observe(phase, name, table, converted_meta[name], repeat_id, seed, False)
             _score_rows(result_rows, child, phase, repeat_id, seed)
         _runtime_rows(result_rows, child, repeat_id, seed)
         _custom_score_rows(result_rows, child, repeat_id, seed)
@@ -875,11 +930,8 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
                                 "value": value,
                                 **info,
                             })
-    descriptors: Dict[tuple, tuple] = {}
-    for key in groups:
-        descriptors.setdefault((key[0], key[1]), key[2:])
     for item in result_rows:
-        if item.get("kind") or item["metric"] in {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}:
+        if item.get("_group") == "read" or item.get("kind") or item["metric"] in {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}:
             continue
         desc = descriptors.get((item["phase"], item["run_name"]))
         if desc is None:
@@ -916,6 +968,7 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
         fixed_abundance=fixed_abundance,
     )
     _atomic_csv(statistics, stat_rows, _STAT_FIELDS)
+    _write_summary_figures(summary / "figures", stat_rows)
     _atomic_json(summary / "tables.json", {
         "schema": 1,
         "built_from": "saved child artifacts",
