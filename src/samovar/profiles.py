@@ -911,7 +911,12 @@ def report_profiles(annotation, dest, stage, config=None, *, annotators="all"):
         matches = [run for run in runs if source == run.get("run_name") or
                    source.startswith("taxID_" + str(run.get("run_name")) + "_")]
         run = matches[0] if len(matches) == 1 else {}
-        info.update(stage=stage, identity=name, run_name=info.get("run_name", run.get("run_name", source)),
+        from samovar.stage_report import annotator_display_name, read_annotator_labels
+
+        shown = annotator_display_name(str(source), read_annotator_labels(runs))
+        if shown == str(source):
+            shown = info.get("run_name", run.get("run_name", source))
+        info.update(stage=stage, identity=name, run_name=shown,
                     tool=info.get("tool", run.get("type")),
                     database=info.get("database", run.get("db_path")))
         from samovar.multiqc_report import profile_selected

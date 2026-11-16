@@ -814,7 +814,8 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
             tables, metas = read_profiles(child / f"{phase}_profiles")
             for name, table in tables.items():
                 info = metas[name]
-                key = (phase, name) + tuple(_desc(info)[item] for item in _DESC)
+                shown = str(info.get("run_name") or name)
+                key = (phase, shown) + tuple(_desc(info)[item] for item in _DESC)
                 samples = {}
                 for col in n_sample_columns(table):
                     samples[col[2:]] = {

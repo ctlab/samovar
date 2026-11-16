@@ -649,6 +649,60 @@ def _clean_db_label(label: str) -> str:
     return text.replace(" ", "_")
 
 
+def read_annotator_labels(run_config: Sequence[Any]) -> Dict[str, str]:
+    """Map combiner tokens ``kraken2_0`` / ``taxID_kraken2_0`` onto run names.
+
+    The combiner sorts ``{sample}_{run}.{tool}.out`` by filename and numbers
+    that list. Profile-level tools are not in it. A single read-level tool
+    also matches the unsuffixed name left after viz strips a unique ``_0``.
+    """
+    rows = []
+    for item in run_config or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("output_level") or "read") == "profile":
+            continue
+        run_name = str(item.get("run_name") or item.get("type") or "").strip()
+        tool_type = str(item.get("type") or run_name)
+        if not run_name or not tool_type:
+            continue
+        filename = f"S_{run_name}.{_annotator_output_suffix(tool_type)}"
+        tool = _combine_tool_name(filename).lower()
+        if not tool:
+            continue
+        rows.append((filename, tool, run_name))
+    rows.sort(key=lambda row: row[0])
+    counts: Dict[str, int] = {}
+    for _filename, tool, _run_name in rows:
+        counts[tool] = counts.get(tool, 0) + 1
+    labels: Dict[str, str] = {}
+    for index, (_filename, tool, run_name) in enumerate(rows):
+        for token in (f"{tool}_{index}", f"taxid_{tool}_{index}", f"taxID_{tool}_{index}"):
+            labels[token] = run_name
+        if counts[tool] == 1:
+            for token in (tool, f"taxid_{tool}", f"taxID_{tool}"):
+                labels[token] = run_name
+    return labels
+
+
+def run_config_near(path: Path) -> list:
+    """``run_config`` from the nearest ``.log/configs/config_init.yaml``."""
+    for parent in (Path(path), *Path(path).parents):
+        cfg = parent / ".log" / "configs" / "config_init.yaml"
+        if cfg.is_file():
+            data = _load_yaml(cfg)
+            rows = data.get("run_config") or []
+            return rows if isinstance(rows, list) else []
+    return []
+
+
+def annotator_display_name(name: str, labels: Dict[str, str]) -> str:
+    text = str(name)
+    if text in labels:
+        return labels[text]
+    return labels.get(text.lower(), text)
+
+
 def database_column_labels(run_config: Sequence[Any]) -> Any:
     """Map combiner ``(tool, index)`` onto the database token from the flag.
 

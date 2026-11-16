@@ -407,3 +407,56 @@ def test_pairs_count_once_and_sources_stay_separate():
     )[0]
     assert reads["tp"] == 1 and table["fp"] == 1
     assert reads["truth_source"] != table["truth_source"]
+
+
+def test_quality_scores_use_run_names_not_tool_index(tmp_path):
+    import yaml
+
+    from samovar.profiles import write_profiles
+    from samovar.repeats import publish_package, set_repeat_state, write_long_tables
+    from samovar.stage_report import read_annotator_labels
+
+    labels = read_annotator_labels([
+        {"run_name": "k2b", "type": "kraken2"},
+        {"run_name": "sylphpart", "type": "sylph", "output_level": "profile"},
+        {"run_name": "k2a", "type": "kraken2"},
+    ])
+    assert labels["kraken2_0"] == "k2a"
+    assert labels["taxID_kraken2_1"] == "k2b"
+    assert "sylph_0" not in labels
+
+    run = tmp_path / "run"
+    plots = run / "initial_annotations_plots"
+    cfg = run / ".log" / "configs"
+    cfg.mkdir(parents=True)
+    (cfg / "config_init.yaml").write_text(yaml.safe_dump({"run_config": [
+        {"run_name": "k2b", "type": "kraken2"},
+        {"run_name": "k2a", "type": "kraken2"},
+    ]}), encoding="utf-8")
+    frame = pd.DataFrame({
+        "seq": ["r1", "r2"],
+        "true": ["562", "562"],
+        "sample": ["A", "A"],
+        "taxID_kraken2_0": ["562", "562"],
+        "taxID_kraken2_1": ["9606", "9606"],
+    })
+    viz_annotation(
+        frame, type=("scores",), output_dir=str(plots), rank="none", use_names=False, plot=False,
+    )
+    scores = pd.read_csv(plots / "quality_scores.csv")
+    assert set(scores["annotator"]) >= {"k2a", "k2b"}
+    assert not scores["annotator"].astype(str).str.startswith("kraken2_").any()
+
+    root = tmp_path / "pkg"
+    publish_package(root, count=1, base_seed=1, kind="generated", identity="generated:names")
+    set_repeat_state(root, "0001", "succeeded", stage="pipeline")
+    child = root / "out_0001" / "initial_profiles"
+    table = pd.DataFrame({"taxid": ["562"], "N_A": [3]})
+    write_profiles(child, {"taxID_kraken2_0": table}, {
+        "taxID_kraken2_0": dict(kind="abundance", unit="counts", basis="reads", taxonomy="ncbi",
+                                rank="species", normalization="all", run_name="k2a"),
+    })
+    written = write_long_tables(root)
+    text = written["profiles"].read_text(encoding="utf-8")
+    assert "k2a" in text
+    assert "taxID_kraken2_0" not in text

@@ -351,18 +351,25 @@ def score(root, stage, config):
     if not tables or (not gts and not (native or config.get("profile_truth"))):
         return False
     from samovar.scores import profile_scores
+    from samovar.stage_report import annotator_display_name, read_annotator_labels, run_config_near
+
+    labels = read_annotator_labels(config.get("run_config") or run_config_near(root))
+
+    def _shown(name: str) -> str:
+        return annotator_display_name(name, labels)
+
     rows = []
     if not gts:
         for name in tables:
             rows.append(pd.DataFrame([dict(
-                annotator=name, reason="no profile gold standard available", scorer="profile_scores",
+                annotator=_shown(name), reason="no profile gold standard available", scorer="profile_scores",
             )]))
     for gt_name, truth, tm in gts:
         for name, table in tables.items():
             pred, pm, aligned, aligned_meta = align_truth(table, metas[name], truth, tm, root, config)
             result = profile_scores(pred, aligned, pm, aligned_meta)
             result.insert(0, "ground_truth", gt_name)
-            result.insert(0, "annotator", name)
+            result.insert(0, "annotator", _shown(name))
             rows.append(result)
     dest = root / f"{stage}_annotations_plots"
     dest.mkdir(parents=True, exist_ok=True)

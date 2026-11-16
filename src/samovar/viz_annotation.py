@@ -198,6 +198,25 @@ def axis_levels_from_fpc(present: Iterable, fpc_core: Sequence[str]) -> List[str
     return core + extra + spec
 
 
+def _rename_runs(df: pd.DataFrame, out_dir: Optional[Path]) -> pd.DataFrame:
+    if out_dir is None:
+        return df
+    from samovar.stage_report import annotator_display_name, read_annotator_labels, run_config_near
+
+    labels = read_annotator_labels(run_config_near(out_dir))
+    if not labels:
+        return df
+    rename = {}
+    taken = set(df.columns)
+    for col in df.columns:
+        shown = annotator_display_name(str(col), labels)
+        if shown == col or shown in taken:
+            continue
+        rename[col] = shown
+        taken.add(shown)
+    return df.rename(columns=rename) if rename else df
+
+
 def _strip_annotator_prefixes(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     rename = {}
@@ -673,6 +692,7 @@ def viz_annotation(
 
     selected = annotator_columns(work)
     work = _strip_annotator_prefixes(work)
+    work = _rename_runs(work, out_dir)
     annotators = []
     skip_meta = {"length", "sample", "true", "seq", "read_type"}
     renamed_selected = []
