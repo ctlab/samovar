@@ -88,8 +88,9 @@ else:
     target.write_text({PROFILE!r})
 ''')
     fake.chmod(0o755)
-    cfg_path = Path(os.environ['SAMOVAR_CONFIG'])
-    cfg = json.loads(cfg_path.read_text())
+    cfg = json.loads(Path(os.environ['SAMOVAR_CONFIG']).read_text())
+    cfg_path = tmp_path / 'samovar_config.json'
+    monkeypatch.setenv('SAMOVAR_CONFIG', str(cfg_path))
     replaced = {'phanta', 'kraken2', 'bracken', 'snakemake'}
     cfg['tools'] = {k: v for k, v in cfg['tools'].items() if k.split(':')[0] not in replaced}
     cfg['tool_envs'] = {k: v for k, v in cfg.get('tool_envs', {}).items() if k not in replaced}
