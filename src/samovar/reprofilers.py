@@ -45,12 +45,13 @@ from samovar.reprofiling import (
     train_models,
     training_n_jobs,
     use_gpu,
+    RFC2_N_ESTIMATORS,
 )
 from samovar.table_regenerators import extra_flags_argv
 
 REPROFILER_GROUP = "reprofiler"
-# ``samovar prepare`` with no ``--reprofiler`` trains RandomForest only.
-DEFAULT_REPROFILER = "random_forest"
+# ``samovar prepare`` with no ``--reprofiler`` trains rfc2.
+DEFAULT_REPROFILER = "rfc2"
 PathLike = Union[str, Path]
 
 _BUILTIN_ALIASES = {
@@ -61,6 +62,9 @@ _BUILTIN_ALIASES = {
     "random_forest": "random_forest",
     "rf": "random_forest",
     "randomforest": "random_forest",
+    "rfc2": "rfc2",
+    "random_forest_2": "rfc2",
+    "randomforest2": "rfc2",
     "adaboost": "adaboost",
     "ada": "adaboost",
     "linear": "linear",
@@ -122,6 +126,8 @@ def flags_apply_to_reprofiler(target: str, name: Optional[str] = None) -> bool:
     if kind == "builtin":
         if canon == "random_forest":
             names.extend(["rf", "randomforest"])
+        if canon == "rfc2":
+            names.extend(["random_forest_2", "randomforest2"])
         if canon == "adaboost":
             names.extend(["ada"])
         if canon == "ensemble":
@@ -156,7 +162,7 @@ def lookup_reprofiler(name: str) -> list:
     if not key:
         raise MissingReprofilerError(
             "Empty reprofiler name. Import with "
-            "`samovar tools import -n NAME --type ml` or use ensemble|random_forest|adaboost|linear."
+            "`samovar tools import -n NAME --type ml` or use ensemble|random_forest|rfc2|adaboost|linear."
         )
     tools = iter_tools(load_config())
     spec = tools.get(key)
@@ -668,13 +674,19 @@ def run_builtin_reprofiler(
         )
         return ReprofileResult(tables=load_csv_tables(output_dir, skip_prefixes=()))
     seed = int(cfg.get("seed") or 42)
+    canon = str(name or "").lower().replace("-", "_")
+    gpu = use_gpu(config=cfg)
+    if canon == "rfc2" and not cfg.get("no_gpu"):
+        gpu = True
     try:
         best, models, metrics, feature_cols = train_models(
             validation,
             random_state=seed,
             methods=name,
             n_jobs=training_n_jobs(config=cfg),
-            gpu=use_gpu(config=cfg),
+            gpu=gpu,
+            abstain=canon == "rfc2",
+            n_estimators=int(cfg.get("n_estimators") or (RFC2_N_ESTIMATORS if canon == "rfc2" else 100)),
         )
     except ValueError:
         passthrough_reprofile_tables(
@@ -964,7 +976,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ml",
         dest="reprofiler",
         default=None,
-        help="random_forest (default)|ensemble|adaboost|linear or an imported --type ml name",
+        help="rfc2 (default)|random_forest|ensemble|adaboost|linear or an imported --type ml name",
     )
     parser.add_argument("--config", default="", help="config_reprofiling.yaml from prepare")
     parser.add_argument(
@@ -985,7 +997,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gpu",
         action="store_true",
-        help="Train on GPU (cuML). AdaBoost has no GPU fit.",
+        help="Train on GPU (cuML). AdaBoost has no GPU fit. rfc2 uses the GPU unless --no-gpu is set.",
+    )
+    parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Train rfc2 on CPU. Other reprofilers already stay on CPU unless --gpu is set.",
     )
     from samovar.memory import add_mem_argument
 
@@ -1015,6 +1032,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cfg["cores"] = int(args.cores)
     if args.gpu:
         cfg["gpu"] = True
+    if getattr(args, "no_gpu", False):
+        cfg["no_gpu"] = True
+        cfg["gpu"] = False
     from samovar.memory import memory_limit_mb
 
     limit = memory_limit_mb(args.mem_mb if args.mem_mb is not None else cfg.get("mem_mb"))

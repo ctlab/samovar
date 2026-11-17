@@ -193,7 +193,7 @@ def _apply_translated_cli_flags(config: "PipelineConfig", args: argparse.Namespa
     config.scoring_tool_flags = named_s or {}
     config.reprofiler_flags = apply_translated_flags(
         config.reprofiler_flags or "",
-        name=config.reprofiler or "random_forest",
+        name=config.reprofiler or "rfc2",
         record=lookup_tool_record(cfg, str(config.reprofiler or "")),
         canonical=canonical,
     ) or None
@@ -429,8 +429,9 @@ class PipelineConfig:
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
     viz: Optional[Dict] = None
-    reprofiler: str = "random_forest"
+    reprofiler: str = "rfc2"
     gpu: bool = False
+    no_gpu: bool = False
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
     feature_importance: str = "builtin"
@@ -496,6 +497,8 @@ class PipelineConfig:
             self.export_formats = []
         if not self.email:
             self.email = _default_email()
+        if self.reprofiler == "rfc2" and not self.no_gpu:
+            self.gpu = True
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
@@ -1234,6 +1237,11 @@ class PipelineConfig:
         )
         if cli_reprofiler:
             config.reprofiler = require_known_reprofiler(cli_reprofiler)
+        if getattr(args, "no_gpu", False):
+            config.gpu = False
+            config.no_gpu = True
+        elif config.reprofiler == "rfc2":
+            config.gpu = True
         cli_fi = getattr(args, "feature_importance", None)
         if cli_fi not in (None, ""):
             config.feature_importance = str(cli_fi)
@@ -1806,6 +1814,7 @@ class PipelineConfig:
             'cores': int(self.cores),
             'mem_mb': int(self.mem_mb or 0),
             'gpu': bool(self.gpu),
+            'no_gpu': bool(self.no_gpu),
             'feature_importance': self.feature_importance or "builtin",
             'feature_importance_all': bool(self.feature_importance_all),
             'feature_importance_flags': self.feature_importance_flags or "",
@@ -2319,7 +2328,12 @@ fi
 
         viz_regenerated = _checkpoint_block("viz_regenerated", _viz_body("regenerated", csv=True))
 
-        gpu_line = " \\\n    --gpu" if self.gpu else ""
+        if self.no_gpu:
+            gpu_line = " \\\n    --no-gpu"
+        elif self.gpu:
+            gpu_line = " \\\n    --gpu"
+        else:
+            gpu_line = ""
         reprofile_body = f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
     "$PYTHON_PATH" {shlex.quote(str(src / 'annotators' / 'fastq_annotator.py'))} "$out_dir/initial_trimmed" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}

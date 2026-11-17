@@ -185,6 +185,7 @@ TOOL_FILES: Dict[str, List[str]] = {
     "minimap2": ["minimap2_li2018.bib"],
     "coverm": ["coverm_aroney2025.bib"],
     "random_forest": ["sklearn_pedregosa2011.bib"],
+    "rfc2": ["sklearn_pedregosa2011.bib"],
     "adaboost": ["sklearn_pedregosa2011.bib"],
     "snakemake": ["snakemake_koster2012.bib", "snakemake_molder2021.bib"],
     "nextflow": ["nextflow_ditommaso2017.bib"],
@@ -664,8 +665,8 @@ _CITE_LOOKUP = {
     "native": ("random_forest",),
     "sklearn": ("random_forest",),
     "permutation": ("random_forest",),
-    "default": ("random_forest",),
-    "auto": ("random_forest",),
+    "default": ("rfc2",),
+    "auto": ("rfc2",),
     "illumina": ("fastp",),
     "bgi": ("fastp",),
     "mgi": ("fastp",),
@@ -792,7 +793,7 @@ def selected_prepare_tools(config: Any) -> List[str]:
     names.append(getattr(config, "reads_generator", "") or "iss")
     names.append(getattr(config, "metagenome_generator", "") or "")
 
-    repro = str(getattr(config, "reprofiler", "") or "random_forest")
+    repro = str(getattr(config, "reprofiler", "") or "rfc2")
     try:
         from samovar.reprofilers import resolve_reprofiler
 

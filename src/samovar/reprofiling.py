@@ -479,6 +479,13 @@ class _ParallelDepth1Tree(BaseEstimator, ClassifierMixin):
         return self.tree_.predict_proba(column)
 
 
+# Chosen on the realistic annotation sweep: 80 trees, confidence 2/3.
+# Below that, F1 barely moves; above it, R² collapses.
+RFC2_N_ESTIMATORS = 80
+RFC2_MIN_CLASS_COUNT = 1
+RFC2_MIN_CONFIDENCE = 2 / 3
+
+
 def build_random_forest(n_jobs=1, random_state=42, n_estimators=100, gpu=False):
     """Forest whose ``fit`` builds trees via ``Parallel(n_jobs=...)`` or cuML on GPU."""
     jobs = training_n_jobs(n_jobs)
@@ -539,7 +546,36 @@ def fit_logistic(X, y, *, n_jobs=1, gpu=False, **kwargs) -> Any:
     return model
 
 
-def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu=False):
+def _choose_abstention(model, y_train):
+    """Save the fixed rfc2 refusal rule and the training class counts."""
+    counts = {int(label): int(n) for label, n in y_train.value_counts().items()}
+    model.samovar_abstain_ = True
+    model.samovar_class_counts_ = counts
+    model.samovar_min_class_count_ = RFC2_MIN_CLASS_COUNT
+    model.samovar_min_confidence_ = RFC2_MIN_CONFIDENCE
+
+
+def _apply_abstention(model, label, confidence):
+    """Return taxid 0 when the saved support rule rejects this row. Confidence stays put."""
+    if not getattr(model, "samovar_abstain_", False):
+        try:
+            return int(label), ""
+        except (TypeError, ValueError):
+            return label, ""
+    counts = getattr(model, "samovar_class_counts_", {}) or {}
+    try:
+        key = int(label)
+    except (TypeError, ValueError):
+        return 0, "unknown_class"
+    support = int(counts.get(key, 0))
+    if support < int(getattr(model, "samovar_min_class_count_", 1) or 1):
+        return 0, "rare_class"
+    if float(confidence) < float(getattr(model, "samovar_min_confidence_", 0) or 0):
+        return 0, "low_confidence"
+    return key, ""
+
+
+def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu=False, abstain=False, n_estimators=None):
     """
     Train RandomForest and/or AdaBoost models for taxID prediction.
 
@@ -551,14 +587,21 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
             or an iterable of those names.
         n_jobs: Threads for training. ``samovar prepare --cores`` supplies this.
         gpu: Train on CUDA. Each model is checked; sklearn estimators are rejected.
+        abstain: rfc2 only. Choose a refusal rule on a held-out sample and save it.
+        n_estimators: Trees. rfc2 uses 80 when this is omitted; other forests use 100.
 
     Returns:
         tuple: (best_model, models_dict, metrics_dict, feature_cols)
     """
     # Preprocess the data first
+    if n_estimators is None:
+        n_estimators = RFC2_N_ESTIMATORS if abstain else 100
+    samples = df["sample"].astype(str) if "sample" in df.columns else None
     df_processed = preprocess_data(df)
     if df_processed.empty:
         raise ValueError("No training rows available after preprocessing")
+    if samples is not None:
+        samples = samples.reindex(df_processed.index)
 
     # Select features for training (exclude seq and true)
     feature_cols = sorted([col for col in df_processed.columns 
@@ -578,34 +621,46 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
     # Prepare features and target
     X = df_processed[feature_cols]
     y = df_processed['true']
-    min_class = int(os.environ.get("SAMOVAR_MIN_CLASS_COUNT", "0") or 0)
-    if min_class > 1:
-        counts = y.value_counts()
-        keep_labels = counts[counts >= min_class].index
-        if len(keep_labels) >= 2:
-            mask = y.isin(keep_labels)
-            dropped = int((~mask).sum())
-            print(
-                f"[rfc] skip rare profiles: drop {dropped} rows in classes with n<{min_class}; "
-                f"keep {len(keep_labels)} classes",
-                flush=True,
-            )
-            X = X.loc[mask]
-            y = y.loc[mask]
-        else:
-            print(
-                f"[rfc] skip rare profiles: not applied, fewer than 2 classes have n>={min_class}",
-                flush=True,
-            )
-    
-    # Split data. Stratify only when every class has ≥2 members (sklearn).
-    split_kwargs = {"test_size": test_size, "random_state": random_state}
-    class_counts = y.value_counts()
-    if len(class_counts) > 1 and int(class_counts.min()) >= 2:
-        split_kwargs["stratify"] = y
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, **split_kwargs
+    grouped = (
+        abstain
+        and samples is not None
+        and int(samples.nunique(dropna=True)) >= 2
     )
+    if grouped:
+        hold = sorted(samples.dropna().unique())[-1]
+        val_mask = samples == hold
+        if int((~val_mask).sum()) == 0 or int(val_mask.sum()) == 0:
+            grouped = False
+    if grouped:
+        X_train, X_test = X.loc[~val_mask], X.loc[val_mask]
+        y_train, y_test = y.loc[~val_mask], y.loc[val_mask]
+    else:
+        min_class = int(os.environ.get("SAMOVAR_MIN_CLASS_COUNT", "0") or 0)
+        if min_class > 1:
+            counts = y.value_counts()
+            keep_labels = counts[counts >= min_class].index
+            if len(keep_labels) >= 2:
+                mask = y.isin(keep_labels)
+                dropped = int((~mask).sum())
+                print(
+                    f"[rfc] skip rare profiles: drop {dropped} rows in classes with n<{min_class}; "
+                    f"keep {len(keep_labels)} classes",
+                    flush=True,
+                )
+                X = X.loc[mask]
+                y = y.loc[mask]
+            else:
+                print(
+                    f"[rfc] skip rare profiles: not applied, fewer than 2 classes have n>={min_class}",
+                    flush=True,
+                )
+        split_kwargs = {"test_size": test_size, "random_state": random_state}
+        class_counts = y.value_counts()
+        if len(class_counts) > 1 and int(class_counts.min()) >= 2:
+            split_kwargs["stratify"] = y
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, **split_kwargs
+        )
 
     wanted = _normalize_sklearn_methods(methods)
     if use_gpu(gpu):
@@ -622,10 +677,10 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
                 raise GpuNotSupported(reason)
     builders = {
         "RandomForest": lambda: build_random_forest(
-            n_jobs=jobs, random_state=random_state, gpu=on_gpu
+            n_jobs=jobs, random_state=random_state, n_estimators=n_estimators, gpu=on_gpu
         ),
         "AdaBoost": lambda: build_adaboost(
-            n_jobs=jobs, random_state=random_state, gpu=on_gpu
+            n_jobs=jobs, random_state=random_state, n_estimators=n_estimators, gpu=on_gpu
         ),
     }
     # Build only the requested estimators. AdaBoost has no CUDA fit, so
@@ -640,6 +695,8 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
     for name, model in models.items():
         model.fit(X_train, y_train)
         model.samovar_preprocessing_ = df_processed.attrs["samovar_preprocessing"]
+        if abstain and name == "RandomForest":
+            _choose_abstention(model, y_train)
         score = model.score(X_test, y_test)
         metrics[name] = score
         
@@ -659,6 +716,9 @@ def _normalize_sklearn_methods(methods) -> list:
         "random_forest": ("RandomForest",),
         "rf": ("RandomForest",),
         "randomforest": ("RandomForest",),
+        "rfc2": ("RandomForest",),
+        "random_forest_2": ("RandomForest",),
+        "randomforest2": ("RandomForest",),
         "adaboost": ("AdaBoost",),
         "ada": ("AdaBoost",),
         "randomforestclassifier": ("RandomForest",),
@@ -677,7 +737,7 @@ def _normalize_sklearn_methods(methods) -> list:
         mapped = alias.get(key)
         if mapped is None:
             raise ValueError(
-                f"Unknown built-in reprofiler {raw!r}. Use ensemble, random_forest, or adaboost."
+                f"Unknown built-in reprofiler {raw!r}. Use ensemble, random_forest, rfc2, or adaboost."
             )
         for name in mapped:
             if name not in seen:
@@ -729,13 +789,16 @@ def _predict_in_chunks(model, X: pd.DataFrame):
     n = len(X)
     predictions = np.empty(n, dtype=object)
     confidences = np.zeros(n, dtype=float)
+    reasons = np.empty(n, dtype=object)
+    reasons[:] = ""
     if n == 0:
-        return predictions, confidences
+        return predictions, confidences, reasons
     classes = getattr(model, "classes_", None)
     n_classes = len(classes) if classes is not None else 2
     chunk = proba_chunk_rows(n_classes, int(X.shape[1]))
     annotator_cols = annotator_taxid_columns(X)
     requested = getattr(model, "n_jobs", 1) or 1
+    abstain = bool(getattr(model, "samovar_abstain_", False))
     with predict_threads(model, requested):
         for start in range(0, n, chunk):
             stop = min(n, start + chunk)
@@ -746,6 +809,13 @@ def _predict_in_chunks(model, X: pd.DataFrame):
             del proba
             values = block[annotator_cols] if annotator_cols else None
             for i, label in enumerate(pred):
+                confidence = float(conf[i])
+                if abstain:
+                    kept, reason = _apply_abstention(model, label, confidence)
+                    predictions[start + i] = kept
+                    confidences[start + i] = confidence
+                    reasons[start + i] = reason
+                    continue
                 votes = []
                 if values is not None:
                     for col in annotator_cols:
@@ -755,7 +825,6 @@ def _predict_in_chunks(model, X: pd.DataFrame):
                             continue
                         if value > 0:
                             votes.append(value)
-                confidence = float(conf[i])
                 if os.environ.get("SAMOVAR_RFC_CORRECTION") == "1":
                     min_conf = float(os.environ.get("SAMOVAR_MIN_CONFIDENCE", "0.5"))
                     if not votes or confidence < min_conf:
@@ -773,7 +842,7 @@ def _predict_in_chunks(model, X: pd.DataFrame):
                         continue
                 predictions[start + i] = int(label)
                 confidences[start + i] = confidence
-    return predictions, confidences
+    return predictions, confidences, reasons
 
 
 def predict_taxid(df, model_path=None, feature_cols=None):
@@ -808,7 +877,7 @@ def predict_taxid(df, model_path=None, feature_cols=None):
     if "length" not in df_processed.columns:
         df_processed["length"] = 0
     X = df_processed.reindex(columns=feature_cols, fill_value=0)
-    final_predictions, final_confidences = _predict_in_chunks(model, X)
+    final_predictions, final_confidences, final_reasons = _predict_in_chunks(model, X)
     
     # Chunked read_csv keeps the file index (20000, 20001, ...), so labels are
     # not positions in this dataframe.
@@ -817,15 +886,20 @@ def predict_taxid(df, model_path=None, feature_cols=None):
 
     full_predictions = np.zeros(len(df), dtype=object)
     full_confidences = np.zeros(len(df))
+    full_reasons = np.empty(len(df), dtype=object)
+    full_reasons[:] = ""
 
-    for i, (pred, conf) in enumerate(zip(final_predictions, final_confidences)):
+    for i, (pred, conf, reason) in enumerate(zip(final_predictions, final_confidences, final_reasons)):
         pos = label_to_pos[processed_to_original[i]]
         full_predictions[pos] = pred
         full_confidences[pos] = conf
+        full_reasons[pos] = reason
     
     # Add predictions to dataframe
     df['taxid_SAMOVAR'] = full_predictions
     df['taxid_SAMOVAR_confidence'] = full_confidences
+    if getattr(model, "samovar_abstain_", False):
+        df["taxid_SAMOVAR_abstain_reason"] = full_reasons
     
     return df
 

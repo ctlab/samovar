@@ -49,7 +49,7 @@ def _tiny_tables():
 
 def test_resolve_builtin_reprofilers():
     assert resolve_reprofiler("ensemble") == ("builtin", "ensemble")
-    assert resolve_reprofiler(None) == ("builtin", "random_forest")
+    assert resolve_reprofiler(None) == ("builtin", "rfc2")
     assert resolve_reprofiler("rf") == ("builtin", "random_forest")
     assert resolve_reprofiler("AdaBoost") == ("builtin", "adaboost")
     assert resolve_reprofiler("linear") == ("builtin", "linear")
@@ -66,8 +66,8 @@ def test_prepare_cores_are_training_threads(tmp_path):
     assert repro["cores"] == 6
     iss = yaml.safe_load(Path(paths["annotation2iss"]).read_text())
     assert iss["cores"] == 6
-    assert repro["reprofiler"] == "random_forest"
-    assert repro["gpu"] is False
+    assert repro["reprofiler"] == "rfc2"
+    assert repro["gpu"] is True
     assert export["cores"] == 6
     script = Path(config.generate_pipeline(str(tmp_path))).read_text()
     assert 'export SAMOVAR_CORES="6"' in script
@@ -490,3 +490,92 @@ def test_combined_only_initial_reaches_adapter_without_copying_true(tmp_path, mo
     ])
     assert rc == 1
     assert list(failed.glob("*_reprofiled.csv")) == []
+
+
+def _rfc2_frames():
+    rows = []
+    for sample, n in (("A", 30), ("B", 12)):
+        for i in range(n):
+            tax = 562 if i % 2 == 0 else 9606
+            rows.append({
+                "seq": f"{sample}{i}",
+                "sample": sample,
+                "taxid_dummy": tax,
+                "length": 100,
+                "true": tax,
+            })
+    rows.append({
+        "seq": "rare",
+        "sample": "A",
+        "taxid_dummy": 111,
+        "length": 100,
+        "true": 111,
+    })
+    regenerated = pd.DataFrame(rows)
+    initial = pd.DataFrame({
+        "seq": ["known", "other", "blank"],
+        "taxid_dummy": [562, 9606, 111],
+        "length": [100, 100, 100],
+        "true": [562, 9606, 111],
+    })
+    return regenerated, initial
+
+
+def test_rfc2_name_and_baseline_forest_do_not_abstain():
+    assert resolve_reprofiler("random_forest_2") == ("builtin", "rfc2")
+    regenerated, initial = _rfc2_frames()
+    baseline, _, _, _ = train_models(
+        regenerated.drop(columns=["sample"]),
+        methods="random_forest",
+        n_jobs=1,
+        gpu=False,
+        n_estimators=8,
+        random_state=1,
+    )
+    assert not getattr(baseline, "samovar_abstain_", False)
+    scored = predict_taxid(initial, model_path=baseline)
+    assert "taxid_SAMOVAR_abstain_reason" not in scored.columns
+    assert set(scored["taxid_SAMOVAR"].astype(int)) <= {562, 9606, 111}
+
+
+def test_rfc2_abstains_saves_the_rule_and_is_stable_across_chunks(tmp_path):
+    import joblib
+
+    regenerated, initial = _rfc2_frames()
+    model, _, _, _ = train_models(
+        regenerated,
+        methods="rfc2",
+        n_jobs=1,
+        gpu=False,
+        abstain=True,
+        n_estimators=8,
+        random_state=1,
+    )
+    assert model.samovar_abstain_ is True
+    assert model.samovar_min_class_count_ == 1
+    assert model.samovar_min_confidence_ == 2 / 3
+    assert model.n_estimators == 8
+    assert 562 in model.samovar_class_counts_
+
+    model.samovar_min_class_count_ = max(model.samovar_class_counts_.values()) + 1
+    model.samovar_min_confidence_ = 0.0
+    one = predict_taxid(initial.iloc[[0]], model_path=model)
+    many = predict_taxid(initial, model_path=model)
+    assert int(one["taxid_SAMOVAR"].iloc[0]) == int(many["taxid_SAMOVAR"].iloc[0]) == 0
+    assert many["taxid_SAMOVAR_abstain_reason"].iloc[0] == "rare_class"
+    assert float(many["taxid_SAMOVAR_confidence"].iloc[0]) > 0
+
+    model.samovar_min_class_count_ = 1
+    model.samovar_min_confidence_ = 1.1
+    refused = predict_taxid(initial.iloc[[0]], model_path=model)
+    assert int(refused["taxid_SAMOVAR"].iloc[0]) == 0
+    assert refused["taxid_SAMOVAR_abstain_reason"].iloc[0] == "low_confidence"
+    assert float(refused["taxid_SAMOVAR_confidence"].iloc[0]) > 0
+
+    path = tmp_path / "trained_model.joblib"
+    joblib.dump(model, path)
+    loaded = joblib.load(path)
+    again = predict_taxid(initial.iloc[[0]], model_path=loaded)
+    assert int(again["taxid_SAMOVAR"].iloc[0]) == 0
+    assert loaded.samovar_min_confidence_ == 1.1
+    assert loaded.samovar_class_counts_[562] == model.samovar_class_counts_[562]

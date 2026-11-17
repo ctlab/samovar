@@ -263,8 +263,8 @@ def main():
         dest='reprofiler',
         default=None,
         help=(
-            'ML reprofiler (default: random_forest). Also ensemble (RandomForest and '
-            'AdaBoost), adaboost, linear, or a name imported with '
+            'ML reprofiler (default: rfc2, 80 trees, confidence 2/3, GPU). '
+            'Also random_forest, ensemble, adaboost, linear, or a name imported with '
             '`samovar tools import --type ml`'
         ),
     )
@@ -273,8 +273,13 @@ def main():
         action='store_true',
         help=(
             'Train ML models on a GPU via cuML (RandomForest and logistic regression). '
-            'AdaBoost stays unsupported: its fit is a CPU stump loop.'
+            'rfc2 does this unless --no-gpu is set. AdaBoost stays on CPU.'
         ),
+    )
+    parser.add_argument(
+        '--no-gpu',
+        action='store_true',
+        help='Train rfc2 on CPU.',
     )
     parser.add_argument(
         '--feature-importance',
