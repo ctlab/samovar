@@ -28,7 +28,13 @@ if [[ "$ready" -eq 0 ]]; then
   # into --output-dir. Link them so build sees a FASTA directory.
   while IFS= read -r genome; do
     [[ -f "$genome" ]] || continue
-    ln -sfn "$genome" "$db/src/$(basename "$genome")"
+    dest="$db/src/$(basename "$genome")"
+    # A cache miss already writes the FASTA into --output-dir. Linking that
+    # path onto itself removes the file and stops the build.
+    if [[ "$genome" -ef "$dest" ]]; then
+      continue
+    fi
+    ln -sfn "$genome" "$dest"
   done < <(samovar genome download --output-dir "$db/src" "${library[@]}")
   if ! compgen -G "$db/src/*" > /dev/null; then
     echo "genome download produced no FASTA under $db/src" >&2
