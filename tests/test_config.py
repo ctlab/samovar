@@ -317,6 +317,13 @@ def test_generate_pipeline(tmp_path):
         assert "incremental_annotations: true" in init_yaml.read_text(encoding="utf-8")
         assert "score annotators" in pipeline_content
         assert "score profiles" in pipeline_content
+        for stage in ("regenerated", "reprofiled"):
+            marker = f'"$out_dir/{stage}_annotations_plots" \\\n'
+            assert marker in pipeline_content
+            follow = pipeline_content.split(marker, 1)[1].lstrip()
+            assert follow.startswith(
+                f'--csv "$out_dir/{stage}_annotations/combined_annotation_table.csv"'
+            )
         assert "workflow/ML.py" in pipeline_content
         assert "--seed 42" in pipeline_content
         assert "samovar.seqio" in pipeline_content

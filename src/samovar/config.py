@@ -2200,7 +2200,7 @@ fi
             lines = []
             if has_read_tools:
                 csv_flag = (
-                    f'\n    --csv "$out_dir/{stage}_annotations/combined_annotation_table.csv"'
+                    f' \\\n    --csv "$out_dir/{stage}_annotations/combined_annotation_table.csv"'
                     if csv else ""
                 )
                 lines.append(
