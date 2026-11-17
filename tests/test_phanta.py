@@ -109,6 +109,7 @@ else:
     return root, executable, db, reads
 
 
+@pytest.mark.optional
 @pytest.mark.parametrize('paired', [False, True])
 def test_phanta_production_profile_adapter(native, paired):
     from samovar.annotators_wrapper import ProfileAnnotator

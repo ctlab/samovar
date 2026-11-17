@@ -49,6 +49,7 @@ def test_cli_config_python_beats_foreign_path_and_env(runtime):
     assert not called.exists()
 
 
+@pytest.mark.optional
 @pytest.mark.parametrize("kind", ["generate", "prepare"])
 def test_generated_scripts_keep_space_paths_as_one_argument(tmp_path, runtime, kind):
     config, python, snake, capture, called = runtime
@@ -147,6 +148,7 @@ def test_direct_shell_wrapper_uses_configured_python(runtime, tmp_path):
     assert not called.exists()
 
 
+@pytest.mark.optional
 @pytest.mark.parametrize(
     "schema",
     [

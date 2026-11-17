@@ -266,7 +266,7 @@ _IN_TREE_ANNOTATOR_MODULES = {
 }
 
 
-def _portable_annotator_cmd(cmd: str) -> str:
+def _portable_annotator_cmd(cmd: str, *, allow_python_script: bool = False) -> str:
     """Keep PATH names in YAML; exec resolves via PATH / install config.
 
     Absolute binaries the user passed explicitly are stored as-is.
@@ -290,13 +290,13 @@ def _portable_annotator_cmd(cmd: str) -> str:
     if path.is_file():
         from samovar.tools_import import refuse_nonexecutable_annotator
 
-        refuse_nonexecutable_annotator(text)
+        refuse_nonexecutable_annotator(text, allow_python_script=allow_python_script)
         return text
     resolved = (command_argv(resolve_executable(token, allow_python_script=True)) or [""])[0]
     if resolved and Path(resolved).expanduser().is_file():
         from samovar.tools_import import refuse_nonexecutable_annotator
 
-        refuse_nonexecutable_annotator(resolved)
+        refuse_nonexecutable_annotator(resolved, allow_python_script=allow_python_script)
         return text
     if shutil.which(token):
         return text
@@ -867,10 +867,22 @@ class PipelineConfig:
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
+                    from samovar.main_config import lookup_tool_record
+                    from samovar.paths import load_config
+
+                    installed = load_config()
                     for ann in input_config['annotators']:
                         payload = dict(ann)
                         if payload.get("cmd"):
-                            payload["cmd"] = _portable_annotator_cmd(payload["cmd"])
+                            registered = lookup_tool_record(
+                                installed,
+                                str(payload.get("type") or payload.get("cmd") or ""),
+                            )
+                            profiler = str((registered or {}).get("type") or "").lower() == "profiler"
+                            profiler = profiler or str(payload.get("output_level") or "").lower() == "profile"
+                            payload["cmd"] = _portable_annotator_cmd(
+                                payload["cmd"], allow_python_script=profiler,
+                            )
                         if "db_path" in payload:
                             raw_db = str(payload["db_path"])
                             if not payload.get("db_label"):

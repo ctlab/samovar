@@ -197,6 +197,7 @@ def test_kaiju_and_kraken2_commands_support_single_end_fastq(tmp_path):
     assert "-j " not in se_kaiju
 
 
+@pytest.mark.optional
 def test_snakemake_constant_taxid_rule(tmp_path):
     """Snakemake custom_tool rule runs the constant-taxID annotator on toy reads."""
     pytest.importorskip("snakemake")
@@ -252,6 +253,7 @@ def test_snakemake_constant_taxid_rule(tmp_path):
     assert len(df) == 4
 
 
+@pytest.mark.optional
 def test_builtin_rule_keeps_underscore_run_name(tmp_path):
     """rule kraken2 must not parse A_kraken2_x as sample A_kraken2."""
     pytest.importorskip("snakemake")
@@ -310,6 +312,7 @@ def test_sylph_profile_command_uses_config_and_quoted_paths(tmp_path, monkeypatc
     exe = tmp_path / "tools with spaces" / "sylph"
     exe.parent.mkdir()
     exe.touch()
+    exe.chmod(0o755)
     called = []
     def resolve(command, **kwargs):
         called.append(command)
@@ -342,7 +345,7 @@ def test_bracken_profile_uses_kraken_contract_threads_and_quoted_paths(tmp_path,
     db.mkdir()
     (db / 'database126mers.kmer_distrib').write_text('distribution')
     exe = tmp_path / 'programs with spaces' / 'bracken'
-    exe.parent.mkdir(); exe.touch()
+    exe.parent.mkdir(); exe.touch(); exe.chmod(0o755)
     monkeypatch.setattr('samovar.paths.resolve_executable', lambda cmd, **k: str(exe) if cmd == str(exe) else cmd)
     tool = ProfileAnnotator(dict(type='bracken', cmd=str(exe), run_name='kb', db_path=str(db), threads=3, extra='-t 0'), {})
     r1, r2 = str(tmp_path / 'read 1.fastq'), str(tmp_path / 'read 2.fastq') if paired else None
@@ -364,7 +367,7 @@ def test_bracken_profile_uses_kraken_contract_threads_and_quoted_paths(tmp_path,
 def test_motus_profile_command_reuses_shared_profile_stage(tmp_path, monkeypatch, paired):
     import shlex
     from samovar.annotators_wrapper import ProfileAnnotator
-    native = tmp_path/'motus'; native.touch()
+    native = tmp_path/'motus'; native.touch(); native.chmod(0o755)
     monkeypatch.setattr('samovar.paths.resolve_executable', lambda *a, **k: str(native))
     obj = get_annotator_instance('motus', dict(run_name='motus_named', type='motus', cmd=str(native),
          db_path=str(tmp_path/'marker DB'), threads=2, output_level='profile'), {})

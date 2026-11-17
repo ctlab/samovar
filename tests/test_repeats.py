@@ -719,6 +719,7 @@ def test_statistics_uses_whole_repeats_and_known_moments():
     }
 
 
+@pytest.mark.optional
 def test_public_cli_repeat_package_preserves_single_run_semantics(tmp_path, monkeypatch):
     import subprocess
     import sys

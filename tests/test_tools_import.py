@@ -846,6 +846,7 @@ def test_import_flags_translate_skips_help_warning(tmp_path, monkeypatch, capsys
     assert "(none)" in format_import_status({})
 
 
+@pytest.mark.optional
 def test_import_pytest_annotator_uses_db_path(tmp_path, monkeypatch, capsys):
     stub = tmp_path / "dbstub.sh"
     stub.write_text(

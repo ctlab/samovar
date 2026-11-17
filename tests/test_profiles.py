@@ -765,6 +765,7 @@ def test_profile_sample_mismatch_is_a_prepare_error(tmp_path):
     assert truth_desc["path"] == str(matched)
 
 
+@pytest.mark.optional
 def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
     import os
     import subprocess

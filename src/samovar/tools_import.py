@@ -128,11 +128,13 @@ def _flags_with_import_mem(
 _SHORT_OPTION = re.compile(r"(?<![\w-])-([A-Za-z])\b")
 
 
-def refuse_nonexecutable_annotator(command: str) -> None:
+def refuse_nonexecutable_annotator(command: str, *, allow_python_script: bool = False) -> None:
     """Stop before launch when this command is a file without ``+x``.
 
     ``resolve_executable`` skips that file and the run falls through to
-    ``custom.sh``, whose error never reaches the task log.
+    ``custom.sh``, whose error never reaches the task log. A ``.py`` file
+    launched by the interpreter (``allow_python_script``) is not executed
+    itself, so it does not need ``+x``.
     """
     from samovar.paths import command_argv, load_config
 
@@ -147,6 +149,8 @@ def refuse_nonexecutable_annotator(command: str) -> None:
         if mapped:
             candidates.append(Path(mapped).expanduser())
     for exe in candidates:
+        if allow_python_script and exe.suffix == ".py":
+            continue
         if exe.is_file() and not os.access(exe, os.X_OK):
             raise PermissionError(
                 f"Permission denied: {exe} is not executable. chmod +x {exe}"

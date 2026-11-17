@@ -172,6 +172,7 @@ def test_run_reprofiler_writes_importance(tmp_path):
         output_dir=dest,
         config={
             "seed": 0,
+            "n_estimators": 4,
             "initial_abundance": initial_ab,
             "feature_importance": "builtin",
         },

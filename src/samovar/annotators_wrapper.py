@@ -153,8 +153,14 @@ class BaseAnnotator:
         first = command_argv(raw_cmd)[0] if raw_cmd else ""
         from samovar.tools_import import refuse_nonexecutable_annotator
 
-        refuse_nonexecutable_annotator(raw_cmd)
+        refuse_nonexecutable_annotator(
+            raw_cmd, allow_python_script=self.launched_by_interpreter()
+        )
         self.cmd = shlex.join(command_argv(resolve_executable(raw_cmd, tool_key=Path(first).name if first else None)))
+
+    def launched_by_interpreter(self) -> bool:
+        """True when a ``.py`` command is passed to Python instead of exec."""
+        return False
 
     @property
     def default_cmd(self) -> str:
@@ -189,6 +195,11 @@ def _metaphlan_modern_cli(command):
 
 class ProfileAnnotator(BaseAnnotator):
     """Sample-level contract, sharing tool lookup/resources with annotators."""
+
+    def launched_by_interpreter(self) -> bool:
+        # Custom profilers and Phanta run ``.py`` entry points with Python.
+        # Native binaries (sylph, bracken, motus) are still exec'd and need +x.
+        return True
 
     @property
     def default_cmd(self):
