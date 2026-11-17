@@ -66,10 +66,16 @@ def test_prepare_cores_are_training_threads(tmp_path):
     assert repro["cores"] == 6
     iss = yaml.safe_load(Path(paths["annotation2iss"]).read_text())
     assert iss["cores"] == 6
+    from samovar.reprofiling import gpu_training_support
+
     assert repro["reprofiler"] == "rfc2"
-    assert repro["gpu"] is True
+    assert repro["gpu"] is (gpu_training_support("RandomForest") is None)
     assert export["cores"] == 6
     script = Path(config.generate_pipeline(str(tmp_path))).read_text()
+    if gpu_training_support("RandomForest") is None:
+        assert "--gpu" in script
+    else:
+        assert "--gpu" not in script
     assert 'export SAMOVAR_CORES="6"' in script
     assert '--cores "$SAMOVAR_CORES"' in script
     regenerated, ground, initial = _tiny_tables()
@@ -82,6 +88,15 @@ def test_prepare_cores_are_training_threads(tmp_path):
         config={"seed": 0, "cores": repro["cores"]},
     )
     assert result.model.n_jobs == 6
+    cpu = run_reprofiler(
+        "rfc2",
+        regenerated=regenerated,
+        ground_truth=ground,
+        initial=initial,
+        output_dir=tmp_path / "rfc2",
+        config={"seed": 0, "cores": 1, "n_estimators": 2},
+    )
+    assert cpu.model is None or "cuml" not in type(cpu.model).__module__
 
 
 @pytest.mark.optional
@@ -571,6 +586,12 @@ def test_rfc2_abstains_saves_the_rule_and_is_stable_across_chunks(tmp_path):
     assert int(refused["taxid_SAMOVAR"].iloc[0]) == 0
     assert refused["taxid_SAMOVAR_abstain_reason"].iloc[0] == "low_confidence"
     assert float(refused["taxid_SAMOVAR_confidence"].iloc[0]) > 0
+    from samovar.abundance import annotation_to_abundance_tables, taxid_annotation_columns
+    from samovar.annotation_columns import select_scoring_annotators
+
+    assert "taxid_SAMOVAR_abstain_reason" not in taxid_annotation_columns(refused)
+    assert "SAMOVAR_abstain_reason" not in annotation_to_abundance_tables(refused)
+    assert "taxid_SAMOVAR_abstain_reason" not in select_scoring_annotators(refused)
 
     path = tmp_path / "trained_model.joblib"
     joblib.dump(model, path)

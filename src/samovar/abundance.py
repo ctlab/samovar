@@ -180,7 +180,7 @@ def taxid_annotation_columns(frame: pd.DataFrame) -> List[str]:
         low = name.lower()
         if name in {"seq", "length", "sample", "true", "read_type"}:
             continue
-        if "confidence" in low or name.endswith("_conf"):
+        if "confidence" in low or name.endswith("_conf") or low.endswith("_abstain_reason"):
             continue
         if low in _ID_ALIASES and n_sample_columns(frame):
             continue

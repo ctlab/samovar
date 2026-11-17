@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from samovar.annotation_io import annotator_columns, read_annotation_dir
-from samovar.annotation_columns import is_feat_column
+from samovar.annotation_columns import is_feat_column, is_tax_column
 from samovar.parse_annotators import (
     ensure_taxid_name_map,
     remap_taxid_dataframe,
@@ -247,7 +247,7 @@ def _annotator_names(df: pd.DataFrame) -> List[str]:
     skip = {"length", "sample", "true", "seq", "read_type"}
     names = []
     for col in df.columns:
-        if col in skip or "confidence" in str(col).lower() or str(col).endswith("_conf"):
+        if col in skip or "confidence" in str(col).lower() or str(col).endswith("_conf") or str(col).lower().endswith("_abstain_reason"):
             continue
         if is_feat_column(col) or str(col).lower().startswith("feat_"):
             continue
@@ -708,7 +708,7 @@ def viz_annotation(
         short = re.sub(r"_[0-9]+$", "", name)
         renamed_selected.append(short if short in work.columns else name)
     for col in work.columns:
-        if col in skip_meta or "confidence" in str(col).lower() or str(col).endswith("_conf"):
+        if col in skip_meta or "confidence" in str(col).lower() or str(col).endswith("_conf") or str(col).lower().endswith("_abstain_reason"):
             continue
         if is_feat_column(col):
             continue
@@ -1035,7 +1035,7 @@ def compare_annotations(
             data.to_csv(csv_file, index=False)
         return data
     require_viz_backend()
-    tax_cols = [c for c in data.columns if str(c).startswith("taxID_")]
+    tax_cols = [c for c in data.columns if is_tax_column(c)]
     if not tax_cols:
         print(
             f"no taxID_* columns in {annotation_path}; skipping visualization",

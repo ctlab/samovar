@@ -42,6 +42,7 @@ from samovar.reprofiling import (
     preprocess_data,
     preprocess_for_model,
     save_model,
+    gpu_training_support,
     train_models,
     training_n_jobs,
     use_gpu,
@@ -677,7 +678,14 @@ def run_builtin_reprofiler(
     canon = str(name or "").lower().replace("-", "_")
     gpu = use_gpu(config=cfg)
     if canon == "rfc2" and not cfg.get("no_gpu"):
-        gpu = True
+        reason = gpu_training_support("RandomForest")
+        if reason is None:
+            gpu = True
+        elif gpu:
+            raise GpuNotSupported(reason)
+        else:
+            print(f"Warning: rfc2 is training on CPU. {reason}", file=sys.stderr)
+            gpu = False
     try:
         best, models, metrics, feature_cols = train_models(
             validation,

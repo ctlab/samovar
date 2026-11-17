@@ -497,8 +497,10 @@ class PipelineConfig:
             self.export_formats = []
         if not self.email:
             self.email = _default_email()
-        if self.reprofiler == "rfc2" and not self.no_gpu:
-            self.gpu = True
+        if self.reprofiler == "rfc2" and not self.no_gpu and not self.gpu:
+            from samovar.reprofiling import gpu_training_support
+
+            self.gpu = gpu_training_support("RandomForest") is None
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
@@ -1252,6 +1254,10 @@ class PipelineConfig:
         if getattr(args, "no_gpu", False):
             config.gpu = False
             config.no_gpu = True
+        elif config.reprofiler == "rfc2" and not getattr(args, "gpu", False):
+            from samovar.reprofiling import gpu_training_support
+
+            config.gpu = gpu_training_support("RandomForest") is None
         elif config.reprofiler == "rfc2":
             config.gpu = True
         cli_fi = getattr(args, "feature_importance", None)
