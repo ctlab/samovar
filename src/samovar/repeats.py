@@ -166,6 +166,10 @@ def publish_package(
 
 def generated_identity(args: Any) -> str:
     genome = getattr(args, "genome_dir", None)
+    if not genome and getattr(args, "accessions", None) and getattr(args, "output_dir", None):
+        from samovar.genome_index import run_processed_dir
+
+        genome = run_processed_dir(args.output_dir)  # where --accessions puts genomes
     genome_text = str(Path(genome).resolve()) if genome else ""
     abundance = getattr(args, "abundance_table", None)
     abundance_text = str(Path(abundance).resolve()) if abundance else ""
