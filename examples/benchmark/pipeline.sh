@@ -75,7 +75,7 @@ fi
 
 # Kaiju indexes proteins. The nucleotide genomes above are for Kraken2, Centrifuge, and Bracken.
 if [[ ! -f "$db/kaiju_db/.built_from_faa" ]]; then
-  python - "$db/proteins" "${library[@]}" <<'PY'
+  python - "$db/proteins" "$db/src" "${library[@]}" <<'PY'
 import gzip
 import sys
 from pathlib import Path
@@ -83,13 +83,30 @@ from pathlib import Path
 from Bio import SeqIO
 
 from samovar.build_database import nucleotide_to_orf_records
-from samovar.genome_index import numeric_taxid_for, processed_storage_dir, proteome_storage_dir
+from samovar.genome_index import (
+    numeric_taxid_for,
+    numeric_taxid_from_fasta,
+    processed_storage_dir,
+    proteome_storage_dir,
+    resolve_indexed_path,
+)
 
 dest = Path(sys.argv[1])
+downloaded = Path(sys.argv[2])
 dest.mkdir(parents=True, exist_ok=True)
 proteomes = proteome_storage_dir()
-genomes = processed_storage_dir()
-for accession in sys.argv[2:]:
+store = processed_storage_dir()
+
+def nucleotide(accession, taxid):
+    names = [f"{accession}.fa.gz", f"{accession}.fna.gz", f"{taxid}.fa.gz"]
+    for folder in (downloaded, store):
+        for name in names:
+            path = folder / name
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+    return resolve_indexed_path(accession) or resolve_indexed_path(taxid)
+
+for accession in sys.argv[3:]:
     out = dest / f"{accession}.faa.gz"
     if out.is_file() and out.stat().st_size > 0:
         continue
@@ -100,11 +117,11 @@ for accession in sys.argv[2:]:
     if cached.is_file() and cached.stat().st_size > 0:
         out.symlink_to(cached.resolve())
         continue
-    genome = genomes / f"{accession}.fa.gz"
-    if not genome.is_file():
-        genome = genomes / f"{taxid}.fa.gz"
-    if not genome.is_file():
+    genome = nucleotide(accession, taxid)
+    if genome is None:
         raise SystemExit(f"no protein FASTA or nucleotide genome for {accession}")
+    if not str(taxid).isdigit():
+        taxid = numeric_taxid_from_fasta(genome) or taxid
     records = nucleotide_to_orf_records(str(genome), taxid)
     if not records:
         raise SystemExit(f"no proteins translated for {accession}")
