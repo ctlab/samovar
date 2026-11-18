@@ -218,6 +218,81 @@ def ks_shannon(
     )
 
 
+_FORBIDDEN_DISTRIBUTION_COLUMNS = frozenset({"true", "taxid_samovar"})
+
+
+def _distribution_frame(source: Any) -> pd.DataFrame:
+    if isinstance(source, pd.DataFrame):
+        return source
+    frame = getattr(source, "DataFrame", None)
+    if isinstance(frame, pd.DataFrame):
+        return frame
+    raise TypeError("distribution score expects a DataFrame or an Annotation")
+
+
+def _distribution_token(value: Any) -> str:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (bool, np.bool_)):
+        return str(value)
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)) and math.isfinite(float(value)):
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+    return str(value).strip()
+
+
+def _bray_curtis_frequencies(left: pd.Series, right: pd.Series) -> float:
+    """Bray–Curtis on normalized value frequencies. Identical proportions score 0."""
+    left_counts = left.map(_distribution_token).value_counts()
+    right_counts = right.map(_distribution_token).value_counts()
+    keys = left_counts.index.union(right_counts.index)
+    observed = left_counts.reindex(keys, fill_value=0).to_numpy(dtype=float)
+    generated = right_counts.reindex(keys, fill_value=0).to_numpy(dtype=float)
+    observed_total = float(observed.sum())
+    generated_total = float(generated.sum())
+    if observed_total <= 0 or generated_total <= 0:
+        raise ValueError("distribution score needs rows in both annotations")
+    observed /= observed_total
+    generated /= generated_total
+    denominator = float(observed.sum() + generated.sum())
+    return float(np.abs(observed - generated).sum() / denominator)
+
+
+def score_annotation_distributions(left: Any, right: Any, columns: Sequence[str]) -> float:
+    """Mean Bray–Curtis distance between value distributions of the named columns.
+
+    ``left`` and ``right`` are annotation tables or ``Annotation`` objects
+    (``initial`` against the regenerated table used to train). ``columns`` are
+    the training features to compare. ``true`` and ``taxid_SAMOVAR`` are not
+    features. A column that is not listed does not affect the score. 0 means
+    the selected distributions match.
+    """
+    selected = [str(column) for column in columns]
+    if not selected:
+        raise ValueError("distribution score needs at least one column")
+    for name in selected:
+        if name.strip().lower() in _FORBIDDEN_DISTRIBUTION_COLUMNS:
+            raise ValueError(f"{name} cannot be a distribution column")
+    left_frame = _distribution_frame(left)
+    right_frame = _distribution_frame(right)
+    if left_frame.empty or right_frame.empty:
+        raise ValueError("distribution score needs rows in both annotations")
+    distances = []
+    for name in selected:
+        if name not in left_frame.columns or name not in right_frame.columns:
+            raise ValueError(f"distribution column {name} is missing from one annotation")
+        distances.append(_bray_curtis_frequencies(left_frame[name], right_frame[name]))
+    return float(np.mean(distances))
+
+
 def _candidate_row(
     *,
     scorer: str,

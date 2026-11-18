@@ -13,6 +13,7 @@ from samovar.table_scorers import (
     ks_shannon,
     pick_best_table_method,
     rank_methods_per_annotator,
+    score_annotation_distributions,
     score_generated_tables,
     shannon_entropy,
     shannon_vector_from_annotation,
@@ -284,3 +285,48 @@ def test_unsupported_generator_does_not_reuse_stale_candidate(tmp_path):
         "generate_errors": {},
     }))
     assert set(load_tables_by_mode_from_run(tmp_path)) == {"direct"}
+
+
+def test_distribution_score_ignores_unselected_columns():
+    left = pd.DataFrame({
+        "taxid_kraken2": [562, 562, 9606],
+        "feat_gc": [0.4, 0.4, 0.6],
+        "ignored": [1, 2, 3],
+    })
+    right = left.copy()
+    right["ignored"] = [9, 9, 9]
+    assert score_annotation_distributions(left, right, ["taxid_kraken2", "feat_gc"]) == 0.0
+
+
+def test_distribution_score_rises_when_taxid_frequencies_shift():
+    left = pd.DataFrame({"taxid_kraken2": [562, 562, 9606]})
+    right = pd.DataFrame({"taxid_kraken2": [562, 9606, 9606]})
+    assert score_annotation_distributions(left, right, ["taxid_kraken2"]) > 0
+
+
+def test_distribution_score_accepts_annotation_frames():
+    from samovar.parse_annotators import Annotation
+
+    frame = pd.DataFrame({"taxid_kraken2": [562, 562, 9606], "feat_len": [100, 100, 150]})
+    left = Annotation.from_long_table(frame)
+    right = Annotation.from_long_table(frame.copy())
+    assert score_annotation_distributions(left, right, ["taxid_kraken2"]) == 0.0
+
+
+def test_distribution_score_rejects_targets_and_empty_input():
+    frame = pd.DataFrame({
+        "true": [562, 562],
+        "taxid_SAMOVAR": [562, 9606],
+        "taxid_kraken2": [562, 562],
+    })
+    with pytest.raises(ValueError, match="cannot be a distribution column"):
+        score_annotation_distributions(frame, frame, ["true"])
+    with pytest.raises(ValueError, match="cannot be a distribution column"):
+        score_annotation_distributions(frame, frame, ["taxid_SAMOVAR"])
+    with pytest.raises(ValueError, match="at least one column"):
+        score_annotation_distributions(frame, frame, [])
+    with pytest.raises(ValueError, match="missing"):
+        score_annotation_distributions(frame, frame, ["feat_gc"])
+    empty = frame.iloc[0:0]
+    with pytest.raises(ValueError, match="needs rows"):
+        score_annotation_distributions(empty, frame, ["taxid_kraken2"])
