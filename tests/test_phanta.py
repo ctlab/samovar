@@ -88,7 +88,13 @@ else:
     target.write_text({PROFILE!r})
 ''')
     fake.chmod(0o755)
-    cfg = json.loads(Path(os.environ['SAMOVAR_CONFIG']).read_text())
+    source = os.environ.get('SAMOVAR_CONFIG')
+    if source and Path(source).is_file():
+        cfg = json.loads(Path(source).read_text())
+    else:
+        cfg = {}
+    cfg.setdefault('tools', {})
+    cfg.setdefault('tool_envs', {})
     cfg_path = tmp_path / 'samovar_config.json'
     monkeypatch.setenv('SAMOVAR_CONFIG', str(cfg_path))
     replaced = {'phanta', 'kraken2', 'bracken', 'snakemake'}
