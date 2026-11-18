@@ -14,7 +14,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional, Sequence, TextIO, Tuple, Union
+from typing import Any, Iterable, Iterator, List, Optional, Sequence, TextIO, Tuple, Union
 
 PathLike = Union[str, os.PathLike]
 
@@ -460,6 +460,87 @@ def iter_fastq_records(path: PathLike) -> Iterator[Tuple[str, str, str, str]]:
             if not plus.startswith("+"):
                 raise ValueError(f"FASTQ record at {target}:{line_no} is missing the + line")
             yield header, seq, plus, qual
+
+
+INTERLEAVED_GROUPS = ("illumina", "bgi", "mgi", "ont", "wgsim", "nanosim3", "art")
+
+
+def normalize_interleaved_groups(raw: Any) -> List[str]:
+    """Group tokens marked paired-in-one-file. Empty input is no groups."""
+    if raw in (None, "", False):
+        return []
+    parts = raw.replace(",", " ").split() if isinstance(raw, str) else list(raw)
+    groups: List[str] = []
+    known = set(INTERLEAVED_GROUPS)
+    for item in parts:
+        name = str(item).strip().lower()
+        if not name or name in groups:
+            continue
+        if name not in known:
+            raise ValueError(
+                f"Unknown interleaved group {name!r}. "
+                f"Use one of: {', '.join(INTERLEAVED_GROUPS)}"
+            )
+        groups.append(name)
+    return groups
+
+
+def deinterleave_marked_groups(directory: PathLike, groups: Any) -> List[Path]:
+    """Split interleaved FASTQ for the named groups into R1 and R2.
+
+    The working copy is moved to ``.interleaved/`` and is not overwritten.
+    Groups that already have an R2 mate are left paired. Other groups stay
+    single-end. An empty file or an odd number of records is an error.
+    """
+    wanted = set(normalize_interleaved_groups(groups))
+    directory = as_path(directory)
+    if not wanted or not directory.is_dir():
+        return []
+    written: List[Path] = []
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or not is_fastq_name(path.name):
+            continue
+        if path.name.endswith(FASTQ_R1_SUFFIXES) or path.name.endswith(FASTQ_R2_SUFFIXES):
+            continue
+        sample = sample_name_from_r1(path)
+        tail = _CAMISIM_TECH_TAIL.search(sample)
+        group = tail.group(1).lower() if tail else ""
+        if group not in wanted:
+            continue
+        ext = ".fastq.gz" if path.name.endswith(".gz") else ".fastq"
+        r1 = directory / f"{sample}_R1{ext}"
+        r2 = directory / f"{sample}_R2{ext}"
+        if find_fastq_mate(directory, sample, "R2") is not None or (r1.is_file() and r2.is_file()):
+            _park_interleaved(path, directory)
+            continue
+        if r1.exists() or r2.exists():
+            raise ValueError(f"Partial deinterleave for {path}: {r1.name} / {r2.name}")
+        count = 0
+        with open_text(r1, "wt") as left, open_text(r2, "wt") as right:
+            for record in iter_fastq_records(path):
+                handle = left if count % 2 == 0 else right
+                handle.writelines(record)
+                count += 1
+        if count == 0 or count % 2:
+            r1.unlink(missing_ok=True)
+            r2.unlink(missing_ok=True)
+            raise ValueError(
+                f"Interleaved FASTQ {path} has {count} records; paired ends need a positive even count"
+            )
+        _park_interleaved(path, directory)
+        written.extend((r1, r2))
+    return written
+
+
+def _park_interleaved(path: Path, directory: Path) -> None:
+    """Move a working interleaved copy aside. A repeat link is dropped."""
+    aside = directory / ".interleaved"
+    aside.mkdir(exist_ok=True)
+    dest = aside / path.name
+    if dest.exists():
+        path.unlink()
+        return
+    path.rename(dest)
 
 
 def validate_fastq_directory(directory: PathLike) -> None:

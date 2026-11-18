@@ -688,3 +688,22 @@ def test_prepare_offers_resolved_default_generator(tmp_path, monkeypatch):
     setup_pipeline(args)
     assert offered[-1].reads_generator == "iss"
     assert offered[-1].workflow == "snakemake"
+
+
+def test_interleaved_group_is_split_in_setup_reads(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    config = PipelineConfig(output_dir=str(out), interleaved=["illumina"])
+    script = Path(config.generate_pipeline(str(out))).read_text()
+    assert "deinterleave_marked_groups" in script
+    assert script.count("illumina") >= 1
+    plain = PipelineConfig(output_dir=str(tmp_path / "plain"))
+    assert "deinterleave_marked_groups" not in Path(
+        plain.generate_pipeline(str(tmp_path / "plain"))
+    ).read_text()
+    conf = tmp_path / "in.yaml"
+    conf.write_text("interleaved: [ont, ont]\n", encoding="utf-8")
+    loaded = PipelineConfig.from_args(argparse.Namespace(
+        input_config=str(conf), input_dir=None, output_dir=str(out), interleaved=None,
+    ))
+    assert loaded.interleaved == ["ont"]

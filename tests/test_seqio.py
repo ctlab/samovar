@@ -256,6 +256,43 @@ def test_drop_r2_when_source_is_single_end(tmp_path):
     assert kept.is_file()
 
 
+def _record(name, base):
+    return f"@{name}\n{base}\n+\n{'I' * len(base)}\n"
+
+
+def test_deinterleave_one_group_keeps_the_other(tmp_path):
+    from samovar.seqio import deinterleave_marked_groups
+
+    illumina = tmp_path / "1_illumina.fastq"
+    illumina.write_text(_record("r1a", "AA") + _record("r2a", "TT") + _record("r1b", "CC") + _record("r2b", "GG"))
+    ont = tmp_path / "1_ont.fastq"
+    ont.write_text(_record("ont", "NNNN"))
+    source = tmp_path / "input"
+    source.mkdir()
+    illumina_src = source / illumina.name
+    illumina_src.write_text(illumina.read_text())
+    written = deinterleave_marked_groups(tmp_path, ["illumina"])
+    assert [p.name for p in written] == ["1_illumina_R1.fastq", "1_illumina_R2.fastq"]
+    assert (tmp_path / "1_illumina_R1.fastq").read_text() == _record("r1a", "AA") + _record("r1b", "CC")
+    assert (tmp_path / "1_illumina_R2.fastq").read_text() == _record("r2a", "TT") + _record("r2b", "GG")
+    parked = tmp_path / ".interleaved" / "1_illumina.fastq"
+    assert parked.read_text() == illumina_src.read_text()
+    assert not illumina.exists()
+    assert ont.read_text() == _record("ont", "NNNN")
+    assert deinterleave_marked_groups(tmp_path, ["illumina"]) == []
+
+
+def test_deinterleave_rejects_odd_records(tmp_path):
+    from samovar.seqio import deinterleave_marked_groups
+
+    path = tmp_path / "1_illumina.fastq"
+    path.write_text(_record("only", "A"))
+    with pytest.raises(ValueError, match="even count"):
+        deinterleave_marked_groups(tmp_path, ["illumina"])
+    assert path.is_file()
+    assert not (tmp_path / "1_illumina_R1.fastq").exists()
+
+
 def test_list_fasta_includes_gzip(tmp_path):
     (tmp_path / "1.fna.gz").write_bytes(b"\x1f\x8b")
     (tmp_path / "notes.txt").write_text("nope")

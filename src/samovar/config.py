@@ -442,6 +442,7 @@ class PipelineConfig:
     qc_initial: str = ""
     qc_generated: str = ""
     qc_postfix: Optional[Dict[str, str]] = None
+    interleaved: Optional[List[str]] = None
     qc_flags: Optional[str] = None
     qc_tool_flags: Optional[Dict[str, str]] = None
     startpoint: str = "setup_reads"
@@ -473,6 +474,8 @@ class PipelineConfig:
             self.feature_importance_tool_flags = {}
         if self.qc_postfix is None:
             self.qc_postfix = {}
+        if self.interleaved is None:
+            self.interleaved = []
         if self.qc_tool_flags is None:
             self.qc_tool_flags = {}
         if self.export_tool_flags is None:
@@ -749,6 +752,11 @@ class PipelineConfig:
                         key: require_known_qc(val) if val else ""
                         for key, val in parsed_pf.items()
                     }
+                from samovar.seqio import normalize_interleaved_groups
+
+                yaml_interleaved = input_config.get("interleaved")
+                if yaml_interleaved not in (None, "", False):
+                    config.interleaved = normalize_interleaved_groups(yaml_interleaved)
                 yaml_qc_flags = input_config.get("qc_flags")
                 if yaml_qc_flags:
                     config.qc_flags = str(yaml_qc_flags)
@@ -1398,6 +1406,11 @@ class PipelineConfig:
             config.qc_generated = require_known_qc(cli_qc_g)
         elif config.qc and not config.qc_generated:
             config.qc_generated = config.qc
+        cli_interleaved = getattr(args, "interleaved", None)
+        if cli_interleaved:
+            from samovar.seqio import normalize_interleaved_groups
+
+            config.interleaved = normalize_interleaved_groups(cli_interleaved)
         cli_qc_pf = getattr(args, "qc_postfix", None)
         if cli_qc_pf:
             parsed_pf = parse_qc_postfix(cli_qc_pf)
@@ -1969,6 +1982,16 @@ class PipelineConfig:
             f"    {tos}"
         )
 
+    def _deinterleave_line(self) -> str:
+        groups = list(self.interleaved or [])
+        if not groups:
+            return ""
+        quoted = " ".join(shlex.quote(group) for group in groups)
+        return (
+            "\"$PYTHON_PATH\" -c 'import sys; from samovar.seqio import deinterleave_marked_groups; "
+            f"deinterleave_marked_groups(sys.argv[1], sys.argv[2:])' \"$out_dir/initial\" {quoted}\n"
+        )
+
     def generate_pipeline(self, base_dir: str, script_name: str = "samovar.sh") -> str:
         """Generate the pipeline script and return its path"""
         base_dir = absolute_path(base_dir)
@@ -2161,6 +2184,7 @@ if [ -n "$SAMOVAR_INPUT_DIR" ] && [ -d "$SAMOVAR_INPUT_DIR" ]; then
         "$PYTHON_PATH" -c 'import sys; from samovar.seqio import link_or_copy_reads; link_or_copy_reads(sys.argv[1], sys.argv[2])' "$src_dir" "$dst_dir"
     fi
 fi
+{self._deinterleave_line()}
 "$PYTHON_PATH" -c 'import sys; from samovar.seqio import validate_fastq_directory; validate_fastq_directory(sys.argv[1])' "$out_dir/initial"
 """,
         )
