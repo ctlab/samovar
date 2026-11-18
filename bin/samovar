@@ -87,6 +87,7 @@ show_usage() {
     echo "  apply       Apply a completed pipeline to one new sample (optional --full to refit)"
     echo "  merge       Combine two or more run directories (modes: initial, regenerated)"
     echo "  methods     Write methods.md from a prepared run (alias: samovar-method)"
+    echo "  score       Score annotators or profiles in a finished run (score annotators | score profiles)"
     echo "  help        Show this help message (also: -h, --help)"
     echo ""
     echo "Examples:"
@@ -310,6 +311,10 @@ case "${1:-}" in
         shift
         PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
             "$PYTHON" -m samovar.methods "$@"
+        ;;
+    "score")
+        shift
+        "$PYTHON" "$SCRIPT_DIR/samovar_score" "$@"
         ;;
     "genome")
         shift

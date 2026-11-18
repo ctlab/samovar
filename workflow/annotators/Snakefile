@@ -3,7 +3,7 @@ import shlex
 import re
 
 from samovar.annotators_wrapper import get_annotator_instance, use_kaiju_multi
-from samovar.memory import annotator_mem_mb
+from samovar.memory import annotator_job_threads, annotator_mem_mb, index_reserve_mb
 from samovar.tool_spec import annotator_priority, memory_tool_name
 from samovar.combine_tables import ambiguous_sample_run_stems
 from samovar.seqio import find_fastq_mate, list_fastq_samples
@@ -79,6 +79,15 @@ MACHINE_CORES = max(1, int(config.get("cores") or os.environ.get("SAMOVAR_CORES"
 MEM_LIMIT = int(config.get("mem_mb") or os.environ.get("SAMOVAR_MEM_MB") or 0) or None
 
 
+def rule_db(wildcards):
+    ann = ANNOTATORS.get(wildcards.run_name)
+    if ann is None:
+        return ""
+    if type(ann).__name__ == "KaijuAnnotator":
+        return ann._database_and_nodes()[0]
+    return str(getattr(ann, "db_path", "") or "")
+
+
 def rule_mem(wildcards):
     tool = TOOL_TYPES.get(wildcards.run_name, "")
     ann = ANNOTATORS.get(wildcards.run_name)
@@ -88,6 +97,24 @@ def rule_mem(wildcards):
         THREADS.get(wildcards.run_name, 1),
         MACHINE_CORES,
         MEM_LIMIT,
+        db_path=rule_db(wildcards),
+    )
+
+
+def rule_threads(wildcards):
+    tool = memory_tool_name(
+        TOOL_TYPES.get(wildcards.run_name, ""),
+        getattr(ANNOTATORS.get(wildcards.run_name), "extra", "") or "",
+    )
+    if tool not in {"kaiju", "kraken2"}:
+        return THREADS.get(wildcards.run_name, 1)
+    db = rule_db(wildcards)
+    return annotator_job_threads(
+        tool,
+        MACHINE_CORES,
+        rule_mem(wildcards),
+        MEM_LIMIT,
+        index_known=index_reserve_mb(tool, db) is not None,
     )
 
 
@@ -110,6 +137,8 @@ KAIJU_RUNS = [
 # One kaiju-multi job loads the FM-index once for the cohort. A wildcard
 # rule that also writes the same files would be ambiguous, so it is omitted.
 BATCH_KAIJU = use_kaiju_multi(len(SAMPLES)) and bool(KAIJU_RUNS)
+# Filled while the batch rules are declared. rule all reads it later.
+KAIJU_RUNTIME = []
 
 # Default: fold each finished annotator into a per-sample CSV and drop the per-read file.
 # The Snakemake target is then a sentinel, so a deleted *.out is not rerun.
@@ -169,9 +198,14 @@ def get_all_expected_outputs():
                 outputs.append(path)
     return outputs
 
+
+def all_inputs(wildcards):
+    del wildcards
+    return get_all_expected_outputs() + KAIJU_RUNTIME
+
 rule all:
     input:
-        get_all_expected_outputs()
+        all_inputs
 
 rule profile_tool:
     wildcard_constraints:
@@ -362,7 +396,7 @@ rule kraken2:
         report = f"{config['output_dir']}/{{sample}}_{{run_name}}.kraken2.report",
         out = marker_output("kraken2.out")
     threads:
-        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        rule_threads
     resources:
         mem_mb=rule_mem,
     priority: annotator_priority("kraken2")
@@ -392,7 +426,7 @@ if not BATCH_KAIJU:
         output:
             out = marker_output("kaiju.out")
         threads:
-            lambda wildcards: THREADS.get(wildcards.run_name, 1)
+            rule_threads
         resources:
             mem_mb=rule_mem,
         priority: annotator_priority("kaiju")
@@ -416,6 +450,21 @@ if not BATCH_KAIJU:
 
 if BATCH_KAIJU:
     for _kaiju_run in KAIJU_RUNS:
+        _kaiju_db = ANNOTATORS[_kaiju_run]._database_and_nodes()[0]
+        _kaiju_mem = annotator_mem_mb(
+            "kaiju",
+            THREADS.get(_kaiju_run, 1),
+            MACHINE_CORES,
+            MEM_LIMIT,
+            db_path=_kaiju_db,
+        )
+        _kaiju_threads = annotator_job_threads(
+            "kaiju",
+            MACHINE_CORES,
+            _kaiju_mem,
+            MEM_LIMIT,
+            index_known=index_reserve_mb("kaiju", _kaiju_db) is not None,
+        )
         rule:
             name:
                 f"kaiju_multi_{_kaiju_run}"
@@ -425,14 +474,14 @@ if BATCH_KAIJU:
                     sample=SAMPLES,
                 )
             threads:
-                THREADS.get(_kaiju_run, 1)
+                _kaiju_threads
             resources:
-                mem_mb=annotator_mem_mb(
-                    "kaiju", THREADS.get(_kaiju_run, 1), MACHINE_CORES, MEM_LIMIT
-                ),
+                mem_mb=_kaiju_mem,
             priority: annotator_priority("kaiju")
             log:
                 f"{config['output_dir']}/logs/{_kaiju_run}.kaiju-multi.log"
+            benchmark:
+                f"{config['output_dir']}/runtime/batches/{_kaiju_run}.kaiju.tsv"
             params:
                 cmd = lambda wildcards, output, run_name=_kaiju_run: ANNOTATORS[run_name].batch_shell(
                     SAMPLES, config["r1_dir"], config["r2_dir"], config["output_dir"]
@@ -450,6 +499,35 @@ if BATCH_KAIJU:
                 {params.cmd} 2> {log:q}
                 {params.ingest}
                 """
+
+        _kaiju_samples = [
+            f"{config['output_dir']}/runtime/samples/{_kaiju_run}/kaiju/{sample}.tsv"
+            for sample in SAMPLES
+        ]
+        KAIJU_RUNTIME.extend(_kaiju_samples)
+
+        rule:
+            name:
+                f"kaiju_runtime_{_kaiju_run}"
+            input:
+                expand(
+                    marker_output("kaiju.out").replace("{run_name}", _kaiju_run),
+                    sample=SAMPLES,
+                )
+            output:
+                _kaiju_samples
+            threads:
+                1
+            resources:
+                mem_mb=128
+            params:
+                bench = f"{config['output_dir']}/runtime/batches/{_kaiju_run}.kaiju.tsv"
+            run:
+                from pathlib import Path
+
+                from samovar.runtime import publish_shared_benchmark
+
+                publish_shared_benchmark(Path(params.bench), [Path(path) for path in output])
 
 rule metaphlan4:
     input:

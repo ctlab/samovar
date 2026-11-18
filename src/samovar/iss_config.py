@@ -171,6 +171,22 @@ def _genomes_from_generate_yaml(config_path: Optional[str]) -> Dict[str, Any]:
 
 
 def _finish_generate(args, result):
+    repeat = getattr(args, "_repeat_count", None)
+    if repeat:
+        from samovar.repeats import generated_identity, publish_package
+
+        publish_package(
+            Path(args.output_dir),
+            count=int(repeat),
+            base_seed=int(getattr(args, "seed", None) or 42),
+            kind="generated",
+            identity=generated_identity(args),
+            settings={"simulator": str(getattr(args, "simulator", None) or "iss")},
+            allow_template=True,
+        )
+        from samovar.repeats import materialize_repeat_generations
+
+        materialize_repeat_generations(args)
     try:
         from samovar.repro import _argv_from_args, _ns_to_dict, record_stage
 
@@ -236,6 +252,7 @@ class ISSTestConfig:
     reads_generator: str = "iss"
     metagenome_generator: str = ""
     abundance_table: str = ""
+    table_reads_generator: str = ""
     max_genome_mb: float = 100.0
     genome_skip_list: str = ""
     max_genomes: float = 100.0
@@ -281,6 +298,7 @@ class ISSTestConfig:
             reads_generator=str(getattr(args, "reads_generator", None) or "iss"),
             metagenome_generator=str(getattr(args, "metagenome_generator", None) or ""),
             abundance_table=str(abundance or ""),
+            table_reads_generator=str(getattr(args, "table_reads_generator", None) or ""),
             max_genome_mb=max_mb,
             genome_skip_list=skip_text,
             max_genomes=max_g,
@@ -328,6 +346,8 @@ class ISSTestConfig:
             from samovar.abundance import generation_sample_names
             config['sample_names'] = generation_sample_names(self.abundance_table, self.n_samples)
             config['abundance_table'] = self.abundance_table
+        if self.table_reads_generator:
+            config['table_reads_generator'] = self.table_reads_generator
         config['max_genome_mb'] = float(self.max_genome_mb)
         config['max_genomes'] = float(self.max_genomes)
         if self.genome_skip_list:
@@ -372,7 +392,8 @@ out_dir="{base_dir}"
 mkdir -p "$out_dir"
 
 # Generate reads with InSilicoSeq
-MEM_MB="${{SAMOVAR_MEM_MB:-$("$PYTHON_PATH" -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')}}"
+{"" if not self.table_reads_generator else f'''"$PYTHON_PATH" -c "from samovar.reads_generators import apply_table_regenerator; apply_table_regenerator({config_path!r})"
+'''}MEM_MB="${{SAMOVAR_MEM_MB:-$("$PYTHON_PATH" -c 'from samovar.memory import memory_limit_mb; print(memory_limit_mb())')}}"
 export SAMOVAR_MEM_MB="$MEM_MB"
 "$SNAKEMAKE" -s {shlex.quote(str(snakefile))} \\
     --configfile {shlex.quote(config_path)} \\
@@ -433,6 +454,15 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
                        help='Fraction of host reads')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed for reproducibility')
+    parser.add_argument(
+        '--repeat',
+        default=None,
+        help=(
+            'Positive integer. Omit it for one output directory. '
+            '1 or more writes a package: .log/repeats.json and out_0001… '
+            'This does not run the repeats; it records them.'
+        ),
+    )
     parser.add_argument('--model', default="hiseq",
                        help='Sequencing model to use')
     parser.add_argument(
@@ -453,6 +483,19 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         default='iss',
         choices=['iss', 'camisim'],
         help='Read/community generator: InSilicoSeq (default) or optional CAMISIM',
+    )
+    parser.add_argument(
+        '--table-reads-generator',
+        '--table_reads_generator',
+        '--regeneration-mode',
+        '--regeneration_mode',
+        dest='table_reads_generator',
+        default=None,
+        help=(
+            'With -i/--abundance, regenerate that table first: '
+            'direct|concat_weighted|bootstrap|vae|glm|samovar, or a name from '
+            '`samovar tools import --type table`'
+        ),
     )
     parser.add_argument(
         '--reads_generator',
@@ -562,6 +605,12 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     """Main function to set up the ISS or CAMISIM generate configuration"""
     if args is None:
         args = parse_args()
+    from samovar.repeats import guard_generate
+
+    try:
+        args._repeat_count = guard_generate(args)
+    except ValueError as exc:
+        raise SystemExit(f"Error: {exc}") from exc
 
     from samovar.main_config import merge_flag_strings
     from samovar.metagenome_generators import (
@@ -649,6 +698,14 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     if kind == "custom":
         require_known_reads_generator(canon)
 
+    table_mode = str(getattr(args, "table_reads_generator", None) or "").strip()
+    if table_mode and not getattr(args, "abundance_table", None):
+        raise SystemExit("generate: --table-reads-generator requires -i/--abundance")
+    if table_mode:
+        from samovar.table_regenerators import require_known_regeneration_mode
+
+        args.table_reads_generator = require_known_regeneration_mode(table_mode)
+
     flag_parts = [getattr(args, "extra_flags", None)]
     for item in getattr(args, "tool_flags", None) or []:
         if not item or len(item) < 2:
@@ -662,6 +719,14 @@ def setup_iss_test(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
     _materialize_generate_accessions(args)
     if not getattr(args, "genome_dir", None):
         raise SystemExit("generate: --genome_dir or --accessions is required")
+
+    if getattr(args, "abundance_table", None) and canon != "iss":
+        config = ISSTestConfig.from_args(args)
+        config_path = config.generate_config(config.output_dir)
+        pipeline_path = write_custom_generate_script(
+            config.output_dir, config_path, cores=config.cores
+        )
+        return _finish_generate(args, {"config": config_path, "pipeline": pipeline_path})
 
     mapped_mode = camisim_mode_for_reads_generator(canon, camisim_mode)
     if mapped_mode is not None:

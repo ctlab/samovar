@@ -311,22 +311,25 @@ class CamisimReadsGenerator(ReadsGenerator):
                 "camisim_config": cfg.get("camisim_config"),
                 "size_gbp": cfg.get("size_gbp"),
                 "max_genomes": cfg.get("max_genomes"),
+                "abundance_table": cfg.get("abundance_table") or cfg.get("abundance") or "",
             },
         )()
         # Prefer writing YAML then running when this is invoked in-process.
         paths = setup_camisim_generate(args)
         yaml_path = paths.get("config") or paths.get("yaml")
         if yaml_path:
-            data = Path(yaml_path).read_text(encoding="utf-8")
+            import yaml
+
+            mapped = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8")) or {}
             extra = cfg.get("extra_flags") or ""
             if extra:
-                import yaml
-
-                mapped = yaml.safe_load(data) or {}
                 mapped["extra_flags"] = extra
                 mapped["reads_generator_flags"] = extra
-                if cfg.get("max_genomes") is not None:
-                    mapped["max_genomes"] = cfg.get("max_genomes")
+            if cfg.get("max_genomes") is not None:
+                mapped["max_genomes"] = cfg.get("max_genomes")
+            if cfg.get("abundance_table"):
+                mapped["abundance_table"] = cfg.get("abundance_table")
+            if extra or cfg.get("abundance_table") or cfg.get("max_genomes") is not None:
                 Path(yaml_path).write_text(yaml.dump(mapped), encoding="utf-8")
         if cfg.get("run", True) and yaml_path:
             result = run_from_config(yaml_path)
@@ -897,9 +900,48 @@ def _write_annotator_abundance_csv(
     out.to_csv(dest, index=False)
 
 
+def apply_table_regenerator(config_path: str) -> str:
+    """Regenerate the generate YAML's abundance table, then point the YAML at the result."""
+    import yaml
+
+    path = Path(config_path)
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    mode = str(cfg.get("table_reads_generator") or "").strip()
+    source = str(cfg.get("abundance_table") or "").strip()
+    if not mode or not source:
+        return source
+    from samovar.regenerate import regenerate_annotation_tables
+
+    dest = path.parent / "regenerated_abundance"
+    tables = regenerate_annotation_tables(
+        source,
+        dest,
+        {
+            "regeneration_mode": mode,
+            "table_reads_generator": mode,
+            "N_reads": int(cfg.get("total_reads") or cfg.get("N_reads") or 1000),
+            "seed": cfg.get("seed", 42),
+            "N": cfg.get("n_samples"),
+        },
+        select_best=False,
+    )
+    written = sorted(item for item in dest.glob("*.csv") if item.is_file())
+    if not written and tables:
+        chosen = dest / "abundance.csv"
+        next(iter(tables.values())).to_csv(chosen, index=False)
+        written = [chosen]
+    if not written:
+        raise RuntimeError(f"table regenerator {mode} wrote no abundance table")
+    cfg["abundance_table"] = str(written[0].resolve())
+    cfg.pop("table_reads_generator", None)
+    path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return cfg["abundance_table"]
+
+
 def run_generate_from_yaml(config_path: str) -> List[str]:
     import yaml
 
+    apply_table_regenerator(config_path)
     cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
     meta_name = cfg.get("metagenome_generator")
     if meta_name:

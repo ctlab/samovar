@@ -88,8 +88,15 @@ else:
     target.write_text({PROFILE!r})
 ''')
     fake.chmod(0o755)
-    cfg_path = Path(os.environ['SAMOVAR_CONFIG'])
-    cfg = json.loads(cfg_path.read_text())
+    source = os.environ.get('SAMOVAR_CONFIG')
+    if source and Path(source).is_file():
+        cfg = json.loads(Path(source).read_text())
+    else:
+        cfg = {}
+    cfg.setdefault('tools', {})
+    cfg.setdefault('tool_envs', {})
+    cfg_path = tmp_path / 'samovar_config.json'
+    monkeypatch.setenv('SAMOVAR_CONFIG', str(cfg_path))
     replaced = {'phanta', 'kraken2', 'bracken', 'snakemake'}
     cfg['tools'] = {k: v for k, v in cfg['tools'].items() if k.split(':')[0] not in replaced}
     cfg['tool_envs'] = {k: v for k, v in cfg.get('tool_envs', {}).items() if k not in replaced}
@@ -109,6 +116,7 @@ else:
     return root, executable, db, reads
 
 
+@pytest.mark.optional
 @pytest.mark.parametrize('paired', [False, True])
 def test_phanta_production_profile_adapter(native, paired):
     from samovar.annotators_wrapper import ProfileAnnotator

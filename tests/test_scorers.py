@@ -59,6 +59,8 @@ def test_custom_python_scorer_and_flags(tmp_path, monkeypatch):
     )
     report = (dest / "file_counts.tsv").read_text()
     assert "initial_annotations" in report
+    scores = (dest / "scores.csv").read_text()
+    assert "n_files" in scores
     assert (dest / "stage.txt").read_text().strip() == "viz_initial"
     assert flags_apply_to_scorer("scoring", "counts")
     assert flags_apply_to_scorer("viz", "counts")

@@ -10,13 +10,13 @@ from samovar.opal import (
     opal_command,
     opal_executable,
     opal_rank_range,
-    opal_style_metrics,
     run_opal,
     series_to_counts,
     write_cami_profile,
     write_profiles_for_annotators,
 )
-from samovar.scores import score_annotators
+from samovar.profiles import metadata
+from samovar.scores import profile_scores, score_annotators
 from samovar.viz_annotation import viz_annotation
 
 
@@ -33,17 +33,33 @@ def test_confusion_rates_tn_fn():
 
 
 def test_opal_style_presence_and_l1():
-    true = ["A", "A", "B", "B"]
-    pred = ["A", "A", "A", "A"]
-    stats = opal_style_metrics(true, pred)
-    assert stats["opal_tp"] == 1
-    assert stats["opal_fp"] == 0
-    assert stats["opal_fn"] == 1
-    assert stats["completeness"] == pytest.approx(0.5)
-    assert stats["opal_purity"] == pytest.approx(1.0)
-    assert stats["jaccard"] == pytest.approx(0.5)
-    assert stats["l1_norm"] == pytest.approx(1.0)
-    assert 0 <= stats["bray_curtis"] <= 1
+    true = ["562", "562", "9606", "9606"]
+    pred = ["562", "562", "562", "562"]
+    table = score_annotators(
+        pd.DataFrame({"true": true, "taxID_tool_0": pred}),
+        ["taxID_tool_0"],
+        include_consensus=False,
+        opal=True,
+    )
+    row = table.iloc[0]
+    assert "opal_tp" not in table.columns
+    assert "completeness" not in table.columns
+    assert row["schema"] == "read-quality-v1"
+    meta = metadata({"rank": "taxid", "normalization": "all"})
+    native = profile_scores(
+        pd.DataFrame({"taxid": ["562"], "N_s": [4.0]}),
+        pd.DataFrame({"taxid": ["562", "9606"], "N_s": [2.0, 2.0]}),
+        meta,
+        meta,
+    ).iloc[0]
+    assert native["schema"] == "profile-v1"
+    assert native["scorer"] == "profile_scores"
+    assert (native["tp"], native["fp"], native["fn"]) == (1, 0, 1)
+    assert native["recall"] == pytest.approx(0.5)
+    assert native["precision"] == pytest.approx(1.0)
+    assert native["jaccard"] == pytest.approx(0.5)
+    assert native["l1_norm"] == pytest.approx(1.0)
+    assert 0 <= native["bray_curtis"] <= 1
 
 
 def test_write_cami_profile(tmp_path):
@@ -97,11 +113,13 @@ def test_score_table_includes_opal_and_tn(tmp_path):
         }
     )
     table = score_annotators(df, ["kaiju", "kraken2"], opal=True)
-    for col in ("tnr", "fnr", "tn_pct", "fn_pct", "completeness", "opal_purity", "l1_norm"):
-        assert col in table.columns
-        assert table[col].notna().all()
+    assert "completeness" not in table.columns
+    assert "opal_purity" not in table.columns
+    rates = score_annotators(df, ["kaiju", "kraken2"], metrics=["tnr", "fnr"])
+    assert rates["tnr"].notna().all()
+    assert rates["fnr"].notna().all()
     plain = score_annotators(df, ["kaiju", "kraken2"])
-    assert plain["completeness"].isna().all()
+    assert "completeness" not in plain.columns
     assert plain["accuracy"].tolist() == table["accuracy"].tolist()
 
 
@@ -127,10 +145,10 @@ def test_viz_writes_opal_scores_plot(tmp_path):
         opal=True,
     )
     csv = pd.read_csv(out / "quality_scores.csv")
-    assert "tn_pct" in csv.columns
-    assert "completeness" in csv.columns
+    assert "completeness" not in csv.columns
+    assert csv["schema"].eq("read-quality-v1").all()
     assert (out / "scores.png").is_file()
-    assert (out / "opal_scores.png").is_file()
+    assert not (out / "opal_scores.png").exists()
 
 
 @pytest.mark.optional

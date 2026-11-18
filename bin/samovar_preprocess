@@ -263,8 +263,8 @@ def main():
         dest='reprofiler',
         default=None,
         help=(
-            'ML reprofiler (default: random_forest). Also ensemble (RandomForest and '
-            'AdaBoost), adaboost, linear, or a name imported with '
+            'ML reprofiler (default: rfc2, 80 trees, confidence 2/3, GPU). '
+            'Also random_forest, ensemble, adaboost, linear, or a name imported with '
             '`samovar tools import --type ml`'
         ),
     )
@@ -273,8 +273,13 @@ def main():
         action='store_true',
         help=(
             'Train ML models on a GPU via cuML (RandomForest and logistic regression). '
-            'AdaBoost stays unsupported: its fit is a CPU stump loop.'
+            'rfc2 does this unless --no-gpu is set. AdaBoost stays on CPU.'
         ),
+    )
+    parser.add_argument(
+        '--no-gpu',
+        action='store_true',
+        help='Train rfc2 on CPU.',
     )
     parser.add_argument(
         '--feature-importance',
@@ -435,6 +440,27 @@ def main():
         action='store_false',
         default=None,
         help='Keep per-read annotator files and combine them in one batch',
+    )
+    parser.add_argument(
+        '--repeat',
+        default=None,
+        help=(
+            'Positive integer. Omit it to keep one run directory. '
+            '1 or more writes .log/repeats.json and out_0001… and does not '
+            'prepare a pipeline in the package root. CLI overrides YAML repeat. '
+            'A generated package must already come from samovar generate.'
+        ),
+    )
+    parser.add_argument(
+        '--mode',
+        choices=('full', 'benchmark'),
+        default=None,
+        help=(
+            'full (default) keeps the pipeline through viz_reprofiled. '
+            'benchmark stops after initial profiles, exports, scores and reports '
+            '(viz_initial) and does not regenerate, train, or reprofile. '
+            'This is not the MultiQC benchmark section and not regeneration_mode.'
+        ),
     )
     parser.add_argument(
         '--startpoint',
@@ -616,7 +642,7 @@ def main():
         "samples-metadata", "samples_metadata", "flags",
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",
-        "startpoint", "start-point", "endpoint", "end-point",
+        "startpoint", "start-point", "endpoint", "end-point", "mode", "repeat",
         "scoring", "reprofiler", "ml",
         "feature-importance", "feature_importance", "no-feature-importance",
         "feature-importance-all",
@@ -685,6 +711,8 @@ def main():
     args._offer_imports = True
     offer_prepare_imports(args)
     result = setup_pipeline(args)
+    if result.get("repeats"):
+        return
     print(f"Generated configs: {result['configs']}")
     print(f"Generated pipeline: {result['pipeline']}")
 

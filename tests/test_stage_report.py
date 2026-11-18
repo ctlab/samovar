@@ -54,6 +54,7 @@ def test_bundle_multiqc_includes_plots_and_scores(tmp_path):
     jsons = list(staged.glob("*_mqc.json"))
     assert jsons
     scores = json.loads(next(p for p in jsons if "quality_scores" in p.name).read_text())
+    assert "not recalculated" in scores["description"]
     assert "kaiju" in scores["data"] and "kraken2" in scores["data"]
     assert "SAMOVAR" in scores["data"]
     assert "consensus" not in scores["data"]
@@ -351,4 +352,116 @@ def test_bundle_multiqc_includes_table_score(tmp_path):
     table = json.loads(next(p for p in staged.glob("*TableScore_quality_scores_mqc.json")).read_text())
     assert table["plot_type"] == "table"
     assert "kaiju / direct" in table["data"]
+
+
+def test_package_summary_multiqc_keeps_repeats_distinct(tmp_path):
+    import pandas as pd
+    import pytest
+
+    pytest.importorskip("multiqc", reason="MultiQC is not installed")
+
+    from samovar.multiqc_report import effective_settings
+    from samovar.profiles import write_profiles
+    from samovar.repeats import publish_package, set_repeat_state, write_long_tables
+    from samovar.stage_report import bundle_package_report, run_multiqc
+
+    meta = dict(
+        kind="abundance", unit="counts", basis="reads", taxonomy="ncbi",
+        rank="species", normalization="all",
+    )
+
+    def build(root, series, failed=()):
+        publish_package(root, count=len(series) + len(failed), base_seed=42, kind="generated", identity="pkg")
+        index = 1
+        for values in series:
+            repeat = f"{index:04d}"
+            frame = pd.DataFrame({
+                "taxid": ["562", "4932"],
+                "N_A": values[0],
+                "N_B": values[1],
+            })
+            write_profiles(
+                root / f"out_{repeat}" / "initial_profiles",
+                {"kraken": frame},
+                {"kraken": meta},
+            )
+            set_repeat_state(root, repeat, "succeeded", stage="pipeline")
+            plots = root / f"out_{repeat}" / "initial_annotations_plots"
+            plots.mkdir(parents=True, exist_ok=True)
+            (plots / "quality_scores.csv").write_text(
+                "sample,annotator,accuracy\nA,kraken,0.{0}\nB,kraken,0.{0}\n".format(index),
+                encoding="utf-8",
+            )
+            runtime = root / f"out_{repeat}" / "initial_reports" / "runtime" / "samples" / "kraken" / "classify"
+            runtime.mkdir(parents=True)
+            (runtime / "A.tsv").write_text(f"s\tmax_rss\n{index}.0\t{index}0\n", encoding="utf-8")
+            index += 1
+        for _ in failed:
+            repeat = f"{index:04d}"
+            set_repeat_state(root, repeat, "failed", "exec failed", "pipeline")
+            index += 1
+        write_long_tables(root)
+
+    root = tmp_path / "three"
+    build(root, [([10, 1], [4, 8]), ([20, 2], [4, 8]), ([30, 3], [4, 8])])
+    marker = root / "out_0001" / ".log" / "checkpoints" / "keep"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("stay", encoding="utf-8")
+    stats_path = root / "summary" / "statistics.csv"
+    before = marker.read_bytes()
+    stamp = stats_path.stat().st_mtime_ns
+    assert run_multiqc(root) == 0
+    assert marker.read_bytes() == before
+    assert stats_path.stat().st_mtime_ns == stamp
+    html_path = next((root / "summary" / "multiqc").glob("*multiqc_report.html"))
+    html_report = html_path.read_text(encoding="utf-8")
+    assert "Repeat status" in html_report
+    assert "samovar_repeat_composition" in html_report
+    assert "samovar_plots_scores_benchmark_unit" in html_report
+    assert "Read-level scores: scores from 0 to 1" in html_report
+    assert "samovar_plots_scores_runtime_seconds" in html_report
+    assert "samovar_plots_scores_beta_unit" in html_report
+    assert "benchmark accuracy" not in html_report
+    assert "benchmark f1_macro" not in html_report
+    assert "individual report" in html_report
+    assert "statistics.csv" in html_report
+    staged = root / "summary" / "multiqc_samovar"
+    comparisons = json.loads((staged / "status_comparisons_mqc.json").read_text())
+    mean = next(
+        row["mean"] for name, row in comparisons["data"].items()
+        if name.startswith("A |") and "| 562 |" in f" {name} "
+    )
+    assert mean == 20
+    alpha_charts = "\n".join(path.read_text(encoding="utf-8") for path in staged.glob("scores_alpha_*_mqc.html"))
+    assert "Shannon diversity" in alpha_charts
+    assert "A" in alpha_charts and "B" in alpha_charts
+
+    run_multiqc(root, extra_args=["--exclude", "composition"])
+    assert marker.read_bytes() == before
+    assert stats_path.stat().st_mtime_ns == stamp
+    assert not list((root / "summary" / "multiqc_samovar").glob("composition_*"))
+    assert (root / "summary" / "multiqc_samovar" / "status_repeats_mqc.html").is_file()
+
+    partial = tmp_path / "partial"
+    build(partial, [([10, 1], [1, 1]), ([20, 2], [1, 1])], failed=["x"])
+    text = (bundle_package_report(partial, effective_settings([])) / "status_repeats_mqc.html").read_text()
+    assert "incomplete" in text and "failed" in text
+
+    single = tmp_path / "single"
+    build(single, [([10, 1], [1, 1])])
+    one = bundle_package_report(single, effective_settings([]))
+    summary = json.loads((one / "alpha_summary_mqc.json").read_text())
+    entry = next(iter(summary["data"].values()))
+    assert entry["n_valid"] == 1
+    assert "ci_low" not in entry
+
+    empty = tmp_path / "empty"
+    publish_package(empty, count=2, base_seed=42, kind="generated", identity="none")
+    set_repeat_state(empty, "0001", "failed", "exec failed", "pipeline")
+    set_repeat_state(empty, "0002", "failed", "exec failed", "pipeline")
+    write_long_tables(empty)
+    none = bundle_package_report(empty, effective_settings([]))
+    assert "no data" in (none / "status_repeats_mqc.html").read_text()
+    assert not list(none.glob("composition_*"))
+    assert not list(none.glob("beta_*heatmap*"))
 

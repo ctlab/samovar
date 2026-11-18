@@ -1,15 +1,20 @@
 """Accuracy purity, F1 purity, and annotator quality barplots."""
 
+import math
+
 import pandas as pd
 import pytest
 
+from samovar.kreport import KReportTaxonomy
 from samovar.scores import (
     accuracy_purity,
     annotation_scores,
+    classify_call,
     f1_purity,
     majority_vote,
     purity_by_taxon,
     score_annotators,
+    score_rank_fragments,
 )
 from samovar.viz_annotation import viz_annotation
 
@@ -33,17 +38,24 @@ def test_current_f1_equals_accuracy_and_macro_is_standard():
     true = ["A", "A", "A", "B", "B", "B"]
     pred = ["A", "A", "A", "A", "B", "B"]
     stats = annotation_scores(true, pred)
-    assert stats["f1"] == pytest.approx(5 / 6)
+    assert stats["legacy_closed_set_f1_accuracy"] == pytest.approx(5 / 6)
     assert stats["accuracy"] == pytest.approx(5 / 6)
     assert stats["f1_micro"] == pytest.approx(5 / 6)
     f1_a = 2 * 0.75 * 1.0 / 1.75
     f1_b = 2 * 1.0 * (2 / 3) / (1.0 + 2 / 3)
     assert stats["f1_macro"] == pytest.approx(0.5 * f1_a + 0.5 * f1_b)
     std = standard_classification_metrics(true, pred)
-    caption = format_f1_caption(stats["f1"], std)
+    caption = format_f1_caption(stats["legacy_closed_set_f1_accuracy"], std)
     assert "TP/N" in caption
     assert "F1-macro" in caption
     assert "1 −" in format_r2_caption(0.5) or "SS" in format_r2_caption(0.5)
+    from samovar.scores import _r2_abundance
+    from samovar.viz_annotation import _r2_table
+    flat = pd.Series(["A", "A", "B", "B"])
+    assert _r2_abundance(flat, flat) == 1.0
+    assert math.isnan(_r2_abundance(flat, pd.Series(["A", "A", "A", "A"])))
+    _, plotted = _r2_table(flat, flat)
+    assert plotted == 1.0
 
 
 def test_f1_purity_penalises_external_calls_into_majority():
@@ -60,7 +72,7 @@ def test_consistent_wrong_label_is_pure_but_not_accurate():
     pred = ["X", "X", "Y", "Y"]
     assert accuracy_purity(true, pred) == pytest.approx(1.0)
     assert f1_purity(true, pred) == pytest.approx(1.0)
-    assert annotation_scores(true, pred)["f1"] == pytest.approx(0.0)
+    assert annotation_scores(true, pred)["legacy_closed_set_f1_accuracy"] == pytest.approx(0.0)
 
 
 def test_shared_majority_label_lowers_f1_purity():
@@ -108,7 +120,9 @@ def test_default_scores_skip_opal_and_split_read_types_once():
     full = score_annotators(df.drop(columns=["read_type"]), ["kaiju", "kraken2"], opal=True)
     plain = score_annotators(df, ["kaiju", "kraken2"])
     overall = plain[plain["read_type"] == "all"]
-    assert overall["completeness"].isna().all()
+    assert "completeness" not in plain.columns
+    assert "completeness" not in full.columns
+    assert overall["schema"].eq("read-quality-v1").all()
     assert overall["accuracy"].tolist() == full["accuracy"].tolist()
     assert set(plain["read_type"]) == {"all", "illumina", "ont"}
     sampled = score_annotators(df.drop(columns=["read_type"]), ["kaiju"], metrics_sample=2, seed=1)
@@ -130,8 +144,12 @@ def test_score_annotators_adds_consensus_and_keeps_samovar():
     assert names.count("SAMOVAR") == 1
     assert "consensus" not in names
     assert "kaiju" in names and "kraken2" in names
-    assert (table["accuracy_purity"] >= 0).all()
-    assert (table["f1_purity"] >= 0).all()
+    assert "accuracy_purity" not in table.columns
+    diagnosed = score_annotators(
+        df, ["kaiju", "kraken2", "SAMOVAR"], metrics=["accuracy_purity", "f1_purity"],
+    )
+    assert (diagnosed["accuracy_purity"] >= 0).all()
+    assert (diagnosed["f1_purity"] >= 0).all()
 
 
 def test_score_annotators_names_majority_vote_samovar():
@@ -148,6 +166,61 @@ def test_score_annotators_names_majority_vote_samovar():
     assert "consensus" not in names
 
 
+def test_false_taxids_stay_in_the_profile_counts():
+    """Two distinct false taxids are two false positives; 0 and other are not."""
+    y = ["562", "562", "9606", "9606"]
+    p = ["562", "111", "222", "0"]
+    gold = {t for t in y if t != "0"}
+    called = {t for t in p if t not in {"0", "other"}}
+    assert len(gold & called) == 1
+    assert len(called - gold) == 2
+    assert len(gold - called) == 1
+    from samovar.profiles import metadata
+    from samovar.scores import profile_scores
+
+    meta = metadata({"rank": "taxid", "normalization": "all"})
+    native = profile_scores(
+        pd.DataFrame({"taxid": ["562", "111", "222", "0"], "N_s": [1, 1, 1, 1]}),
+        pd.DataFrame({"taxid": ["562", "9606"], "N_s": [2, 2]}),
+        meta,
+        meta,
+    ).iloc[0]
+    assert (native["tp"], native["fp"], native["fn"]) == (1, 2, 1)
+    assert native["precision"] == pytest.approx(1 / 3)
+    assert native["recall"] == pytest.approx(1 / 2)
+    assert native["f1"] == pytest.approx(0.4)
+    assert native["l1_norm"] == pytest.approx(1.25)
+    frame = pd.DataFrame({"true": y, "taxID_test_0": p, "sample": ["A", "A", "B", "B"]})
+    table = score_annotators(frame, ["taxID_test_0"], include_consensus=False, opal=True)
+    assert "opal_tp" not in table.columns and "l1_norm" not in table.columns
+    assert list(frame["taxID_test_0"]) == p
+    repeated = profile_scores(
+        pd.DataFrame({"taxid": ["111"], "N_s": [2]}),
+        pd.DataFrame({"taxid": ["562"], "N_s": [2]}),
+        meta, meta,
+    ).iloc[0]
+    assert repeated["fp"] == 1
+    blank = profile_scores(
+        pd.DataFrame({"taxid": ["0"], "N_s": [4]}),
+        pd.DataFrame({"taxid": ["562", "9606"], "N_s": [2, 2]}),
+        meta, meta,
+    ).iloc[0]
+    assert blank["fp"] == 0 and blank["fn"] == 2
+    assert blank["precision"] != blank["precision"]
+    assert blank["f1"] != blank["f1"]
+
+
+def test_same_short_name_keeps_both_profile_identities():
+    from samovar.abundance import annotation_to_abundance_tables
+
+    tables = annotation_to_abundance_tables(pd.DataFrame({
+        "taxID_k2_0": ["562", "9606"],
+        "taxID_k2_1": ["111", "222"],
+    }))
+    assert set(tables) == {"taxID_k2_0", "taxID_k2_1"}
+    assert set(tables["taxID_k2_1"]["taxid"]) == {"111", "222"}
+
+
 def test_score_annotators_without_ground_truth():
     df = pd.DataFrame(
         {
@@ -159,7 +232,7 @@ def test_score_annotators_without_ground_truth():
     names = list(table["annotator"].astype(str))
     assert "kaiju" in names and "kraken2" in names
     assert names[-1] == "SAMOVAR"
-    assert table["f1"].isna().all()
+    assert table["legacy_closed_set_f1_accuracy"].isna().all()
     assert table["r2"].isna().all()
     assert (table["n_reads"] == 4).all()
 
@@ -192,25 +265,24 @@ def test_viz_annotation_writes_scores_barplot(tmp_path, monkeypatch, opal):
     assert not results["scores"].empty
     assert (out / "scores.png").is_file()
     assert (out / "quality_scores.csv").is_file()
-    assert (out / "purity_by_taxon.csv").is_file()
+    assert not (out / "purity_by_taxon.csv").exists()
     csv = pd.read_csv(out / "quality_scores.csv")
-    assert "accuracy_purity" in csv.columns
-    assert "f1_purity" in csv.columns
+    assert "accuracy_purity" not in csv.columns
+    assert "completeness" not in csv.columns
     assert "accuracy" in csv.columns
     assert "f1_macro" in csv.columns
-    assert "tnr" in csv.columns
-    assert "completeness" in csv.columns
-    assert (out / "opal_scores.png").is_file() == opal
-    assert (out / "opal_scores.html").is_file() == opal
+    assert csv["schema"].eq("read-quality-v1").all()
+    assert "legacy_closed_set_f1_accuracy" in csv.columns
+    assert not (out / "opal_scores.png").exists()
+    assert not (out / "opal_scores.html").exists()
     assert bool(calls) == opal
-    assert csv["completeness"].notna().all() if opal else csv["completeness"].isna().all()
     import matplotlib.image as mpimg
 
-    for name in (("scores.png", "opal_scores.png") if opal else ("scores.png",)):
+    for name in ("scores.png",):
         arr = mpimg.imread(out / name)
         assert arr.shape[1] >= 1400, f"{name} width {arr.shape[1]} is too low-res"
         assert arr.shape[0] >= 700, f"{name} height {arr.shape[0]} is too low-res"
-    assert "f1" in csv.columns
+    assert "legacy_closed_set_f1_accuracy" in csv.columns
     assert "r2" in csv.columns
     assert "SAMOVAR" in set(csv["annotator"].astype(str))
     assert "consensus" not in set(csv["annotator"].astype(str))
@@ -258,5 +330,156 @@ def test_selected_metrics_skip_unused_computations(monkeypatch):
     frame = pd.DataFrame({"kaiju": ["562", "0"], "true": ["562", "562"]})
     result = scores.score_annotators(frame, ["kaiju"], metrics=["accuracy"])
     assert result.loc[0, "accuracy"] == 0.5
-    assert result["r2"].isna().all() and result["f1_purity"].isna().all()
+    assert result["r2"].isna().all()
+    assert "f1_purity" not in result.columns
     assert result.loc[0, "n_reads"] == 2
+
+
+_RANK_TREE = KReportTaxonomy({
+    1: (1, "no rank"),
+    2: (1, "superkingdom"),
+    1236: (2, "family"),
+    561: (1236, "genus"),
+    562: (561, "species"),
+    5621: (562, "no rank"),
+    4930: (2, "genus"),
+    4932: (4930, "species"),
+})
+
+
+def test_genus_calls_match_the_hand_table():
+    assert classify_call(_RANK_TREE, 562, 561, "genus")[0] == "tp"
+    assert classify_call(_RANK_TREE, 562, 5621, "genus")[0] == "tp"
+    assert classify_call(_RANK_TREE, 562, 1236, "genus")[0] == "vp"
+    assert classify_call(_RANK_TREE, 562, 4930, "genus")[0] == "fp"
+    assert classify_call(_RANK_TREE, 562, 0, "genus")[0] == "fn"
+    assert classify_call(_RANK_TREE, 9999, 562, "genus") == ("unscorable", "unknown true lineage")
+    assert classify_call(_RANK_TREE, 562, "missing-node", "genus") == ("unscorable", "unresolved prediction")
+    assert classify_call(_RANK_TREE, 562, 5621, "species")[0] == "tp"
+    assert classify_call(_RANK_TREE, 562, 561, "species")[0] == "vp"
+    assert classify_call(_RANK_TREE, 562, 4932, "species")[0] == "fp"
+
+
+def test_manual_rank_counts_and_undefined_ratios():
+    frame = pd.DataFrame({
+        "true": [562, 562, 562, 562, 562],
+        "taxID_k2_0": [561, 5621, 4930, 0, 1236],
+        "sample": ["A"] * 5,
+    })
+    row = score_rank_fragments(frame, _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2")[0]
+    assert (row["tp"], row["fp"], row["fn"], row["vp"], row["total"]) == (2, 1, 1, 1, 5)
+    assert row["ppv"] == pytest.approx(2 / 3)
+    assert row["sensitivity"] == pytest.approx(2 / 5)
+    assert row["f1"] == pytest.approx(1 / 2)
+    assert row["coverage"] == pytest.approx(4 / 5)
+    assert row["classified_at_rank"] == pytest.approx(3 / 5)
+    assert row["schema"] == "kraken2-rank-v1"
+
+    only_fn = score_rank_fragments(
+        pd.DataFrame({"true": [562], "taxID_k2_0": [0]}),
+        _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2",
+    )[0]
+    assert only_fn["ppv"] == "" and only_fn["f1"] == ""
+    assert "undefined PPV" in only_fn["reason"]
+    assert only_fn["sensitivity"] == 0
+
+    missing = score_rank_fragments(
+        pd.DataFrame({"true": ["", "9999"], "taxID_k2_0": [562, 562]}),
+        _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2",
+    )[0]
+    assert missing["total"] == 0 and missing["unscorable"] == 2
+    assert missing["sensitivity"] == "" and "no evaluated fragments" in missing["reason"]
+
+
+def test_pairs_count_once_and_sources_stay_separate():
+    paired = pd.DataFrame({
+        "seq": ["r/1", "r/2", "s/1", "s/2", "ont1"],
+        "true": [562, 562, 562, 4932, 562],
+        "taxID_k2_0": [561, 561, 561, 561, 0],
+    })
+    row = score_rank_fragments(paired, _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2")[0]
+    assert row["unit"] == "mixed"
+    assert row["tp"] == 1 and row["unscorable"] == 1 and row["fn"] == 1
+    assert row["total"] == 2
+    with pytest.raises(ValueError, match="read-level"):
+        score_rank_fragments(
+            pd.DataFrame({"taxid": [562], "N_A": [1]}),
+            _RANK_TREE, rank="genus", pred_col="taxID_k2_0", tool="k2",
+        )
+    frame = pd.DataFrame({"true": [562], "table_true": [4932], "taxID_k2_0": [562]})
+    reads = score_rank_fragments(
+        frame, _RANK_TREE, rank="species", pred_col="taxID_k2_0", tool="k2", truth_source="reads",
+    )[0]
+    table = score_rank_fragments(
+        frame, _RANK_TREE, rank="species", pred_col="taxID_k2_0", tool="k2",
+        truth_col="table_true", truth_source="per-read-table",
+    )[0]
+    assert reads["tp"] == 1 and table["fp"] == 1
+    assert reads["truth_source"] != table["truth_source"]
+
+
+def test_quality_scores_use_run_names_not_tool_index(tmp_path):
+    import yaml
+
+    from samovar.profiles import write_profiles
+    from samovar.repeats import publish_package, set_repeat_state, write_long_tables
+    from samovar.stage_report import read_annotator_labels
+
+    labels = read_annotator_labels([
+        {"run_name": "k2b", "type": "kraken2"},
+        {"run_name": "sylphpart", "type": "sylph", "output_level": "profile"},
+        {"run_name": "k2a", "type": "kraken2"},
+    ])
+    assert labels["kraken2_0"] == "k2a"
+    assert labels["taxID_kraken2_1"] == "k2b"
+    assert "sylph_0" not in labels
+
+    run = tmp_path / "run"
+    plots = run / "initial_annotations_plots"
+    cfg = run / ".log" / "configs"
+    cfg.mkdir(parents=True)
+    (cfg / "config_init.yaml").write_text(yaml.safe_dump({"run_config": [
+        {"run_name": "k2b", "type": "kraken2"},
+        {"run_name": "k2a", "type": "kraken2"},
+    ]}), encoding="utf-8")
+    frame = pd.DataFrame({
+        "seq": ["r1", "r2"],
+        "true": ["562", "562"],
+        "sample": ["A", "A"],
+        "taxID_kraken2_0": ["562", "562"],
+        "taxID_kraken2_1": ["9606", "9606"],
+    })
+    viz_annotation(
+        frame, type=("scores",), output_dir=str(plots), rank="none", use_names=False, plot=False,
+    )
+    scores = pd.read_csv(plots / "quality_scores.csv")
+    assert set(scores["annotator"]) >= {"k2a", "k2b"}
+    assert not scores["annotator"].astype(str).str.startswith("kraken2_").any()
+
+    mixed = tmp_path / "mixed"
+    mixed_plots = mixed / "initial_annotations_plots"
+    mixed_cfg = mixed / ".log" / "configs"
+    mixed_cfg.mkdir(parents=True)
+    (mixed_cfg / "config_init.yaml").write_text(yaml.safe_dump({"run_config": [
+        {"run_name": "kraken2", "type": "kraken2"},
+        {"run_name": "k2b", "type": "kraken2"},
+    ]}), encoding="utf-8")
+    viz_annotation(
+        frame, type=("scores",), output_dir=str(mixed_plots), rank="none", use_names=False, plot=False,
+    )
+    mixed_scores = pd.read_csv(mixed_plots / "quality_scores.csv")
+    assert set(mixed_scores["annotator"]) >= {"kraken2", "k2b", "SAMOVAR"}
+
+    root = tmp_path / "pkg"
+    publish_package(root, count=1, base_seed=1, kind="generated", identity="generated:names")
+    set_repeat_state(root, "0001", "succeeded", stage="pipeline")
+    child = root / "out_0001" / "initial_profiles"
+    table = pd.DataFrame({"taxid": ["562"], "N_A": [3]})
+    write_profiles(child, {"taxID_kraken2_0": table}, {
+        "taxID_kraken2_0": dict(kind="abundance", unit="counts", basis="reads", taxonomy="ncbi",
+                                rank="species", normalization="all", run_name="k2a"),
+    })
+    written = write_long_tables(root)
+    text = written["profiles"].read_text(encoding="utf-8")
+    assert "k2a" in text
+    assert "taxID_kraken2_0" not in text

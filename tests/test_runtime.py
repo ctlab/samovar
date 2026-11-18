@@ -1,10 +1,11 @@
 """Runtime is a measured elapsed time, not a quality score and not a filled-in zero."""
 
 import json
+from pathlib import Path
 
 from samovar.config import _checkpoint_block
 from samovar.multiqc_report import effective_settings
-from samovar.runtime import load_sample_runtimes, mean_per_run, record_stage
+from samovar.runtime import load_sample_runtimes, mean_per_run, publish_shared_benchmark, record_stage
 from samovar.stage_report import bundle_multiqc
 
 
@@ -40,12 +41,10 @@ def test_per_sample_mean_is_not_the_stage_wall_clock(tmp_path):
     assert abs(means["mean_elapsed_s"] - 3.5) < 1e-9
     assert abs(means["mean_max_rss_mb"] - 200) < 1e-9
     staged = bundle_multiqc(tmp_path, effective_settings([{"sections": ["runtime"]}]))
-    box = json.loads((staged / "runtime_box_mqc.json").read_text())
-    assert box["plot_type"] == "box"
-    assert box["data"]["initial: kraken2_std"] == [3.0, 4.0]
-    memory = json.loads((staged / "runtime_memory_box_mqc.json").read_text())
-    assert memory["plot_type"] == "box"
-    assert memory["data"]["initial: kraken2_std"] == [100.0, 300.0]
+    elapsed = (staged / "runtime_time_mqc.html").read_text(encoding="utf-8")
+    memory = (staged / "runtime_memory_mqc.html").read_text(encoding="utf-8")
+    assert "Time per sample" in elapsed and "initial: kraken2_std" in elapsed
+    assert "Peak memory per sample" in memory and "initial: kraken2_std" in memory
     summary = json.loads((staged / "runtime_summary_mqc.json").read_text())
     by_kind = {row["kind"]: row for row in summary["data"].values()}
     assert by_kind["per_sample_mean"]["elapsed_s"] == 3.5
@@ -54,3 +53,30 @@ def test_per_sample_mean_is_not_the_stage_wall_clock(tmp_path):
     assert by_kind["absolute"]["max_rss_mb"] == ""
     hidden = bundle_multiqc(tmp_path, effective_settings([{"sections": ["profiles"], "exclude": ["runtime"]}]))
     assert not list(hidden.glob("runtime*"))
+
+
+def test_batch_benchmark_is_copied_onto_each_sample(tmp_path):
+    source = tmp_path / "batch.tsv"
+    _benchmark(source, 9, rss=400)
+    reports = tmp_path / "initial_reports" / "runtime" / "samples" / "kj" / "kaiju"
+    publish_shared_benchmark(source, [reports / "A.tsv", reports / "B.tsv"])
+    rows = load_sample_runtimes(tmp_path)
+    assert [(row["sample"], row["elapsed_s"], row["max_rss_mb"]) for row in rows] == [
+        ("A", 9.0, 400.0),
+        ("B", 9.0, 400.0),
+    ]
+    assert mean_per_run(rows)[0]["mean_elapsed_s"] == 9.0
+
+
+def test_bracken_runtime_adds_the_kraken2_sample(tmp_path):
+    reports = tmp_path / "initial_reports"
+    _benchmark(reports / "runtime" / "samples" / "kraken2" / "kraken2" / "s.tsv", 4, rss=200)
+    _benchmark(reports / "runtime" / "samples" / "bracken" / "profile" / "s.tsv", 1.5, rss=80)
+    (reports / "s_bracken.profile.csv.bracken.tsv").write_text("taxonomy_id\n", encoding="utf-8")
+    rows = {row["run_name"]: row for row in load_sample_runtimes(tmp_path)}
+    assert rows["kraken2"]["elapsed_s"] == 4
+    assert rows["bracken"]["elapsed_s"] == 5.5
+    assert rows["bracken"]["max_rss_mb"] == 280
+    text = (Path(__file__).resolve().parents[1] / "workflow" / "annotators" / "Snakefile").read_text(encoding="utf-8")
+    assert "runtime/batches/{_kaiju_run}.kaiju.tsv" in text
+    assert "publish_shared_benchmark" in text

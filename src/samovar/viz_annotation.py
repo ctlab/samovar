@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from samovar.annotation_io import annotator_columns, read_annotation_dir
-from samovar.annotation_columns import is_feat_column
+from samovar.annotation_columns import is_feat_column, is_tax_column
 from samovar.parse_annotators import (
     ensure_taxid_name_map,
     remap_taxid_dataframe,
@@ -39,7 +39,7 @@ PALETTE_F1 = [
 
 def normalize_viz_config(settings=None) -> dict:
     """Validate the shared prepare/workflow visualization settings."""
-    from samovar.scores import SCORE_COLUMNS
+    from samovar.scores import LEGACY_CLOSED_SET_F1, SCORE_COLUMNS, _PURITY_COLUMNS, _RATE_COLUMNS
 
     out = dict(full=False, opal=False, metrics_sample=0, metrics=None)
     if settings is not None:
@@ -67,9 +67,16 @@ def normalize_viz_config(settings=None) -> dict:
             names = None
         elif names == ["none"]:
             names = []
-        elif set(names) - (set(SCORE_COLUMNS) - {"annotator"}):
-            unknown = set(names) - (set(SCORE_COLUMNS) - {"annotator"})
-            raise ValueError(f"Unknown viz metrics: {', '.join(sorted(unknown))}")
+        else:
+            allowed = (
+                (set(SCORE_COLUMNS) - {"annotator", "schema"})
+                | set(_PURITY_COLUMNS)
+                | set(_RATE_COLUMNS)
+                | {"f1", LEGACY_CLOSED_SET_F1}
+            )
+            unknown = set(names) - allowed
+            if unknown:
+                raise ValueError(f"Unknown viz metrics: {', '.join(sorted(unknown))}")
         out["metrics"] = names
     return out
 
@@ -191,6 +198,25 @@ def axis_levels_from_fpc(present: Iterable, fpc_core: Sequence[str]) -> List[str
     return core + extra + spec
 
 
+def _rename_runs(df: pd.DataFrame, out_dir: Optional[Path]) -> pd.DataFrame:
+    if out_dir is None:
+        return df
+    from samovar.stage_report import annotator_display_name, read_annotator_labels, run_config_near
+
+    labels = read_annotator_labels(run_config_near(out_dir))
+    if not labels:
+        return df
+    rename = {}
+    taken = set(df.columns)
+    for col in df.columns:
+        shown = annotator_display_name(str(col), labels)
+        if shown == col or shown in taken:
+            continue
+        rename[col] = shown
+        taken.add(shown)
+    return df.rename(columns=rename) if rename else df
+
+
 def _strip_annotator_prefixes(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     rename = {}
@@ -221,7 +247,7 @@ def _annotator_names(df: pd.DataFrame) -> List[str]:
     skip = {"length", "sample", "true", "seq", "read_type"}
     names = []
     for col in df.columns:
-        if col in skip or "confidence" in str(col).lower() or str(col).endswith("_conf"):
+        if col in skip or "confidence" in str(col).lower() or str(col).endswith("_conf") or str(col).lower().endswith("_abstain_reason"):
             continue
         if is_feat_column(col) or str(col).lower().startswith("feat_"):
             continue
@@ -277,7 +303,11 @@ def _r2_table(true: pd.Series, pred: pd.Series) -> Tuple[pd.DataFrame, float]:
         return table, 0.0
     ss_tot = ((table["true_n"] - table["true_n"].mean()) ** 2).sum()
     ss_res = ((table["pred_n"] - table["true_n"]) ** 2).sum()
-    r2 = 0.0 if ss_tot == 0 else float(1 - ss_res / ss_tot)
+    if ss_tot == 0:
+        # A flat truth has no variance. Matching it is a perfect fit.
+        r2 = 1.0 if ss_res == 0 else float("nan")
+    else:
+        r2 = float(1 - ss_res / ss_tot)
     return table, r2
 
 
@@ -666,6 +696,9 @@ def viz_annotation(
 
     selected = annotator_columns(work)
     work = _strip_annotator_prefixes(work)
+    stripped_columns = set(work.columns)
+    work = _rename_runs(work, out_dir)
+    renamed_columns = set(work.columns) - stripped_columns
     annotators = []
     skip_meta = {"length", "sample", "true", "seq", "read_type"}
     renamed_selected = []
@@ -675,7 +708,7 @@ def viz_annotation(
         short = re.sub(r"_[0-9]+$", "", name)
         renamed_selected.append(short if short in work.columns else name)
     for col in work.columns:
-        if col in skip_meta or "confidence" in str(col).lower() or str(col).endswith("_conf"):
+        if col in skip_meta or "confidence" in str(col).lower() or str(col).endswith("_conf") or str(col).lower().endswith("_abstain_reason"):
             continue
         if is_feat_column(col):
             continue
@@ -683,7 +716,7 @@ def viz_annotation(
             continue
         annotators.append(col)
     if renamed_selected:
-        keep = [c for c in annotators if c in renamed_selected or c in selected]
+        keep = [c for c in annotators if c in renamed_selected or c in selected or c in renamed_columns]
         if keep:
             annotators = keep
 
@@ -728,7 +761,6 @@ def viz_annotation(
 
     if types & {"scores", "score", "purity"}:
         from samovar.scores import (
-            OPAL_DISPLAY,
             purity_by_taxon,
             save_scores_altair,
             save_scores_barplot,
@@ -748,20 +780,7 @@ def viz_annotation(
                 title=f"Annotation quality{caption_rank}",
             )
             save_scores_altair(scores_table, out_dir / "scores.html")
-            if opal:
-                save_scores_barplot(
-                    scores_table,
-                    out_dir / "opal_scores.png",
-                    title=f"OPAL-style profile metrics{caption_rank}",
-                    display=OPAL_DISPLAY,
-                    ymax=2.0,
-                )
-                save_scores_altair(
-                    scores_table,
-                    out_dir / "opal_scores.html",
-                    display=OPAL_DISPLAY,
-                )
-            if truth_frame is not None and (metrics is None or set(metrics) & {"accuracy_purity", "f1_purity"}):
+            if truth_frame is not None and metrics is not None and set(metrics) & {"accuracy_purity", "f1_purity"}:
                 taxon_frames = []
                 tools = tool_annotators(annotators)
                 seen = set()
@@ -809,8 +828,15 @@ def viz_annotation(
         true_levels_last: List[str] = []
         f1_work = truth_frame
         for name in annotators:
-            pred = _collapse_other(f1_work[name], f1_work["true"])
             true = normalize_series(f1_work["true"])
+            raw = normalize_series(f1_work[name])
+            raw_counts = pd.DataFrame({"true": true, "pred": raw}).value_counts().rename("Freq").reset_index()
+            f1 = _f1_from_counts(raw_counts)
+            std = standard_classification_metrics(true, raw)
+            from samovar.opal import confusion_rates
+
+            std.update(confusion_rates(true, raw))
+            pred = _collapse_other(raw, true)
             counts = pd.DataFrame({"true": true, "pred": pred}).value_counts().rename("Freq").reset_index()
             if reord == "fpc":
                 fpc_core = fpc_taxon_order(counts, "pred", "true")
@@ -819,11 +845,6 @@ def viz_annotation(
             true_levels = axis_levels_from_fpc(true, fpc_core)
             pred_levels = axis_levels_from_fpc(pred, fpc_core)
             true_levels_last = true_levels
-            f1 = _f1_from_counts(counts)
-            std = standard_classification_metrics(true, pred)
-            from samovar.opal import confusion_rates
-
-            std.update(confusion_rates(true, pred))
             caption = format_f1_caption(f1, std, rank_used)
             matrix = _trim_matrix(_pivot_matrix(counts, "true", "pred", true_levels, pred_levels))
             gglist[name] = {"f1": f1, "metrics": std, "matrix": matrix}
@@ -889,7 +910,7 @@ def viz_annotation(
         gglist = {}
         r2_work = truth_frame
         for name in annotators:
-            pred = _collapse_other(r2_work[name], r2_work["true"])
+            pred = normalize_series(r2_work[name])
             true = normalize_series(r2_work["true"])
             table, r2 = _r2_table(true, pred)
             if np.isnan(r2):
@@ -917,7 +938,7 @@ def viz_annotation(
                 if sub.empty:
                     continue
                 for name in annotators:
-                    pred = _collapse_other(sub[name], sub["true"])
+                    pred = normalize_series(sub[name])
                     true = normalize_series(sub["true"])
                     table, r2 = _r2_table(true, pred)
                     if np.isnan(r2):
@@ -1014,7 +1035,7 @@ def compare_annotations(
             data.to_csv(csv_file, index=False)
         return data
     require_viz_backend()
-    tax_cols = [c for c in data.columns if str(c).startswith("taxID_")]
+    tax_cols = [c for c in data.columns if is_tax_column(c)]
     if not tax_cols:
         print(
             f"no taxID_* columns in {annotation_path}; skipping visualization",
@@ -1046,3 +1067,158 @@ def compare_annotations(
         Path(csv_file).parent.mkdir(parents=True, exist_ok=True)
         data.to_csv(csv_file, index=False)
     return data
+
+
+def _viz_from_args(args):
+    """Stage YAML plus the CLI overrides compare_annotations already accepts."""
+    import yaml
+
+    config = {}
+    if getattr(args, "config", None):
+        with open(args.config) as handle:
+            config = yaml.safe_load(handle) or {}
+    settings = normalize_viz_config(config.get("viz"))
+    for key, value in (
+        ("full", args.full),
+        ("opal", args.opal),
+        ("metrics_sample", args.viz_metrics_sample),
+        ("metrics", args.viz_metrics),
+    ):
+        if value is not None:
+            settings[key] = value
+    return config, normalize_viz_config(settings)
+
+
+def _run_annotator_compare(args, config, viz) -> None:
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    compare_annotations(
+        annotation_dir=args.annotation_dir,
+        output_dir=args.output_dir,
+        csv_file=args.csv_file,
+        show_top=args.show_top,
+        types=("f1", "R2", "cv", "scores") if viz["full"] else ("scores",),
+        rank=args.rank,
+        split=args.split,
+        spearman_full=True if args.spearman_full else None,
+        opal=viz["opal"],
+        metrics_sample=viz["metrics_sample"],
+        metrics=viz["metrics"],
+        seed=args.seed if args.seed is not None else int(config.get("seed", 42)),
+        threads=args.threads if args.threads is not None else int(config.get("cores", 1)),
+    )
+
+
+def _add_annotator_score_flags(parser) -> None:
+    import argparse
+
+    parser.add_argument("--annotation-dir", "--annotation_dir", dest="annotation_dir", required=True)
+    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", default=None)
+    parser.add_argument("--csv", dest="csv_file", default=None)
+    parser.add_argument("--show-top", "--show_top", dest="show_top", type=int, default=0)
+    parser.add_argument("--rank", default="genus")
+    parser.add_argument("--split", action="store_true")
+    parser.add_argument("--config", help="Stage YAML containing a viz mapping")
+    parser.add_argument("--threads", "--cores", type=int, default=None,
+                        help="Native Spearman threads; scalar metrics use vectorized counts")
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--viz-metrics", action="append", default=None,
+                        help="Comma-separated score column names; all or none")
+    parser.add_argument(
+        "--full", action=argparse.BooleanOptionalAction, default=None,
+        help="Also write F1, R2, and CV plots. Default is the scores table and bar plot.",
+    )
+    parser.add_argument(
+        "--opal", action=argparse.BooleanOptionalAction, default=None,
+        help="Run optional external OPAL when it is installed.",
+    )
+    parser.add_argument("--viz-metrics-sample", type=int, default=None,
+                        help="Score a seeded subset of this many rows. 0 scores every row.")
+    parser.add_argument("--spearman-full", action="store_true",
+                        help="Spearman on the concatenated per-read table")
+
+
+def score_annotators_main(argv=None) -> int:
+    """Score per-read annotators. A missing or empty directory is not a failure."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="samovar score annotators")
+    _add_annotator_score_flags(parser)
+    args = parser.parse_args(argv)
+    path = Path(args.annotation_dir)
+    if path.exists() and not path.is_dir():
+        parser.error(f"annotation_dir is not a directory: {path}")
+    if not path.is_dir():
+        print(
+            f"no per-sample annotation rows in {path} "
+            "(expected non-empty *.csv other than combined_annotation_table*); "
+            "skipping visualization",
+            file=sys.stderr,
+        )
+        return 0
+    try:
+        config, viz = _viz_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    _run_annotator_compare(args, config, viz)
+    return 0
+
+
+def score_profiles_main(argv=None) -> int:
+    """Score saved profiles. Each profile keeps its own rank. Nothing to score is success."""
+    import argparse
+
+    from samovar.profile_pipeline import score
+
+    parser = argparse.ArgumentParser(prog="samovar score profiles")
+    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", required=True)
+    parser.add_argument("--stage", required=True, choices=("initial", "regenerated", "reprofiled"))
+    parser.add_argument("--config", help="Stage YAML containing a viz mapping")
+    parser.add_argument("--full", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--opal", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--viz-metrics", action="append", default=None)
+    parser.add_argument("--viz-metrics-sample", type=int, default=None)
+    args = parser.parse_args(argv)
+    try:
+        config, viz = _viz_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    score(Path(args.output_dir), args.stage, {**config, "viz": viz})
+    return 0
+
+
+def score_main(argv=None) -> int:
+    """``samovar score annotators`` or ``samovar score profiles``."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="samovar score")
+    sub = parser.add_subparsers(dest="group", required=True)
+    sub.add_parser("annotators", help="Per-read annotator scores", add_help=False)
+    sub.add_parser("profiles", help="Profile scores, including annotations converted to profiles", add_help=False)
+    args, rest = parser.parse_known_args(argv)
+    if args.group == "annotators":
+        return score_annotators_main(rest)
+    return score_profiles_main(rest)
+
+
+def legacy_compare_main(argv=None) -> int:
+    """Previous ``workflow/compare_annotations.py``: profiles, then per-read scores."""
+    import argparse
+
+    from samovar.annotation_io import read_annotation_dir
+    from samovar.profile_pipeline import score
+
+    parser = argparse.ArgumentParser(description="Visualize SamovaR annotation tables")
+    _add_annotator_score_flags(parser)
+    args = parser.parse_args(argv)
+    try:
+        config, viz = _viz_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    root = Path(args.annotation_dir).parent
+    stage = Path(args.annotation_dir).name.removesuffix("_annotations")
+    has_profiles = score(root, stage, {**config, "viz": viz})
+    if has_profiles and read_annotation_dir(args.annotation_dir).empty:
+        return 0
+    _run_annotator_compare(args, config, viz)
+    return 0

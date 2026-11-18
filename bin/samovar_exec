@@ -101,6 +101,22 @@ if [ "${SAMOVAR_REDO:-0}" != "0" ]; then
         rm -f "$OUTPUT_DIR/.log/checkpoints/"*.done 2>/dev/null || true
 fi
 
+if [ -f "$OUTPUT_DIR/.log/repeats.json" ]; then
+    extra=()
+    if [ "${SAMOVAR_REDO:-0}" != "0" ]; then
+        extra+=(--redo)
+    fi
+    if [ -n "${SAMOVAR_START:-}" ]; then
+        extra+=(--startpoint "$SAMOVAR_START")
+    fi
+    if [ -n "${SAMOVAR_END:-}" ]; then
+        extra+=(--endpoint "$SAMOVAR_END")
+    fi
+    PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON" -m samovar.repeats exec --root "$OUTPUT_DIR" "${extra[@]}"
+    exit $?
+fi
+
 # Check for .generate directory and run its pipeline if it exists.
 # Skip when the exec window starts after setup_reads, or when initial/ already
 # has reads (CAMISIM Nextflow is slow to redo) unless --redo / SAMOVAR_REDO=1.

@@ -8,7 +8,7 @@ from pathlib import Path
 from samovar.annotators_wrapper import kaiju_multi_script, use_kaiju_multi
 from samovar.assembly_profiling import assembly_stage_threads, run_megahit, run_prodigal
 from samovar.config import AnnotatorConfig, PipelineConfig, _apply_translated_cli_flags
-from samovar.memory import annotator_mem_mb, job_mem_mb
+from samovar.memory import annotator_job_threads, annotator_mem_mb, job_mem_mb
 from samovar.tool_spec import annotator_priority, scheduler_threads
 
 import pytest
@@ -16,6 +16,7 @@ import pytest
 
 @pytest.mark.optional
 def test_heavy_databases_take_the_whole_memory_ceiling():
+    """Unmeasured Kraken2 still takes the ceiling. A found index is sized separately."""
     limit = 32_000
     cores = 32
     assert annotator_mem_mb("kraken2", 16, cores, limit) == limit
@@ -29,6 +30,43 @@ def test_heavy_databases_take_the_whole_memory_ceiling():
     assert annotator_priority("kaiju") > annotator_priority("kraken2")
     assert annotator_priority("kraken2") > annotator_priority("metax")
     assert annotator_priority("metax") > annotator_priority("gc")
+
+
+def test_index_file_reserves_its_size_and_widths_a_lone_job(tmp_path):
+    cores = 64
+    mib = 1024 * 1024
+    small = tmp_path / "nr.fmi"
+    small.write_bytes(b"x" * (2 * mib))
+    mem = annotator_mem_mb("kaiju", 32, cores, 10_000, db_path=str(small))
+    assert mem == 3
+    assert 2 * mem < 10_000
+    assert annotator_job_threads("kaiju", cores, mem, 10_000, index_known=True) == 32
+
+    lone = tmp_path / "k2"
+    lone.mkdir()
+    (lone / "hash.k2d").write_bytes(b"x" * (6 * mib))
+    kmem = annotator_mem_mb("kraken2", 16, cores, 10, db_path=str(lone))
+    assert kmem == 7
+    assert 2 * kmem > 10
+    assert annotator_job_threads("kraken2", cores, kmem, 10, index_known=True) == cores
+
+    over = tmp_path / "over.fmi"
+    over.write_bytes(b"x" * (20 * mib))
+    over_mem = annotator_mem_mb("kaiju", 32, cores, 10, db_path=str(over))
+    assert over_mem == 10
+    assert annotator_job_threads("kaiju", cores, over_mem, 10, index_known=True) == cores
+
+    assert annotator_mem_mb("kraken2", 16, cores, 10_000) == 10_000
+    assert annotator_job_threads("kraken2", cores, 10_000, 10_000, index_known=False) == 16
+    share = annotator_mem_mb("kaiju", 32, cores, 10_000)
+    assert share == job_mem_mb(32, cores, 10_000)
+    assert annotator_job_threads("kaiju", cores, share, 10_000, index_known=False) == 32
+    assert annotator_mem_mb("metax", 4, cores, 10_000, db_path=str(lone)) == 10_000
+
+    glob_dir = tmp_path / "kaiju"
+    glob_dir.mkdir()
+    (glob_dir / "only.fmi").write_bytes(b"x" * (2 * mib))
+    assert annotator_mem_mb("kaiju", 8, cores, 10_000, db_path=str(glob_dir / "*.fmi")) == 3
 
 
 @pytest.mark.optional

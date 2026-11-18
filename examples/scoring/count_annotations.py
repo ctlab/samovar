@@ -25,6 +25,7 @@ def score(inputs: Sequence[Path], output_dir: Path, config: dict) -> None:
     dest = Path(output_dir)
     dest.mkdir(parents=True, exist_ok=True)
     lines = ["path\tn_files"]
+    scores = ["sample_id,metric,value"]
     for raw in inputs:
         path = Path(raw)
         if path.is_dir():
@@ -36,7 +37,9 @@ def score(inputs: Sequence[Path], output_dir: Path, config: dict) -> None:
         if n < min_files:
             continue
         lines.append(f"{path}\t{n}")
+        scores.append(f"{path.name},n_files,{n}")
     (dest / "file_counts.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (dest / "scores.csv").write_text("\n".join(scores) + "\n", encoding="utf-8")
     stage = config.get("stage") or ""
     if stage:
         (dest / "stage.txt").write_text(str(stage) + "\n", encoding="utf-8")

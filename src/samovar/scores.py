@@ -4,12 +4,15 @@ Accuracy purity asks: among reads that truly come from one taxid, how much of
 that mass did the tool pile onto a single predicted label (the majority call)?
 F1 purity keeps that recall and penalises other true taxa that were also
 assigned to the same majority label.
+
+``score_rank_fragments`` is the separate Kraken 2 rank count. It does not
+replace the per-read accuracy column named ``f1``.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -42,8 +45,12 @@ def profile_scores(predicted, reference, predicted_metadata, reference_metadata)
     for col in n_sample_columns(predicted):
         p, r = pred[col] > 0, ref[col] > 0
         tp, fp, fn = int((p & r).sum()), int((p & ~r).sum()), int((~p & r).sum())
-        row = dict(sample=col[2:], tp=tp, fp=fp, fn=fn, precision=ratio(tp, tp + fp),
-                   recall=ratio(tp, tp + fn), f1=ratio(2 * tp, 2 * tp + fp + fn),
+        precision, recall = ratio(tp, tp + fp), ratio(tp, tp + fn)
+        f1 = float("nan")
+        if precision == precision and recall == recall and precision + recall > 0:
+            f1 = ratio(2 * tp, 2 * tp + fp + fn)
+        row = dict(sample=col[2:], tp=tp, fp=fp, fn=fn, precision=precision,
+                   recall=recall, f1=f1,
                    jaccard=ratio(tp, tp + fp + fn), l1_norm=float("nan"), bray_curtis=float("nan"),
                    reason="undefined ratios have zero denominator")
         if quantitative and px[col].sum() > 0 and ry[col].sum() > 0:
@@ -54,7 +61,10 @@ def profile_scores(predicted, reference, predicted_metadata, reference_metadata)
         else:
             row["reason"] = "empty abundance has no quantitative composition"
         rows.append(row)
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    frame["scorer"] = "profile_scores"
+    frame["schema"] = PROFILE_SCHEMA
+    return frame
 
 
 def _taxon_helpers():
@@ -79,8 +89,18 @@ COMBINATION_ANNOTATORS = frozenset({"samovar", "consensus"})
 PLATFORM_READ_TYPE_RE = re.compile(r"^[a-z][a-z0-9_+-]{1,31}$", re.I)
 INVALID_READ_TYPES = frozenset({"", "nan", "none", "na", "all", "0", "unclassified"})
 
+READ_QUALITY_SCHEMA = "read-quality-v1"
+PROFILE_SCHEMA = "profile-v1"
+LEGACY_CLOSED_SET_F1 = "legacy_closed_set_f1_accuracy"
+LEGACY_READ_WARNING = (
+    "Column f1 is closed-set accuracy (TP/N), not rank F1 or profile set-F1. "
+    "The stored value was not recalculated."
+)
+_PURITY_COLUMNS = ("accuracy_purity", "f1_purity")
+_RATE_COLUMNS = ("tpr", "tnr", "fpr", "fnr", "tn_pct", "fn_pct", "fp_pct", "tp_pct")
 SCORE_COLUMNS = (
     "annotator",
+    "schema",
     "n_reads",
     "n_taxa",
     "accuracy",
@@ -89,27 +109,8 @@ SCORE_COLUMNS = (
     "f1_micro",
     "f1_macro",
     "f1_weighted",
-    "f1",
+    LEGACY_CLOSED_SET_F1,
     "r2",
-    "accuracy_purity",
-    "f1_purity",
-    "tpr",
-    "tnr",
-    "fpr",
-    "fnr",
-    "tn_pct",
-    "fn_pct",
-    "fp_pct",
-    "tp_pct",
-    "opal_tp",
-    "opal_fp",
-    "opal_fn",
-    "completeness",
-    "opal_purity",
-    "opal_f1",
-    "jaccard",
-    "l1_norm",
-    "bray_curtis",
 )
 
 
@@ -232,7 +233,9 @@ def _r2_abundance(true: pd.Series, pred: pd.Series) -> float:
     ss_tot = float(((y - y.mean()) ** 2).sum())
     ss_res = float(((x - y) ** 2).sum())
     if ss_tot == 0:
-        return 0.0
+        # A flat truth has no variance. Matching it is a perfect fit; any
+        # other prediction cannot be compared with the usual ratio.
+        return 1.0 if ss_res == 0 else float("nan")
     return float(1.0 - ss_res / ss_tot)
 
 
@@ -335,6 +338,18 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
     return float(np.dot(table["f1"].to_numpy(dtype=float), weights) / denom)
 
 
+def adapt_quality_scores(table: pd.DataFrame) -> pd.DataFrame:
+    """Read a saved read-quality table without turning its old ``f1`` into set-F1."""
+    work = table.copy()
+    if "schema" in work.columns and work["schema"].astype(str).eq(READ_QUALITY_SCHEMA).all():
+        return work
+    if "f1" in work.columns and LEGACY_CLOSED_SET_F1 not in work.columns:
+        work = work.rename(columns={"f1": LEGACY_CLOSED_SET_F1})
+        work["schema"] = "legacy-read-quality"
+        work["warning"] = LEGACY_READ_WARNING
+    return work
+
+
 def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = False,
                       include_classification: bool = True) -> Dict[str, float]:
     true_s = pd.Series(list(true) if not isinstance(true, pd.Series) else true.reset_index(drop=True))
@@ -349,13 +364,9 @@ def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = Fa
         "f1_purity": float(np.dot(table["f1"], table["n_true"]) / weight) if weight else 0.0,
     }
     if include_classification:
-        stats["f1"] = _f1_accuracy(true_s, pred_s)
+        stats[LEGACY_CLOSED_SET_F1] = _f1_accuracy(true_s, pred_s)
         stats["r2"] = _r2_abundance(true_s, pred_s)
         stats.update(standard_classification_metrics(true_s, pred_s))
-    if include_opal:
-        from samovar.opal import opal_style_metrics
-
-        stats.update(opal_style_metrics(true_s, pred_s))
     return stats
 
 
@@ -424,6 +435,7 @@ def order_annotators(names: Sequence[str]) -> List[str]:
 def _empty_score_row(name: str, n_reads: float, n_taxa: float) -> Dict[str, float]:
     row = {col: np.nan for col in SCORE_COLUMNS}
     row["annotator"] = name
+    row["schema"] = READ_QUALITY_SCHEMA
     row["n_reads"] = float(n_reads)
     row["n_taxa"] = float(n_taxa)
     return row
@@ -453,9 +465,11 @@ def score_annotators(
     not added again. When ground truth is missing or all-unclassified, F1 / R²
     and related metrics are left as NaN; ``n_reads`` / ``n_taxa`` are still filled.
 
-    ``opal=False`` leaves OPAL profile columns NaN. ``metrics`` limits which
-    score columns are filled. ``metrics_sample`` above 0 draws a seeded subset
-    and records ``n_sampled``; 0 scores every row.
+    Profile presence and abundance are not copied here. ``opal`` is accepted
+    for existing callers and does not add a second profile table.
+    ``accuracy_purity`` and ``f1_purity`` are filled only when ``metrics``
+    names them. ``metrics_sample`` above 0 draws a seeded subset and records
+    ``n_sampled``; 0 scores every row.
     """
     names = [n for n in annotators if str(n).lower() != "read_type" and not is_feat_column(n)]
     names = select_scoring_annotators(work, names)
@@ -480,7 +494,9 @@ def score_annotators(
                 frame[col] = normalize_series(frame[col].astype("category"))
     scored = rows_with_usable_truth(frame, true_col) if frame is not None else None
     true = scored[true_col] if scored is not None else None
-    wanted = None if metrics is None else {str(name) for name in metrics}
+    wanted = None if metrics is None else {
+        LEGACY_CLOSED_SET_F1 if str(name) == "f1" else str(name) for name in metrics
+    }
     rows = []
 
     def _add(name: str, pred: pd.Series) -> None:
@@ -493,29 +509,22 @@ def score_annotators(
             row["n_sampled"] = float(n_sampled)
             rows.append(row)
             return
-        from samovar.viz_annotation import _collapse_other
-
         aligned = pred.reindex(scored.index)
-        collapsed = _collapse_other(aligned, true)
-        if wanted is None or wanted & {"accuracy_purity", "f1_purity"}:
+        if wanted is not None and wanted & set(_PURITY_COLUMNS):
             stats = annotation_scores(true, aligned, include_classification=False)
         else:
             n_reads, n_taxa = _pred_counts(true)
             stats = {"n_reads": n_reads, "n_taxa": n_taxa}
-        if wanted is None or "f1" in wanted:
-            stats["f1"] = _f1_accuracy(true, collapsed)
+        if wanted is None or LEGACY_CLOSED_SET_F1 in wanted:
+            stats[LEGACY_CLOSED_SET_F1] = _f1_accuracy(true, aligned)
         if wanted is None or "r2" in wanted:
-            stats["r2"] = _r2_abundance(true, collapsed)
+            stats["r2"] = _r2_abundance(true, aligned)
         if wanted is None or wanted & {"accuracy", "precision_macro", "recall_macro", "f1_micro", "f1_macro", "f1_weighted"}:
-            stats.update(standard_classification_metrics(true, collapsed))
-        if opal and (wanted is None or wanted & {
-            "completeness", "opal_purity", "opal_f1", "jaccard", "l1_norm", "bray_curtis",
-            "opal_tp", "opal_fp", "opal_fn",
-            "tpr", "tnr", "fpr", "fnr", "tp_pct", "tn_pct", "fp_pct", "fn_pct",
-        }):
-            from samovar.opal import opal_style_metrics
+            stats.update(standard_classification_metrics(true, aligned))
+        if wanted is not None and wanted & set(_RATE_COLUMNS):
+            from samovar.opal import confusion_rates
 
-            stats.update(opal_style_metrics(true, collapsed))
+            stats.update(confusion_rates(true, aligned))
         if wanted is not None:
             for key in list(stats):
                 if key not in wanted and key not in {"n_reads", "n_taxa"}:
@@ -553,7 +562,9 @@ def score_annotators(
     for col in list(SCORE_COLUMNS) + ["n_sampled"]:
         if col not in table.columns:
             table[col] = np.nan
-    table = table[list(SCORE_COLUMNS) + ["n_sampled"]]
+    table["schema"] = READ_QUALITY_SCHEMA
+    extras = [col for col in (*_PURITY_COLUMNS, *_RATE_COLUMNS) if col in table.columns]
+    table = table[list(SCORE_COLUMNS) + extras + ["n_sampled"]]
     ordered = order_annotators(list(table["annotator"]))
     table["annotator"] = pd.Categorical(table["annotator"], categories=ordered, ordered=True)
     table = table.sort_values("annotator").reset_index(drop=True)
@@ -593,8 +604,8 @@ SCORE_DISPLAY = {
     "precision_macro": "P-macro",
     "recall_macro": "R-macro",
     "f1_macro": "F1-macro",
-    "f1": "F1 (current)",
-    "r2": "R² (current)",
+    LEGACY_CLOSED_SET_F1: "Closed-set accuracy",
+    "r2": "R²",
     "tnr": "TN rate",
     "fnr": "FN rate",
     "accuracy_purity": "Accuracy purity",
@@ -620,7 +631,7 @@ BAR_COLORS = {
     "precision_macro": "#E6AB02",
     "recall_macro": "#A6761D",
     "f1_macro": "#1F78B4",
-    "f1": "#7570B3",
+    LEGACY_CLOSED_SET_F1: "#7570B3",
     "r2": "#E7298A",
     "tnr": "#80B1D3",
     "fnr": "#FB8072",
@@ -750,6 +761,118 @@ def save_scores_barplot(
     plt.close("all")
 
 
+def _bar_label(row: Mapping[str, Any], *, phase: bool, sample: bool, truth: bool) -> str:
+    parts = [str(row.get("run_name") or "")]
+    if phase:
+        parts.append(str(row.get("phase") or ""))
+    if sample:
+        parts.append(str(row.get("sample_id") or ""))
+    if truth:
+        parts.append(str(row.get("truth_source") or ""))
+    return " ".join(part for part in parts if part)
+
+
+def save_repeat_errorbars(
+    rows: Sequence[Mapping[str, Any]],
+    path,
+    *,
+    title: str,
+    metrics: Sequence[str],
+    labels: Optional[Dict[str, str]] = None,
+) -> None:
+    """One figure: mean across repeats, with the saved interval as the error bar."""
+    from math import ceil
+    from pathlib import Path
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from samovar.viz_annotation import _setup_cns
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    chosen = [metric for metric in metrics if any(str(row.get("metric") or "") == metric for row in rows)]
+    if not chosen:
+        return
+    used = [row for row in rows if str(row.get("metric") or "") in chosen]
+    phases = {str(row.get("phase") or "") for row in used}
+    samples = {str(row.get("sample_id") or "") for row in used}
+    truths = {str(row.get("truth_source") or "") for row in used}
+    flags = {"phase": len(phases) > 1, "sample": len(samples) > 1, "truth": len(truths) > 1}
+    names: List[str] = []
+    for row in used:
+        label = _bar_label(row, **flags)
+        if label and label not in names:
+            names.append(label)
+    if not names:
+        return
+    lookup = {
+        (_bar_label(row, **flags), str(row.get("metric") or "")): row
+        for row in used
+    }
+    shown = labels or {}
+    _setup_cns()
+    n_ann = len(names)
+    n_met = len(chosen)
+    ncols = min(3, n_met)
+    nrows = ceil(n_met / ncols)
+    panel_w = max(3.4, 0.72 * n_ann + 1.8)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(panel_w * ncols, 2.85 * nrows + 0.55), squeeze=False,
+    )
+    x = np.arange(n_ann, dtype=float)
+    for i, metric in enumerate(chosen):
+        ax = axes[i // ncols][i % ncols]
+        means, lows, highs = [], [], []
+        for name in names:
+            row = lookup.get((name, metric), {})
+            mean = _optional_plot_float(row.get("mean"))
+            low = _optional_plot_float(row.get("ci_low"))
+            high = _optional_plot_float(row.get("ci_high"))
+            means.append(0.0 if mean is None else mean)
+            if mean is None or low is None or high is None:
+                lows.append(0.0)
+                highs.append(0.0)
+            else:
+                lows.append(max(0.0, mean - low))
+                highs.append(max(0.0, high - mean))
+        vals = np.asarray(means, dtype=float)
+        ax.bar(x, vals, width=0.72, color=BAR_COLORS.get(metric, "0.45"), edgecolor="white", linewidth=0.6)
+        ax.errorbar(x, vals, yerr=np.vstack([lows, highs]), fmt="none", ecolor="0.15", elinewidth=1, capsize=3)
+        ax.set_title(shown.get(metric, metric))
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=30, ha="right")
+        ax.set_xlim(-0.7, n_ann - 0.3)
+        span = np.concatenate([vals - np.asarray(lows), vals + np.asarray(highs)])
+        ax.set_ylim(*_panel_ylim(span))
+        ax.axhline(0, color="0.55", linewidth=0.7)
+        ax.set_axisbelow(True)
+        ax.yaxis.grid(True, linestyle=":", linewidth=0.6, color="0.78")
+        if i % ncols == 0:
+            ax.set_ylabel("Score")
+    for j in range(n_met, nrows * ncols):
+        axes[j // ncols][j % ncols].set_visible(False)
+    fig.suptitle(title)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.88, bottom=0.14, hspace=0.38, wspace=0.28)
+    fig.savefig(
+        path, dpi=_SCORE_SAVE_DPI, bbox_inches="tight", pad_inches=0.25,
+        facecolor="white", transparent=False, edgecolor="none",
+    )
+    plt.close("all")
+
+
+def _optional_plot_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
 def format_f1_caption(f1: float, std: Dict[str, float], rank: Optional[str] = None) -> str:
     """Two-line caption for F1 heatmaps: current formula + standard metrics."""
     tag = f" ({rank})" if rank else ""
@@ -809,3 +932,240 @@ def save_scores_altair(table: pd.DataFrame, path, display: Optional[Dict[str, st
             path.with_suffix(".json").write_text(chart.to_json())
         except Exception:
             pass
+
+
+RANK_SCHEMA = "kraken2-rank-v1"
+_RANK_FIELDS = (
+    "rank", "schema", "taxonomy", "taxonomy_version", "sample", "tool", "unit",
+    "truth_source", "tp", "vp", "fn", "fp", "unscorable", "total",
+    "ppv", "sensitivity", "f1", "coverage", "classified_at_rank", "reason",
+)
+_RANK_MISSING = {"", "nan", "none", "na", "unknown"}
+_RANK_UNCLASSIFIED = {"0", "unclassified"}
+
+
+def _rank_node(tree, value):
+    """Taxid on this tree. Unknown tokens stay unknown; ``resolve`` would call them 0."""
+    text = "" if value is None else str(value).strip()
+    low = text.lower()
+    if low in _RANK_MISSING:
+        return None
+    if low in _RANK_UNCLASSIFIED:
+        return 0
+    if low in tree.aliases:
+        taxid = int(tree.aliases[low])
+    else:
+        token = text[:-2] if text.endswith(".0") and text[:-2].lstrip("-").isdigit() else text
+        if not token.lstrip("-").isdigit():
+            return None
+        taxid = int(token)
+    if taxid == 0:
+        return 0
+    if taxid not in tree.tree:
+        return None
+    return taxid
+
+
+def _at_rank(tree, taxid: int, rank: str) -> int:
+    return next((node for node in tree.ancestors_inclusive(taxid) if tree.rank_of(node) == rank), 0)
+
+
+def classify_call(tree, true, pred, rank: str):
+    """Kraken 2 label at ``rank``: tp, vp, fn, fp, or unscorable."""
+    true_id = _rank_node(tree, true)
+    pred_id = _rank_node(tree, pred)
+    if true_id in {None, 0}:
+        missing = true_id == 0 or str(true).strip().lower() in _RANK_MISSING
+        return "unscorable", "missing truth" if missing else "unknown true lineage"
+    if pred_id is None:
+        return "unscorable", "unresolved prediction"
+    target = _at_rank(tree, true_id, rank)
+    if not target:
+        return "unscorable", f"true lineage has no {rank}"
+    if pred_id == 0:
+        return "fn", ""
+    if target in tree.ancestors_inclusive(pred_id):
+        return "tp", ""
+    if pred_id in tree.ancestors_inclusive(true_id):
+        return "vp", ""
+    return "fp", ""
+
+
+def _fragment_units(frame, id_col, true_col: str, pred_col: str, sample_col: str):
+    from samovar.seqio import strip_mate_suffix
+
+    rows = []
+    grouped = {}
+    order = []
+    for _, row in frame.iterrows():
+        sample = "" if sample_col not in frame.columns else str(row[sample_col])
+        item = {"sample": sample, "true": row[true_col], "pred": row[pred_col]}
+        if not id_col or id_col not in frame.columns:
+            rows.append({**item, "unit": "read", "label": None, "reason": ""})
+            continue
+        text = str(row[id_col]).strip()
+        if text.startswith("@"):
+            text = text[1:]
+        text = text.split()[0] if text else ""
+        mate = text[-1] if len(text) >= 2 and text[-2] == "/" and text[-1] in "12" else ""
+        base = strip_mate_suffix(text)
+        key = ("se", sample, base) if not mate else ("pe", sample, base)
+        if key not in grouped:
+            order.append(key)
+        grouped.setdefault(key, []).append({**item, "mate": mate})
+    for key in order:
+        bucket = grouped[key]
+        sample = bucket[0]["sample"]
+        if key[0] == "se":
+            if len(bucket) > 1:
+                rows.append({"sample": sample, "unit": "read", "label": "unscorable", "reason": "duplicate read id"})
+            else:
+                rows.append({**bucket[0], "unit": "read", "label": None, "reason": ""})
+            continue
+        mates = {item["mate"] for item in bucket}
+        if mates != {"1", "2"} or any(sum(item["mate"] == side for item in bucket) != 1 for side in "12"):
+            reason = "missing mate" if mates < {"1", "2"} else "duplicate read id"
+            rows.append({"sample": sample, "unit": "fragment", "label": "unscorable", "reason": reason})
+            continue
+        first, second = bucket
+        if str(first["true"]) != str(second["true"]) or str(first["pred"]) != str(second["pred"]):
+            rows.append({"sample": sample, "unit": "fragment", "label": "unscorable", "reason": "paired mates disagree"})
+            continue
+        rows.append({**first, "unit": "fragment", "label": None, "reason": ""})
+    return rows
+
+
+def score_rank_fragments(
+    frame,
+    tree,
+    *,
+    rank: str,
+    pred_col: str,
+    tool: str,
+    truth_col: str = "true",
+    truth_source: str = "reads",
+    id_col: str = "seq",
+    sample_col: str = "sample",
+    taxonomy: str = "ncbi",
+    taxonomy_version: str = "",
+):
+    """One row per sample. A profile table has no read labels and is refused."""
+    if truth_col not in frame.columns or pred_col not in frame.columns:
+        raise ValueError("profile input has no read-level labels")
+    units = _fragment_units(frame, id_col if id_col in frame.columns else None, truth_col, pred_col, sample_col)
+    by_sample = {}
+    for unit in units:
+        by_sample.setdefault(unit["sample"], []).append(unit)
+    if not by_sample:
+        by_sample[""] = []
+    scored = []
+    for sample, group in by_sample.items():
+        counts = {name: 0 for name in ("tp", "vp", "fn", "fp", "unscorable")}
+        reasons = []
+        names = {unit["unit"] for unit in group}
+        unit_name = "mixed" if len(names) > 1 else (next(iter(names)) if names else "read")
+        for unit in group:
+            if unit["label"] == "unscorable":
+                counts["unscorable"] += 1
+                if unit["reason"]:
+                    reasons.append(unit["reason"])
+                continue
+            label, reason = classify_call(tree, unit["true"], unit["pred"], rank)
+            counts[label] += 1
+            if reason:
+                reasons.append(reason)
+        total = counts["tp"] + counts["vp"] + counts["fn"] + counts["fp"]
+        ppv = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else None
+        sensitivity = counts["tp"] / total if total else None
+        if ppv is None or sensitivity is None or ppv + sensitivity == 0:
+            f1 = None
+        else:
+            f1 = 2 * ppv * sensitivity / (ppv + sensitivity)
+        coverage = (counts["tp"] + counts["vp"] + counts["fp"]) / total if total else None
+        at_rank = (counts["tp"] + counts["fp"]) / total if total else None
+        if total == 0:
+            reasons.append("no evaluated fragments")
+        elif ppv is None:
+            reasons.append("undefined PPV: no true or false positive")
+        if f1 is None and ppv is not None and sensitivity == 0:
+            reasons.append("undefined F1: PPV and sensitivity are zero")
+        elif f1 is None and total and ppv is None:
+            reasons.append("undefined F1: PPV is undefined")
+        elif f1 is None and total == 0:
+            reasons.append("undefined F1: no evaluated fragments")
+        scored.append({
+            "rank": rank,
+            "schema": RANK_SCHEMA,
+            "taxonomy": taxonomy,
+            "taxonomy_version": taxonomy_version,
+            "sample": sample,
+            "tool": tool,
+            "unit": unit_name,
+            "truth_source": truth_source,
+            "tp": counts["tp"],
+            "vp": counts["vp"],
+            "fn": counts["fn"],
+            "fp": counts["fp"],
+            "unscorable": counts["unscorable"],
+            "total": total,
+            "ppv": "" if ppv is None else ppv,
+            "sensitivity": "" if sensitivity is None else sensitivity,
+            "f1": "" if f1 is None else f1,
+            "coverage": "" if coverage is None else coverage,
+            "classified_at_rank": "" if at_rank is None else at_rank,
+            "reason": "; ".join(dict.fromkeys(reasons)),
+        })
+    return scored
+
+
+def write_rank_scores(path, rows) -> None:
+    import csv
+    from pathlib import Path
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_RANK_FIELDS, extrasaction="ignore", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+    import hashlib
+    from pathlib import Path
+
+    from samovar.kreport import KReportTaxonomy
+
+    parser = argparse.ArgumentParser(prog="samovar.scores")
+    parser.add_argument("--table", required=True)
+    parser.add_argument("--taxdump", required=True)
+    parser.add_argument("--rank", required=True)
+    parser.add_argument("--pred", required=True)
+    parser.add_argument("--true", default="true")
+    parser.add_argument("--id", default="seq")
+    parser.add_argument("--tool", required=True)
+    parser.add_argument("--truth-source", default="reads")
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args(argv)
+    nodes = Path(args.taxdump)
+    nodes_file = nodes if nodes.is_file() else nodes / "nodes.dmp"
+    frame = pd.read_csv(args.table, dtype=str, keep_default_na=False)
+    rows = score_rank_fragments(
+        frame,
+        KReportTaxonomy.from_taxdump(nodes),
+        rank=args.rank,
+        pred_col=args.pred,
+        tool=args.tool,
+        truth_col=args.true,
+        truth_source=args.truth_source,
+        id_col=args.id,
+        taxonomy="ncbi",
+        taxonomy_version=hashlib.sha256(nodes_file.read_bytes()).hexdigest()[:12],
+    )
+    write_rank_scores(args.output, rows)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

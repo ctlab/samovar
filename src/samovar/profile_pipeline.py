@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from samovar.abundance import input_to_abundance_tables, n_sample_columns
+from samovar.abundance import n_sample_columns
 from samovar.profiles import (at_rank, change_basis, load_profile, metadata, read_counts,
                               read_profiles, reference_lengths, write_profiles)
 
@@ -83,10 +83,10 @@ def _drop_reprofiled_suffix(table, meta):
 
 def stage_tables(root, stage):
     ann = stage_annotation(root, stage)
-    tables = input_to_abundance_tables(ann)
+    tables = ann.to_abundance()
     meta = dict(ann.profile_metadata)
     for name in tables:
-        meta.setdefault(name, metadata({"rank": "taxid"}))
+        meta.setdefault(name, metadata({"rank": "taxid", "normalization": "all"}))
         if stage == "reprofiled":
             tables[name], meta[name] = _drop_reprofiled_suffix(tables[name], meta[name])
     return tables, meta
@@ -308,23 +308,13 @@ def ground_truth(root, stage, config):
     return found[0][1], found[0][2]
 
 
-def _taxdump_present(taxdump) -> bool:
-    from samovar.kreport import resolve_taxdump_files
-
-    try:
-        resolve_taxdump_files(taxdump or None)
-    except FileNotFoundError:
-        return False
-    return True
-
-
 def align_truth(pred, pm, truth, tm, root, config):
     if pm["taxonomy"] != tm["taxonomy"]:
         raise ValueError(f"Incompatible profile taxonomy: {pm['taxonomy']} vs {tm['taxonomy']}; supply an explicit taxonomy mapping")
     taxdump = config.get("taxdump") or None
-    # Per-read tables and read-header truth are both rank taxid. Species
-    # rollup needs a taxdump; without one, compare the taxids as stored.
-    if pm["rank"] == "taxid" and tm["rank"] == "taxid" and not _taxdump_present(taxdump):
+    # Two taxid profiles compare the stored ids, including false taxids.
+    # A taxid profile against a named rank still rolls up when a taxdump exists.
+    if pm["rank"] == "taxid" and tm["rank"] == "taxid":
         rank = "taxid"
     else:
         rank = pm["rank"] if pm["rank"] != "taxid" else "species"
@@ -361,21 +351,51 @@ def score(root, stage, config):
     if not tables or (not gts and not (native or config.get("profile_truth"))):
         return False
     from samovar.scores import profile_scores
+    from samovar.stage_report import annotator_display_name, read_annotator_labels, run_config_near
+
+    labels = read_annotator_labels(config.get("run_config") or run_config_near(root))
+
+    def _shown(name: str) -> str:
+        return annotator_display_name(name, labels)
+
     rows = []
     if not gts:
         for name in tables:
-            rows.append(pd.DataFrame([dict(annotator=name, reason="no profile gold standard available")]))
+            rows.append(pd.DataFrame([dict(
+                annotator=_shown(name), reason="no profile gold standard available", scorer="profile_scores",
+            )]))
     for gt_name, truth, tm in gts:
         for name, table in tables.items():
             pred, pm, aligned, aligned_meta = align_truth(table, metas[name], truth, tm, root, config)
             result = profile_scores(pred, aligned, pm, aligned_meta)
+            for key in ("kind", "taxonomy", "rank", "unit", "basis", "normalization"):
+                result[key] = pm.get(key, "")
             result.insert(0, "ground_truth", gt_name)
-            result.insert(0, "annotator", name)
+            result.insert(0, "annotator", _shown(name))
             rows.append(result)
     dest = root / f"{stage}_annotations_plots"
     dest.mkdir(parents=True, exist_ok=True)
     result = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     result.to_csv(dest / "profile_quality_scores.csv", index=False)
+    if "f1" in result.columns:
+        from samovar.scores import save_scores_barplot
+
+        plot = result.loc[result["f1"].notna()].copy()
+        if not plot.empty and plot["sample"].nunique() > 1:
+            plot["annotator"] = plot["annotator"].astype(str) + " " + plot["sample"].astype(str)
+        save_scores_barplot(
+            plot,
+            dest / "profile_scores.png",
+            title="Profile comparison",
+            display={
+                "precision": "Precision",
+                "recall": "Recall",
+                "f1": "F1",
+                "jaccard": "Jaccard",
+                "l1_norm": "L1",
+                "bray_curtis": "Bray–Curtis",
+            },
+        )
     data = {str(i): {k: (None if pd.isna(v) else v) for k, v in row.items()}
             for i, row in result.iterrows()}
     content = dict(id=f"{stage}_profile_scores", section_name="Taxonomic profiles",

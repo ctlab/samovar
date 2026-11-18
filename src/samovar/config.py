@@ -193,7 +193,7 @@ def _apply_translated_cli_flags(config: "PipelineConfig", args: argparse.Namespa
     config.scoring_tool_flags = named_s or {}
     config.reprofiler_flags = apply_translated_flags(
         config.reprofiler_flags or "",
-        name=config.reprofiler or "random_forest",
+        name=config.reprofiler or "rfc2",
         record=lookup_tool_record(cfg, str(config.reprofiler or "")),
         canonical=canonical,
     ) or None
@@ -266,7 +266,7 @@ _IN_TREE_ANNOTATOR_MODULES = {
 }
 
 
-def _portable_annotator_cmd(cmd: str) -> str:
+def _portable_annotator_cmd(cmd: str, *, allow_python_script: bool = False) -> str:
     """Keep PATH names in YAML; exec resolves via PATH / install config.
 
     Absolute binaries the user passed explicitly are stored as-is.
@@ -288,9 +288,15 @@ def _portable_annotator_cmd(cmd: str) -> str:
         return shlex.join([python_path(), "-m", module, *rest])
     path = Path(token).expanduser()
     if path.is_file():
+        from samovar.tools_import import refuse_nonexecutable_annotator
+
+        refuse_nonexecutable_annotator(text, allow_python_script=allow_python_script)
         return text
     resolved = (command_argv(resolve_executable(token, allow_python_script=True)) or [""])[0]
     if resolved and Path(resolved).expanduser().is_file():
+        from samovar.tools_import import refuse_nonexecutable_annotator
+
+        refuse_nonexecutable_annotator(resolved, allow_python_script=allow_python_script)
         return text
     if shutil.which(token):
         return text
@@ -423,8 +429,9 @@ class PipelineConfig:
     scoring_tools: Optional[List[str]] = None
     scoring_tool_flags: Optional[Dict[str, str]] = None
     viz: Optional[Dict] = None
-    reprofiler: str = "random_forest"
+    reprofiler: str = "rfc2"
     gpu: bool = False
+    no_gpu: bool = False
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
     feature_importance: str = "builtin"
@@ -439,6 +446,8 @@ class PipelineConfig:
     qc_tool_flags: Optional[Dict[str, str]] = None
     startpoint: str = "setup_reads"
     endpoint: str = "viz_reprofiled"
+    mode: str = "full"
+    repeat: Optional[int] = None
     export_formats: Optional[List[str]] = None
     export_taxdump: Optional[str] = None
     export_taxonomy: Optional[str] = None
@@ -488,6 +497,10 @@ class PipelineConfig:
             self.export_formats = []
         if not self.email:
             self.email = _default_email()
+        if self.reprofiler == "rfc2" and not self.no_gpu and not self.gpu:
+            from samovar.reprofiling import gpu_training_support
+
+            self.gpu = gpu_training_support("RandomForest") is None
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'PipelineConfig':
@@ -791,6 +804,15 @@ class PipelineConfig:
                 )
                 if yaml_end:
                     config.endpoint = str(yaml_end)
+                yaml_mode = input_config.get("mode")
+                if yaml_mode:
+                    from samovar.exec_control import normalize_mode
+
+                    config.mode = normalize_mode(str(yaml_mode))
+                if "repeat" in input_config and not getattr(args, "_repeat_child", False):
+                    from samovar.repeats import parse_repeat
+
+                    config.repeat = parse_repeat(input_config.get("repeat"))
                 yaml_gt = (
                     input_config.get("initial_ground_truth_table")
                     or input_config.get("initial-ground-truth-table")
@@ -847,10 +869,22 @@ class PipelineConfig:
                 
                 # Handle annotators from config
                 if 'annotators' in input_config:
+                    from samovar.main_config import lookup_tool_record
+                    from samovar.paths import load_config
+
+                    installed = load_config()
                     for ann in input_config['annotators']:
                         payload = dict(ann)
                         if payload.get("cmd"):
-                            payload["cmd"] = _portable_annotator_cmd(payload["cmd"])
+                            registered = lookup_tool_record(
+                                installed,
+                                str(payload.get("type") or payload.get("cmd") or ""),
+                            )
+                            profiler = str((registered or {}).get("type") or "").lower() == "profiler"
+                            profiler = profiler or str(payload.get("output_level") or "").lower() == "profile"
+                            payload["cmd"] = _portable_annotator_cmd(
+                                payload["cmd"], allow_python_script=profiler,
+                            )
                         if "db_path" in payload:
                             raw_db = str(payload["db_path"])
                             if not payload.get("db_label"):
@@ -868,6 +902,16 @@ class PipelineConfig:
         if config.input_dir:
             config.input_dir = absolute_path(config.input_dir)
         config.output_dir = absolute_path(config.output_dir or DEFAULT_OUTPUT_DIR)
+        if getattr(args, "_repeat_child", False):
+            from samovar.repeats import load_manifest
+
+            parent = Path(config.output_dir).parent
+            manifest = load_manifest(parent)
+            if manifest and (manifest.get("input") or {}).get("kind") == "fastq-bootstrap":
+                config.input_dir = str(Path(config.output_dir) / "initial")
+                rewritten = Path(config.output_dir) / ".log" / "bootstrap_truth.tsv"
+                if rewritten.is_file():
+                    config.initial_ground_truth_table = str(rewritten)
         from samovar.profiles import validate_profile_settings
         (
             config.profile_inputs,
@@ -875,6 +919,12 @@ class PipelineConfig:
             config.profile_corrector,
             config.profile_references,
         ) = validate_profile_settings(input_config)
+        if not config.profile_references:
+            from samovar.profiles import references_from_generate
+
+            found = references_from_generate(config.output_dir)
+            if found:
+                config.profile_references = found
         if config.input_dir:
             from samovar.seqio import link_or_copy_reads
 
@@ -1201,6 +1251,15 @@ class PipelineConfig:
         )
         if cli_reprofiler:
             config.reprofiler = require_known_reprofiler(cli_reprofiler)
+        if getattr(args, "no_gpu", False):
+            config.gpu = False
+            config.no_gpu = True
+        elif config.reprofiler == "rfc2" and not getattr(args, "gpu", False):
+            from samovar.reprofiling import gpu_training_support
+
+            config.gpu = gpu_training_support("RandomForest") is None
+        elif config.reprofiler == "rfc2":
+            config.gpu = True
         cli_fi = getattr(args, "feature_importance", None)
         if cli_fi not in (None, ""):
             config.feature_importance = str(cli_fi)
@@ -1457,9 +1516,34 @@ class PipelineConfig:
         cli_end = getattr(args, "endpoint", None)
         if cli_end:
             config.endpoint = str(cli_end)
-        config.startpoint, config.endpoint = resolve_window(
-            config.startpoint, config.endpoint
-        )
+        cli_mode = getattr(args, "mode", None)
+        if cli_mode:
+            from samovar.exec_control import normalize_mode
+
+            config.mode = normalize_mode(str(cli_mode))
+        if getattr(args, "_repeat_child", False):
+            config.repeat = None
+            config._repeat_child = True
+        elif getattr(args, "repeat", None) is not None:
+            from samovar.repeats import parse_repeat
+
+            config.repeat = parse_repeat(args.repeat)
+        if config.mode == "benchmark":
+            from samovar.exec_control import benchmark_window
+
+            config.startpoint, config.endpoint = benchmark_window(
+                config.startpoint,
+                config.endpoint,
+                endpoint_explicit=bool(cli_end) or bool(
+                    input_config.get("endpoint")
+                    or input_config.get("end_point")
+                    or input_config.get("end")
+                ),
+            )
+        else:
+            config.startpoint, config.endpoint = resolve_window(
+                config.startpoint, config.endpoint
+            )
         from samovar.annotation_convert import formats_from_prepare_args, parse_export_formats
 
         cli_export = formats_from_prepare_args(args)
@@ -1748,6 +1832,7 @@ class PipelineConfig:
             'cores': int(self.cores),
             'mem_mb': int(self.mem_mb or 0),
             'gpu': bool(self.gpu),
+            'no_gpu': bool(self.no_gpu),
             'feature_importance': self.feature_importance or "builtin",
             'feature_importance_all': bool(self.feature_importance_all),
             'feature_importance_flags': self.feature_importance_flags or "",
@@ -1815,7 +1900,7 @@ class PipelineConfig:
                 raise ValueError(f"Regenerated profiles need profilers with matching run_name identities: {sorted(missing)}; use endpoint viz_initial for benchmark-only inputs")
         window_path = base_path / ".log" / "window.env"
         window_path.write_text(
-            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\n",
+            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\nexport SAMOVAR_MODE={self.mode}\n",
             encoding="utf-8",
         )
         configs["window"] = str(window_path)
@@ -1833,11 +1918,27 @@ class PipelineConfig:
 
         return configs
 
-    def _annotation_export_bash(self, src_rel: str, stage: str) -> str:
+    def _annotation_export_bash(self, src_rel: str, stage: str, method: Optional[str] = None) -> str:
         """Corrected Annotation → abundance-like tables after combine/reprofile."""
+        from samovar.abundance_correctors import is_identity_export
+
+        chosen = method or self.export_corrector
+        if (
+            method is None
+            and self.mode == "benchmark"
+            and stage == "initial"
+            and not is_skipped_export(chosen)
+            and not is_identity_export(chosen)
+        ):
+            notice = (
+                f'\necho "benchmark: export corrector {chosen} needs a regenerated '
+                f'reference and a trained model; writing uncorrected initial tables" '
+                f'| tee "$out_dir/.log/benchmark_export.txt"\n'
+            )
+            return notice + self._annotation_export_bash(src_rel, stage, method="identity")
         if (self.profile_inputs or any(a.output_level == "profile" for a in self.annotators)) and not any(a.output_level == "read" for a in self.annotators):
             return ""  # profile exports are already materialized without a read table
-        if is_skipped_export(self.export_corrector):
+        if is_skipped_export(chosen):
             return ""
         formats = list(self.export_formats or [])
         if not formats:
@@ -1850,13 +1951,18 @@ class PipelineConfig:
             tax = " --taxdump " + shlex.quote(str(self.export_taxdump))
         if self.export_taxonomy:
             tax += " --taxonomy " + shlex.quote(str(self.export_taxonomy))
-        method = shlex.quote(str(self.export_corrector or "logistic"))
+        method = shlex.quote(str(chosen or "logistic"))
         stage_q = shlex.quote(str(stage))
+        trained = ""
+        if not is_identity_export(chosen):
+            trained = (
+                '    --reference "$out_dir/regenerated_annotations" \\\n'
+                '    --model "$out_dir/reprofiled_annotations/trained_model.joblib" \\\n'
+            )
         return (
             f"\n\"$PYTHON_PATH\" -m samovar.abundance_correctors \\\n"
             f'    -i "$out_dir/{src_rel}" -o "$out_dir/exports/{stage}" \\\n'
-            f'    --reference "$out_dir/regenerated_annotations" \\\n'
-            f'    --model "$out_dir/reprofiled_annotations/trained_model.joblib" \\\n'
+            f"{trained}"
             f'    --config "$out_dir/.log/configs/config_export.yaml" \\\n'
             f'    --output_dir "$out_dir" --stage {stage_q} \\\n'
             f"    --export {method}{tax} \\\n"
@@ -1875,7 +1981,7 @@ class PipelineConfig:
         pipeline_path = log_dir / name
         start_s, end_s = resolve_window(self.startpoint, self.endpoint)
         (log_dir / "window.env").write_text(
-            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\n",
+            f"export SAMOVAR_START={start_s}\nexport SAMOVAR_END={end_s}\nexport SAMOVAR_MODE={self.mode}\n",
             encoding="utf-8",
         )
         
@@ -1910,6 +2016,7 @@ class PipelineConfig:
             if (sample_qc_on or name not in {"score_sample_qc_full", "score_sample_qc_final"})
             and (filter_full_on or name != "filter_sample_qc_full")
             and (filter_final_on or name != "filter_sample_qc_final")
+            and (self.mode != "benchmark" or CHECKPOINT_STEPS.index(name) <= CHECKPOINT_STEPS.index("viz_initial"))
         ]
         step_names = " ".join(listed_steps)
         extra_genome_dirs = ":".join(self.genome_dirs or [])
@@ -2073,9 +2180,8 @@ fi
     --resources mem_mb=$MEM_MB""",
         )
 
-        combine_initial = _checkpoint_block(
-            "combine_initial",
-            (_annotation_combine_bash(
+        combine_body = (
+            _annotation_combine_bash(
                 f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/initial_reports" \\
     -o "$out_dir/initial_annotations"{gt_initial}""",
@@ -2084,19 +2190,43 @@ fi
                 gt_initial,
                 self.incremental_annotations,
             )
-            + self._annotation_export_bash("initial_annotations", "initial") if has_read_tools or not profile_mode else "")
+            if has_read_tools or not profile_mode
+            else ""
+        )
+        combine_initial = _checkpoint_block(
+            "combine_initial",
+            combine_body
+            + self._annotation_export_bash("initial_annotations", "initial")
             + collect_profiles("initial"),
         )
 
-        viz_initial = _checkpoint_block(
-            "viz_initial",
-            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
-    --annotation_dir "$out_dir/initial_annotations" \\
-    --output_dir "$out_dir/initial_annotations_plots" \\
-    --show_top 0 --config {configs['scoring']}
-"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_initial \\
-    --config {configs['scoring']}""",
-        )
+        score_bin = shlex.quote(str(root / "bin" / "samovar"))
+
+        def _viz_body(stage: str, *, csv: bool) -> str:
+            lines = []
+            if has_read_tools:
+                csv_flag = (
+                    f' \\\n    --csv "$out_dir/{stage}_annotations/combined_annotation_table.csv"'
+                    if csv else ""
+                )
+                lines.append(
+                    f"{score_bin} score annotators \\\n"
+                    f'    --annotation-dir "$out_dir/{stage}_annotations" \\\n'
+                    f'    --output-dir "$out_dir/{stage}_annotations_plots"{csv_flag} \\\n'
+                    f"    --show-top 0 --config {configs['scoring']}"
+                )
+            lines.append(
+                f"{score_bin} score profiles \\\n"
+                f'    --output-dir "$out_dir" --stage {stage} \\\n'
+                f"    --config {configs['scoring']}"
+            )
+            lines.append(
+                f'"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_{stage} \\\n'
+                f"    --config {configs['scoring']}"
+            )
+            return "\n".join(lines)
+
+        viz_initial = _checkpoint_block("viz_initial", _viz_body("initial", csv=False))
 
         abundance_tables = _checkpoint_block(
             "abundance_tables",
@@ -2214,18 +2344,14 @@ fi
             combine_regen_body,
         )
 
-        viz_regenerated = _checkpoint_block(
-            "viz_regenerated",
-            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
-    --annotation_dir "$out_dir/regenerated_annotations" \\
-    --output_dir "$out_dir/regenerated_annotations_plots" \\
-    --csv "$out_dir/regenerated_annotations/combined_annotation_table.csv" \\
-    --show_top 0 --config {configs['scoring']}
-"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_regenerated \\
-    --config {configs['scoring']}""",
-        )
+        viz_regenerated = _checkpoint_block("viz_regenerated", _viz_body("regenerated", csv=True))
 
-        gpu_line = " \\\n    --gpu" if self.gpu else ""
+        if self.no_gpu:
+            gpu_line = " \\\n    --no-gpu"
+        elif self.gpu:
+            gpu_line = " \\\n    --gpu"
+        else:
+            gpu_line = ""
         reprofile_body = f"""if [ "${{SAMOVAR_ML_FEATURES:-0}}" != "0" ]; then
     echo "[INFO] Extracting per-read features for ML ensemble..."
     "$PYTHON_PATH" {shlex.quote(str(src / 'annotators' / 'fastq_annotator.py'))} "$out_dir/initial_trimmed" -o "$out_dir/features.tsv" --chunk_size 50000 --seed {self.regeneration_seed}
@@ -2250,16 +2376,7 @@ fi
                 f'\n"$PYTHON_PATH" -m samovar.profiles correct --output-dir "$out_dir" --config {configs["scoring"]}\n')
         reprofile = _checkpoint_block("reprofile", reprofile_body)
 
-        viz_reprofiled = _checkpoint_block(
-            "viz_reprofiled",
-            f""""$PYTHON_PATH" {shlex.quote(str(wf / 'compare_annotations.py'))} \\
-    --annotation_dir "$out_dir/reprofiled_annotations" \\
-    --output_dir "$out_dir/reprofiled_annotations_plots" \\
-    --csv "$out_dir/reprofiled_annotations/combined_annotation_table.csv" \\
-    --show_top 0 --config {configs['scoring']}
-"$PYTHON_PATH" -m samovar.scorers run --output_dir "$out_dir" --stage viz_reprofiled \\
-    --config {configs['scoring']}""",
-        )
+        viz_reprofiled = _checkpoint_block("viz_reprofiled", _viz_body("reprofiled", csv=True))
 
         footer = """"$PYTHON_PATH" -m samovar.stage_report overview "$out_dir" || true
 "$PYTHON_PATH" -m samovar.stage_report bundle "$out_dir" || true
@@ -2280,15 +2397,16 @@ cleanup_tmp_if_requested
                 qc_initial = _checkpoint_block("qc_initial", for_stage)
                 annotate_initial = _checkpoint_block("annotate_initial", for_stage)
 
-        pipeline_content = "\n".join(
-            part
-            for part in [
-                header,
-                setup_reads,
-                qc_initial,
-                annotate_initial,
-                combine_initial,
-                viz_initial,
+        stages = [
+            header,
+            setup_reads,
+            qc_initial,
+            annotate_initial,
+            combine_initial,
+            viz_initial,
+        ]
+        if self.mode != "benchmark":
+            stages.extend([
                 abundance_tables,
                 regenerate_tables,
                 score_sample_qc_full,
@@ -2306,10 +2424,9 @@ cleanup_tmp_if_requested
                 viz_regenerated,
                 reprofile,
                 viz_reprofiled,
-                footer,
-            ]
-            if part
-        )
+            ])
+        stages.append(footer)
+        pipeline_content = "\n".join(part for part in stages if part)
 
         with open(pipeline_path, 'w') as f:
             f.write(pipeline_content)
@@ -2391,9 +2508,42 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
 
     try:
         config = PipelineConfig.from_args(args)
+        from samovar.repeats import prepare_package
+
+        repeat_manifest = prepare_package(config)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    if repeat_manifest is not None:
+        from samovar.repeats import load_manifest
+
+        manifest = load_manifest(config.output_dir)
+        root = Path(config.output_dir)
+        if (manifest.get("input") or {}).get("kind") == "fastq-bootstrap":
+            from samovar.repeats import write_fastq_bootstrap
+
+            write_fastq_bootstrap(
+                root,
+                args.input_dir or config.input_dir,
+                getattr(config, "initial_ground_truth_table", None),
+            )
+            manifest = load_manifest(root)
+        for row in manifest["repeats"]:
+            child_args = argparse.Namespace(**vars(args))
+            child_args.output_dir = str(root / row["out_dir"])
+            child_args.repeat = None
+            child_args._repeat_child = True
+            child_initial = root / row["out_dir"] / "initial"
+            if (manifest.get("input") or {}).get("kind") == "fastq-bootstrap":
+                child_args.input_dir = str(child_initial)
+                rewritten = child_initial.parent / ".log" / "bootstrap_truth.tsv"
+                if rewritten.is_file():
+                    child_args.initial_ground_truth_table = str(rewritten)
+            elif not getattr(child_args, "input_dir", None) and child_initial.is_dir():
+                child_args.input_dir = str(child_initial)
+            setup_pipeline(child_args)
+        print(f"Repeat package: {repeat_manifest}")
+        return {"repeats": str(repeat_manifest)}
     try:
         from samovar.genome_cache import remember_prepare_genome_paths
 

@@ -241,6 +241,68 @@ jobs:
       run: |
         bash examples/phage/pipeline.sh
 
+  examples-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    env:
+      SAMOVAR_CORES: "2"
+      SAMOVAR_GENERATE_CORES: "2"
+      TOTAL_READS: "200"
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.sha }}
+    - name: Confirm checkout matches the triggering ref
+      run: |
+        echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF sha=$GITHUB_SHA"
+        echo "HEAD=$(git rev-parse HEAD)"
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: "3.12"
+        auto-update-conda: true
+        activate-environment: samovar
+        environment-file: environment.yml
+
+    - name: Install tools named by prepare
+      run: |
+        # benchmark prepare: iss, snakemake, kraken2, kaiju, centrifuge, bracken, multiqc
+        # MetaX is not installed: samovar build has no metax type.
+        conda install -y -c conda-forge -c bioconda kraken2 kaiju centrifuge bracken
+        chmod +x install.sh
+        ./install.sh
+        ./install.sh MultiQC
+
+    - name: Example (benchmark repeats)
+      timeout-minutes: 150
+      run: |
+        bash examples/benchmark/pipeline.sh
+        python - <<'PY'
+        import csv
+        from pathlib import Path
+        root = Path("examples_outdir/benchmark")
+        for child in ("out_0001", "out_0002", "out_0003"):
+            window = (root / child / ".log" / "window.env").read_text()
+            assert "SAMOVAR_MODE=benchmark" in window, window
+            assert "SAMOVAR_END=viz_initial" in window, window
+            regenerated = root / child / "regenerated"
+            fastq = list(regenerated.rglob("*.fastq")) + list(regenerated.rglob("*.fastq.gz")) if regenerated.is_dir() else []
+            assert fastq == [], fastq
+        rows = list(csv.DictReader((root / "summary" / "statistics.csv").open()))
+        hit = [row for row in rows if row["n_valid"] == "3" and "n_valid<5" in row["limitation"]]
+        assert hit, "no three-repeat interval"
+        html = root / "summary" / "multiqc" / "SAMOVAR_multiqc_report.html"
+        assert html.is_file() and html.stat().st_size > 0
+        print("benchmark package OK", html)
+        PY
+
   examples-public:
     runs-on: ubuntu-latest
     timeout-minutes: 180

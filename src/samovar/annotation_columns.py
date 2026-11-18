@@ -29,7 +29,7 @@ DROP_RAW_COLUMNS = frozenset(
 )
 _TAX_PREFIX = re.compile(r"^(taxid|tax)([_.].+)?$", re.I)
 _FEAT_PREFIX = re.compile(r"^feat([_.].+)?$", re.I)
-_CONF = re.compile(r"confidence|_conf$", re.I)
+_CONF = re.compile(r"confidence|_conf$|_abstain_reason$", re.I)
 _KMER_ID = re.compile(r"^[ACGT]{1,8}$", re.I)
 _LATENT_ID = re.compile(r"^z[0-9]+$", re.I)
 _FEATURE_NAMES = frozenset(

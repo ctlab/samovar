@@ -256,6 +256,70 @@ def test_profile_scores_count_taxa_not_artificial_reads():
         profile_scores(pred, gt, metadata(), metadata({"basis": "organisms"}))
 
 
+def test_prepare_reuses_generate_genomes_as_profile_references(tmp_path, monkeypatch):
+    import yaml
+    from argparse import Namespace
+
+    from samovar.config import PipelineConfig
+    from samovar.paths import write_config
+    from samovar.profiles import reference_lengths
+
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    write_config({"root": str(tmp_path), "tools": {}, "custom-flags": []}, also_repo_build=False)
+    genomes = tmp_path / "genomes"
+    genomes.mkdir()
+    _write_fasta(genomes / "562.fna", 12)
+    _write_fasta(genomes / "4932.fna", 8)
+    host = tmp_path / "9606.fna"
+    _write_fasta(host, 16)
+    other = tmp_path / "other.fna"
+    _write_fasta(other, 4)
+    out = tmp_path / "out"
+    cfg_dir = out / ".generate" / "configs"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "iss_config.yaml").write_text(yaml.safe_dump({
+        "genome_dir": str(genomes),
+        "genomes": [str(genomes / "562.fna"), str(genomes / "4932.fna")],
+        "host_genome": str(host),
+    }), encoding="utf-8")
+    (tmp_path / "reads").mkdir()
+    config = PipelineConfig.from_args(Namespace(
+        input_config=None, input_dir=str(tmp_path / "reads"), output_dir=str(out),
+        threads=None, cores=1, mem_mb=None, custom_cli_flags={},
+    ))
+    assert config.profile_references["562"].endswith("562.fna")
+    assert config.profile_references["4932"].endswith("4932.fna")
+    assert config.profile_references["9606"].endswith("9606.fna")
+    assert reference_lengths({"562", "4932"}, out / "genomes", {
+        "profile_references": config.profile_references,
+    }) == {"562": 12, "4932": 8}
+
+    spec = tmp_path / "refs.yaml"
+    spec.write_text(yaml.safe_dump({"profile_references": {"562": str(other)}}), encoding="utf-8")
+    kept = PipelineConfig.from_args(Namespace(
+        input_config=str(spec), input_dir=str(tmp_path / "reads"), output_dir=str(out),
+        threads=None, cores=1, mem_mb=None, custom_cli_flags={},
+    ))
+    assert kept.profile_references == {"562": str(other.resolve())}
+
+    (cfg_dir / "iss_config.yaml").write_text(yaml.safe_dump({
+        "genomes": [str(genomes / "562.fna"), str(genomes / "562.fasta")],
+    }), encoding="utf-8")
+    _write_fasta(genomes / "562.fasta", 6)
+    bare = tmp_path / "bare"
+    (bare / "reads").mkdir(parents=True)
+    bare_out = tmp_path / "bare_out"
+    (bare_out / ".generate" / "configs").mkdir(parents=True)
+    (bare_out / ".generate" / "configs" / "iss_config.yaml").write_text(
+        (cfg_dir / "iss_config.yaml").read_text(), encoding="utf-8"
+    )
+    skipped = PipelineConfig.from_args(Namespace(
+        input_config=None, input_dir=str(bare / "reads"), output_dir=str(bare_out),
+        threads=None, cores=1, mem_mb=None, custom_cli_flags={},
+    ))
+    assert "562" not in (skipped.profile_references or {})
+
+
 def test_length_conversion_and_exact_fragment_allocation():
     frame = table([50, 50])
     info = metadata(dict(unit="percent", basis="organisms"))
@@ -701,6 +765,7 @@ def test_profile_sample_mismatch_is_a_prepare_error(tmp_path):
     assert truth_desc["path"] == str(matched)
 
 
+@pytest.mark.optional
 def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
     import os
     import subprocess
@@ -786,10 +851,9 @@ def test_profile_only_rejects_unused_initial_ground_truth(tmp_path):
     assert "--truth-table" not in script
 
 
-def test_taxid_profiles_score_without_a_taxdump(tmp_path, monkeypatch):
+def test_taxid_profiles_score_without_a_taxdump(tmp_path):
     import samovar.profile_pipeline as pipe
 
-    monkeypatch.setattr(pipe, "_taxdump_present", lambda taxdump: False)
     pred = pd.DataFrame({"taxid": ["562"], "N_A": [2.0]})
     truth = pd.DataFrame({"taxid": ["562"], "N_A": [2.0]})
     info = metadata({"rank": "taxid", "normalization": "all"})
@@ -920,3 +984,60 @@ def test_three_ground_truths_score_independently(tmp_path):
     present = present[present["ground_truth"] == "profile_truth"]
     assert present["reason"].str.contains("presence gold standard").all()
     assert present["bray_curtis"].isna().all()
+
+
+def test_profile_comparison_includes_annotators_on_each_stage(tmp_path, monkeypatch):
+    import samovar.profile_pipeline as pipe
+    from samovar.profiles import metadata, write_profiles
+    from samovar.repeats import publish_package, set_repeat_state, write_long_tables
+    from samovar.scores import score_annotators
+
+    monkeypatch.setattr(
+        pipe, "at_rank",
+        lambda table, info, rank, taxdump=None: (table, {**info, "rank": rank}),
+    )
+    fields = metadata({
+        "kind": "abundance", "unit": "counts", "basis": "reads",
+        "taxonomy": "ncbi", "rank": "species", "normalization": "classified",
+    })
+    pkg = tmp_path / "pkg"
+    publish_package(pkg, count=1, base_seed=1, kind="generated", identity="mix")
+    child = pkg / "out_0001"
+    set_repeat_state(pkg, "0001", "succeeded", stage="pipeline")
+    reads = "@r1|taxid:562\nACGT\n+\nIIII\n"
+    for stage in ("initial", "regenerated", "reprofiled"):
+        read_stage = "initial" if stage == "reprofiled" else stage
+        folder = child / read_stage
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "A.fastq").write_text(reads, encoding="utf-8")
+        ann = child / f"{stage}_annotations"
+        ann.mkdir()
+        name = "A_reprofiled.csv" if stage == "reprofiled" else "A.csv"
+        table = pd.DataFrame({"seq": ["r1"], "taxID_kraken2_0": [562], "true": [562]})
+        table.to_csv(ann / name, index=False)
+        write_profiles(
+            child / f"{stage}_profiles",
+            {"ext": pd.DataFrame({"taxid": ["562"], "N_A": [1.0]})},
+            {"ext": fields},
+        )
+        assert pipe.score(child, stage, {})
+        scores = pd.read_csv(child / f"{stage}_annotations_plots" / "profile_quality_scores.csv")
+        assert set(scores["annotator"]) == {"kraken2", "ext"}
+        assert set(scores.loc[scores["annotator"] == "kraken2", "rank"]) == {"taxid"}
+        assert set(scores.loc[scores["annotator"] == "ext", "rank"]) == {"species"}
+        assert (child / f"{stage}_annotations_plots" / "profile_scores.png").is_file()
+        assert not (child / f"{stage}_profiles" / "kraken2.csv").exists()
+        read = score_annotators(table, ["taxID_kraken2_0"], include_consensus=False)
+        assert "ext" not in set(read["annotator"].astype(str))
+        assert not read.empty
+    plots = child / "initial_annotations_plots"
+    (plots / "quality_scores.csv").write_text(
+        "annotator,schema,accuracy,r2\nkraken2,read-quality-v1,1,1\n",
+        encoding="utf-8",
+    )
+    profiles = pd.read_csv(write_long_tables(pkg)["profiles"])
+    for stage in ("initial", "regenerated", "reprofiled"):
+        assert set(profiles.loc[profiles["phase"] == stage, "run_name"]) == {"kraken2", "ext"}
+    figures = pkg / "summary" / "figures"
+    assert (figures / "annotators.png").is_file()
+    assert (figures / "profilers.png").is_file()

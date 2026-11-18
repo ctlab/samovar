@@ -910,6 +910,223 @@ def _valid_genome_content(path, inode, size, mtime, ctime):
         return False
 
 
+def _header_taxid(header: str) -> str:
+    match = re.search(r"taxid[:|]([0-9]+)", header, flags=re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _plain_fastq(path: Path):
+    """Return a seekable FASTQ. A gzip source is streamed to a temp file."""
+    if not is_gzip_file(path):
+        return path, None
+    import tempfile
+
+    handle = tempfile.NamedTemporaryFile(prefix="samovar-fastq-", suffix=".fastq", delete=False)
+    handle.close()
+    dest = Path(handle.name)
+    with gzip.open(path, "rb") as src, dest.open("wb") as out:
+        shutil.copyfileobj(src, out)
+    return dest, dest
+
+
+def _index_fastq(path: Path):
+    """Byte offsets and source ids. Record bodies stay on disk."""
+    import array
+
+    plain, temporary = _plain_fastq(path)
+    offsets = array.array("Q")
+    ids: List[str] = []
+    seen = set()
+    try:
+        with plain.open("rb") as handle:
+            while True:
+                offset = handle.tell()
+                header = handle.readline()
+                if not header:
+                    break
+                seq = handle.readline()
+                plus = handle.readline()
+                qual = handle.readline()
+                if not header.startswith(b"@") or not seq or not plus or not qual or not plus.startswith(b"+"):
+                    raise ValueError(f"invalid FASTQ record in {path}")
+                if len(seq.strip()) != len(qual.strip()):
+                    raise ValueError(f"FASTQ sequence and quality differ in length in {path}")
+                try:
+                    ident = fastq_record_id(header.decode())
+                except ValueError as exc:
+                    raise ValueError(f"invalid FASTQ record in {path}") from exc
+                if ident in seen:
+                    raise ValueError(
+                        f"duplicate source read id {ident} in {path}; the output mapping would be ambiguous"
+                    )
+                seen.add(ident)
+                offsets.append(offset)
+                ids.append(ident)
+    except Exception:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise
+    if not offsets:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise ValueError(f"empty FASTQ input: {path}")
+    return plain, temporary, offsets, ids
+
+
+def _record_at(plain: Path, offset: int):
+    with plain.open("rb") as handle:
+        handle.seek(offset)
+        header = handle.readline()
+        seq = handle.readline()
+        plus = handle.readline()
+        qual = handle.readline()
+    return header, seq, plus, qual
+
+
+def _truth_by_id(path: Optional[PathLike]) -> dict:
+    if not path:
+        return {}
+    from samovar.ground_truth import iter_truth_pairs
+
+    found = {}
+    for seq, tax in iter_truth_pairs(path):
+        if seq in found and found[seq] != tax:
+            raise ValueError(f"ambiguous truth for read id {seq}")
+        found[seq] = tax
+    return found
+
+
+def _scan_bootstrap(src: PathLike, truth_table: Optional[PathLike] = None):
+    src = as_path(src)
+    truth = _truth_by_id(truth_table)
+    samples = list_fastq_samples(src)
+    if not samples:
+        raise ValueError("empty FASTQ input; refusing to bootstrap")
+    partitions = []
+    try:
+        for sample in samples:
+            left = find_fastq_mate(src, sample, "R1")
+            right = find_fastq_mate(src, sample, "R2")
+            if left is None:
+                raise ValueError(f"sample {sample} has no FASTQ")
+            indexed_left = _index_fastq(left)
+            try:
+                indexed_right = _index_fastq(right) if right is not None else None
+                if indexed_right is not None:
+                    if len(indexed_left[3]) != len(indexed_right[3]):
+                        raise ValueError(f"paired FASTQ files for {sample} have different record counts")
+                    for one, two in zip(indexed_left[3], indexed_right[3]):
+                        if one != two:
+                            raise ValueError(f"paired FASTQ ids for {sample} do not match: {one} vs {two}")
+            except Exception:
+                if indexed_left[1] is not None:
+                    indexed_left[1].unlink(missing_ok=True)
+                raise
+            partitions.append((sample, left, indexed_left, right, indexed_right))
+    except Exception:
+        for item in partitions:
+            for indexed in (item[2], item[4]):
+                if indexed is not None and indexed[1] is not None:
+                    indexed[1].unlink(missing_ok=True)
+        raise
+    return truth, partitions
+
+
+def assert_bootstrap_fastq(src: PathLike, truth_table: Optional[PathLike] = None) -> None:
+    """Reject an unusable FASTQ directory before a package is created."""
+    _, partitions = _scan_bootstrap(src, truth_table)
+    for item in partitions:
+        for indexed in (item[2], item[4]):
+            if indexed is not None and indexed[1] is not None:
+                indexed[1].unlink(missing_ok=True)
+
+
+def bootstrap_fastq_directory(
+    src: PathLike,
+    dest: PathLike,
+    *,
+    seed: int,
+    repeat_id: str,
+    truth_table: Optional[PathLike] = None,
+) -> dict:
+    """Draw each sample with replacement, one index list per PE fragment.
+
+    seqtk sample cannot draw with replacement. Output order is the draw order.
+    ONT and other single-end partitions are drawn separately from paired files.
+    """
+    import numpy as np
+
+    truth, partitions = _scan_bootstrap(src, truth_table)
+    dest = as_path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    mapping = dest.parent / ".log" / "fastq_bootstrap.tsv"
+    mapping.parent.mkdir(parents=True, exist_ok=True)
+    truth_out = dest.parent / ".log" / "bootstrap_truth.tsv"
+    rng = np.random.Generator(np.random.PCG64(int(seed)))
+    counts = {}
+    wrote_truth = False
+    try:
+        with mapping.open("w", encoding="utf-8") as mapped, truth_out.open("w", encoding="utf-8") as truth_handle:
+            mapped.write("sample\tmate\tdraw\tsource_id\toutput_id\ttaxid\n")
+            truth_handle.write("seq\ttaxid\n")
+            for sample, left, indexed_left, right, indexed_right in partitions:
+                count = len(indexed_left[3])
+                draws = rng.integers(0, count, size=count)
+                counts[sample] = int(count)
+                mates = [(left, indexed_left, "R1")]
+                if indexed_right is not None:
+                    mates.append((right, indexed_right, "R2"))
+                outputs = []
+                for path, indexed, mate in mates:
+                    plain = indexed[0]
+                    name = path.name[:-3] if path.name.endswith(".gz") else path.name
+                    out_path = dest / name
+                    outputs.append(out_path)
+                    with out_path.open("wb") as out:
+                        for draw, choice in enumerate(draws):
+                            choice = int(choice)
+                            header, seq, plus, qual = _record_at(plain, int(indexed[2][choice]))
+                            source_id = indexed[3][choice]
+                            header_tax = _header_taxid(header.decode())
+                            table_tax = truth.get(source_id, "")
+                            if table_tax and header_tax and table_tax != header_tax:
+                                raise ValueError(
+                                    f"truth table taxid {table_tax} disagrees with header taxid {header_tax} for {source_id}"
+                                )
+                            tax = table_tax or header_tax
+                            output_id = f"b{repeat_id}_{draw:06d}|src:{source_id}"
+                            if tax:
+                                output_id = f"{output_id}|taxid:{tax}"
+                            rest = header.decode().split(maxsplit=1)
+                            suffix = (" " + rest[1].rstrip("\n")) if len(rest) > 1 else ""
+                            out.write(f"@{output_id}{suffix}\n".encode())
+                            out.write(seq)
+                            out.write(plus)
+                            out.write(qual)
+                            mapped.write(
+                                f"{sample}\t{mate}\t{draw}\t{source_id}\t{output_id}\t{tax}\n"
+                            )
+                            if tax and mate == "R1":
+                                truth_handle.write(f"{output_id}\t{tax}\n")
+                                wrote_truth = True
+        if not wrote_truth:
+            truth_out.unlink()
+            truth_out = None
+        link_or_copy_reads(dest, dest)
+    finally:
+        for item in partitions:
+            for indexed in (item[2], item[4]):
+                if indexed is not None and indexed[1] is not None:
+                    indexed[1].unlink(missing_ok=True)
+    return {
+        "method": "index-with-replacement",
+        "seed": int(seed),
+        "n_source": counts,
+        "mapping": ".log/fastq_bootstrap.tsv",
+        "truth": ".log/bootstrap_truth.tsv" if wrote_truth else "",
+    }
+
+
 def publish_genome_file(source, destination, *, move=False):
     """Stage a complete hardlink/copy, including cross-filesystem moves."""
     src, dest = Path(source), Path(destination)

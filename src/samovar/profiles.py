@@ -472,6 +472,55 @@ def read_counts(table, info, depth, lengths=None):
     return table, {**converted, "unit": "counts", "depth": int(depth)}
 
 
+def references_from_generate(output_dir):
+    """Taxid → FASTA from the genomes ``generate`` already selected.
+
+    A taxid with two different files is left out. The caller keeps the
+    explicit missing-reference error instead of picking one.
+    """
+    root = Path(output_dir)
+    listed = []
+    for name in ("iss_config.yaml", "camisim.yaml"):
+        cfg = root / ".generate" / "configs" / name
+        if not cfg.is_file():
+            continue
+        import yaml
+
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        raw = data.get("genomes") or []
+        if isinstance(raw, list) and raw:
+            listed = list(raw)
+        else:
+            genome_dir = data.get("genome_dir")
+            if genome_dir:
+                from samovar.iss_config import list_generate_genome_paths
+
+                listed = list(list_generate_genome_paths(str(genome_dir)))
+        if data.get("host_genome") and listed:
+            listed.append(data["host_genome"])
+        if listed:
+            break
+    from samovar.seqio import taxid_from_fasta_name
+
+    chosen = {}
+    ambiguous = set()
+    for item in listed:
+        path = Path(str(item)).expanduser()
+        if not path.is_file():
+            continue
+        taxid = str(taxid_from_fasta_name(path) or path.stem).split(".")[0]
+        if not taxid or taxid in ambiguous:
+            continue
+        resolved = str(path.resolve())
+        previous = chosen.get(taxid)
+        if previous and previous != resolved:
+            chosen.pop(taxid, None)
+            ambiguous.add(taxid)
+            continue
+        chosen[taxid] = resolved
+    return chosen
+
+
 def validate_profile_settings(config):
     inputs = config.get("profile_inputs") or {}
     if not isinstance(inputs, dict):
@@ -911,7 +960,12 @@ def report_profiles(annotation, dest, stage, config=None, *, annotators="all"):
         matches = [run for run in runs if source == run.get("run_name") or
                    source.startswith("taxID_" + str(run.get("run_name")) + "_")]
         run = matches[0] if len(matches) == 1 else {}
-        info.update(stage=stage, identity=name, run_name=info.get("run_name", run.get("run_name", source)),
+        from samovar.stage_report import annotator_display_name, read_annotator_labels
+
+        shown = annotator_display_name(str(source), read_annotator_labels(runs))
+        if shown == str(source):
+            shown = info.get("run_name", run.get("run_name", source))
+        info.update(stage=stage, identity=name, run_name=shown,
                     tool=info.get("tool", run.get("type")),
                     database=info.get("database", run.get("db_path")))
         from samovar.multiqc_report import profile_selected

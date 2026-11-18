@@ -8,6 +8,7 @@ into ``<output>/multiqc_samovar/`` as ``*_mqc.*`` files that stock MultiQC can r
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import json
 import os
@@ -22,8 +23,10 @@ from samovar.exec_control import CHECKPOINT_STEPS
 from samovar.paths import PACKAGE_VERSION
 from samovar.scores import (
     ENSEMBLE_NAME,
+    LEGACY_CLOSED_SET_F1,
     OPAL_DISPLAY,
     SCORE_DISPLAY,
+    adapt_quality_scores,
     canonical_annotator_name,
     is_platform_read_type,
 )
@@ -285,26 +288,15 @@ ANNOTATOR_COLOR_FALLBACK = (
 
 BAR_METRIC_ORDER = (
     "accuracy",
-    "f1",
+    LEGACY_CLOSED_SET_F1,
     "f1_macro",
-    "accuracy_purity",
-    "f1_purity",
-    "completeness",
-    "opal_purity",
-    "opal_f1",
-    "jaccard",
-    "bray_curtis",
 )
 
 CONCLUSION_METRICS = (
-    "f1",
+    LEGACY_CLOSED_SET_F1,
     "accuracy",
     "f1_macro",
     "r2",
-    "accuracy_purity",
-    "f1_purity",
-    "completeness",
-    "opal_f1",
 )
 
 
@@ -372,7 +364,7 @@ def _read_scores_table(plots: Path) -> List[Dict[str, Any]]:
     try:
         import pandas as pd
 
-        table = pd.read_csv(csv)
+        table = adapt_quality_scores(pd.read_csv(csv))
     except Exception:
         return []
     rows = []
@@ -655,6 +647,60 @@ def _clean_db_label(label: str) -> str:
     if "/" in text or text.startswith("~"):
         text = Path(text.rstrip("/")).name
     return text.replace(" ", "_")
+
+
+def read_annotator_labels(run_config: Sequence[Any]) -> Dict[str, str]:
+    """Map combiner tokens ``kraken2_0`` / ``taxID_kraken2_0`` onto run names.
+
+    The combiner sorts ``{sample}_{run}.{tool}.out`` by filename and numbers
+    that list. Profile-level tools are not in it. A single read-level tool
+    also matches the unsuffixed name left after viz strips a unique ``_0``.
+    """
+    rows = []
+    for item in run_config or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("output_level") or "read") == "profile":
+            continue
+        run_name = str(item.get("run_name") or item.get("type") or "").strip()
+        tool_type = str(item.get("type") or run_name)
+        if not run_name or not tool_type:
+            continue
+        filename = f"S_{run_name}.{_annotator_output_suffix(tool_type)}"
+        tool = _combine_tool_name(filename).lower()
+        if not tool:
+            continue
+        rows.append((filename, tool, run_name))
+    rows.sort(key=lambda row: row[0])
+    counts: Dict[str, int] = {}
+    for _filename, tool, _run_name in rows:
+        counts[tool] = counts.get(tool, 0) + 1
+    labels: Dict[str, str] = {}
+    for index, (_filename, tool, run_name) in enumerate(rows):
+        for token in (f"{tool}_{index}", f"taxid_{tool}_{index}", f"taxID_{tool}_{index}"):
+            labels[token] = run_name
+        if counts[tool] == 1:
+            for token in (tool, f"taxid_{tool}", f"taxID_{tool}"):
+                labels[token] = run_name
+    return labels
+
+
+def run_config_near(path: Path) -> list:
+    """``run_config`` from the nearest ``.log/configs/config_init.yaml``."""
+    for parent in (Path(path), *Path(path).parents):
+        cfg = parent / ".log" / "configs" / "config_init.yaml"
+        if cfg.is_file():
+            data = _load_yaml(cfg)
+            rows = data.get("run_config") or []
+            return rows if isinstance(rows, list) else []
+    return []
+
+
+def annotator_display_name(name: str, labels: Dict[str, str]) -> str:
+    text = str(name)
+    if text in labels:
+        return labels[text]
+    return labels.get(text.lower(), text)
 
 
 def database_column_labels(run_config: Sequence[Any]) -> Any:
@@ -1233,6 +1279,7 @@ def _write_score_plots(
         return written
     data, headers = _table_payload(rows)
     if data:
+        warning = next((str(row.get("warning")) for row in rows if row.get("warning")), "")
         payload = {
             "id": f"{parent_id}_quality_scores",
             "section_id": f"{parent_id}_quality_scores",
@@ -1240,7 +1287,7 @@ def _write_score_plots(
             "parent_name": parent_name,
             "parent_description": parent_description,
             "section_name": f"{parent_name} — quality scores",
-            "description": "",
+            "description": warning,
             "plot_type": "table",
             "pconfig": {
                 "id": f"{parent_id}_quality_scores_table",
@@ -1415,7 +1462,7 @@ def _best_tool_row(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
     def _rank(row: Dict[str, Any]) -> tuple:
         vals = []
-        for key in ("f1", "accuracy", "f1_macro", "completeness"):
+        for key in (LEGACY_CLOSED_SET_F1, "accuracy", "f1_macro"):
             val = row.get(key)
             vals.append(float(val) if _is_finite_number(val) else -1e9)
         return tuple(vals)
@@ -2147,6 +2194,232 @@ def _csv_cell(value: Any) -> Any:
     return "" if value is None else value
 
 
+_UNIT_METRICS = {
+    "accuracy", "precision", "recall", "precision_macro", "recall_macro",
+    "precision_micro", "recall_micro", "f1", "f1_micro", "f1_macro", "f1_weighted",
+    "jaccard", "bray_curtis", "legacy_closed_set_f1_accuracy",
+}
+_METRIC_LABELS = {
+    "accuracy": "Accuracy",
+    "precision": "Precision",
+    "recall": "Recall",
+    "precision_macro": "Precision (macro)",
+    "recall_macro": "Recall (macro)",
+    "precision_micro": "Precision (micro)",
+    "recall_micro": "Recall (micro)",
+    "f1": "F1",
+    "f1_micro": "F1 (micro)",
+    "f1_macro": "F1 (macro)",
+    "f1_weighted": "F1 (weighted)",
+    "jaccard": "Jaccard",
+    "bray_curtis": "Bray–Curtis similarity",
+    "l1_norm": "L1 distance",
+    "r2": "R²",
+    "tp": "True positives",
+    "fp": "False positives",
+    "fn": "False negatives",
+    "n_reads": "Reads",
+    "n_sampled": "Sampled reads",
+    "n_taxa": "Taxa",
+    "n_files": "Files",
+    "elapsed_s": "Seconds",
+    "max_rss_mb": "Peak memory (MB)",
+    "stage_elapsed_s": "Stage time (seconds)",
+    "richness": "Richness",
+    "shannon": "Shannon diversity",
+    "legacy_closed_set_f1_accuracy": "Closed-set F1",
+}
+_FAMILY_TITLES = {
+    "benchmark": "Read-level scores",
+    "profilers": "Profile scores",
+    "runtime": "Runtime",
+    "alpha": "Alpha diversity",
+    "beta": "Beta diversity",
+    "composition": "Composition",
+}
+_BAR_COLORS = ("#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2", "#B279A2", "#FF9DA6", "#9D755D")
+
+
+def _metric_label(metric: str) -> str:
+    return _METRIC_LABELS.get(metric, metric.replace("_", " "))
+
+
+def _family_title(family: str) -> str:
+    return _FAMILY_TITLES.get(family, family.replace("_", " "))
+
+
+def _requested(settings: Mapping[str, Any], name: str) -> bool:
+    """True when a config layer named this section. The implicit default does not."""
+    explicit = settings.get("explicit")
+    return bool(explicit) and name in explicit
+
+
+def _enough_samples(tables: Mapping[str, Any]) -> bool:
+    for table in tables.values():
+        columns = [column for column in getattr(table, "columns", []) if str(column).startswith("N_")]
+        if len(columns) >= 2:
+            return True
+    return False
+
+
+def _chart_category(row: Mapping[str, Any], keys: Sequence[str]) -> str:
+    parts = [str(row.get(key) or "").strip() for key in keys]
+    return " · ".join(part for part in parts if part) or "result"
+
+
+def _varying_keys(rows: Sequence[Mapping[str, Any]]) -> List[str]:
+    keys = ("run_name", "phase", "sample_id", "rank")
+    varying = []
+    for key in keys:
+        values = {str(row.get(key) or "").strip() for row in rows}
+        values.discard("")
+        if len(values) > 1:
+            varying.append(key)
+    if varying:
+        return varying
+    for key in keys:
+        if any(str(row.get(key) or "").strip() for row in rows):
+            return [key]
+    return ["run_name"]
+
+
+def _score_axis(metric: str, values: Sequence[Optional[float]]) -> str:
+    if metric in {"elapsed_s", "stage_elapsed_s"}:
+        return "seconds"
+    if metric == "max_rss_mb":
+        return "memory"
+    if metric in _UNIT_METRICS:
+        return "unit"
+    finite = [value for value in values if value is not None]
+    if finite and all(0 <= value <= 1 for value in finite):
+        return "unit"
+    return "metric:" + metric
+
+
+def _axis_copy(axis: str, family: str) -> tuple:
+    title = _family_title(family)
+    if axis == "unit":
+        return (
+            f"{title}: scores from 0 to 1",
+            "Each bar is the mean across repeats. The whisker is the saved 95% interval. "
+            "One repeat has a bar and no whisker. Tools are side by side.",
+            "Score",
+            1.0,
+        )
+    if axis == "seconds":
+        return (
+            f"{title}: time",
+            "Each bar is the mean wall-clock seconds. The whisker runs from the lowest to the highest sample.",
+            "Seconds",
+            None,
+        )
+    if axis == "memory":
+        return (
+            f"{title}: peak memory",
+            "Each bar is the mean peak RSS in megabytes. The whisker runs from the lowest to the highest sample.",
+            "MB",
+            None,
+        )
+    metric = axis.split(":", 1)[-1]
+    return (
+        f"{title}: {_metric_label(metric)}",
+        "Each bar is the mean across repeats. The whisker is the saved 95% interval when more than one repeat is finite.",
+        _metric_label(metric),
+        None,
+    )
+
+
+def _errorbar_svg(items: Sequence[tuple], ylabel: str, ymax: Optional[float]) -> str:
+    """One grouped bar chart. ``items`` are (category, series, mean, low, high)."""
+    categories: List[str] = []
+    series: List[str] = []
+    for category, name, *_rest in items:
+        if category not in categories:
+            categories.append(category)
+        if name not in series:
+            series.append(name)
+    highs = [high if high is not None else mean for _c, _n, mean, _low, high in items if mean is not None]
+    top = ymax if ymax is not None else (max(highs) * 1.15 if highs else 1.0)
+    if top <= 0:
+        top = 1.0
+    bar, gap, group = 16, 4, 18
+    group_width = max(len(series), 1) * (bar + gap) + group
+    left, right, head, foot = 48, 12, 28, 72
+    width = left + right + group_width * max(len(categories), 1)
+    height = head + 180 + foot
+    plot_h = 180
+
+    def y_of(value: float) -> float:
+        return head + plot_h - (max(0.0, value) / top) * plot_h
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'role="img" aria-label="{html.escape(ylabel)}">',
+        f'<text x="{left}" y="16" font-size="12">{html.escape(ylabel)}</text>',
+    ]
+    for index, name in enumerate(series):
+        color = _BAR_COLORS[index % len(_BAR_COLORS)]
+        x = left + index * 86
+        parts.append(
+            f'<rect x="{x}" y="{height - 18}" width="12" height="12" fill="{color}"/>'
+            f'<text x="{x + 16}" y="{height - 8}" font-size="11">{html.escape(name)}</text>'
+        )
+    lookup = {(category, name): (mean, low, high) for category, name, mean, low, high in items}
+    for cat_index, category in enumerate(categories):
+        origin = left + cat_index * group_width
+        parts.append(
+            f'<text x="{origin}" y="{head + plot_h + 16}" font-size="11">{html.escape(category)}</text>'
+        )
+        for ser_index, name in enumerate(series):
+            mean, low, high = lookup.get((category, name), (None, None, None))
+            if mean is None:
+                continue
+            x = origin + ser_index * (bar + gap)
+            y = y_of(mean)
+            color = _BAR_COLORS[ser_index % len(_BAR_COLORS)]
+            parts.append(
+                f'<rect x="{x}" y="{y:.1f}" width="{bar}" height="{max(0.0, head + plot_h - y):.1f}" fill="{color}"/>'
+            )
+            if low is not None and high is not None and high > low:
+                mid = x + bar / 2
+                parts.append(
+                    f'<line x1="{mid}" y1="{y_of(low):.1f}" x2="{mid}" y2="{y_of(high):.1f}" stroke="#222" stroke-width="1.2"/>'
+                    f'<line x1="{mid - 4}" y1="{y_of(low):.1f}" x2="{mid + 4}" y2="{y_of(low):.1f}" stroke="#222"/>'
+                    f'<line x1="{mid - 4}" y1="{y_of(high):.1f}" x2="{mid + 4}" y2="{y_of(high):.1f}" stroke="#222"/>'
+                )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _write_errorbar_chart(
+    dest: Path,
+    stem: str,
+    *,
+    section_name: str,
+    description: str,
+    ylabel: str,
+    items: Sequence[tuple],
+    ymax: Optional[float],
+    parent_id: str = "samovar_plots",
+    parent_name: str = "Repeat summary",
+) -> None:
+    if not items:
+        return
+    body = "<p>" + html.escape(description) + "</p>\n" + _errorbar_svg(items, ylabel, ymax) + "\n"
+    (dest / f"{stem}_mqc.html").write_text(
+        _html_comment({
+            "id": f"samovar_plots_{stem}",
+            "section_name": section_name,
+            "description": description,
+            "parent_id": parent_id,
+            "parent_name": parent_name,
+            "plot_type": "html",
+        })
+        + body,
+        encoding="utf-8",
+    )
+
+
 def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) -> None:
     """Box plots of per-sample seconds and peak RSS, plus means and stage wall clocks."""
     import csv
@@ -2186,49 +2459,48 @@ def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) 
         writer.writeheader()
         writer.writerows({key: _csv_cell(row.get(key)) for key in mean_fields} for row in means)
     if samples:
-        grouped: Dict[str, List[float]] = {}
-        for row in samples:
-            grouped.setdefault(f"{row['phase']}: {row['run_name']}", []).append(row["elapsed_s"])
-        payload = {
-            "id": "samovar_runtime_box",
-            "section_name": "Runtime per sample",
-            "description": (
-                "Each point is one sample's wall-clock seconds for that annotator or profiler. "
-                "The mean is the per-sample runtime. Absolute stage time is the checkpoint wall clock "
-                "and is not the sum of these points. A tool that did not run is absent, not zero."
+        def _range_items(field: str) -> List[tuple]:
+            grouped: Dict[str, List[float]] = {}
+            for row in samples:
+                value = row.get(field)
+                if value is None:
+                    continue
+                grouped.setdefault(f"{row['phase']}: {row['run_name']}", []).append(float(value))
+            items = []
+            for label, values in grouped.items():
+                items.append((label, "Samples", sum(values) / len(values), min(values), max(values)))
+            return items
+
+        _write_errorbar_chart(
+            dest, "runtime_time",
+            section_name="Time per sample",
+            description=(
+                "Each bar is the mean wall-clock seconds of that tool. "
+                "The whisker runs from the fastest sample to the slowest. "
+                "Tools sit side by side. A tool that did not run is absent, not zero. "
+                "Bracken includes the Kraken2 classification it depends on."
             ),
-            "plot_type": "box",
-            "pconfig": {
-                "id": "samovar_runtime_box_plot",
-                "title": "Elapsed seconds per sample",
-                "ylab": "Seconds",
-            },
-            "data": grouped,
-        }
-        _emit_mqc(payload, dest / "runtime_box_mqc.json")
-        memory: Dict[str, List[float]] = {}
-        for row in samples:
-            if row.get("max_rss_mb") is None:
-                continue
-            memory.setdefault(f"{row['phase']}: {row['run_name']}", []).append(row["max_rss_mb"])
-        if memory:
-            payload = {
-                "id": "samovar_runtime_memory_box",
-                "section_name": "Peak memory per sample",
-                "description": (
-                    "Each point is one sample's Snakemake benchmark max_rss, in MB, "
-                    "for that annotator or profiler. The mean is the per-sample peak. "
-                    "A missing max_rss is absent, not zero."
-                ),
-                "plot_type": "box",
-                "pconfig": {
-                    "id": "samovar_runtime_memory_box_plot",
-                    "title": "Peak RSS per sample",
-                    "ylab": "MB",
-                },
-                "data": memory,
-            }
-            _emit_mqc(payload, dest / "runtime_memory_box_mqc.json")
+            ylabel="Seconds",
+            items=_range_items("elapsed_s"),
+            ymax=None,
+            parent_id="samovar_runtime",
+            parent_name="Runtime",
+        )
+        _write_errorbar_chart(
+            dest, "runtime_memory",
+            section_name="Peak memory per sample",
+            description=(
+                "Each bar is the mean peak RSS in megabytes. "
+                "The whisker runs from the lowest sample to the highest. "
+                "Tools sit side by side. A missing measurement is absent, not zero. "
+                "Bracken includes the Kraken2 classification it depends on."
+            ),
+            ylabel="MB",
+            items=_range_items("max_rss_mb"),
+            ymax=None,
+            parent_id="samovar_runtime",
+            parent_name="Runtime",
+        )
     rows: Dict[str, Dict[str, Any]] = {}
     for row in means:
         rss = row.get("mean_max_rss_mb")
@@ -2265,6 +2537,457 @@ def _write_runtime_section(root: Path, dest: Path, settings: Mapping[str, Any]) 
         _emit_mqc(payload, dest / "runtime_summary_mqc.json")
 
 
+_RUNTIME_METRICS = {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}
+_PHASES = ("initial", "regenerated", "reprofiled")
+
+
+def _csv_dicts(path: Path) -> List[dict]:
+    if not path.is_file():
+        return []
+    with path.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or abs(number) == float("inf"):
+        return None
+    return number
+
+
+def _row_phase(row: Mapping[str, Any]) -> str:
+    phase = str(row.get("phase") or "")
+    if phase:
+        return phase
+    reason = str(row.get("reason") or "")
+    for name in ("reprofiled", "regenerated", "initial"):
+        if name in reason:
+            return name
+    return ""
+
+
+def _selected_row(row: Mapping[str, Any], stages: set, annotators: Any) -> bool:
+    phase = _row_phase(row)
+    if phase and phase not in stages:
+        return False
+    if not phase and stages != set(_PHASES):
+        return False
+    name = str(row.get("run_name") or "")
+    if annotators != "all" and name and name not in set(annotators):
+        return False
+    return True
+
+
+def _repeat_state(row: Mapping[str, Any]) -> str:
+    stages = row.get("stages") or {}
+    pipeline = stages.get("pipeline") or ""
+    if pipeline == "succeeded":
+        return "succeeded"
+    if pipeline == "failed" or stages.get("generate") in {"error", "failed"} or row.get("error"):
+        return "failed"
+    return pipeline or str(row.get("state") or "planned")
+
+
+def _comparison_name(row: Mapping[str, Any]) -> str:
+    return " | ".join(
+        str(row.get(key) or "-")
+        for key in ("sample_id", "phase", "run_name", "rank", "metric", "taxon", "truth_source")
+    )
+
+
+def _numeric_table(rows: Sequence[Mapping[str, Any]]) -> List[dict]:
+    numeric = ("n_expected", "n_success", "n_valid", "mean", "sd", "ci_low", "ci_high")
+    table = []
+    for row in rows:
+        item = {"comparison": _comparison_name(row)}
+        for key in numeric:
+            number = _optional_float(row.get(key))
+            if number is not None:
+                item[key] = number
+        table.append(item)
+    return table
+
+
+def _profile_frames(rows: Sequence[Mapping[str, Any]]):
+    import pandas as pd
+
+    groups: Dict[tuple, List[Mapping[str, Any]]] = {}
+    for row in rows:
+        if row.get("kind") != "abundance":
+            continue
+        key = tuple(
+            str(row.get(name) or "")
+            for name in (
+                "repeat_id", "phase", "run_name", "kind", "taxonomy", "rank",
+                "unit", "basis", "normalization",
+            )
+        )
+        groups.setdefault(key, []).append(row)
+    for key, items in groups.items():
+        taxa = sorted({str(item.get("taxon") or "") for item in items})
+        samples = sorted({str(item.get("sample_id") or "") for item in items})
+        lookup = {
+            (str(item.get("taxon") or ""), str(item.get("sample_id") or "")): item.get("value")
+            for item in items
+        }
+        frame = {"taxid": taxa}
+        for sample in samples:
+            frame[f"N_{sample}"] = [
+                _optional_float(lookup.get((tax, sample))) or 0 for tax in taxa
+            ]
+        info = dict(
+            kind=key[3], taxonomy=key[4], rank=key[5], unit=key[6],
+            basis=key[7], normalization=key[8],
+        )
+        yield key, pd.DataFrame(frame), info
+
+
+def bundle_package_report(root: Path, settings: Dict[str, Any]) -> Path:
+    """Stage the package summary from saved long tables. Children are not rebuilt."""
+    import pandas as pd
+
+    from samovar.multiqc_report import apply_selection, missing_sections, settings_document
+    from samovar.profiles import (
+        alpha_metrics,
+        beta_diversity,
+        composition_color,
+        composition_display,
+        composition_fractions,
+        composition_label,
+    )
+    from samovar.repeats import load_manifest, statistics_rows
+
+    dest = root / "summary" / "multiqc_samovar"
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest = load_manifest(root) or {}
+    enabled = set(settings["sections"])
+    stages = set(settings["stages"])
+    annotators = settings["annotators"]
+    repeats = list(manifest.get("repeats") or [])
+    status_path = root / "summary" / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.is_file() else {}
+    n_expected = len(repeats)
+    n_success = sum(1 for row in repeats if _repeat_state(row) == "succeeded")
+    if status.get("status"):
+        headline = str(status["status"])
+    elif n_success == 0:
+        headline = "no data"
+    elif n_success < n_expected:
+        headline = "incomplete"
+    else:
+        headline = "complete"
+    stats = [row for row in _csv_dicts(root / "summary" / "statistics.csv") if _selected_row(row, stages, annotators)]
+    profiles = [row for row in _csv_dicts(root / "summary" / "profiles_long.csv") if _selected_row(row, stages, annotators)]
+    results = [row for row in _csv_dicts(root / "summary" / "results_long.csv") if _selected_row(row, stages, annotators)]
+    base_seed = int(manifest.get("base_seed") or 0)
+    input_kind = str((manifest.get("input") or {}).get("kind") or "")
+    fixed = any(row.get("abundance") or row.get("generator_namespace") == "reads" for row in repeats)
+
+    lines = [
+        f"<p>Package status: <strong>{html.escape(headline)}</strong>. "
+        "This summary reads the saved long tables and does not rerun the children.</p>",
+        "<table><thead><tr><th>Repeat</th><th>State</th><th>Seed</th><th>Error</th><th>Report</th></tr></thead><tbody>",
+    ]
+    for row in repeats:
+        state = _repeat_state(row)
+        repeat_id = str(row.get("repeat_id") or "")
+        link = f"../../{row.get('out_dir')}/multiqc/SAMOVAR_multiqc_report.html"
+        lines.append(
+            "<tr><td>" + html.escape(repeat_id) + "</td><td>" + html.escape(state)
+            + "</td><td>" + html.escape(str(row.get("seed") or ""))
+            + "</td><td>" + html.escape(str(row.get("error") or ""))
+            + "</td><td><a href=\"" + html.escape(link) + "\">individual report</a></td></tr>"
+        )
+    lines.append("</tbody></table>")
+    lines.append(
+        "<p>Raw tables: <a href=\"../statistics.csv\">statistics.csv</a>, "
+        "<a href=\"../profiles_long.csv\">profiles_long.csv</a>, "
+        "<a href=\"../results_long.csv\">results_long.csv</a>.</p>"
+    )
+    (dest / "status_repeats_mqc.html").write_text(
+        _html_comment({
+            "id": "samovar_repeat_status",
+            "section_name": "Repeat status",
+            "description": "Planned, successful and failed repeats. Incomplete and no-data stay visible.",
+            "plot_type": "html",
+        })
+        + "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
+    if stats:
+        write_table_mqc(
+            _numeric_table(stats),
+            dest / "status_comparisons_mqc.json",
+            section_name="Repeat comparisons",
+            description=(
+                "n_valid counts finite repeat values. n_valid=1 has a mean and no SD or CI. "
+                "The same sample name in another tool or rank is a different row."
+            ),
+            col1_header="Comparison",
+            id_field="comparison",
+            numeric_fields=("n_expected", "n_success", "n_valid", "mean", "sd", "ci_low", "ci_high"),
+        )
+
+    def _points(family: str, metric_rows: Sequence[Mapping[str, Any]], observations: Sequence[Mapping[str, Any]]) -> None:
+        del observations
+        finite = [row for row in metric_rows if _optional_float(row.get("mean")) is not None and row.get("metric")]
+        if not finite:
+            return
+        keys = _varying_keys(finite)
+        by_axis: Dict[str, List[tuple]] = {}
+        for row in finite:
+            metric = str(row["metric"])
+            mean, low, high = (_optional_float(row.get(name)) for name in ("mean", "ci_low", "ci_high"))
+            if mean is None:
+                continue
+            axis = _score_axis(metric, (mean, low, high))
+            by_axis.setdefault(axis, []).append((
+                _chart_category(row, keys), _metric_label(metric), mean, low, high,
+            ))
+        for axis, items in sorted(by_axis.items()):
+            section, description, ylabel, ymax = _axis_copy(axis, family)
+            _write_errorbar_chart(
+                dest, f"scores_{family}_{_slug(axis)}",
+                section_name=section,
+                description=description,
+                ylabel=ylabel,
+                items=items,
+                ymax=ymax,
+            )
+        write_table_mqc(
+            _numeric_table(metric_rows),
+            dest / f"{family}_summary_mqc.json",
+            section_name=f"{_family_title(family)}: mean and 95% interval",
+            description=(
+                "The chart uses these means. The interval is the saved percentile bootstrap "
+                "over whole repeats. One finite repeat leaves the interval empty."
+            ),
+            col1_header="Comparison",
+            id_field="comparison",
+            numeric_fields=("n_valid", "mean", "sd", "ci_low", "ci_high"),
+        )
+
+    if "benchmark" in enabled:
+        score_stats = [
+            row for row in stats
+            if row.get("metric") and row.get("metric") not in _RUNTIME_METRICS and not row.get("taxon")
+        ]
+        score_obs = [
+            row for row in results
+            if row.get("metric") and row.get("metric") not in _RUNTIME_METRICS
+        ]
+        def _profile_score(row: Mapping[str, Any]) -> bool:
+            return bool(str(row.get("kind") or "").strip())
+
+        _points(
+            "benchmark",
+            [row for row in score_stats if not _profile_score(row)],
+            [row for row in score_obs if not _profile_score(row)],
+        )
+        _points(
+            "profilers",
+            [row for row in score_stats if _profile_score(row)],
+            [row for row in score_obs if _profile_score(row)],
+        )
+    if "runtime" in enabled:
+        _points(
+            "runtime",
+            [row for row in stats if row.get("metric") in _RUNTIME_METRICS],
+            [row for row in results if row.get("metric") in _RUNTIME_METRICS],
+        )
+    sample_ids = {str(row.get("sample_id") or "") for row in profiles if str(row.get("sample_id") or "")}
+    show_diversity = len(sample_ids) >= 2
+    if "alpha" in enabled and (_requested(settings, "alpha") or show_diversity):
+        alpha_obs = []
+        for key, frame, info in _profile_frames(profiles):
+            for item in alpha_metrics(frame, info) or []:
+                for metric in ("richness", "shannon"):
+                    alpha_obs.append({
+                        "repeat_id": key[0], "sample_id": item["sample"], "phase": key[1],
+                        "run_name": key[2], "rank": info["rank"], "metric": metric,
+                        "value": item[metric], "truth_source": "", "taxon": "",
+                    })
+        alpha_stats = statistics_rows(
+            [], alpha_obs, n_expected=n_expected, n_success=n_success, base_seed=base_seed,
+            input_kind=input_kind, fixed_abundance=fixed,
+        ) if alpha_obs else []
+        _points("alpha", alpha_stats, alpha_obs)
+    if "composition" in enabled:
+        means: Dict[tuple, Dict[str, float]] = {}
+        for row in stats:
+            if row.get("metric") or not row.get("taxon") or row.get("kind") != "abundance":
+                continue
+            number = _optional_float(row.get("mean"))
+            if number is None:
+                continue
+            key = tuple(
+                str(row.get(name) or "")
+                for name in ("sample_id", "phase", "run_name", "rank", "unit", "basis", "normalization", "taxonomy", "kind")
+            )
+            means.setdefault(key, {})[str(row["taxon"])] = number
+        series: Dict[str, Dict[str, float]] = {}
+        for key, taxon_means in means.items():
+            sample, phase, run_name, rank, unit, basis, normalization, taxonomy, kind = key
+            info = dict(
+                kind=kind, taxonomy=taxonomy, rank=rank, unit=unit,
+                basis=basis, normalization=normalization,
+            )
+            frame = pd.DataFrame({"taxid": list(taxon_means), f"N_{sample}": list(taxon_means.values())})
+            fractions = composition_fractions(frame, info)
+            if fractions is None:
+                continue
+            shown = composition_display(fractions)
+            label = f"{sample} | {run_name} | {rank}"
+            series[label] = {
+                composition_label(str(tax)): round(float(value) * 100, 4)
+                for tax, value in zip(shown.taxid.astype(str), shown[f"N_{sample}"])
+                if float(value) > 0
+            }
+        if series:
+            names = []
+            for sample_series in series.values():
+                for name in sample_series:
+                    if name not in names:
+                        names.append(name)
+            payload = {
+                "id": "samovar_repeat_composition",
+                "section_id": "samovar_repeat_composition",
+                "section_name": "Mean composition",
+                "description": (
+                    "Top taxa of the mean profile. These bars are shares of that mean, "
+                    "not stacked CI bounds."
+                ),
+                "plot_type": "bargraph",
+                "categories": {
+                    name: {"name": name, "color": composition_color(name.split(" (", 1)[0])}
+                    for name in names
+                },
+                "pconfig": {
+                    "id": "samovar_repeat_composition_plot",
+                    "title": "Mean composition",
+                    "ylab": "Percent",
+                    "stacking": "normal",
+                    "cpswitch": False,
+                    "sort_samples": False,
+                    "ymax": 100,
+                },
+                "data": series,
+            }
+            _emit_mqc(payload, dest / "composition_mean_mqc.json")
+    if "beta" in enabled and (_requested(settings, "beta") or show_diversity):
+        status_rows = []
+        pair_obs = []
+        for key, frame, info in _profile_frames(profiles):
+            result = beta_diversity(frame, info)
+            repeat_id, phase, run_name = key[0], key[1], key[2]
+            identity = f"{repeat_id} | {run_name} | {info['rank']}"
+            status_rows.append({
+                "comparison": identity,
+                "status": result["status"] or "ok",
+                "samples": ", ".join(result["sample_ids"]),
+            })
+            if result["matrix"] is None:
+                continue
+            matrix = pd.DataFrame(
+                result["matrix"], index=result["sample_ids"], columns=result["sample_ids"]
+            )
+            write_heatmap_mqc(
+                matrix,
+                dest / f"beta_{repeat_id}_{_slug(run_name)}_{_slug(info['rank'])}_heatmap_mqc.json",
+                section_name=f"Beta {identity}",
+                description="Distance matrix of this repeat only. PCoA axes are not averaged across repeats.",
+                xlab="Sample",
+                ylab="Sample",
+            )
+            samples = result["sample_ids"]
+            for left in range(len(samples)):
+                for right in range(left + 1, len(samples)):
+                    pair_obs.append({
+                        "repeat_id": repeat_id, "sample_id": f"{samples[left]} | {samples[right]}",
+                        "phase": phase, "run_name": run_name, "rank": info["rank"],
+                        "metric": "bray_curtis", "value": result["matrix"][left][right],
+                        "truth_source": "", "taxon": "",
+                    })
+            coords = result["coordinates"]
+            if coords and result["explained_variance"]:
+                points = []
+                for sample, xy in coords.items():
+                    if len(xy) < 2:
+                        continue
+                    points.append({"name": f"{repeat_id} | {sample}", "x": float(xy[0]), "y": float(xy[1])})
+                if points:
+                    write_scatter_mqc(
+                        pd.DataFrame(points),
+                        dest / f"beta_{repeat_id}_{_slug(run_name)}_{_slug(info['rank'])}_pcoa_mqc.json",
+                        section_name=f"PCoA {identity}",
+                        description="PCoA of this repeat. Axes from another repeat are not given an interval.",
+                        xlab="PC1",
+                        ylab="PC2",
+                        x="x",
+                        y="y",
+                        label="name",
+                    )
+        if status_rows:
+            payload = _normalize_mqc_json(
+                {
+                    "section_name": "Beta applicability",
+                    "plot_type": "table",
+                    "description": "No gold standard is required. One sample or a presence profile is not a distance.",
+                    "data": {
+                        str(index): row for index, row in enumerate(status_rows)
+                    },
+                },
+                parent_id="samovar_plots", parent_name="Repeat summary",
+                parent_description="", stem="beta_status",
+            )
+            _emit_mqc(payload, dest / "beta_status_mqc.json")
+        if pair_obs:
+            pair_stats = statistics_rows(
+                [], pair_obs, n_expected=n_expected, n_success=n_success, base_seed=base_seed,
+                input_kind=input_kind, fixed_abundance=fixed,
+            )
+            _points("beta", pair_stats, pair_obs)
+
+    produced = apply_selection(dest, settings)
+    missing = missing_sections(settings, produced)
+    if missing:
+        items = "".join(
+            f"<li><strong>{html.escape(name)}</strong>: {html.escape(reason)}</li>"
+            for name, reason in missing
+        )
+        (dest / "98_report_status_mqc.html").write_text(
+            _html_comment({
+                "id": "samovar_report_status",
+                "section_name": "Report status",
+                "description": "Selected sections with nothing to plot in this package.",
+                "plot_type": "html",
+            })
+            + "<p>These selected sections have no saved summary data. Nothing was recomputed from reads.</p><ul>"
+            + items + "</ul>\n",
+            encoding="utf-8",
+        )
+    (dest / "report_settings.json").write_text(
+        json.dumps(settings_document(settings), indent=2) + "\n", encoding="utf-8"
+    )
+    (dest / "00_run_options_mqc.html").write_text(
+        _html_comment({
+            "id": "samovar_run_options",
+            "section_name": "Repeat summary",
+            "description": "Package MultiQC reads saved summary tables.",
+            "plot_type": "html",
+        })
+        + "<p>Individual MultiQC reports stay in each out_XXXX. This page does not merge those HTML files.</p>\n",
+        encoding="utf-8",
+    )
+    _write_multiqc_config(dest, [])
+    return dest
+
+
 def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = None) -> Path:
     """Materialize ``*_mqc.*`` custom content from plot folders and run options.
 
@@ -2282,6 +3005,14 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
     )
 
     root = as_path(output_dir)
+    from samovar.repeats import manifest_path
+
+    if manifest_path(root).is_file():
+        if settings is None:
+            from samovar.multiqc_report import resolve_settings
+
+            settings = resolve_settings(root)
+        return bundle_package_report(root, settings)
     if settings is None:
         settings = resolve_settings(root)
     enabled = set(settings["sections"])
@@ -2369,13 +3100,13 @@ def bundle_multiqc(output_dir: PathLike, settings: Optional[Dict[str, Any]] = No
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], order=i,
                 )
-            if "alpha" in enabled:
+            if "alpha" in enabled and (_requested(settings, "alpha") or _enough_samples(tables)):
                 _write_alpha_tables(
                     dest, phase, tables, metas,
                     parent_id=spec["id"], parent_name=spec["title"],
                     parent_description=spec["description"], order=i,
                 )
-            if "beta" in enabled:
+            if "beta" in enabled and (_requested(settings, "beta") or _enough_samples(tables)):
                 shared = _load_yaml(root / ".log" / "configs" / "config_annotation2iss.yaml")
                 scorer_config = {key: shared[key] for key in ("concordance", "seed", "permutations") if key in shared}
                 scorer_config.update(config)
@@ -2493,7 +3224,10 @@ def run_multiqc(
         config_path = Path(cli["config"]) if cli.get("config") else None
         settings = resolve_settings(as_path(output_dir), cli, config_path)
     staged = bundle_multiqc(output_dir, settings)
-    out = as_path(output_dir) / "multiqc"
+    from samovar.repeats import manifest_path
+
+    root = as_path(output_dir)
+    out = root / "summary" / "multiqc" if manifest_path(root).is_file() else root / "multiqc"
     out.mkdir(parents=True, exist_ok=True)
     cfg = staged / "multiqc_config.yaml"
     exe = discover_multiqc()

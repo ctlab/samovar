@@ -19,7 +19,9 @@ def test_generated_exec_pipeline_is_python_only(tmp_path):
     (tmp_path / "reads").mkdir()
     result = setup_pipeline(args)
     script = Path(result["pipeline"]).read_text()
-    assert "compare_annotations.py" in script
+    assert "score annotators" in script
+    assert "score profiles" in script
+    assert "compare_annotations.py" not in script
     assert "compare_annotations.R" not in script
     # PATH restore uses _SAMOVAR_CALLER_PATH; that name contains the letters R_PATH=.
     assert "export R_PATH=" not in script

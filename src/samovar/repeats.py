@@ -1,0 +1,1138 @@
+"""Repeat-package contract: manifest, sequential exec, and long summary tables.
+
+Seeds come from SHA-256 of the base seed, the 1-based repeat index and a
+namespace, so they do not depend on Python's hash or on the order of execution.
+"""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+SCHEMA = 1
+SEED_RULE = "sha256-v1"
+MAX_REPEAT = 9999
+_CHILD = re.compile(r"out_(\d{4})$")
+
+
+def parse_repeat(value: Any) -> Optional[int]:
+    """Missing means a single run. An explicit count, including 1, is a package."""
+    if value is None or value is False or value == "":
+        return None
+    if isinstance(value, bool) or isinstance(value, float) or not str(value).strip().isdigit():
+        raise ValueError(f"repeat must be a positive integer, got {value!r}")
+    count = int(str(value).strip())
+    if count < 1 or count > MAX_REPEAT:
+        raise ValueError(f"repeat must be from 1 to {MAX_REPEAT}, got {count}")
+    return count
+
+
+def repeat_seed(base: int, index: int, namespace: str) -> int:
+    """Stable seed in ``1 .. 2**31-2``. ``index`` is 1-based."""
+    payload = f"{int(base)}:{int(index)}:{namespace}".encode()
+    value = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") % (2**31 - 1)
+    return value or 1
+
+
+def manifest_path(root: Path) -> Path:
+    return Path(root) / ".log" / "repeats.json"
+
+
+def load_manifest(root: Path) -> Optional[Dict[str, Any]]:
+    path = manifest_path(root)
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+        raise ValueError(f"unsupported repeat manifest: {path}")
+    return data
+
+
+def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    with tmp.open("w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def _parent_package(root: Path) -> Optional[Path]:
+    if _CHILD.match(root.name) and manifest_path(root.parent).is_file():
+        return root.parent
+    return None
+
+
+def _occupied(root: Path, *, allow_template: bool = False) -> bool:
+    if not root.exists():
+        return False
+    for path in root.iterdir():
+        if allow_template and path.name in {".generate", ".log", ".genomes"}:
+            continue
+        return True
+    return False
+
+
+def _rows(count: int, base_seed: int) -> list:
+    rows = []
+    for index in range(1, count + 1):
+        rows.append(
+            {
+                "repeat_id": f"{index:04d}",
+                "out_dir": f"out_{index:04d}",
+                "seed": repeat_seed(base_seed, index, "repeat"),
+                "state": "planned",
+                "stages": {},
+            }
+        )
+    return rows
+
+
+def _same(existing: Mapping[str, Any], request: Mapping[str, Any], *, identity_required: bool) -> None:
+    if int(existing["repeat"]) != int(request["repeat"]) or int(existing["base_seed"]) != int(request["base_seed"]):
+        raise ValueError(
+            "repeat package does not match this request: "
+            f"manifest repeat={existing['repeat']} seed={existing['base_seed']}, "
+            f"request repeat={request['repeat']} seed={request['base_seed']}"
+        )
+    old = existing.get("input") or {}
+    new = request["input"]
+    if identity_required and (old.get("kind") != new.get("kind") or old.get("identity") != new.get("identity")):
+        raise ValueError(
+            "repeat package input does not match this request: "
+            f"{old.get('kind')} {old.get('identity')} vs {new.get('kind')} {new.get('identity')}"
+        )
+    if not identity_required and new.get("kind") and (
+        old.get("kind") != new.get("kind") or old.get("identity") != new.get("identity")
+    ):
+        raise ValueError(
+            "repeat package input does not match this request: "
+            f"{old.get('kind')} vs {new.get('kind')}"
+        )
+
+
+def _ensure_children(root: Path, rows: list) -> None:
+    for row in rows:
+        (root / row["out_dir"]).mkdir(parents=True, exist_ok=True)
+
+
+def publish_package(
+    root: Path,
+    *,
+    count: int,
+    base_seed: int,
+    kind: str,
+    identity: str,
+    settings: Optional[Mapping[str, Any]] = None,
+    adopt_without_identity: bool = False,
+    allow_template: bool = False,
+) -> Path:
+    """Create or resume a package. Raises before replacing an incompatible manifest."""
+    root = Path(root)
+    if _parent_package(root):
+        raise ValueError(f"{root} is already a repeat directory; refusing to nest another package")
+    request = {
+        "repeat": int(count),
+        "base_seed": int(base_seed),
+        "input": {"kind": kind, "identity": identity},
+    }
+    existing = load_manifest(root)
+    if existing:
+        _same(existing, request, identity_required=not adopt_without_identity)
+        _ensure_children(root, existing["repeats"])
+        return manifest_path(root)
+    if _occupied(root, allow_template=allow_template):
+        raise ValueError(f"{root} is not empty and has no repeat manifest; refusing to overwrite")
+    payload = {
+        "schema": SCHEMA,
+        "seed_rule": SEED_RULE,
+        "repeat": int(count),
+        "base_seed": int(base_seed),
+        "input": {"kind": kind, "identity": identity},
+        "settings": dict(settings or {}),
+        "repeats": _rows(count, int(base_seed)),
+    }
+    _atomic_json(manifest_path(root), payload)
+    _ensure_children(root, payload["repeats"])
+    return manifest_path(root)
+
+
+def generated_identity(args: Any) -> str:
+    genome = getattr(args, "genome_dir", None)
+    if not genome and getattr(args, "accessions", None) and getattr(args, "output_dir", None):
+        from samovar.genome_index import run_processed_dir
+
+        genome = run_processed_dir(args.output_dir)  # where --accessions puts genomes
+    genome_text = str(Path(genome).resolve()) if genome else ""
+    abundance = getattr(args, "abundance_table", None)
+    abundance_text = str(Path(abundance).resolve()) if abundance else ""
+    simulator = str(getattr(args, "reads_generator", None) or getattr(args, "simulator", None) or "iss")
+    meta = str(getattr(args, "metagenome_generator", None) or "")
+    return "|".join(
+        [
+            genome_text,
+            simulator,
+            meta,
+            str(getattr(args, "n_samples", None)),
+            str(getattr(args, "total_reads", None)),
+            abundance_text,
+        ]
+    )
+
+
+def prepare_identity(config: Any) -> Optional[tuple]:
+    """Reads or profiles can start a package. Anything else must already be generated."""
+    parts = []
+    kind = None
+    if getattr(config, "input_dir", None):
+        kind = "reads"
+        parts.append("reads:" + str(Path(config.input_dir).resolve()))
+    profiles = getattr(config, "profile_inputs", None) or {}
+    if profiles:
+        kind = kind or "profiles"
+        named = []
+        for name in sorted(profiles):
+            value = profiles[name]
+            text = str(Path(value).resolve()) if isinstance(value, (str, Path)) else json.dumps(value, sort_keys=True)
+            named.append(f"{name}={text}")
+        parts.append("profiles:" + ",".join(named))
+    if kind is None:
+        return None
+    return kind, "|".join(parts)
+
+
+def record_generator_plan(root: Path, planned: list) -> None:
+    """Remember the seed each existing generator will receive. Does not run it."""
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    by_id = {row["repeat_id"]: row for row in data["repeats"]}
+    for item in planned:
+        row = by_id[item["repeat_id"]]
+        row["generator_seed"] = int(item["generator_seed"])
+        row["generator_namespace"] = item["namespace"]
+        row["abundance"] = item.get("abundance") or ""
+        row["state"] = "planned"
+    _atomic_json(manifest_path(root), data)
+
+
+def set_repeat_state(
+    root: Path,
+    repeat_id: str,
+    state: str,
+    error: str = "",
+    stage: str = "generate",
+) -> None:
+    """Record one stage. Does not create reads or truth."""
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    found = False
+    for row in data["repeats"]:
+        if row["repeat_id"] != str(repeat_id):
+            continue
+        stages = dict(row.get("stages") or {})
+        stages[stage] = state
+        row["stages"] = stages
+        if stage in {"generate", "pipeline"}:
+            row["state"] = state
+        if error:
+            row["error"] = error
+        elif stage == "pipeline" and state == "succeeded":
+            row.pop("error", None)
+        found = True
+    if not found:
+        raise ValueError(f"repeat {repeat_id} is not in {manifest_path(root)}")
+    _atomic_json(manifest_path(root), data)
+
+
+def write_repeat_orchestrator(root: Path, rows: list) -> None:
+    """Root generate.sh runs each child's existing generate.sh and keeps going."""
+    from samovar.paths import python_path, repo_root, shell_source_install_env_snippet
+
+    root = Path(root)
+    lines = [
+        "#!/bin/bash",
+        "set -u",
+        f'export SAMOVAR_ROOT="{repo_root()}"',
+        shell_source_install_env_snippet().rstrip(),
+        'export PYTHONPATH="' + str(repo_root() / "src") + '${PYTHONPATH:+:$PYTHONPATH}"',
+        f'PYTHON_PATH="${{PYTHON_PATH:-{python_path()}}}"',
+        f'root="{root.resolve()}"',
+        "fail=0",
+        "mark()",
+        "{",
+        '  "$PYTHON_PATH" -m samovar.repeats mark --root "$root" --repeat-id "$1" --state "$2" --error "${3:-}"',
+        "}",
+    ]
+    for row in rows:
+        child = root / row["out_dir"]
+        lines.extend([
+            f'if bash "{child.resolve() / ".generate" / "generate.sh"}" --directory "{child.resolve()}"; then',
+            f'  mark {row["repeat_id"]} generated',
+            "else",
+            f'  mark {row["repeat_id"]} error "generate failed"',
+            "  fail=1",
+            "fi",
+        ])
+    lines.append('exit "$fail"')
+    script = root / ".generate" / "generate.sh"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.chmod(script, 0o755)
+
+
+def materialize_repeat_generations(args: Any) -> None:
+    """Write one existing generator workflow per repeat. Does not execute it."""
+    import argparse
+
+    from samovar.iss_config import setup_iss_test
+
+    root = Path(args.output_dir)
+    manifest = load_manifest(root)
+    if manifest is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    abundance = str(getattr(args, "abundance_table", None) or "")
+    namespace = "reads" if abundance else "community"
+    base = int(getattr(args, "seed", None) if getattr(args, "seed", None) is not None else 42)
+    planned = []
+    for row in manifest["repeats"]:
+        index = int(row["repeat_id"])
+        seed = repeat_seed(base, index, namespace)
+        child = root / row["out_dir"]
+        child_args = argparse.Namespace(**vars(args))
+        child_args.output_dir = str(child)
+        child_args.seed = seed
+        child_args.repeat = None
+        child_args._repeat_count = None
+        child_args._writing_repeat_child = True
+        setup_iss_test(child_args)
+        planned.append({
+            "repeat_id": row["repeat_id"],
+            "generator_seed": seed,
+            "namespace": namespace,
+            "abundance": str(Path(abundance).resolve()) if abundance else "",
+        })
+    record_generator_plan(root, planned)
+    write_repeat_orchestrator(root, manifest["repeats"])
+
+
+def guard_generate(args: Any) -> Optional[int]:
+    """Reject a bad generate target before the generator writes anything."""
+    if getattr(args, "_writing_repeat_child", False):
+        return None
+    count = parse_repeat(getattr(args, "repeat", None))
+    root = Path(getattr(args, "output_dir", ""))
+    if _parent_package(root):
+        raise ValueError(f"{root} is already a repeat directory; refusing to nest another package")
+    existing = load_manifest(root) if root.exists() else None
+    if count is None:
+        if existing:
+            raise ValueError(
+                f"{root} is a repeat package ({existing['repeat']} repeats); "
+                "pass the same --repeat, or choose another output directory"
+            )
+        return None
+    if existing:
+        publish_package(
+            root,
+            count=count,
+            base_seed=int(getattr(args, "seed", None) or 42),
+            kind="generated",
+            identity=generated_identity(args),
+        )
+    elif _occupied(root):
+        raise ValueError(f"{root} is not empty and has no repeat manifest; refusing to overwrite")
+    return count
+
+
+def main(argv: Optional[list] = None) -> None:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(prog="samovar.repeats")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    mark = sub.add_parser("mark")
+    mark.add_argument("--root", required=True)
+    mark.add_argument("--repeat-id", required=True)
+    mark.add_argument("--state", required=True)
+    mark.add_argument("--error", default="")
+    mark.add_argument("--stage", default="generate")
+    run = sub.add_parser("exec")
+    run.add_argument("--root", required=True)
+    run.add_argument("--redo", action="store_true")
+    run.add_argument("--startpoint", default=None)
+    run.add_argument("--endpoint", default=None)
+    tables = sub.add_parser("tables")
+    tables.add_argument("--root", required=True)
+    args = parser.parse_args(argv)
+    if args.cmd == "mark":
+        try:
+            set_repeat_state(Path(args.root), args.repeat_id, args.state, args.error, args.stage)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+    elif args.cmd == "exec":
+        raise SystemExit(exec_package(
+            Path(args.root),
+            redo=args.redo,
+            startpoint=args.startpoint,
+            endpoint=args.endpoint,
+        ))
+    elif args.cmd == "tables":
+        try:
+            write_long_tables(Path(args.root))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+
+
+def _supplied_repeat_blocked(kind: str, count: int) -> None:
+    if count > 1 and kind == "profiles":
+        raise ValueError(
+            "resampling a saved profile is not supported; "
+            "--repeat 1 prepares one run and does not create independent replicates"
+        )
+
+
+def write_fastq_bootstrap(root: Path, src: str, truth_table: Optional[str] = None) -> None:
+    """Fill each child ``initial/`` with a with-replacement draw of ``src``."""
+    from samovar.seqio import bootstrap_fastq_directory
+
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    base = int(data["base_seed"])
+    for row in data["repeats"]:
+        seed = repeat_seed(base, int(row["repeat_id"]), "fastq-bootstrap")
+        info = bootstrap_fastq_directory(
+            src,
+            Path(root) / row["out_dir"] / "initial",
+            seed=seed,
+            repeat_id=row["repeat_id"],
+            truth_table=truth_table or None,
+        )
+        row["generator_seed"] = seed
+        row["generator_namespace"] = "fastq-bootstrap"
+        row["bootstrap"] = info
+    data["input"]["method"] = "index-with-replacement"
+    data["input"]["draw"] = "source-count"
+    _atomic_json(manifest_path(root), data)
+
+
+def write_status_summary(root: Path) -> Path:
+    """Counts only. A partial package is incomplete; none succeeded is no data."""
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    errors = []
+    success = 0
+    for row in data["repeats"]:
+        stages = row.get("stages") or {}
+        if stages.get("pipeline") == "succeeded":
+            success += 1
+            continue
+        if stages.get("pipeline") == "failed" or stages.get("generate") in {"error", "failed"} or row.get("error"):
+            errors.append({
+                "repeat_id": row["repeat_id"],
+                "error": row.get("error") or stages.get("pipeline") or stages.get("generate") or "failed",
+            })
+    expected = len(data["repeats"])
+    if success == 0:
+        status = "no data"
+    elif success < expected:
+        status = "incomplete"
+    else:
+        status = "complete"
+    path = Path(root) / "summary" / "status.json"
+    _atomic_json(path, {
+        "status": status,
+        "n_expected": expected,
+        "n_success": success,
+        "errors": errors,
+    })
+    return path
+
+
+_PHASES = ("initial", "regenerated", "reprofiled")
+_DESC = ("kind", "taxonomy", "rank", "unit", "basis", "normalization")
+_PROFILE_FIELDS = (
+    "repeat_id", "sample_id", "seed", "phase", "run_name", *_DESC, "taxon", "value",
+)
+_RESULT_FIELDS = (
+    "repeat_id", "sample_id", "seed", "phase", "run_name", *_DESC,
+    "metric", "value", "truth_source", "reason",
+)
+_STAT_FIELDS = (
+    "sample_id", "phase", "run_name", *_DESC, "metric", "taxon", "truth_source",
+    "n_expected", "n_success", "n_valid",
+    "mean", "sd", "ci_low", "ci_high",
+    "reason", "limitation",
+    "bootstrap_method", "bootstrap_seed", "n_resamples",
+)
+_N_RESAMPLES = 10000
+_BOOTSTRAP = "percentile"
+_SCORE_IDS = {
+    "annotator", "ground_truth", "truth_source", "sample", "sample_id", "reason",
+    "phase", "run_name", *_DESC,
+}
+
+
+def _atomic_csv(path: Path, rows: List[Mapping[str, Any]], fields: tuple) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def _cell(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value != value:
+        return ""
+    return str(value)
+
+
+def _blank_desc() -> Dict[str, str]:
+    return {key: "" for key in _DESC}
+
+
+def _desc(info: Mapping[str, Any]) -> Dict[str, str]:
+    return {key: _cell(info.get(key, "")) for key in _DESC}
+
+
+def _adapt_quality_row(rec: Dict[str, Any]) -> Dict[str, Any]:
+    from samovar.scores import LEGACY_CLOSED_SET_F1, LEGACY_READ_WARNING, READ_QUALITY_SCHEMA
+
+    if rec.get("schema") == READ_QUALITY_SCHEMA:
+        return rec
+    if "f1" not in rec or LEGACY_CLOSED_SET_F1 in rec:
+        return rec
+    adapted = dict(rec)
+    adapted[LEGACY_CLOSED_SET_F1] = adapted.pop("f1")
+    adapted["schema"] = "legacy-read-quality"
+    adapted["warning"] = LEGACY_READ_WARNING
+    return adapted
+
+
+def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed: Any) -> None:
+    plots = child / f"{phase}_annotations_plots"
+    for name in ("profile_quality_scores.csv", "quality_scores.csv"):
+        path = plots / name
+        if not path.is_file():
+            continue
+        with path.open(encoding="utf-8", newline="") as handle:
+            for rec in csv.DictReader(handle):
+                if name == "quality_scores.csv":
+                    rec = _adapt_quality_row(rec)
+                reason = rec.get("reason") or rec.get("warning") or ""
+                base = {
+                    "repeat_id": repeat_id,
+                    "sample_id": rec.get("sample") or rec.get("sample_id") or "",
+                    "seed": seed,
+                    "phase": phase,
+                    "run_name": rec.get("annotator") or rec.get("run_name") or "",
+                    "truth_source": rec.get("ground_truth") or rec.get("truth_source") or "",
+                    "reason": reason,
+                    "_group": "read" if name == "quality_scores.csv" else "profile",
+                    **_desc(rec),
+                }
+                metrics = []
+                for key, raw in rec.items():
+                    if not key or key in _SCORE_IDS or raw is None or str(raw).strip() == "":
+                        continue
+                    try:
+                        value = float(raw)
+                    except ValueError:
+                        continue
+                    if value != value:
+                        continue
+                    metrics.append((key, value))
+                if not metrics:
+                    if reason:
+                        rows.append({**base, "metric": "", "value": ""})
+                    continue
+                for metric, value in metrics:
+                    rows.append({**base, "metric": metric, "value": value})
+
+
+def _custom_score_rows(rows: List[dict], child: Path, repeat_id: str, seed: Any) -> None:
+    """Ingest `{name}_scores/scores.csv` (metric, value, optional sample_id)."""
+    for path in sorted(child.glob("*_scores/scores.csv")):
+        tool = path.parent.name[: -len("_scores")]
+        with path.open(encoding="utf-8", newline="") as handle:
+            for rec in csv.DictReader(handle):
+                metric = str(rec.get("metric") or "").strip()
+                value = _finite(rec.get("value"))
+                if not metric or value is None:
+                    continue
+                rows.append({
+                    "repeat_id": repeat_id,
+                    "sample_id": rec.get("sample") or rec.get("sample_id") or "",
+                    "seed": seed,
+                    "phase": rec.get("phase") or "",
+                    "run_name": rec.get("run_name") or rec.get("annotator") or tool,
+                    "metric": metric,
+                    "value": value,
+                    "truth_source": rec.get("truth_source") or rec.get("ground_truth") or "",
+                    "reason": rec.get("reason") or "",
+                    **_blank_desc(),
+                })
+
+
+def _runtime_rows(rows: List[dict], child: Path, repeat_id: str, seed: Any) -> None:
+    from samovar.runtime import load_sample_runtimes, load_stage_runtimes
+
+    for rec in load_sample_runtimes(child):
+        for metric in ("elapsed_s", "max_rss_mb"):
+            if rec.get(metric) is None:
+                continue
+            rows.append({
+                "repeat_id": repeat_id,
+                "sample_id": rec.get("sample") or "",
+                "seed": seed,
+                "phase": rec.get("phase") or "",
+                "run_name": rec.get("run_name") or "",
+                "metric": metric,
+                "value": rec[metric],
+                "truth_source": "",
+                "reason": "",
+                **_blank_desc(),
+            })
+    for rec in load_stage_runtimes(child):
+        rows.append({
+            "repeat_id": repeat_id,
+            "sample_id": "",
+            "seed": seed,
+            "phase": "",
+            "run_name": "",
+            "metric": "stage_elapsed_s",
+            "value": rec["elapsed_s"],
+            "truth_source": "",
+            "reason": rec.get("stage") or "",
+            **_blank_desc(),
+        })
+
+
+def summary_seed(base_seed: int) -> int:
+    """Seed for the summary bootstrap. It is not one of the repeat seeds."""
+    return repeat_seed(int(base_seed), 0, "summary")
+
+
+def _finite(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or abs(number) == float("inf"):
+        return None
+    return number
+
+
+def _observation(row: Mapping[str, Any], source: str) -> tuple:
+    metric = str(row.get("metric") or "")
+    taxon = str(row.get("taxon") or "")
+    truth = str(row.get("truth_source") or "")
+    run_name = str(row.get("run_name") or "")
+    if source == "profile":
+        metric, truth = "", ""
+    else:
+        taxon = ""
+        if metric == "stage_elapsed_s" and not run_name:
+            run_name = str(row.get("reason") or "")
+    key = (
+        str(row.get("sample_id") or ""),
+        str(row.get("phase") or ""),
+        run_name,
+        *(str(row.get(name) or "") for name in _DESC),
+        metric,
+        taxon,
+        truth,
+    )
+    return key, str(row.get("repeat_id") or ""), _finite(row.get("value"))
+
+
+def _one_per_repeat(by_repeat: Mapping[str, List[Optional[float]]]) -> tuple:
+    values = []
+    dropped = False
+    for repeat_id in sorted(by_repeat):
+        finite = [item for item in by_repeat[repeat_id] if item is not None]
+        if len(set(finite)) > 1:
+            dropped = True
+            continue
+        if finite:
+            values.append(finite[0])
+    return values, dropped
+
+
+def _limitation(
+    n_valid: int,
+    n_success: int,
+    n_expected: int,
+    *,
+    fixed_abundance: bool,
+    zero_width: bool,
+    input_kind: str = "",
+) -> str:
+    parts = []
+    if 2 <= n_valid < 5:
+        parts.append("n_valid<5; the interval is a limited description of these repeats")
+    if n_success < n_expected:
+        parts.append("incomplete repeats can bias this interval")
+    if input_kind == "fastq-bootstrap":
+        parts.append("with-replacement resampling of the supplied FASTQ, not a population interval")
+    elif fixed_abundance:
+        parts.append(
+            "conditional simulation variability given a fixed abundance, not biological uncertainty"
+        )
+    else:
+        parts.append("variability of the selected generator, not a population interval")
+    if zero_width:
+        parts.append("zero-width interval is not evidence of no uncertainty")
+    return " ".join(parts)
+
+
+def _num(value: float) -> str:
+    return format(float(value), ".12g")
+
+
+def statistics_rows(
+    profile_rows: List[Mapping[str, Any]],
+    result_rows: List[Mapping[str, Any]],
+    *,
+    n_expected: int,
+    n_success: int,
+    base_seed: int,
+    input_kind: str = "",
+    fixed_abundance: bool = False,
+) -> List[dict]:
+    """Mean, sample SD and a percentile CI over whole repeat ids.
+
+    Row order does not matter. NaN and inf are excluded, not turned into 0.
+    A saved profile or supplied FASTQ copied across repeats is not a replicate.
+    """
+    import numpy as np
+
+    groups: Dict[tuple, Dict[str, List[Optional[float]]]] = {}
+    for source, rows in (("profile", profile_rows), ("result", result_rows)):
+        for row in rows:
+            key, repeat_id, value = _observation(row, source)
+            groups.setdefault(key, {}).setdefault(repeat_id, []).append(value)
+    seed = summary_seed(base_seed)
+    copied = input_kind in {"profiles", "reads"}
+    copy_reason = (
+        "no-data: saved profile is not an independent replicate"
+        if input_kind == "profiles"
+        else "no-data: supplied reads are not independent replicates"
+    )
+    written = []
+    for key in sorted(groups):
+        values, dropped = _one_per_repeat(groups[key])
+        n_valid = 0 if copied else len(values)
+        mean = sd = low = high = ""
+        zero_width = False
+        if copied:
+            reason = copy_reason
+        elif dropped and n_valid == 0:
+            reason = "no-data: duplicate repeat rows excluded"
+        elif n_valid == 0:
+            reason = "no-data"
+        elif n_valid == 1:
+            mean = _num(values[0])
+            reason = "n_valid=1"
+            if dropped:
+                reason += ": duplicate repeat rows excluded"
+        else:
+            array = np.asarray(values, dtype=float)
+            mean = _num(float(array.mean()))
+            sd = _num(float(array.std(ddof=1)))
+            group_seed = repeat_seed(seed, 1, "\x1f".join(key))
+            rng = np.random.default_rng(group_seed)
+            drawn = rng.integers(0, n_valid, size=(_N_RESAMPLES, n_valid))
+            means = array[drawn].mean(axis=1)
+            q_low, q_high = np.quantile(means, [0.025, 0.975])
+            low, high = _num(float(q_low)), _num(float(q_high))
+            zero_width = low == high
+            reason = "duplicate repeat rows excluded" if dropped else ""
+        if copied:
+            limitation = reason
+        else:
+            limitation = _limitation(
+                n_valid, n_success, n_expected,
+                fixed_abundance=fixed_abundance, zero_width=zero_width,
+                input_kind=input_kind,
+            )
+        record = dict(zip(_STAT_FIELDS[:12], key))
+        record.update({
+            "n_expected": n_expected,
+            "n_success": n_success,
+            "n_valid": n_valid,
+            "mean": mean,
+            "sd": sd,
+            "ci_low": low,
+            "ci_high": high,
+            "reason": reason,
+            "limitation": limitation,
+            "bootstrap_method": "" if n_valid < 2 else _BOOTSTRAP,
+            "bootstrap_seed": "" if n_valid < 2 else seed,
+            "n_resamples": "" if n_valid < 2 else _N_RESAMPLES,
+        })
+        written.append(record)
+    return written
+
+
+_RUNTIME_METRICS = {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}
+_PROFILE_BAR_METRICS = ("precision", "recall", "f1", "jaccard", "l1_norm", "bray_curtis")
+
+
+def _write_summary_figures(dest: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Repeat means as ordinary bar charts. Not part of the MultiQC report."""
+    from samovar.scores import SCORE_DISPLAY, save_repeat_errorbars
+
+    scored = [
+        row for row in rows
+        if row.get("metric") and row.get("metric") not in _RUNTIME_METRICS and not row.get("taxon")
+    ]
+    read_rows = [row for row in scored if not str(row.get("kind") or "").strip()]
+    profile_rows = [row for row in scored if str(row.get("kind") or "").strip()]
+    dest.mkdir(parents=True, exist_ok=True)
+    pairs = (
+        (read_rows, dest / "annotators.png", "Annotators", tuple(SCORE_DISPLAY), SCORE_DISPLAY),
+        (
+            profile_rows,
+            dest / "profilers.png",
+            "Profilers",
+            _PROFILE_BAR_METRICS,
+            {
+                "precision": "Precision",
+                "recall": "Recall",
+                "f1": "F1",
+                "jaccard": "Jaccard",
+                "l1_norm": "L1",
+                "bray_curtis": "Bray–Curtis",
+            },
+        ),
+    )
+    for group, path, title, metrics, labels in pairs:
+        if group:
+            save_repeat_errorbars(group, path, title=title, metrics=metrics, labels=labels)
+        elif path.is_file():
+            path.unlink()
+
+
+def write_long_tables(root: Path) -> Dict[str, Path]:
+    """Rewrite summary long tables from successful child artifacts.
+
+    A missing taxon is 0 only inside one complete abundance namespace.
+    Failed repeats, missing samples and missing tools stay absent.
+    """
+    root = Path(root)
+    data = load_manifest(root)
+    if data is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    from samovar.abundance import n_sample_columns
+    from samovar.profiles import read_profiles
+
+    groups: Dict[tuple, List[dict]] = {}
+    profile_rows: List[dict] = []
+    result_rows: List[dict] = []
+    descriptors: Dict[tuple, tuple] = {}
+
+    def _observe(phase, name, table, info, repeat_id, seed, native):
+        shown = str(info.get("run_name") or name)
+        key = (phase, shown) + tuple(_desc(info)[item] for item in _DESC)
+        samples = {}
+        for col in n_sample_columns(table):
+            samples[col[2:]] = {
+                str(taxid): value
+                for taxid, value in zip(table["taxid"].astype(str), table[col])
+            }
+        groups.setdefault(key, []).append({
+            "repeat_id": repeat_id,
+            "seed": seed,
+            "info": info,
+            "samples": samples,
+        })
+        if native:
+            descriptors.setdefault((phase, shown), key[2:])
+
+    for row in data["repeats"]:
+        if (row.get("stages") or {}).get("pipeline") != "succeeded":
+            continue
+        child = root / row["out_dir"]
+        seed = row.get("seed", "")
+        repeat_id = row["repeat_id"]
+        for phase in _PHASES:
+            tables, metas = read_profiles(child / f"{phase}_profiles")
+            for name, table in tables.items():
+                _observe(phase, name, table, metas[name], repeat_id, seed, True)
+            ann_dir = child / f"{phase}_annotations"
+            if ann_dir.is_dir():
+                from samovar.profile_pipeline import stage_tables
+
+                converted, converted_meta = stage_tables(child, phase)
+                for name, table in converted.items():
+                    if name in tables:
+                        continue
+                    _observe(phase, name, table, converted_meta[name], repeat_id, seed, False)
+            _score_rows(result_rows, child, phase, repeat_id, seed)
+        _runtime_rows(result_rows, child, repeat_id, seed)
+        _custom_score_rows(result_rows, child, repeat_id, seed)
+
+    for key, observations in groups.items():
+        phase, run_name = key[0], key[1]
+        kind = key[2]
+        if kind == "abundance":
+            taxa = sorted({
+                taxon
+                for item in observations
+                for values in item["samples"].values()
+                for taxon in values
+                if taxon != "0" and not str(taxon).startswith("unmapped:")
+            })
+        else:
+            taxa = None
+        for item in observations:
+            info = _desc(item["info"])
+            for sample, values in sorted(item["samples"].items()):
+                listed = taxa if taxa is not None else sorted(values)
+                for taxon in listed:
+                    if taxon not in values and taxa is None:
+                        continue
+                    profile_rows.append({
+                        "repeat_id": item["repeat_id"],
+                        "sample_id": sample,
+                        "seed": item["seed"],
+                        "phase": phase,
+                        "run_name": run_name,
+                        "taxon": taxon,
+                        "value": values.get(taxon, 0),
+                        **info,
+                    })
+                if taxa is not None:
+                    for taxon, value in values.items():
+                        if taxon == "0" or str(taxon).startswith("unmapped:"):
+                            profile_rows.append({
+                                "repeat_id": item["repeat_id"],
+                                "sample_id": sample,
+                                "seed": item["seed"],
+                                "phase": phase,
+                                "run_name": run_name,
+                                "taxon": taxon,
+                                "value": value,
+                                **info,
+                            })
+    for item in result_rows:
+        if item.get("_group") == "read" or item.get("kind") or item["metric"] in {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}:
+            continue
+        desc = descriptors.get((item["phase"], item["run_name"]))
+        if desc is None:
+            continue
+        item.update(dict(zip(_DESC, desc)))
+    profile_rows.sort(key=lambda item: (
+        item["repeat_id"], item["phase"], item["run_name"], item["sample_id"], item["taxon"],
+    ))
+    result_rows.sort(key=lambda item: (
+        item["repeat_id"], item["phase"], item["run_name"], item["sample_id"],
+        item["metric"], item["truth_source"], item["reason"],
+    ))
+    summary = root / "summary"
+    profiles = summary / "profiles_long.csv"
+    results = summary / "results_long.csv"
+    statistics = summary / "statistics.csv"
+    _atomic_csv(profiles, profile_rows, _PROFILE_FIELDS)
+    _atomic_csv(results, result_rows, _RESULT_FIELDS)
+    expected = len(data["repeats"])
+    success = sum(
+        1 for row in data["repeats"] if (row.get("stages") or {}).get("pipeline") == "succeeded"
+    )
+    fixed_abundance = any(
+        row.get("abundance") or row.get("generator_namespace") == "reads"
+        for row in data["repeats"]
+    )
+    stat_rows = statistics_rows(
+        profile_rows,
+        result_rows,
+        n_expected=expected,
+        n_success=success,
+        base_seed=int(data.get("base_seed") or 0),
+        input_kind=str((data.get("input") or {}).get("kind") or ""),
+        fixed_abundance=fixed_abundance,
+    )
+    _atomic_csv(statistics, stat_rows, _STAT_FIELDS)
+    _write_summary_figures(summary / "figures", stat_rows)
+    _atomic_json(summary / "tables.json", {
+        "schema": 1,
+        "built_from": "saved child artifacts",
+        "profiles": "profiles_long.csv",
+        "results": "results_long.csv",
+        "statistics": "statistics.csv",
+        "profile_columns": list(_PROFILE_FIELDS),
+        "result_columns": list(_RESULT_FIELDS),
+        "statistic_columns": list(_STAT_FIELDS),
+        "zero_fill": "missing taxon is 0 only inside one complete abundance namespace",
+        "bootstrap_method": _BOOTSTRAP,
+        "bootstrap_seed": summary_seed(int(data.get("base_seed") or 0)),
+        "n_resamples": _N_RESAMPLES,
+        "group_seed": "sha256-v1 of bootstrap_seed, index 1, and the group key",
+        "replicates": "whole repeat_id; a saved profile or supplied FASTQ is not an independent replicate",
+    })
+    return {"profiles": profiles, "results": results, "statistics": statistics}
+
+
+def exec_package(
+    root: Path,
+    *,
+    redo: bool = False,
+    startpoint: Optional[str] = None,
+    endpoint: Optional[str] = None,
+) -> int:
+    """Run each child through the existing exec, one at a time."""
+    import subprocess
+
+    from samovar.paths import repo_root
+
+    root = Path(root)
+    manifest = load_manifest(root)
+    if manifest is None:
+        raise ValueError(f"repeat manifest is missing: {root}")
+    from samovar.seqio import has_r1_reads
+
+    failed = 0
+    env_base = dict(os.environ)
+    exec_script = repo_root() / "bin" / "samovar_exec"
+    for row in manifest["repeats"]:
+        stages = row.get("stages") or {}
+        # state is the pipeline result once that stage exists. A bootstrap
+        # package has no generate stage, so a failed pipeline must stay rerunnable.
+        generate_stage = stages.get("generate")
+        if generate_stage:
+            generate_state = generate_stage
+        elif "pipeline" in stages:
+            generate_state = ""
+        else:
+            generate_state = row.get("state") or ""
+        child = root / row["out_dir"]
+        child_generate = child / ".generate" / "generate.sh"
+        if (
+            child_generate.is_file()
+            and generate_state not in {"generated", "succeeded"}
+            and not has_r1_reads(child / "initial")
+        ):
+            set_repeat_state(root, row["repeat_id"], "running", stage="generate")
+            generated = subprocess.run(
+                ["bash", str(child_generate), "--directory", str(child)],
+                check=False,
+            )
+            if generated.returncode != 0:
+                set_repeat_state(root, row["repeat_id"], "failed", "generate failed", "generate")
+                set_repeat_state(root, row["repeat_id"], "failed", "generate failed", "pipeline")
+                failed += 1
+                continue
+            set_repeat_state(root, row["repeat_id"], "succeeded", stage="generate")
+            generate_state = "succeeded"
+        if generate_state in {"error", "failed"}:
+            set_repeat_state(root, row["repeat_id"], "failed", row.get("error") or "generate failed", "pipeline")
+            failed += 1
+            continue
+        if stages.get("pipeline") == "succeeded" and not redo:
+            continue
+        set_repeat_state(root, row["repeat_id"], "running", stage="pipeline")
+        cmd = ["bash", str(exec_script), "--directory", str(child)]
+        if redo:
+            cmd.append("--redo")
+        if startpoint:
+            cmd.extend(["--startpoint", startpoint])
+        if endpoint:
+            cmd.extend(["--endpoint", endpoint])
+        result = subprocess.run(cmd, check=False, env=env_base)
+        if result.returncode == 0:
+            set_repeat_state(root, row["repeat_id"], "succeeded", stage="pipeline")
+        else:
+            set_repeat_state(
+                root, row["repeat_id"], "failed",
+                f"exec exited {result.returncode}", "pipeline",
+            )
+            failed += 1
+    write_status_summary(root)
+    write_long_tables(root)
+    return 1 if failed else 0
+
+
+def prepare_package(config: Any) -> Optional[Path]:
+    """Return the manifest when this prepare is a package. None keeps the single-run layout."""
+    if getattr(config, "_repeat_child", False):
+        return None
+    root = Path(config.output_dir)
+    if _parent_package(root):
+        raise ValueError(f"{root} is already a repeat directory; refusing to nest another package")
+    repeat = parse_repeat(getattr(config, "repeat", None))
+    existing = load_manifest(root) if root.exists() else None
+    if repeat is None:
+        if existing is None:
+            return None
+        repeat = int(existing["repeat"])
+    elif existing is not None and int(existing["repeat"]) != int(repeat):
+        raise ValueError(
+            "repeat package does not match this request: "
+            f"manifest repeat={existing['repeat']}, request repeat={repeat}"
+        )
+    identity = prepare_identity(config)
+    own_initial = (root / "initial").resolve()
+    generated_here = (
+        existing is not None
+        and (existing.get("input") or {}).get("kind") == "generated"
+        and (
+            identity is None
+            or (
+                getattr(config, "input_dir", None)
+                and Path(config.input_dir).resolve() == own_initial
+                and not getattr(config, "profile_inputs", None)
+            )
+        )
+    )
+    if generated_here or identity is None:
+        if existing is None:
+            raise ValueError(
+                "prepare creates a repeat package only for reads (--input_dir) or "
+                "profiles (profile_inputs); a generated package must come from samovar generate"
+            )
+        kind, ident = existing["input"]["kind"], existing["input"]["identity"]
+        adopt = True
+    else:
+        kind, ident = identity
+        adopt = False
+    if kind == "reads":
+        from samovar.seqio import assert_bootstrap_fastq
+
+        assert_bootstrap_fastq(
+            config.input_dir,
+            getattr(config, "initial_ground_truth_table", None),
+        )
+        kind = "fastq-bootstrap"
+    _supplied_repeat_blocked(kind, int(repeat))
+    return publish_package(
+        root,
+        count=repeat,
+        base_seed=int(getattr(config, "regeneration_seed", None) or 42),
+        kind=kind,
+        identity=ident,
+        settings={"mode": getattr(config, "mode", "full")},
+        adopt_without_identity=adopt,
+    )
+
+
+if __name__ == "__main__":
+    main()

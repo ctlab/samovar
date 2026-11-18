@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Score per-read annotators or saved profiles from a finished run."""
+
+import sys
+
+from samovar.viz_annotation import score_main
+
+
+def main(argv=None) -> int:
+    return score_main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

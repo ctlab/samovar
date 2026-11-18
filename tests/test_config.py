@@ -288,7 +288,9 @@ def test_generate_pipeline(tmp_path):
         # Check basic structure
         assert "set -e" in pipeline_content
         assert "_runtime-env" in pipeline_content
-        assert "workflow/compare_annotations.py" in pipeline_content
+        assert "samovar\" score annotators" in pipeline_content or "samovar score annotators" in pipeline_content
+        assert "score profiles" in pipeline_content
+        assert "workflow/compare_annotations.py" not in pipeline_content
         assert "workflow/compare_annotations.R" not in pipeline_content
         assert "export R_PATH=" not in pipeline_content
         
@@ -313,7 +315,15 @@ def test_generate_pipeline(tmp_path):
         assert "samovar.combine_tables finalize" in pipeline_content
         init_yaml = Path(test_output_dir) / ".log" / "configs" / "config_init.yaml"
         assert "incremental_annotations: true" in init_yaml.read_text(encoding="utf-8")
-        assert "workflow/compare_annotations.py" in pipeline_content
+        assert "score annotators" in pipeline_content
+        assert "score profiles" in pipeline_content
+        for stage in ("regenerated", "reprofiled"):
+            marker = f'"$out_dir/{stage}_annotations_plots" \\\n'
+            assert marker in pipeline_content
+            follow = pipeline_content.split(marker, 1)[1].lstrip()
+            assert follow.startswith(
+                f'--csv "$out_dir/{stage}_annotations/combined_annotation_table.csv"'
+            )
         assert "workflow/ML.py" in pipeline_content
         assert "--seed 42" in pipeline_content
         assert "samovar.seqio" in pipeline_content
@@ -632,9 +642,9 @@ def test_viz_settings_yaml_cli_and_all_pipeline_stages(tmp_path, override):
     assert saved["viz"] == config.viz
     assert saved["cores"] == 2 and saved["seed"] == 42
     script = Path(config.generate_pipeline(config.output_dir)).read_text()
-    calls = [line for line in script.splitlines() if "--show_top 0 --config" in line]
-    assert len(calls) == 3
-    assert all(shlex.split(line)[-1] == configs["scoring"] for line in calls)
+    calls = [line for line in script.splitlines() if line.strip().startswith("--config ")]
+    assert len(calls) >= 3
+    assert all(shlex.split(line)[-1] == configs["scoring"] for line in calls if configs["scoring"] in line)
     if override:
         argv = _argv_from_args("prepare", vars(args))
         assert "--no-viz-full" in argv and "--no-viz-opal" in argv

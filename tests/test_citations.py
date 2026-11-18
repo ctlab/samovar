@@ -108,6 +108,8 @@ def test_write_used_citations_from_prepare_config(tmp_path):
     names = selected_prepare_tools(cfg)
     assert "kraken2" in names
     assert "kaiju" in names
+    assert "k2" not in names
+    assert "kj" not in names
     assert "iss" in names
     assert "snakemake" in names
     cfg.annotators.append(
@@ -131,6 +133,9 @@ def test_write_used_citations_from_prepare_config(tmp_path):
     assert (tmp_path / ".log" / "configs" / "used_citations.bib").is_file()
     assert "Kraken 2" in text or "Wood_" in text
     assert "Kaiju" in text or "Menzel" in text
+    missing = next(line for line in text.splitlines() if line.startswith("% Missing citations:"))
+    assert "k2" not in {part.strip() for part in missing.split(":", 1)[1].split(",")}
+    assert "kj" not in {part.strip() for part in missing.split(":", 1)[1].split(",")}
     assert "InSilicoSeq" in text or "Gourl" in text
     assert "Snakemake" in text or "snakemake" in text.lower() or "Koster" in text
     with pytest.warns(UserWarning, match="No BibTeX citation"):

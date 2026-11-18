@@ -319,3 +319,57 @@ def test_generate_autoimport_flag():
 
     assert parse_args(["--output_dir", "out", "--autoimport", "0"]).autoimport == 0
     assert parse_args(["--output_dir", "out", "--autoimport", "1"]).autoimport == 1
+
+
+def _abundance_args(tmp_path, *extra):
+    from samovar.iss_config import parse_args
+
+    table = tmp_path / "abundance.csv"
+    table.write_text("taxid,N_A\n562,10\n", encoding="utf-8")
+    genomes = tmp_path / "genomes"
+    genomes.mkdir(exist_ok=True)
+    return parse_args([
+        "--output_dir", str(tmp_path / "run"),
+        "--genome_dir", str(genomes),
+        "-i", str(table),
+        *extra,
+    ])
+
+
+def test_generate_from_table_keeps_the_iss_snakefile(tmp_path):
+    result = setup_iss_test(_abundance_args(tmp_path))
+    script = Path(result["pipeline"]).read_text(encoding="utf-8")
+    data = yaml.safe_load(Path(result["config"]).read_text(encoding="utf-8"))
+    assert "workflow/iss_test/Snakefile" in script
+    assert "run_generate_from_yaml" not in script
+    assert data["abundance_table"].endswith("abundance.csv")
+    assert data["reads_generator"] == "iss"
+    assert "table_reads_generator" not in data
+
+
+def test_generate_from_table_uses_the_reads_contract(tmp_path):
+    result = setup_iss_test(_abundance_args(tmp_path, "--reads-generator", "art"))
+    script = Path(result["pipeline"]).read_text(encoding="utf-8")
+    data = yaml.safe_load(Path(result["config"]).read_text(encoding="utf-8"))
+    assert "run_generate_from_yaml" in script
+    assert "iss_test/Snakefile" not in script
+    assert data["reads_generator"] == "art"
+    assert data["abundance_table"].endswith("abundance.csv")
+
+
+def test_table_reads_generator_is_recorded_and_requires_the_table(tmp_path):
+    result = setup_iss_test(_abundance_args(tmp_path, "--table-reads-generator", "direct"))
+    script = Path(result["pipeline"]).read_text(encoding="utf-8")
+    data = yaml.safe_load(Path(result["config"]).read_text(encoding="utf-8"))
+    assert data["table_reads_generator"] == "direct"
+    assert "apply_table_regenerator" in script
+    assert "workflow/iss_test/Snakefile" in script
+    from samovar.iss_config import parse_args
+
+    bare = parse_args([
+        "--output_dir", str(tmp_path / "out"),
+        "--genome_dir", str(tmp_path / "genomes"),
+        "--table-reads-generator", "bootstrap",
+    ])
+    with pytest.raises(SystemExit, match="requires -i"):
+        setup_iss_test(bare)
