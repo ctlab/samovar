@@ -6,6 +6,11 @@ Below are listed some guidelines. Please, use pull requests & github issues for 
 
 Keep changes modular, testable, and consistent with the existing pipeline architecture.
 
+Read [CONSTITUTION.md](CONSTITUTION.md) for the target pipeline behaviour,
+data and model boundaries. It distinguishes agreed requirements from
+capabilities that are already implemented; complete the relevant contract
+design gates before declaring its implementation complete.
+
 ## 1. Contracts and modularity
 
 If a pipeline stage is defined by a clear contract and is intended to be interchangeable:
