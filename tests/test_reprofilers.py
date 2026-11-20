@@ -600,3 +600,79 @@ def test_rfc2_abstains_saves_the_rule_and_is_stable_across_chunks(tmp_path):
     assert int(again["taxid_SAMOVAR"].iloc[0]) == 0
     assert loaded.samovar_min_confidence_ == 1.1
     assert loaded.samovar_class_counts_[562] == model.samovar_class_counts_[562]
+
+
+def test_failed_reprofile_does_not_copy_initial_truth(tmp_path, monkeypatch):
+    from samovar.reprofilers import ReprofileResult, run_builtin_reprofiler
+
+    per_sample = tmp_path / "per_sample"
+    per_sample.mkdir()
+    original = pd.DataFrame({"seq": ["r1", "r2"], "taxID_tool_0": [0, 0], "true": [562, 9606]})
+    original.to_csv(per_sample / "A.annotation.csv", index=False)
+    combined = tmp_path / "combined"
+    combined.mkdir()
+    original.assign(sample="A").to_csv(combined / "combined_annotation_table.csv", index=False)
+    empty = tmp_path / "empty.csv"
+    pd.DataFrame({"seq": [], "taxID_tool_0": [], "true": []}).to_csv(empty, index=False)
+
+    def assert_refused(name, regenerated, initial_dir, dest):
+        with pytest.raises(EmptyReprofileError, match="taxid_SAMOVAR"):
+            run_builtin_reprofiler(
+                name,
+                regenerated,
+                {},
+                None,
+                {"initial_dir": str(initial_dir), "output_dir": str(dest)},
+            )
+        assert not dest.exists() or list(dest.rglob("trained_model.joblib")) == []
+        assert list(dest.glob("*reprofiled*")) == []
+        assert not list(initial_dir.glob("*SAMOVAR*"))
+
+    assert_refused("random_forest", pd.DataFrame(), per_sample, tmp_path / "missing")
+    assert_refused("random_forest", pd.DataFrame({"taxID_tool_0": [1, 2]}), per_sample, tmp_path / "no_true")
+    assert_refused("linear", pd.DataFrame({"taxID_tool_0": [1], "true": [None]}), combined, tmp_path / "linear")
+    assert_refused(
+        "random_forest",
+        pd.DataFrame({"taxID_tool_0": [1, 2], "true": ["nope", "also"]}),
+        combined,
+        tmp_path / "invalid",
+    )
+    assert pd.read_csv(per_sample / "A.annotation.csv").to_dict("list") == original.to_dict("list")
+
+    cli = tmp_path / "cli"
+    assert main([
+        "--reprofiler", "random_forest",
+        "--initial", str(per_sample),
+        "--regenerated", str(empty),
+        "--output_dir", str(cli),
+    ]) == 1
+    assert list(cli.glob("*reprofiled*")) == []
+    assert list(cli.glob("trained_model.joblib")) == []
+
+    def fail_training(*args, **kwargs):
+        raise ValueError("fit failed")
+
+    monkeypatch.setattr("samovar.reprofilers.train_models", fail_training)
+    trained = tmp_path / "trained"
+    with pytest.raises(EmptyReprofileError, match="fit failed"):
+        run_builtin_reprofiler(
+            "random_forest",
+            pd.DataFrame({"taxID_tool_0": [1, 2], "true": [562, 9606]}),
+            {},
+            None,
+            {"output_dir": str(trained)},
+        )
+    assert list(trained.glob("trained_model.joblib")) == []
+
+    monkeypatch.setattr(
+        "samovar.reprofilers.run_builtin_reprofiler",
+        lambda *args, **kwargs: ReprofileResult(tables={}),
+    )
+    with pytest.raises(EmptyReprofileError, match="returned no tables"):
+        run_reprofiler(
+            "random_forest",
+            regenerated_path=empty,
+            initial_dir=per_sample,
+            output_dir=tmp_path / "empty_builtin",
+        )
+    assert list((tmp_path / "empty_builtin").glob("*")) == []

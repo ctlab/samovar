@@ -213,8 +213,8 @@ class TestReprofiling(unittest.TestCase):
         self.assertIsNotNone(best)
         self.assertTrue(metrics)
 
-    def test_passthrough_reprofile_tables(self):
-        from samovar.reprofiling import passthrough_reprofile_tables
+    def test_missing_training_truth_does_not_copy_true(self):
+        from samovar.reprofilers import EmptyReprofileError, run_builtin_reprofiler
         import tempfile
         from pathlib import Path
 
@@ -222,13 +222,21 @@ class TestReprofiling(unittest.TestCase):
             src = Path(raw) / "in"
             dst = Path(raw) / "out"
             src.mkdir()
-            pd.DataFrame({"taxid_a": [1, 2], "true": [562, 562]}).to_csv(
-                src / "sample.annotation.csv", index=False
+            original = pd.DataFrame(
+                {"seq": ["r1", "r2"], "taxID_tool_0": [0, 0], "true": [562, 9606]}
             )
-            n = passthrough_reprofile_tables(str(src), str(dst))
-            self.assertEqual(n, 1)
-            out = pd.read_csv(dst / "sample_reprofiled.csv")
-            self.assertEqual(list(out["taxid_SAMOVAR"]), [562, 562])
+            original.to_csv(src / "A.annotation.csv", index=False)
+            with self.assertRaises(EmptyReprofileError):
+                run_builtin_reprofiler(
+                    "random_forest",
+                    pd.DataFrame(),
+                    {},
+                    None,
+                    {"initial_dir": str(src), "output_dir": str(dst)},
+                )
+            self.assertEqual(pd.read_csv(src / "A.annotation.csv").to_dict("list"), original.to_dict("list"))
+            self.assertFalse(dst.exists())
+            self.assertFalse(any(src.rglob("*SAMOVAR*")))
 
     @pytest.mark.optional
     def test_fit_uses_prepare_cores(self):

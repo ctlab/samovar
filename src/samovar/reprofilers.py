@@ -36,7 +36,6 @@ from samovar.reprofiling import (
     fit_logistic,
     load_read_features,
     merge_read_features,
-    passthrough_reprofile_tables,
     plot_roc_curves,
     predict_taxid,
     preprocess_data,
@@ -87,7 +86,7 @@ class MissingReprofilerError(ValueError):
 
 
 class EmptyReprofileError(ValueError):
-    """A custom reprofiler returned no tables. The true column is not copied."""
+    """No trained reprofile. The true column is not copied into taxid_SAMOVAR."""
 
 
 @dataclass
@@ -611,10 +610,13 @@ def reprofile_linear(
     seed = int(cfg.get("seed") or 42)
     features_df = cfg.get("features_df")
     df = preprocess_data(regenerated)
+    if df.empty or "true" not in df.columns:
+        raise EmptyReprofileError(
+            "Reprofiler 'linear' has no usable training truth. "
+            "Refusing to copy the true column into taxid_SAMOVAR."
+        )
     output_dir = Path(cfg.get("output_dir") or ".")
     output_dir.mkdir(parents=True, exist_ok=True)
-    if df.empty or "true" not in df.columns:
-        return ReprofileResult(tables={})
     feature_cols = sorted([c for c in df.columns if c not in {"seq", "true"}])
     kwargs: Dict[str, Any] = {
         "C": flags["C"],
@@ -659,23 +661,20 @@ def run_builtin_reprofiler(
     }:
         return reprofile_linear(regenerated, ground_truth, initial, cfg)
     _ = ground_truth
-    features_df = cfg.get("features_df")
-    validation = merge_read_features(regenerated.copy(), features_df)
+    validation = merge_read_features(regenerated.copy(), cfg.get("features_df"))
     if "seq" in validation.columns:
         validation = validation.drop(columns=["seq"])
     if "true" in validation.columns:
         validation = validation.dropna(subset=["true"])
+    canon = str(name or "").lower().replace("-", "_")
+    if validation.empty or "true" not in validation.columns:
+        raise EmptyReprofileError(
+            f"Reprofiler {canon!r} has no usable training truth. "
+            "Refusing to copy the true column into taxid_SAMOVAR."
+        )
     output_dir = Path(cfg.get("output_dir") or ".")
     output_dir.mkdir(parents=True, exist_ok=True)
-    if validation.empty or "true" not in validation.columns:
-        passthrough_reprofile_tables(
-            str(cfg.get("initial_dir") or output_dir),
-            str(output_dir),
-            features_df=features_df,
-        )
-        return ReprofileResult(tables=load_csv_tables(output_dir, skip_prefixes=()))
     seed = int(cfg.get("seed") or 42)
-    canon = str(name or "").lower().replace("-", "_")
     gpu = use_gpu(config=cfg)
     if canon == "rfc2" and not cfg.get("no_gpu"):
         reason = gpu_training_support("RandomForest")
@@ -696,13 +695,11 @@ def run_builtin_reprofiler(
             abstain=canon == "rfc2",
             n_estimators=int(cfg.get("n_estimators") or (RFC2_N_ESTIMATORS if canon == "rfc2" else 100)),
         )
-    except ValueError:
-        passthrough_reprofile_tables(
-            str(cfg.get("initial_dir") or output_dir),
-            str(output_dir),
-            features_df=features_df,
-        )
-        return ReprofileResult(tables=load_csv_tables(output_dir, skip_prefixes=()))
+    except ValueError as exc:
+        raise EmptyReprofileError(
+            f"Reprofiler {canon!r} training failed: {exc}. "
+            "Refusing to copy the true column into taxid_SAMOVAR."
+        ) from exc
     tables, wrote = _emit_profiles(initial, best, cfg)
     processed = preprocess_for_model(validation, best)
     try:
@@ -813,20 +810,10 @@ def run_reprofiler(
         result = _run_custom(canon, regen, truth, init, cfg)
     wrote = bool((result.extras or {}).get("wrote_tables"))
     if not result.tables and not wrote:
-        if kind != "builtin":
-            raise EmptyReprofileError(
-                f"Reprofiler {canon!r} returned no tables. "
-                "Refusing to copy the true column into taxid_SAMOVAR."
-            )
-        src = initial_dir or cfg.get("initial_dir")
-        if src:
-            passthrough_reprofile_tables(
-                str(src),
-                str(output_dir),
-                features_df=cfg.get("features_df"),
-            )
-        result.tables = load_csv_tables(output_dir, skip_prefixes=())
-        return result
+        raise EmptyReprofileError(
+            f"Reprofiler {canon!r} returned no tables. "
+            "Refusing to copy the true column into taxid_SAMOVAR."
+        )
     if result.tables:
         write_reprofile_result(result, output_dir)
     elif result.model is not None:

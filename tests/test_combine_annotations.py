@@ -813,26 +813,32 @@ def test_append_one_sample_is_serialized(tmp_path, combiner):
     _same_table(ann / "s1.annotation.csv", batch / "s1.annotation.csv")
 
 
-def test_reprofile_passthrough_splits_combined_table(tmp_path):
-    from samovar.reprofiling import passthrough_reprofile_tables
+def test_combined_initial_without_a_model_is_not_copied(tmp_path):
+    from samovar.reprofilers import EmptyReprofileError, run_builtin_reprofiler
 
     src = tmp_path / "ann"
     src.mkdir()
-    pd.DataFrame(
+    original = pd.DataFrame(
         {
             "seq": ["a", "b"],
             "taxID_kaiju_0": [1, 2],
             "true": [1, 2],
             "sample": ["s1", "s2"],
         }
-    ).to_csv(src / "combined_annotation_table.csv", index=False)
+    )
+    original.to_csv(src / "combined_annotation_table.csv", index=False)
     dest = tmp_path / "out"
-    written = passthrough_reprofile_tables(str(src), str(dest))
-    assert written == 2
-    s1 = pd.read_csv(dest / "s1_reprofiled.csv")
-    assert "sample" not in s1.columns
-    assert list(s1["seq"]) == ["a"]
-    assert int(s1.loc[0, "taxid_SAMOVAR"]) == 1
+    with pytest.raises(EmptyReprofileError, match="taxid_SAMOVAR"):
+        run_builtin_reprofiler(
+            "random_forest",
+            pd.DataFrame(),
+            {},
+            None,
+            {"initial_dir": str(src), "output_dir": str(dest)},
+        )
+    assert pd.read_csv(src / "combined_annotation_table.csv").to_dict("list") == original.to_dict("list")
+    assert not dest.exists()
+    assert list(src.glob("*reprofiled*")) == []
 
 
 def test_empty_annotator_output_skips_and_finalize_still_writes(tmp_path):
