@@ -88,17 +88,29 @@ def test_paths_produced_before_skips_later_fastq():
     rels = paths_produced_before("regenerate_tables")
     assert "initial_abundance" in rels
     assert "initial" in rels
+    assert "initial_profiles" in rels
     assert "regenerated" not in rels
+    assert "regenerated_profiles" not in rels
     assert not any(r.startswith("regenerated") for r in rels)
+    later = paths_produced_before("reprofile")
+    assert "initial_profiles" in later
+    assert "regenerated_profiles" in later
+    assert "reprofiled_profiles" not in later
 
 
 def test_copy_run_until_keeps_early_drops_later(tmp_path):
     src = _seed_run(tmp_path / "src")
+    (src / "initial_profiles").mkdir()
+    (src / "initial_profiles" / "sylph.csv").write_text("taxid,N_A\n562,1\n")
+    (src / "regenerated_profiles").mkdir()
+    (src / "regenerated_profiles" / "sylph.csv").write_text("taxid,N_A\n562,1\n")
     dest = tmp_path / "branch"
     assert branch_main(
         ["--start-point", "regenerate_tables", str(src), str(dest)]
     ) == 0
     assert (dest / "initial_abundance" / "dummy.csv").is_file()
+    assert (dest / "initial_profiles" / "sylph.csv").is_file()
+    assert not (dest / "regenerated_profiles").exists()
     assert (dest / "initial" / "1_full_R1.fastq").is_file()
     assert not (dest / "regenerated" / "1_full_dummy_R1.fastq").exists()
     assert not (dest / "regenerated" / ".regenerated_abundance" / "dummy.csv").exists()
@@ -108,6 +120,20 @@ def test_copy_run_until_keeps_early_drops_later(tmp_path):
     meta = yaml.safe_load((dest / ".log" / "branch.yaml").read_text())
     assert meta["startpoint"] == "regenerate_tables"
     assert "dummy" in meta["annotators"]
+
+
+def test_missing_typed_profile_is_an_error(tmp_path):
+    from samovar.exec_control import startpoint_gaps
+    from samovar.profile_pipeline import correct
+
+    src = _seed_run(tmp_path / "src")
+    cfg = src / ".log" / "configs"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "config_scoring.yaml").write_text("profile_inputs:\n  sylph: {}\n")
+    with pytest.raises(ValueError, match="initial_profiles"):
+        correct(src, {})
+    gaps = startpoint_gaps(src, "reprofile")
+    assert any("regenerated_profiles" in gap for gap in gaps)
 
 
 def test_branch_prepare_merges_hydra_rejects_new_annotator(tmp_path):

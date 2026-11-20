@@ -741,6 +741,11 @@ def startpoint_gaps(
                 "regenerated combined table "
                 "(outdir/regenerated_annotations/combined_annotation_table.csv)"
             )
+        if expects_profile_artifacts(root):
+            from samovar.profiles import read_profiles
+
+            if not read_profiles(root / "regenerated_profiles")[0]:
+                gaps.append("typed profiles under outdir/regenerated_profiles")
         return gaps
     if start_s == "viz_reprofiled":
         if not _has_csv_tables(root / "reprofiled_annotations"):

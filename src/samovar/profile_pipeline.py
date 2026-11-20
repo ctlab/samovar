@@ -459,6 +459,12 @@ def correct(root, config):
     config = {**config.get("profile_settings", {}), **config}
     initial, _ = read_profiles(root / "initial_profiles")
     if not initial:
+        from samovar.exec_control import expects_profile_artifacts
+
+        if expects_profile_artifacts(root):
+            raise ValueError(
+                "Profile correction needs initial_profiles; the directory is missing or empty"
+            )
         return
     method = config.get("profile_corrector", "profile_ratio")
     if method == "none":
