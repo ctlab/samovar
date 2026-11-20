@@ -434,6 +434,65 @@ def fastq_record_id(header: str) -> str:
     return strip_mate_suffix(token)
 
 
+def normalize_single_end_read_ids(directory: PathLike) -> List[Path]:
+    """Strip one shared trailing ``/1`` or ``/2`` from single-end working copies.
+
+    A file with an R2 mate is a pair and is left unchanged. A file that contains
+    both ``/1`` and ``/2`` holds different reads and is left unchanged. ``r/10``
+    is not a mate mark. A symlink is replaced by a new file; its target is not
+    written. The ``taxid:`` token stays in the id.
+    """
+    directory = as_path(directory)
+    if not directory.is_dir():
+        return []
+    written: List[Path] = []
+    for path in list_r1_files(directory):
+        sample = sample_name_from_r1(path)
+        if find_fastq_mate(directory, sample, "R2") is not None:
+            continue
+        if _rewrite_uniform_mate_suffix(path):
+            written.append(path)
+    return written
+
+
+def _record_id(header: str) -> str:
+    token = header[1:] if header.startswith("@") else header
+    return token.split()[0].strip()
+
+
+def _header_without_mate_suffix(header: str) -> str:
+    newline = "\n" if header.endswith("\n") else ""
+    raw = header[:-1] if newline else header
+    prefix = "@" if raw.startswith("@") else ""
+    body = raw[1:] if prefix else raw
+    token, sep, rest = body.partition(" ")
+    return f"{prefix}{strip_mate_suffix(token)}{sep}{rest}{newline}"
+
+
+def _rewrite_uniform_mate_suffix(path: Path) -> bool:
+    suffix = ""
+    stripped = []
+    for header, _, _, _ in iter_fastq_records(path):
+        token = _record_id(header)
+        mark = token[-2:] if len(token) >= 2 and token[-2] == "/" and token[-1] in "12" else ""
+        if mark and suffix and mark != suffix:
+            return False
+        if mark:
+            suffix = mark
+        stripped.append(strip_mate_suffix(token))
+    if not suffix or len(set(stripped)) != len(stripped):
+        return False
+    temp = path.with_name(path.name + ".se-id")
+    with open_text(temp, "wt") as handle:
+        for header, seq, plus, qual in iter_fastq_records(path):
+            handle.write(_header_without_mate_suffix(header))
+            handle.write(seq)
+            handle.write(plus)
+            handle.write(qual)
+    temp.replace(path)
+    return True
+
+
 def iter_fastq_records(path: PathLike) -> Iterator[Tuple[str, str, str, str]]:
     """Yield ``(header, seq, plus, qual)`` lines, including their newlines.
 

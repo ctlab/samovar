@@ -2185,6 +2185,7 @@ if [ -n "$SAMOVAR_INPUT_DIR" ] && [ -d "$SAMOVAR_INPUT_DIR" ]; then
     fi
 fi
 {self._deinterleave_line()}
+"$PYTHON_PATH" -c 'import sys; from samovar.seqio import normalize_single_end_read_ids; normalize_single_end_read_ids(sys.argv[1])' "$out_dir/initial"
 "$PYTHON_PATH" -c 'import sys; from samovar.seqio import validate_fastq_directory; validate_fastq_directory(sys.argv[1])' "$out_dir/initial"
 """,
         )

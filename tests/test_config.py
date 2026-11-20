@@ -328,6 +328,7 @@ def test_generate_pipeline(tmp_path):
         assert "--seed 42" in pipeline_content
         assert "samovar.seqio" in pipeline_content
         assert "link_or_copy_reads" in pipeline_content
+        assert "normalize_single_end_read_ids" in pipeline_content
         assert "validate_fastq_directory" in pipeline_content
         assert "cp data/test_genomes" not in pipeline_content
         assert "samovar.genome_cache seed" in pipeline_content

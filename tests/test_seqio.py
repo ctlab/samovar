@@ -298,3 +298,34 @@ def test_list_fasta_includes_gzip(tmp_path):
     (tmp_path / "notes.txt").write_text("nope")
     files = list_fasta_files(tmp_path, nucleotide=True, protein=False)
     assert [p.name for p in files] == ["1.fna.gz"]
+
+
+def test_single_end_uniform_mate_suffix_is_stripped(tmp_path):
+    from samovar.parse_annotators import extract_true_taxid
+    from samovar.seqio import normalize_single_end_read_ids
+
+    source = tmp_path / "origin.fastq"
+    source.write_text("@taxid:2886930_0_1/1\nAC\n+\nII\n@r/10\nGG\n+\nII\n")
+    staged = tmp_path / "initial"
+    staged.mkdir()
+    link = staged / "A.fastq"
+    link.symlink_to(source)
+    (staged / "pair_R1.fastq").write_text("@mate/1\nAA\n+\nI\n")
+    (staged / "pair_R2.fastq").write_text("@mate/2\nTT\n+\nI\n")
+    mixed = staged / "both.fastq"
+    mixed.write_text("@a/1\nA\n+\nI\n@a/2\nT\n+\nI\n")
+    clash = staged / "clash.fastq"
+    clash.write_text("@same/1\nA\n+\nI\n@same\nT\n+\nI\n")
+
+    written = normalize_single_end_read_ids(staged)
+    assert [path.name for path in written] == ["A.fastq"]
+    assert link.read_text().splitlines()[0] == "@taxid:2886930_0_1"
+    assert "r/10" in link.read_text()
+    assert not link.is_symlink()
+    assert source.read_text().splitlines()[0] == "@taxid:2886930_0_1/1"
+    assert extract_true_taxid(link.read_text().splitlines()[0]) == "2886930"
+    assert (staged / "pair_R1.fastq").read_text().startswith("@mate/1")
+    assert (staged / "pair_R2.fastq").read_text().startswith("@mate/2")
+    assert mixed.read_text().splitlines()[0] == "@a/1"
+    assert clash.read_text().splitlines()[0] == "@same/1"
+    assert normalize_single_end_read_ids(staged) == []
