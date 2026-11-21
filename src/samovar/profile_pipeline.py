@@ -327,9 +327,13 @@ def align_truth(pred, pm, truth, tm, root, config):
         truth[cols] = truth[cols].div(truth[cols].sum().replace(0, float("nan"))).fillna(0)
         tm = {**tm, "unit": "fraction", "normalization": "classified", "normalization_conversion": "all to classified"}
     if tm["kind"] != "presence" and tm["basis"] != pm["basis"]:
-        tids = set(truth.loc[truth[n_sample_columns(truth)].sum(axis=1) > 0, "taxid"]) - {"0"}
-        lengths = reference_lengths(tids, Path(root) / "genomes", config)
-        truth, tm = change_basis(truth[truth.taxid != "0"], tm, pm["basis"], lengths)
+        tids = set(truth.loc[truth[n_sample_columns(truth)].sum(axis=1) > 0, "taxid"].astype(str)) - {"0"}
+        from samovar.profiles import pinned_reference_taxids
+
+        pinned = pinned_reference_taxids(config, Path(root) / "genomes")
+        wanted = {tax for tax in tids if str(tax).split(".")[0] in pinned}
+        lengths = reference_lengths(wanted, Path(root) / "genomes", config) if wanted else {}
+        truth, tm = change_basis(truth[truth.taxid != "0"], tm, pm["basis"], lengths, require_all=False)
     return pred, pm, truth, tm
 
 

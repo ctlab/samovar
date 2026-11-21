@@ -394,6 +394,33 @@ def test_explicit_genome_choice_sets_basis_conversion(tmp_path):
         reference_lengths({"562"}, tmp_path / "empty")
 
 
+def test_profile_score_keeps_taxa_without_a_selected_genome(tmp_path):
+    from samovar.profile_pipeline import align_truth
+
+    genome = tmp_path / "562.fna"
+    _write_fasta(genome, 1000)
+    pred = pd.DataFrame({"taxid": ["562", "561"], "N_A": [80.0, 20.0]})
+    truth = pd.DataFrame({"taxid": ["562", "561", "564"], "N_A": [0.7, 0.2, 0.1]})
+    pred_meta = metadata(dict(unit="percent", basis="organisms", taxonomy="ncbi", rank="species", normalization="classified"))
+    truth_meta = metadata(dict(unit="fraction", basis="reads", taxonomy="ncbi", rank="species", normalization="classified"))
+    converted_pred, pm, converted_truth, tm = align_truth(
+        pred,
+        pred_meta,
+        truth,
+        truth_meta,
+        tmp_path / "run",
+        {"profile_references": {"562": str(genome)}},
+    )
+    assert set(converted_truth.taxid.astype(str)) == {"562", "561", "564"}
+    kept = converted_truth.set_index("taxid")
+    assert kept.loc["561", "N_A"] == pytest.approx(0.2)
+    assert kept.loc["564", "N_A"] == pytest.approx(0.1)
+    assert set(tm["unweighted_taxids"]) == {"561", "564"}
+    scored = profile_scores(converted_pred, converted_truth, pm, tm)
+    assert int(scored.tp.iloc[0]) == 2
+    assert int(scored.fn.iloc[0]) == 1
+
+
 def test_incompatible_taxonomy_and_unassigned_length_are_explicit_errors():
     with pytest.raises(ValueError, match="taxonomy"):
         profile_scores(table([1, 2]), table([1, 2]), metadata(), metadata({"taxonomy": "gtdb"}))

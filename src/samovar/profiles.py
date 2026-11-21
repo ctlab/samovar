@@ -304,7 +304,7 @@ def fractions(table, info):
     return table
 
 
-def change_basis(table, info, basis, lengths):
+def change_basis(table, info, basis, lengths=None, *, require_all=True):
     table = fractions(table, info)
     result = {**metadata(info), "unit": "fraction"}
     if result["basis"] != basis:
@@ -314,18 +314,30 @@ def change_basis(table, info, basis, lengths):
             if ((mass > 0) & ~np.isclose(mass, 1)).any() or (unassigned > 0).any():
                 raise ValueError("Basis conversion cannot resolve genome length for unassigned mass; use a classified-normalized profile")
             table = table[table.taxid != "0"].copy()
-        missing = set(table.loc[table[n_sample_columns(table)].sum(axis=1) > 0, "taxid"]) - set(lengths)
-        if missing:
-            raise ValueError(f"Missing selected reference lengths for profile taxa: {sorted(missing)}")
-        weights = table["taxid"].map(lengths).fillna(1).astype(float)
-        if (weights <= 0).any():
-            raise ValueError("Selected reference genome length must be positive")
         cols = n_sample_columns(table)
-        table[cols] = table[cols].mul(weights if basis == "reads" else 1 / weights, axis=0)
-        table[cols] = table[cols].div(table[cols].sum().replace(0, np.nan)).fillna(0)
+        length_keys = {_reference_key(key): value for key, value in (lengths or {}).items()}
+        positive = set(table.loc[table[cols].sum(axis=1) > 0, "taxid"].map(_reference_key))
+        missing = positive - set(length_keys)
+        if missing and require_all:
+            raise ValueError(f"Missing selected reference lengths for profile taxa: {sorted(missing)}")
+        known = table["taxid"].map(_reference_key).isin(length_keys) & (table[cols].sum(axis=1) > 0)
+        if known.any():
+            weights = table.loc[known, "taxid"].map(lambda tax: float(length_keys[_reference_key(tax)]))
+            if (weights <= 0).any():
+                raise ValueError("Selected reference genome length must be positive")
+            factor = weights.to_numpy() if basis == "reads" else 1 / weights.to_numpy()
+            scaled = table.loc[known, cols].mul(factor, axis=0)
+            kept_mass = table.loc[known, cols].sum()
+            scaled = scaled.div(scaled.sum().replace(0, np.nan)).mul(kept_mass).fillna(0)
+            table.loc[known, cols] = scaled.to_numpy()
         result["basis"] = basis
-        result["reference_lengths"] = dict(lengths)
+        result["reference_lengths"] = {
+            key: length_keys[key] for key in length_keys if key in positive
+        }
         result["approximation"] = "selected-reference genome-length weighting"
+        if missing and not require_all:
+            result["unweighted_taxids"] = sorted(missing)
+            result["approximation"] += "; taxa without a selected genome keep their fraction"
     return table, result
 
 
