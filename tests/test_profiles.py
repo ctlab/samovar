@@ -1041,3 +1041,29 @@ def test_profile_comparison_includes_annotators_on_each_stage(tmp_path, monkeypa
     figures = pkg / "summary" / "figures"
     assert (figures / "annotators.png").is_file()
     assert (figures / "profilers.png").is_file()
+
+
+def test_materialize_keeps_selected_genome_taxid(tmp_path):
+    from samovar.profile_pipeline import materialize
+    from samovar.profiles import write_profiles
+
+    genome = tmp_path / "genomes" / "2886930.fna"
+    genome.parent.mkdir()
+    genome.write_text(">phix\nACGTACGTAC\n")
+    table = pd.DataFrame({"taxid": ["2886930"], "N_A": [100.0]})
+    info = {
+        "kind": "abundance",
+        "unit": "percent",
+        "basis": "organisms",
+        "taxonomy": "ncbi",
+        "rank": "taxid",
+        "normalization": "classified",
+    }
+    write_profiles(tmp_path / "initial_profiles", {"sylph": table}, {"sylph": info})
+    materialize(
+        tmp_path,
+        {"profile_references": {"2886930": str(genome)}, "N_reads": 20},
+    )
+    written = pd.read_csv(tmp_path / "initial_abundance" / "sylph.csv")
+    assert set(written["taxid"].astype(str)) == {"2886930"}
+    assert int(written["N_A"].sum()) == 20

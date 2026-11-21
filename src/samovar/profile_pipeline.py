@@ -12,7 +12,7 @@ import pandas as pd
 
 from samovar.abundance import n_sample_columns
 from samovar.profiles import (at_rank, change_basis, load_profile, metadata, read_counts,
-                              read_profiles, reference_lengths, write_profiles)
+                              read_profiles, reference_lengths, retain_pinned_genome_rows, write_profiles)
 
 
 def collect(root, stage, config):
@@ -437,7 +437,9 @@ def materialize(root, config):
             raise ValueError("Presence input cannot define a quantitative regeneration community")
         if info["taxonomy"] != "ncbi":
             raise ValueError("Profile regeneration needs an explicit mapping to NCBI reference taxids")
-        table, info = at_rank(table, info, "species", config.get("taxdump"))
+        table, info = retain_pinned_genome_rows(
+            table, info, config.get("taxdump"), config, root / "genomes"
+        )
         table = table[table.taxid != "0"].copy()
         tids = set(table.loc[table[n_sample_columns(table)].sum(axis=1) > 0, "taxid"])
         lengths = reference_lengths(tids, root / "genomes", config) if info["basis"] != "reads" else {}

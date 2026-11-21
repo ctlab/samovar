@@ -407,6 +407,48 @@ def _selected_reference_paths(taxids, genome_dir, saved):
     return paths
 
 
+def pinned_reference_taxids(config, genome_dir=None):
+    """Taxids of genomes already selected for this run.
+
+    ``profile_references`` and ``genomes/.profile_references.json`` are the
+    canonical selection. A species id is not added for them.
+    """
+    ids = set()
+    refs = (config or {}).get("profile_references") or {}
+    if isinstance(refs, dict):
+        ids.update(_reference_key(key) for key in refs)
+    if genome_dir is not None:
+        manifest = Path(genome_dir) / ".profile_references.json"
+        if manifest.is_file():
+            saved = json.loads(manifest.read_text())
+            if isinstance(saved, dict):
+                ids.update(_reference_key(key) for key in saved)
+    return ids
+
+
+def retain_pinned_genome_rows(table, info, taxdump, config, genome_dir):
+    """Roll unpinned taxa to species. A selected genome taxid stays itself.
+
+    Species projection is for scoring. Regeneration lengths use the FASTA
+    ``generate`` selected, not that genome's species parent.
+    """
+    pinned = pinned_reference_taxids(config, genome_dir)
+    if not pinned:
+        return at_rank(table, info, "species", taxdump)
+    keys = table["taxid"].map(_reference_key)
+    kept = table[keys.isin(pinned)].copy()
+    rest = table[~keys.isin(pinned)].copy()
+    if rest.empty:
+        return kept, info
+    rest, rolled = at_rank(rest, info, "species", taxdump)
+    if kept.empty:
+        return rest, rolled
+    cols = n_sample_columns(table)
+    merged = pd.concat([kept, rest], ignore_index=True)
+    merged = merged.groupby("taxid", as_index=False)[cols].sum()
+    return merged, info
+
+
 def reference_lengths(taxids, genome_dir, config=None, *, selected_paths=None):
     """Lengths are the base counts of the selected reference FASTA files.
 
