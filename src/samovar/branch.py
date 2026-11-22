@@ -190,7 +190,7 @@ def copy_run_until(
     dst.mkdir(parents=True, exist_ok=True)
 
     copied: List[str] = []
-    always = (".hydra", ".generate", ".database", "reads", "MAG")
+    always = (".hydra", ".generate", ".database", "reads", "MAG", "kmer_cluster_models")
     for rel in always:
         piece = src / rel
         if piece.exists():

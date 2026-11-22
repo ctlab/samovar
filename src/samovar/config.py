@@ -258,6 +258,7 @@ _IN_TREE_ANNOTATOR_MODULES = {
     "kmer": "samovar.kmer2",
     "kmer2": "samovar.kmer2",
     "kmer_encoder": "samovar.kmer_encoder",
+    "kmer_cluster": "samovar.kmer_cluster",
     "length": "samovar.length",
     "constant_taxid": "samovar.baselines.constant_taxid",
     "constant9606": "samovar.baselines.constant_taxid",
@@ -1013,6 +1014,12 @@ class PipelineConfig:
                     ):
                         type_name = "kmer_encoder"
                         cmd = f"{shlex.quote(python_path())} -m samovar.kmer_encoder"
+                    if (run_name.lower().replace("-", "_") == "kmer_cluster"
+                        or type_name.lower().replace("-", "_") == "kmer_cluster"
+                        or "samovar.kmer_cluster" in cmd_join
+                        or cmd == str(Path(__file__).with_name("kmer_cluster.py"))):
+                        type_name = "kmer_cluster"
+                        cmd = f"{shlex.quote(python_path())} -m samovar.kmer_cluster"
                     # Konstantaza CLI: --custom-test "metauto /path/to/db"
                     if run_name.lower() in {"custom", "custom-test", "custom_test"}:
                         run_name = type_name

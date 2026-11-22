@@ -278,6 +278,53 @@ from samovar.assembly_profiling import parse_slot_extra
 
 MAG_ROOT = str(config.get("mag_catalog_root") or Path(config["output_dir"]).parent / "MAG")
 MAG_PHASE = str(config.get("mag_catalog_phase") or "initial")
+# One model per configured run is fitted before any per-sample extraction.
+CLUSTER_ROOT = str(Path(MAG_ROOT).parent / "kmer_cluster_models")
+CLUSTER_RUNS = {name for name, ann in ANNOTATORS.items()
+                if type(ann).__name__ == "KmerClusterAnnotator"}
+CLUSTER_EXTERNAL = {name for name in CLUSTER_RUNS
+                    if str(ANNOTATORS[name].db_path or "").strip() not in ("", ".")}
+for _name in CLUSTER_RUNS - CLUSTER_EXTERNAL:
+    if Path(_name).name != _name or _name in (".", ".."):
+        raise ValueError("Invalid kmer-cluster run name")
+    ANNOTATORS[_name].db_path = str(Path(CLUSTER_ROOT) / _name / "model.joblib")
+
+
+def cluster_inputs(wildcards):
+    return [str(path) for sample in sorted(SAMPLES) for mate in ("R1", "R2")
+            if (path := find_fastq_mate(config["r1_dir"] if mate == "R1" else config["r2_dir"], sample, mate)) is not None]
+
+
+def cluster_dependency(wildcards):
+    name = wildcards.run_name
+    path = str(ANNOTATORS[name].db_path)
+    if name not in CLUSTER_EXTERNAL and Path(path).is_file():
+        from samovar.kmer_cluster import validate_model
+        pairs = None
+        if MAG_PHASE == "initial":
+            pairs = [(str(find_fastq_mate(config["r1_dir"], sample, "R1")),
+                      str(find_fastq_mate(config["r2_dir"], sample, "R2") or ""))
+                     for sample in sorted(SAMPLES)]
+        validate_model(path, ANNOTATORS[name].extra, pairs)
+    return [path]
+
+
+if MAG_PHASE == "initial" and CLUSTER_RUNS - CLUSTER_EXTERNAL:
+    rule train_kmer_cluster:
+        input: cluster_inputs
+        output: CLUSTER_ROOT + "/{run_name}/model.joblib"
+        wildcard_constraints:
+            run_name = "|".join(map(re.escape, sorted(CLUSTER_RUNS - CLUSTER_EXTERNAL)))
+        threads: lambda wildcards: THREADS.get(wildcards.run_name, 1)
+        run:
+            from samovar.kmer_cluster import train, training_options
+            pairs = [(str(find_fastq_mate(config["r1_dir"], sample, "R1")),
+                      str(find_fastq_mate(config["r2_dir"], sample, "R2") or ""))
+                     for sample in sorted(SAMPLES)]
+            train(pairs, str(output[0]), threads=int(threads),
+                  **training_options(ANNOTATORS[wildcards.run_name].extra))
+
+
 MAP_RUNS = {
     name for name, ann in ANNOTATORS.items()
     if type(ann).__name__ == "AssemblyAnnotator" and
@@ -616,6 +663,31 @@ rule gc:
         """
         mkdir -p "$(dirname {params.written:q})"
         mkdir -p "$(dirname {log:q})"
+        {params.cmd} 2> {log:q}
+        {params.ingest}
+        """
+
+rule kmer_cluster:
+    input:
+        r1 = r1_input,
+        r2 = r2_input,
+        model = cluster_dependency
+    output:
+        out = marker_output("kmer_cluster.out")
+    threads:
+        lambda wildcards: THREADS.get(wildcards.run_name, 1)
+    resources:
+        mem_mb=rule_mem
+    log:
+        f"{config['output_dir']}/logs/{{sample}}_{{run_name}}.kmer_cluster.log"
+    params:
+        written = lambda wildcards: disk_out(wildcards, "kmer_cluster.out"),
+        ingest = lambda wildcards: ingest_shell(wildcards, "kmer_cluster.out"),
+        cmd = lambda wildcards, input: ANNOTATORS[wildcards.run_name].get_snakemake_shell_cmd(
+            input.r1, shell_r2(wildcards, input), [disk_out(wildcards, "kmer_cluster.out")])
+    shell:
+        """
+        mkdir -p "$(dirname {params.written:q})" "$(dirname {log:q})"
         {params.cmd} 2> {log:q}
         {params.ingest}
         """

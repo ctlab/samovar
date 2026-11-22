@@ -2,7 +2,7 @@
 """k-mer encoder Feature extractor (the encoding stage used inside metauto).
 
 Without a trained model this writes normalized ACGT k-mer frequencies
-(default k=4 → 256 columns). With ``-d model.pt`` it runs the autoencoder
+(default k=4 → 136 canonical columns). With ``-d model.pt`` it runs the autoencoder
 and writes the latent vector (default 64 ``z*`` columns).
 
 Train a model from reference FASTA (same algorithm as ``metauto train``):
@@ -29,23 +29,31 @@ DEFAULT_LATENT = 64
 DEFAULT_EPOCHS = 10
 
 
-def kmer_ids(k: int) -> List[str]:
-    return ["".join(p) for p in product("ACGT", repeat=int(k))]
+def reverse_complement(seq: str) -> str:
+    return seq.translate(str.maketrans("ACGT", "TGCA"))[::-1]
 
 
-def build_kmer_index(k: int) -> Dict[str, int]:
-    return {mer: i for i, mer in enumerate(kmer_ids(k))}
+def kmer_ids(k: int, reverse_complemented: bool = True) -> List[str]:
+    mers = ("".join(p) for p in product("ACGT", repeat=int(k)))
+    return [mer for mer in mers if not reverse_complemented or mer <= reverse_complement(mer)]
 
 
-def seq_to_vec(seq: str, k: int, index: Optional[Dict[str, int]] = None) -> np.ndarray:
-    """Normalized ACGT k-mer frequencies (metauto encoding)."""
-    table = index or build_kmer_index(k)
+def build_kmer_index(k: int, reverse_complemented: bool = True) -> Dict[str, int]:
+    return {mer: i for i, mer in enumerate(kmer_ids(k, reverse_complemented))}
+
+
+def seq_to_vec(seq: str, k: int, index: Optional[Dict[str, int]] = None,
+               reverse_complemented: bool = True) -> np.ndarray:
+    """Normalized canonical (or strand-specific) ACGT k-mer frequencies."""
+    table = index or build_kmer_index(k, reverse_complemented)
     vec = np.zeros(len(table), dtype=np.float64)
     seq = (seq or "").upper()
     if k <= 0 or len(seq) < k:
         return vec
     for i in range(len(seq) - k + 1):
         mer = seq[i : i + k]
+        if reverse_complemented:
+            mer = min(mer, reverse_complement(mer))
         idx = table.get(mer)
         if idx is not None:
             vec[idx] += 1
@@ -111,6 +119,7 @@ def train_encoder(
     epochs: int = DEFAULT_EPOCHS,
     latent_dim: int = DEFAULT_LATENT,
     device: str = "",
+    reverse_complemented: bool = True,
 ) -> Path:
     """Train reconstruction + taxid classifier on k-mer frequencies of FASTA genomes."""
     torch, nn, optim = _torch_mods()
@@ -119,7 +128,7 @@ def train_encoder(
     from samovar.seqio import list_fasta_files, open_text, taxid_from_fasta_name
 
     dirs = [input_dir] if isinstance(input_dir, (str, Path)) else list(input_dir)
-    index = build_kmer_index(k)
+    index = build_kmer_index(k, reverse_complemented)
     X: List[np.ndarray] = []
     y: List[str] = []
     for folder in dirs:
@@ -130,13 +139,13 @@ def train_encoder(
                 for line in handle:
                     if line.startswith(">"):
                         if seq:
-                            X.append(seq_to_vec(seq, k, index))
+                            X.append(seq_to_vec(seq, k, index, reverse_complemented))
                             y.append(taxid)
                             seq = ""
                     else:
                         seq += line.strip()
                 if seq:
-                    X.append(seq_to_vec(seq, k, index))
+                    X.append(seq_to_vec(seq, k, index, reverse_complemented))
                     y.append(taxid)
     if not X:
         raise ValueError(f"no nucleotide FASTA under {dirs}")
@@ -163,6 +172,7 @@ def train_encoder(
         {
             "model": model.state_dict(),
             "k": int(k),
+            "reverse_complemented": reverse_complemented,
             "kmer_index": index,
             "label_encoder": le,
             "latent_dim": int(latent_dim),
@@ -183,7 +193,7 @@ def _load_encoder(model_path: str, device: str = ""):
     model = make_autoencoder(len(index), latent_dim, len(le.classes_)).to(dev)
     model.load_state_dict(ckpt["model"])
     model.eval()
-    return torch, model, dev, k, index, latent_dim
+    return torch, model, dev, k, index, latent_dim, bool(ckpt.get("reverse_complemented", False))
 
 
 def _encode_batch(torch, model, dev, mat: np.ndarray) -> np.ndarray:
@@ -203,6 +213,7 @@ def write_freq_table(
     k: int = DEFAULT_K,
     r2: Optional[str] = None,
     threads: int = 1,
+    reverse_complemented: bool = True,
 ) -> int:
     """Normalized k-mer frequencies via ``bin/samovar_kmer`` (one row per read)."""
     from samovar.kmer2 import ensure_kmer_binary
@@ -223,6 +234,8 @@ def write_freq_table(
     ]
     if r2:
         cmd.extend(["-I", r2])
+    if not reverse_complemented:
+        cmd.append("--no-reverse-complement")
     subprocess.check_call(cmd)
     with path.open(encoding="utf-8") as handle:
         return max(0, sum(1 for _ in handle) - 1)
@@ -235,9 +248,12 @@ def write_latent_table_stream(
     dest: str,
     device: str = "",
     threads: int = 1,
+    reverse_override: Optional[bool] = None,
 ) -> int:
     """Encode C++ frequency rows in batches. A batch is dropped after it is written."""
-    torch, model, dev, k, index, latent_dim = _load_encoder(model_path, device)
+    torch, model, dev, k, index, latent_dim, reverse_complemented = _load_encoder(model_path, device)
+    if reverse_override is not None and reverse_override != reverse_complemented:
+        raise ValueError("Requested k-mer strand mode does not match the saved encoder model")
     names = [f"z{i}" for i in range(latent_dim)]
     path = Path(dest)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -246,7 +262,8 @@ def write_latent_table_stream(
     n = 0
     with tempfile.TemporaryDirectory(prefix="samovar-kmer-") as tmp:
         freq_path = Path(tmp) / "freq.tsv"
-        write_freq_table(r1, str(freq_path), k=k, r2=r2, threads=threads)
+        write_freq_table(r1, str(freq_path), k=k, r2=r2, threads=threads,
+                         reverse_complemented=reverse_complemented)
         with freq_path.open(encoding="utf-8") as src, path.open("w", encoding="utf-8") as out:
             header = src.readline().rstrip("\n").split("\t")
             cols = header[1:]
@@ -299,13 +316,15 @@ def extract_to_file(
     db: str = "",
     k: int = DEFAULT_K,
     threads: int = 1,
+    reverse_complemented: Optional[bool] = None,
 ) -> int:
     model = resolve_model_path(db)
     if model is not None:
         return write_latent_table_stream(
-            r1, r2 or None, str(model), dest, threads=threads
+            r1, r2 or None, str(model), dest, threads=threads, reverse_override=reverse_complemented
         )
-    return write_freq_table(r1, dest, k=k, r2=r2 or None, threads=threads)
+    return write_freq_table(r1, dest, k=k, r2=r2 or None, threads=threads,
+                            reverse_complemented=reverse_complemented is not False)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -324,8 +343,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.add_argument("-k", dest="k", type=int, default=DEFAULT_K)
         parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
         parser.add_argument("--latent", type=int, default=DEFAULT_LATENT)
+        parser.add_argument("--no-reverse-complement", action="store_true")
         args = parser.parse_args(rest)
-        train_encoder(args.input_dir, args.o, k=args.k, epochs=args.epochs, latent_dim=args.latent)
+        train_encoder(args.input_dir, args.o, k=args.k, epochs=args.epochs, latent_dim=args.latent,
+                      reverse_complemented=not args.no_reverse_complement)
         return 0
 
     parser = argparse.ArgumentParser(
@@ -337,11 +358,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("-o", "--output", dest="o", required=True)
     parser.add_argument("-t", dest="threads", default="1")
     parser.add_argument("-k", dest="k", type=int, default=DEFAULT_K)
+    parser.add_argument("--no-reverse-complement", dest="reverse_complemented", action="store_false", default=None)
     args = parser.parse_args(rest)
     threads = int(args.threads)
     if threads < 1:
         parser.error("-t must be >= 1")
-    extract_to_file(args.r1, args.r2, args.o, db=args.db, k=args.k, threads=threads)
+    extract_to_file(args.r1, args.r2, args.o, db=args.db, k=args.k, threads=threads,
+                    reverse_complemented=args.reverse_complemented)
     return 0
 
 

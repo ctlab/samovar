@@ -981,6 +981,7 @@ READ_FUNCTIONS = {
     "gc_content": read_custom_raw,
     "length": read_custom_raw,
     "read_length": read_custom_raw,
+    "kmer_cluster": read_custom_raw,
     "kmer_encoder": read_custom_raw,
     "kmerenc": read_custom_raw,
 }
@@ -1638,6 +1639,7 @@ def match_annotation(annotation_name:str) -> Optional[str]:
         "gc_content": "gc",
         "length": "length",
         "read_length": "length",
+        "kmer_cluster": "kmer_cluster",
         "kmer_encoder": "kmer_encoder",
         "kmerenc": "kmer_encoder",
         "encoder": "kmer_encoder",

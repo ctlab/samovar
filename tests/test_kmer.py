@@ -29,7 +29,7 @@ def test_kmer_counts_dinucleotides(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r1.write_text(_fastq([("r0", "AAAT")]))
     out = tmp_path / "kmer.out"
-    assert main(["-i", str(r1), "-o", str(out), "-t", "1"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-o", str(out), "-t", "1"]) == 0
     frame = parse_output(str(out)).set_index("seq")
     row = frame.loc["r0"]
     assert len(frame.columns) == 16
@@ -44,7 +44,7 @@ def test_kmer_skips_non_acgt(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r1.write_text(_fastq([("r0", "ANAA")]))
     out = tmp_path / "kmer.out"
-    assert main(["-i", str(r1), "-o", str(out), "-t", "1"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-o", str(out), "-t", "1"]) == 0
     row = parse_output(str(out)).set_index("seq").loc["r0"]
     assert int(row["AA"]) == 1
     assert sum(int(row[c]) for c in row.index) == 1
@@ -57,7 +57,7 @@ def test_kmer_cli_and_parse_output(tmp_path):
     r1.write_text(_fastq([("r0", "AAAT")]))
     r2.write_text(_fastq([("r0", "GGGG")]))
     out = tmp_path / "kmer.out"
-    assert main(["-i", str(r1), "-I", str(r2), "-o", str(out), "-t", "1"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-I", str(r2), "-o", str(out), "-t", "1"]) == 0
     text = out.read_text()
     assert text.startswith("seq\tAA\t")
     frame = parse_output(str(out))
@@ -79,9 +79,9 @@ def test_kmer_factory_and_annotation_class(tmp_path):
     r1 = tmp_path / "s_R1.fastq"
     r1.write_text("@readA|taxid:562|\nATGC\n+\nIIII\n")
     out = tmp_path / "sample_kmer2.kmer2.out"
-    inst = get_annotator_instance("kmer2", {"run_name": "kmer2", "cmd": "kmer2"}, {})
+    inst = get_annotator_instance("kmer2", {"run_name": "kmer2"}, {})
     assert inst.__class__.__name__ == "Kmer2Annotator"
-    assert main(["-i", str(r1), "-I", "", "-o", str(out), "-t", "1"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-I", "", "-o", str(out), "-t", "1"]) == 0
     kaiju = tmp_path / "sample_kaiju.kaiju.out"
     kaiju.write_text("C\treadA|taxid:562|\t562\n")
     ann = Annotation({str(kaiju): "kaiju", str(out): "kmer2"})
@@ -105,10 +105,10 @@ def test_kmer_max_keeps_highest_variance(tmp_path):
         )
     )
     out = tmp_path / "kmer.out"
-    assert main(["-i", str(r1), "-o", str(out), "-t", "2", "--kmer-max", "2"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-o", str(out), "-t", "2", "--kmer-max", "2"]) == 0
     frame = parse_output(str(out))
     assert list(frame.columns) == ["seq", "AA", "AC"]
-    assert main(["-i", str(r1), "-o", str(out), "-t", "1", "--kmer-max", "100"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-o", str(out), "-t", "1", "--kmer-max", "100"]) == 0
     wide = parse_output(str(out))
     assert len([c for c in wide.columns if c != "seq"]) == 16
 
@@ -123,8 +123,8 @@ def test_kmer_threads_and_duplicates_match(tmp_path):
     r2.write_text(_fastq([("r000", "aaat"), ("only2", "GG")]))
     one = tmp_path / "t1.out"
     many = tmp_path / "t8.out"
-    assert main(["-i", str(r1), "-I", str(r2), "-o", str(one), "-t", "1"]) == 0
-    assert main(["-i", str(r1), "-I", str(r2), "-o", str(many), "-t", "8", "--kmer-max", "16"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-I", str(r2), "-o", str(one), "-t", "1"]) == 0
+    assert main(["--no-reverse-complement", "-i", str(r1), "-I", str(r2), "-o", str(many), "-t", "8", "--kmer-max", "16"]) == 0
     assert one.read_text() == many.read_text()
     frame = parse_output(str(one)).set_index("seq")
     assert int(frame.loc["r000", "AA"]) == 2
@@ -174,3 +174,27 @@ def test_ml_uses_feat_columns():
     assert "feat_kmer2_0_AA" in feature_cols
     assert any(c.startswith("taxid_") for c in feature_cols)
     assert best is not None
+
+
+def test_canonical_reverse_complements_and_strand_option(tmp_path):
+    r1 = tmp_path / "strand.fastq"
+    r1.write_text(_fastq([("a", "AAAA"), ("t", "TTTT"), ("pal", "ATAT")]))
+    out = tmp_path / "strand.tsv"
+    assert main(["-i", str(r1), "-o", str(out)]) == 0
+    data = parse_output(str(out)).set_index("seq")
+    assert len(data.columns) == 10
+    assert data.loc["a"].equals(data.loc["t"])
+    assert data.loc["pal", "AT"] == 2
+    assert main(["-i", str(r1), "-o", str(out), "--no-reverse-complement"]) == 0
+    strand = parse_output(str(out)).set_index("seq")
+    assert len(strand.columns) == 16
+    assert not strand.loc["a"].equals(strand.loc["t"])
+
+
+def test_old_strand_specific_model_rejects_missing_kmer_columns():
+    from types import SimpleNamespace
+    from samovar.reprofiling import IncompatiblePreprocessingError, preprocess_for_model
+    model = SimpleNamespace(samovar_preprocessing_={'version': 1, 'features': {
+        'feat_kmer2_0_AA': None, 'feat_kmer2_0_TT': None, 'length': None}})
+    with pytest.raises(IncompatiblePreprocessingError, match='strand mode'):
+        preprocess_for_model(pd.DataFrame({'feat_kmer2_0_AA': [1]}), model)

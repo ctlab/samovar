@@ -765,7 +765,31 @@ def check_startpoint(
         start_s, _end_s = resolve_window(start, end)
     except ValueError as exc:
         return [str(exc)]
-    return startpoint_gaps(output_dir, start_s, input_dir=input_dir)
+    gaps = startpoint_gaps(output_dir, start_s, input_dir=input_dir)
+    root = as_path(output_dir)
+    if (checkpoint_dir(root) / "annotate_initial.done").is_file():
+        settings = _init_config(root)
+        for run in settings.get("run_config") or []:
+            if str(run.get("type", "")).replace("-", "_") != "kmer_cluster":
+                continue
+            from samovar.kmer_cluster import validate_model
+            from samovar.seqio import find_fastq_mate, list_fastq_samples
+            raw_db = str(run.get("db_path") or "")
+            model = Path(raw_db) if raw_db not in ("", ".") else root / "kmer_cluster_models" / run["run_name"] / "model.joblib"
+            if not model.is_file():
+                gaps.append(f"saved kmer-cluster model {model}; restore it or rebuild initial and dependent results")
+                continue
+            pairs = None
+            reads = Path(str(settings.get("r1_dir") or root / "initial_trimmed"))
+            if settings.get("mag_catalog_phase", "initial") == "initial" and reads.is_dir():
+                pairs = [(str(find_fastq_mate(reads, sample, "R1")),
+                          str(find_fastq_mate(settings.get("r2_dir") or reads, sample, "R2") or ""))
+                         for sample in sorted(list_fastq_samples(reads))]
+            try:
+                validate_model(model, run.get("extra"), pairs if raw_db in ("", ".") else None)
+            except Exception as exc:
+                gaps.append(f"invalid kmer-cluster model {model}: {exc}")
+    return gaps
 
 
 def run_checkup(
@@ -780,7 +804,7 @@ def run_checkup(
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
-    gaps = startpoint_gaps(output_dir, start_s, input_dir=input_dir)
+    gaps = check_startpoint(output_dir, start_s, end_s, input_dir=input_dir)
     root = as_path(output_dir)
     print(f"outdir: {root}")
     print(f"window: {start_s} .. {end_s}")

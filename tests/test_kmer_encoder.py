@@ -16,7 +16,7 @@ def test_seq_to_vec_normalizes():
     by = dict(zip(ids, vec))
     assert pytest.approx(by["AA"] + by["AT"], 1e-9) == 1.0
     assert by["AA"] == pytest.approx(2 / 3)
-    assert by["GG"] == 0
+    assert by["CC"] == 0
 
 
 def test_kmer_encoder_freq_cli(tmp_path):
@@ -32,7 +32,7 @@ def test_kmer_encoder_freq_cli(tmp_path):
     assert "AA" in frame.columns
     labeled = prefix_tool_columns(frame, "kmer_encoder", 0)
     feat = feat_annotator_columns(labeled.columns)
-    assert len(feat) == 16
+    assert len(feat) == 10
     assert any("AA" in c for c in feat)
 
 
@@ -50,7 +50,7 @@ def test_factory_and_match_annotation(tmp_path):
     kaiju.write_text("C\treadA|taxid:562|\t562\n")
     ann = Annotation({str(kaiju): "kaiju", str(dest): "kmer_encoder"})
     assert list(ann.tr().columns)
-    assert len(ann.ft().columns) == 16
+    assert len(ann.ft().columns) == 10
     assert all(str(c).startswith("feat_") for c in ann.ft().columns)
 
 

@@ -209,6 +209,12 @@ def preprocess_data(df, drop_missing_true: bool = True, *, preprocessing=None):
                 continue
             numeric = pd.to_numeric(df[col], errors="coerce")
             categorical = col == "read_type" or col == "MAG_ID" or col.endswith("_MAG_ID")
+            if col.startswith("feat_") and col.endswith("_kmer_cluster"):
+                values = set(pd.to_numeric(df[col], errors="coerce").dropna().astype(int))
+                levels = df.attrs.get("samovar_cluster_levels", {}).get(col, [])
+                values.update(int(value) for value in levels)
+                features[col] = {"__kmer_cluster__": sorted(v for v in values if v >= 0)}
+                continue
             if not categorical and (
                 numeric.notna().all()
                 or numeric.notna().sum() >= max(1, int(0.9 * len(df)))
@@ -220,7 +226,21 @@ def preprocess_data(df, drop_missing_true: bool = True, *, preprocessing=None):
         schema = {"version": 1, "features": features}
     if schema.get("version") != 1:
         raise IncompatiblePreprocessingError("Unsupported model preprocessing version; retrain the reprofiler")
+    output_features = []
     for col, categories in schema["features"].items():
+        if isinstance(categories, dict) and "__kmer_cluster__" in categories:
+            expanded = [f"{col}__cluster_{v}" for v in categories["__kmer_cluster__"]]
+            if encoded is None:
+                values = pd.to_numeric(df[col], errors="coerce") if col in df else pd.Series(float("nan"), index=df.index)
+                for value, name in zip(categories["__kmer_cluster__"], expanded):
+                    df[name] = values.eq(value).astype(int)
+            else:
+                for name in expanded:
+                    if name not in df:
+                        df[name] = 0
+            output_features.extend(expanded)
+            continue
+        output_features.append(col)
         if col not in df.columns:
             df[col] = 0 if categories is None else -1
         elif encoded is None:
@@ -228,7 +248,7 @@ def preprocess_data(df, drop_missing_true: bool = True, *, preprocessing=None):
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
             else:
                 df[col] = _category_values(df[col], col).map(categories).fillna(-1).astype(int)
-    df = df[[*schema["features"], *(["true"] if "true" in df.columns else [])]]
+    df = df[[*output_features, *(["true"] if "true" in df.columns else [])]]
     df.attrs["samovar_preprocessing"] = schema
     
     # Convert true to numeric and handle NaN values
@@ -245,6 +265,16 @@ def preprocess_for_model(df, model, *, drop_missing_true=True):
     """Transform with saved dictionaries; legacy taxid/length models remain usable."""
     schema = getattr(model, "samovar_preprocessing_", None)
     names = getattr(model, "feature_names_in_", None)
+    if schema is not None:
+        import re
+        expected = [name for name in schema.get("features", {})
+                    if re.match(r"^feat_(?:kmer2|kmer_encoder)_.*_[ACGT]{1,8}$", name)]
+        present = set(df.columns)
+        if any(name not in present for name in expected):
+            raise IncompatiblePreprocessingError(
+                "The k-mer feature columns differ from the saved model; use the strand mode "
+                "and k-mer settings used during training, or retrain the reprofiler."
+            )
     if schema is None:
         df = standardize_taxid_columns(df.copy())
         if names is not None:

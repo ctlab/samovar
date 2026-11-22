@@ -446,6 +446,8 @@ def apply_pipeline(
 
     if (state.root / "MAG").is_dir():
         shutil.copytree(state.root / "MAG", dest / "MAG", dirs_exist_ok=True)
+    if (state.root / "kmer_cluster_models").is_dir():
+        shutil.copytree(state.root / "kmer_cluster_models", dest / "kmer_cluster_models", dirs_exist_ok=True)
     init_cfg = _retarget_init_config(state.init_config, dest, cores, limit)
     reference = (
         Path(state.regenerated_annotations)

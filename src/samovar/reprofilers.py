@@ -662,6 +662,8 @@ def run_builtin_reprofiler(
         return reprofile_linear(regenerated, ground_truth, initial, cfg)
     _ = ground_truth
     validation = merge_read_features(regenerated.copy(), cfg.get("features_df"))
+    if cfg.get("samovar_cluster_levels"):
+        validation.attrs["samovar_cluster_levels"] = cfg["samovar_cluster_levels"]
     if "seq" in validation.columns:
         validation = validation.drop(columns=["seq"])
     if "true" in validation.columns:
@@ -800,6 +802,12 @@ def run_reprofiler(
     else:
         init = initial if initial is not None else load_initial_tables(initial_dir)
     regen, init = _align_ml_tables(regen, init, initial_dir)
+    # Use the full fitted vocabulary, including clusters absent from regenerated reads.
+    from samovar.kmer_cluster import cluster_levels_for_run
+    levels = cluster_levels_for_run(Path(output_dir).parent, regen.columns)
+    if levels:
+        regen.attrs["samovar_cluster_levels"] = levels
+        cfg["samovar_cluster_levels"] = levels
     cfg["features_df"] = cfg.get("features_df")
     if cfg.get("features") and cfg["features_df"] is None:
         cfg["features_df"] = load_read_features(cfg.get("features"))

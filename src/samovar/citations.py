@@ -195,6 +195,7 @@ TOOL_FILES: Dict[str, List[str]] = {
     "kmer": ["samovar_chechenina2023.bib"],
     "kmer2": ["samovar_chechenina2023.bib"],
     "kmer_encoder": ["samovar_chechenina2023.bib"],
+    "kmer_cluster": ["samovar_chechenina2023.bib"],
     "length": ["samovar_chechenina2023.bib"],
     "concat": ["samovar_chechenina2023.bib"],
     "concat_weighted": ["samovar_chechenina2023.bib"],

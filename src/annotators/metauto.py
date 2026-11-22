@@ -54,7 +54,7 @@ def work(fastq_dir, model_path):
         with open(out_file, "w") as out:
             out.write("seq\ttaxID\tconfidence\n")
             for header, seq in read_fastq(path):
-                vec = seq_to_vec(seq.upper(), k, kmer_index)
+                vec = seq_to_vec(seq.upper(), k, kmer_index, bool(checkpoint.get("reverse_complemented", False)))
                 x = torch.tensor(vec, dtype=torch.float32).unsqueeze(0).to(DEVICE)
                 with torch.no_grad():
                     _, logits, _z = model(x)

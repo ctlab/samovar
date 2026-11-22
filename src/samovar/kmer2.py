@@ -2,10 +2,10 @@
 """Dinucleotide (k=2) feature extractor.
 
 Reads FASTQ via the annotator CLI (``-i``/``-I``/``-o``/``-t``) and writes a
-headered TSV: ``seq`` plus ACGT 2-mer counts (``AA``, ``AC``, …, ``TT``).
+headered TSV: ``seq`` plus canonical ACGT 2-mer counts.
 Counting runs in ``bin/samovar_kmer`` (OpenMP over reads, ``-t`` threads).
 ``--kmer-max N`` keeps the N k-mers with the largest across-read variance
-(at most 16; ties keep the earlier AA..TT column). Those are the columns
+(ties keep the earlier k-mer column). Those are the columns
 that land in the combined annotation table.
 This is a Feature sub-contract of Annotation: no taxID column.
 """
@@ -131,7 +131,7 @@ def ensure_kmer_binary() -> Path:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Count ACGT dinucleotides (k=2) per read for the Feature contract."
+        description="Count canonical ACGT k-mers per read for the Feature contract."
     )
     parser.add_argument("-i", "-1", dest="r1", required=True, help="R1 FASTQ")
     parser.add_argument("-I", "-2", dest="r2", default="", help="R2 FASTQ (optional)")
@@ -146,6 +146,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="Max distinct k-mers written (highest across-read variance)",
     )
+    parser.add_argument("--no-reverse-complement", action="store_true", help="Keep strand-specific k-mers")
     args = parser.parse_args(argv)
     if args.k < 1 or args.k > 8:
         parser.error("-k must be from 1 to 8")
@@ -162,6 +163,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         cmd.extend(["-d", args.db])
     if args.k != 2:
         cmd.extend(["-k", str(args.k)])
+    if args.no_reverse_complement:
+        cmd.append("--no-reverse-complement")
     if args.kmer_max is not None:
         cmd.extend(["--kmer-max", str(args.kmer_max)])
     return subprocess.call(cmd)

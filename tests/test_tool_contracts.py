@@ -88,8 +88,14 @@ def test_annotator_contract(request, tmp_path, tiny_fastq):
     out = tmp_path / "clf.out"
     if path.suffix.lower() == ".py":
         module = load_python_module(path, "contract_annotator")
+        if path.name == "kmer_cluster.py":
+            model = tmp_path / "cluster.joblib"
+            module.train([(str(r1), str(r2))], model, k=2, max_clusters=2)
+            db_argument = model
+        else:
+            db_argument = tmp_path
         if hasattr(module, "main"):
-            rc = module.main(["-i", str(r1), "-I", str(r2), "-d", str(tmp_path), "-o", str(out), "-t", "1"])
+            rc = module.main(["-i", str(r1), "-I", str(r2), "-d", str(db_argument), "-o", str(out), "-t", "1"])
             assert rc in (None, 0)
         else:
             out.write_text("r0\t562\n")

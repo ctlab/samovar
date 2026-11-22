@@ -1,7 +1,7 @@
-// ACGT dinucleotide (k=2) profile for the Feature contract.
+// ACGT k-mer profile for the Feature contract.
 // One output row per read id. R1 and R2 counts are summed.
-// --kmer-max N keeps the N k-mers with the largest across-read variance
-// (ties break toward the canonical AA..TT order). N is capped at 16.
+// Reverse complements share a canonical column unless disabled.
+// --kmer-max N keeps the highest-variance columns, breaking ties by k-mer order.
 //
 // -t threads splits reads across an OpenMP team. Counting is independent
 // per read, so the team stays busy on short reads as long as there are
@@ -43,6 +43,7 @@ struct Table {
     int k = 2;
     int nmer = KMER_N;
     std::vector<std::string> ids;
+    std::vector<int> mer_ids;
     std::vector<uint32_t> counts;
 };
 
@@ -73,7 +74,16 @@ int base4(unsigned char c) {
     }
 }
 
-void count_seq(const char* seq, size_t n, uint32_t* counts, int k, int nmer) {
+int reverse_complement_id(int id, int k) {
+    int reverse = 0;
+    for (int i = 0; i < k; ++i) {
+        reverse = (reverse << 2) | (3 - (id & 3));
+        id >>= 2;
+    }
+    return reverse;
+}
+
+void count_seq(const char* seq, size_t n, uint32_t* counts, int k, int nmer, const std::vector<int>& lookup) {
     // Rolling base-4 window. A non-ACGT base breaks the window, same as the
     // k=2 counter (no k-mer crosses an ambiguous base).
     int filled = 0;
@@ -91,7 +101,7 @@ void count_seq(const char* seq, size_t n, uint32_t* counts, int k, int nmer) {
             ++filled;
         }
         if (filled == k) {
-            uint32_t& cell = counts[window];
+            uint32_t& cell = counts[lookup[static_cast<size_t>(window)]];
             if (cell < COUNT_MAX) {
                 ++cell;
             }
@@ -329,8 +339,20 @@ Table collapse(std::vector<std::string> ids, std::vector<uint32_t> counts, int k
     return out;
 }
 
-Table count_fastq(const std::string& path, int threads, int k) {
-    const int nmer = 1 << (2 * k);
+Table count_fastq(const std::string& path, int threads, int k, bool canonical) {
+    const int all_mers = 1 << (2 * k);
+    std::vector<int> mer_ids;
+    std::vector<int> lookup(static_cast<size_t>(all_mers));
+    for (int id = 0; id < all_mers; ++id) {
+        int canonical_id = canonical ? std::min(id, reverse_complement_id(id, k)) : id;
+        if (canonical_id == id) {
+            lookup[static_cast<size_t>(id)] = static_cast<int>(mer_ids.size());
+            mer_ids.push_back(id);
+        } else {
+            lookup[static_cast<size_t>(id)] = lookup[static_cast<size_t>(canonical_id)];
+        }
+    }
+    const int nmer = static_cast<int>(mer_ids.size());
     std::vector<char> text;
     if (!load_bytes(path, threads, text)) {
         throw std::runtime_error("cannot read FASTQ: " + path);
@@ -355,10 +377,12 @@ Table count_fastq(const std::string& path, int threads, int k) {
         line_span(text, starts, rec * 4 + 1, seq, slen);
         ids[rec] = read_id(header, hlen);
         if (!ids[rec].empty()) {
-            count_seq(seq, slen, &counts[rec * width], k, nmer);
+            count_seq(seq, slen, &counts[rec * width], k, all_mers, lookup);
         }
     }
-    return collapse(std::move(ids), std::move(counts), k, nmer);
+    Table result = collapse(std::move(ids), std::move(counts), k, nmer);
+    result.mer_ids = std::move(mer_ids);
+    return result;
 }
 
 void merge_into(Table& dst, const Table& src) {
@@ -388,7 +412,7 @@ struct Rank {
 std::vector<int> select_kmers(const Table& table, int kmer_max) {
     const size_t n = table.ids.size();
     const int nmer = table.nmer;
-    std::vector<Rank> ranks(static_cast<size_t>(nmer));
+    std::vector<Rank> ranks;
     for (int k = 0; k < nmer; ++k) {
         unsigned __int128 sum = 0;
         unsigned __int128 sumsq = 0;
@@ -401,11 +425,11 @@ std::vector<int> select_kmers(const Table& table, int kmer_max) {
         if (n > 1) {
             disp = static_cast<unsigned __int128>(n) * sumsq - sum * sum;
         }
-        ranks[static_cast<size_t>(k)] = Rank{disp, k};
+        ranks.push_back(Rank{disp, k});
     }
-    int keep = nmer;
+    int keep = static_cast<int>(ranks.size());
     if (kmer_max >= 0) {
-        keep = std::min(kmer_max, nmer);
+        keep = std::min(kmer_max, keep);
     }
     if (kmer_max >= 0) {
         std::sort(ranks.begin(), ranks.end(), [](const Rank& a, const Rank& b) {
@@ -450,7 +474,7 @@ void write_table(const std::string& path, const Table& table, const std::vector<
     }
     out << "seq";
     for (int col : cols) {
-        out << '\t' << kmer_name(col, table.k);
+        out << '\t' << kmer_name(table.mer_ids[static_cast<size_t>(col)], table.k);
     }
     out << '\n';
     out.setf(std::ios::fmtflags(0), std::ios::floatfield);
@@ -483,7 +507,7 @@ void write_table(const std::string& path, const Table& table, const std::vector<
 
 void usage() {
     std::cerr
-        << "Usage: samovar_kmer -i R1 [-I R2] -o OUT [-t THREADS] [-k K] [--normalize] [--kmer-max N]\n"
+        << "Usage: samovar_kmer -i R1 [-I R2] -o OUT [-t THREADS] [-k K] [--normalize] [--no-reverse-complement] [--kmer-max N]\n"
         << "  Count ACGT k-mers per read (default k=2). --normalize writes frequencies.\n"
         << "  --kmer-max keeps that many k-mers with the highest across-read variance.\n";
 }
@@ -497,6 +521,7 @@ int main(int argc, char** argv) {
     int threads = 1;
     int k = 2;
     bool normalize = false;
+    bool canonical = true;
     int kmer_max = -1;
     bool kmer_max_set = false;
     try {
@@ -522,6 +547,8 @@ int main(int argc, char** argv) {
                 threads = std::stoi(need("-t"));
             } else if (arg == "-k") {
                 k = std::stoi(need("-k"));
+            } else if (arg == "--no-reverse-complement") {
+                canonical = false;
             } else if (arg == "--normalize") {
                 normalize = true;
             } else if (arg == "-d") {
@@ -562,9 +589,9 @@ int main(int argc, char** argv) {
 #endif
 
     try {
-        Table table = count_fastq(r1, threads, k);
+        Table table = count_fastq(r1, threads, k, canonical);
         if (!r2.empty()) {
-            merge_into(table, count_fastq(r2, threads, k));
+            merge_into(table, count_fastq(r2, threads, k, canonical));
         }
         write_table(dest, table, select_kmers(table, kmer_max), normalize);
     } catch (const std::exception& exc) {

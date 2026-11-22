@@ -1086,6 +1086,25 @@ class KmerEncoderAnnotator(BaseAnnotator):
         return read_custom_raw(file_path)
 
 
+
+class KmerClusterAnnotator(KmerEncoderAnnotator):
+    """Categorical k-mer cluster feature backed by a shared cohort model."""
+
+    @property
+    def default_cmd(self):
+        return f"{shlex.quote(python_path())} -m samovar.kmer_cluster"
+
+    def get_expected_outputs(self, sample, output_dir):
+        return [os.path.join(output_dir, f"{sample}_{self.run_name}.kmer_cluster.out")]
+
+    def get_snakemake_shell_cmd(self, input_r1, input_r2, outputs):
+        cmd = self.default_cmd
+        run = (f"{cmd} -i {shlex.quote(str(input_r1))} {_r2_flag('-I', input_r2)}"
+               f"-d {shlex.quote(str(self.db_path or ''))} "
+               f"-o {shlex.quote(str(outputs[0]))} -t {int(self.threads)}")
+        return skip_empty_reads_cmd(input_r1, outputs, run)
+
+
 def get_annotator_instance(
     tool_type: str, run_config: Dict, config: Dict
 ) -> BaseAnnotator:
@@ -1121,6 +1140,8 @@ def get_annotator_instance(
         "kmer_counter": Kmer2Annotator,
         "dinuc": Kmer2Annotator,
         "dinucleotide": Kmer2Annotator,
+        "kmer_cluster": KmerClusterAnnotator,
+        "kmer-cluster": KmerClusterAnnotator,
         "kmer_encoder": KmerEncoderAnnotator,
         "kmer-encoder": KmerEncoderAnnotator,
         "kmerenc": KmerEncoderAnnotator,
