@@ -79,6 +79,7 @@ TOOL_GROUPS = (
     "mag_homology",
     "mag_mapping",
     "feature_importance",
+    "resampling",
     "workflow",
 )
 
@@ -136,6 +137,8 @@ TOOL_GROUP_ALIASES: Dict[str, str] = {
     "reprofile": "reprofiler",
     "reprofiler": "reprofiler",
     "reprofiling": "reprofiler",
+    "resampling": "resampling",
+    "resample": "resampling",
     "feature_importance": "feature_importance",
     "feature-importance": "feature_importance",
     "featureimportance": "feature_importance",

@@ -984,19 +984,20 @@ def test_concat_equal_reads_union_one_table():
     assert list(tables) == ["concat"]
     frame = tables["concat"]
     assert set(frame["taxid"].astype(str)) == {"1", "2", "3"}
-    assert list(frame.columns) == ["taxid", "N_s1", "N_s2"]
-    # 30 reads / 3 taxa → 10 each
-    assert (frame["N_s1"].astype(int) == 10).all()
-    assert (frame["N_s2"].astype(int) == 10).all()
+    assert list(frame.columns) == ["taxid", "N_community"]
+    assert (frame["N_community"].astype(int) == 10).all()
+    assert int(frame["N_community"].sum()) == 30
 
 
-def test_concat_weighted_sums_shared_taxa():
-    tables = regenerate_concat(_concat_source_tables(), weighted=True)
-    frame = tables["concat_weighted"].set_index(tables["concat_weighted"]["taxid"].astype(str))
-    assert int(frame.loc["1", "N_s1"]) == 10
-    assert int(frame.loc["2", "N_s1"]) == 25
-    assert int(frame.loc["3", "N_s1"]) == 7
-    assert int(frame.loc["2", "N_s2"]) == 7
+def test_concat_weighted_averages_relative_abundance_one_community():
+    tables = regenerate_concat(_concat_source_tables(), weighted=True, n_reads=120)
+    frame = tables["concat_weighted"]
+    assert list(frame.columns) == ["taxid", "N_community"]
+    frame = frame.set_index(frame["taxid"].astype(str))
+    assert int(frame.loc["1", "N_community"]) == 22
+    assert int(frame.loc["2", "N_community"]) == 61
+    assert int(frame.loc["3", "N_community"]) == 37
+    assert int(frame["N_community"].sum()) == 120
 
 
 def test_concat_regenerator_contract():
@@ -1010,6 +1011,7 @@ def test_concat_regenerator_contract():
         _concat_source_tables(), None, {}
     )
     assert list(weighted) == ["concat_weighted"]
+    assert list(weighted["concat_weighted"].columns) == ["taxid", "N_community"]
 
 
 def test_prepare_concat_mixed_with_choose_best_warns_and_drops(tmp_path):

@@ -99,6 +99,120 @@ def test_prepare_cores_are_training_threads(tmp_path):
     assert cpu.model is None or "cuml" not in type(cpu.model).__module__
 
 
+def test_resampled_cat_is_the_saved_tbml_training_artifact(tmp_path):
+    import joblib
+    import json
+
+    regenerated, ground, _ = _tiny_tables()
+    regenerated["sample"] = "synthetic"
+    initial = {
+        "s1": pd.DataFrame(
+            {
+                "seq": [f"a{i}" for i in range(4)],
+                "taxid_dummy": [9606] * 4,
+                "length": [50] * 4,
+            }
+        ),
+        "s2": pd.DataFrame(
+            {
+                "seq": [f"b{i}" for i in range(4)],
+                "taxid_dummy": [562] * 4,
+                "length": [50] * 4,
+            }
+        ),
+    }
+    output = tmp_path / "resampled"
+    result = run_reprofiler(
+        "rf",
+        regenerated=regenerated,
+        ground_truth=ground,
+        initial=initial,
+        output_dir=output,
+        config={
+            "seed": 3,
+            "feature_importance": "none",
+            "n_estimators": 4,
+            "resampling": {
+                "tool": "builtin",
+                "columns": ["taxid_dummy", "length"],
+                "groups": [
+                    {
+                        "name": "case",
+                        "samples": ["s1"],
+                        "dataset": "regenerated",
+                        "size": 8,
+                    },
+                    {
+                        "name": "control",
+                        "samples": ["s2"],
+                        "dataset": "regenerated",
+                        "size": 8,
+                    },
+                ],
+            },
+        },
+    )
+    table = pd.read_csv(output / "resampled_training_table.csv")
+    assert len(table) == 16
+    assert table["draw_id"].is_unique
+    report = json.loads((output / "resampling.json").read_text())
+    assert report["seed"] == 3 and len(report["groups"]) == 2
+    model = joblib.load(output / "trained_model.joblib")
+    assert model.samovar_resampling_ == result.model.samovar_resampling_
+    assert model.samovar_resampling_["solver"] == "raking-v1"
+    zero = tmp_path / "seed-zero"
+    run_reprofiler(
+        "linear",
+        regenerated=regenerated,
+        ground_truth=ground,
+        initial=initial,
+        output_dir=zero,
+        config={
+            "seed": 0,
+            "feature_importance": "none",
+            "resampling": {
+                "columns": ["taxid_dummy"],
+                "groups": [
+                    {
+                        "name": "both",
+                        "samples": ["s1", "s2"],
+                        "dataset": "regenerated",
+                        "size": 8,
+                    }
+                ],
+            },
+        },
+    )
+    assert json.loads((zero / "resampling.json").read_text())["seed"] == 0
+
+
+def test_prepare_writes_resampling_config(tmp_path):
+    import yaml
+
+    block = {
+        "tool": "builtin",
+        "columns": ["taxid_dummy"],
+        "groups": [
+            {
+                "name": "all",
+                "samples": ["s1"],
+                "dataset": "regenerated",
+                "size": 4,
+            }
+        ],
+    }
+    config = PipelineConfig(
+        input_dir="in",
+        output_dir=str(tmp_path),
+        resampling=block,
+    )
+    paths = config.generate_configs(str(tmp_path))
+    repro = yaml.safe_load(Path(paths["reprofiling"]).read_text())
+    assert repro["resampling"] == block
+    script = Path(config.generate_pipeline(str(tmp_path))).read_text()
+    assert f"--config {paths['reprofiling']}" in script
+
+
 @pytest.mark.optional
 def test_prepare_gpu_flag_reaches_ml(tmp_path):
     import yaml

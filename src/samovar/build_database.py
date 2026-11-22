@@ -1197,13 +1197,25 @@ def build_database_metaphlan(config, db_path, threads=1):
     if fasta.resolve() == source.resolve():
         raise ValueError("Build destination must not overwrite the marker source")
     seen = set()
+    length_mismatches = []
+    max_abs_length_delta = 0
     opener = bz2.open if source.suffix == ".bz2" else open_text
     with opener(source, "rt") as handle, fasta.open("w") as output:
         for rec in SeqIO.parse(handle, "fasta"):
             if rec.id in seen or rec.id not in data["markers"]:
                 raise ValueError(f"Duplicate or undocumented MetaPhlAn marker: {rec.id}")
-            if len(rec.seq) != int(data["markers"][rec.id]["len"]):
-                raise ValueError(f"Marker length does not match metadata: {rec.id}")
+            expected_length = int(data["markers"][rec.id]["len"])
+            delta = len(rec.seq) - expected_length
+            max_abs_length_delta = max(max_abs_length_delta, abs(delta))
+            if delta:
+                length_mismatches.append(
+                    {
+                        "marker": rec.id,
+                        "fasta_length": len(rec.seq),
+                        "metadata_length": expected_length,
+                        "delta": delta,
+                    }
+                )
             seen.add(rec.id)
             SeqIO.write(rec, output, "fasta")
     if seen != set(data["markers"]):
@@ -1222,4 +1234,8 @@ def build_database_metaphlan(config, db_path, threads=1):
         return sha.hexdigest()
     (dest / "metaphlan.manifest.json").write_text(json.dumps(dict(
         index=name, marker_count=len(seen), source_fasta=str(source.resolve()), source_metadata=str(info.resolve()),
-        fasta_sha256=digest(source), metadata_sha256=digest(info)), indent=2) + "\n")
+        fasta_sha256=digest(source), metadata_sha256=digest(info),
+        marker_length_mismatch_count=len(length_mismatches),
+        max_abs_marker_length_delta=max_abs_length_delta,
+        marker_length_mismatch_examples=length_mismatches[:100],
+    ), indent=2) + "\n")

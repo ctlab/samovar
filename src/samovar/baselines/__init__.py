@@ -40,6 +40,7 @@ BASELINE_TOOLS: Dict[str, Path] = {
     "mag_homology": _DIR.parent / "MAG" / "homology.py",
     "mag_mapping": _DIR.parent / "MAG" / "mapping.py",
     "feature_importance": _DIR / "native_feature_importance.py",
+    "resampling": _DIR / "resample_cat.py",
 }
 
 # Names that resolve to the constant-taxID annotator (legacy aliases kept).

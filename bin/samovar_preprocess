@@ -279,6 +279,15 @@ def main():
         ),
     )
     parser.add_argument(
+        '--resampling-config',
+        dest='resampling_config',
+        default=None,
+        help=(
+            'YAML resampling block with tool, matching columns and explicit '
+            'initial-sample groups. The selected whole-row CAT trains the reprofiler.'
+        ),
+    )
+    parser.add_argument(
         '--gpu',
         action='store_true',
         help=(
@@ -653,7 +662,7 @@ def main():
         "reads_generator", "reads-generator",
         "metagenome_generator", "metagenome-generator",
         "startpoint", "start-point", "endpoint", "end-point", "mode", "repeat",
-        "scoring", "reprofiler", "ml",
+        "scoring", "reprofiler", "ml", "resampling-config", "resampling_config",
         "feature-importance", "feature_importance", "no-feature-importance",
         "feature-importance-all",
         "export", "abundance-corrector", "corrector", "no-export",

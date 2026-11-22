@@ -196,8 +196,9 @@ must agree with the versioned scorer contract.
   preserves source profiles and sample identities. `concat` and
   `concat_weighted` combine both tools and samples into one synthetic
   community. Equal-taxon versus abundance-weighted composition remains their
-  distinction. The current implementation's multiple sample columns do not
-  satisfy this target concat behaviour.
+  distinction. `concat_weighted` averages normalized relative abundance across
+  every non-empty tool/sample column. Both modes allocate one community column
+  totalling exactly `N_reads` when it is set.
 - A single compatible library/routing template is inherited by a combined
   community. Heterogeneous conflicting templates require an explicit template;
   do not guess a biological parent or flatten incompatible libraries.

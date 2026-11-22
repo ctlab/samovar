@@ -837,3 +837,33 @@ def test_annotator_shell_contract_needs_a_real_db(tmp_path):
     assert "passed" in passed_text.lower()
 
 
+def test_resampling_contract(request):
+    _skip_if_other_type(request, "resampling")
+    path = _tool_path(request, "resampling")
+    module = load_python_module(path, "contract_resample")
+    fn = getattr(module, "resample", None)
+    assert callable(fn), f"{path} must define resample(initial, regenerated, groups, config)"
+    initial = pd.DataFrame(
+        {"sample": ["s1", "s2"], "taxid": [562, 9606], "feat": [1, 2], "true": [562, 9606]}
+    )
+    regenerated = initial.iloc[[0]].copy()
+    groups = [
+        {"name": "A", "samples": ["s1"], "dataset": "regen", "size": 2},
+        {"name": "B", "samples": ["s2"], "dataset": "regen", "size": 1},
+    ]
+    block = fn(
+        initial,
+        {"regen": regenerated},
+        groups,
+        {"seed": 0, "columns": ["taxid", "feat"]},
+    )
+    assert block["native_profiler_resampled"] is False
+    assert block["schema_version"] >= 1
+    assert block["solver"] and block["seed"] == 0
+    assert block["columns"] == ["taxid", "feat"]
+    assert len(block["table"]) == 3
+    assert block["table"]["draw_id"].is_unique
+    assert set(block["table"]["source_row"]) == {"regen:0"}
+    assert list(block["table"]["true"]) == [562, 562, 562]
+    assert block["groups"][0]["support_gaps"] == []
+    assert block["groups"][1]["support_gaps"]

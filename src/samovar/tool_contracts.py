@@ -182,6 +182,17 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "across classified MAG candidates (empty when none compete). "
         "No invented mappings or identity fallback.",
     },
+    "resampling": {
+        "in": "resample(initial, regenerated, groups, config). initial is a CAT "
+        "with a sample column. regenerated maps a dataset name to a CAT. "
+        "groups name sample ids already present in initial, one dataset, and "
+        "an explicit regenerated row size. config contains seed and selected "
+        "matching columns. One dataset may feed several groups.",
+        "out": "Dict with table (whole-row draws, draw_id, source_row, resampling_group), "
+        "groups (residual_mismatch and support_gaps; matching columns exclude "
+        "true and taxid_SAMOVAR), schema_version, solver, seed, columns, and "
+        "native_profiler_resampled False.",
+    },
     "feature_importance": {
         "in": "score_feature_importance(model, annotation, initial_abundance, "
         "regenerated_abundance, config). model is the selected estimator "
@@ -220,6 +231,7 @@ GROUP_TO_TESTNODE = {
     "mag_homology": "tests/test_tool_contracts.py::test_mag_homology_contract",
     "mag_mapping": "tests/test_tool_contracts.py::test_mag_mapping_contract",
     "feature_importance": "tests/test_tool_contracts.py::test_feature_importance_contract",
+    "resampling": "tests/test_tool_contracts.py::test_resampling_contract",
 }
 
 DEFAULT_TOOLS = {group: str(path) for group, path in BASELINE_TOOLS.items()}

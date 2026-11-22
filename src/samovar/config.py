@@ -6,7 +6,7 @@ import sys
 import warnings
 import yaml
 import argparse
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -435,6 +435,7 @@ class PipelineConfig:
     no_gpu: bool = False
     reprofiler_flags: Optional[str] = None
     reprofiler_tool_flags: Optional[Dict[str, str]] = None
+    resampling: Optional[Dict[str, Any]] = None
     feature_importance: str = "builtin"
     feature_importance_all: bool = False
     feature_importance_flags: Optional[str] = None
@@ -471,6 +472,8 @@ class PipelineConfig:
             self.scoring_tool_flags = {}
         if self.reprofiler_tool_flags is None:
             self.reprofiler_tool_flags = {}
+        if self.resampling is None:
+            self.resampling = {}
         if self.feature_importance_tool_flags is None:
             self.feature_importance_tool_flags = {}
         if self.qc_postfix is None:
@@ -708,6 +711,11 @@ class PipelineConfig:
                     config.reprofiler_tool_flags = {
                         str(k): str(v) for k, v in yaml_rtf.items()
                     }
+                yaml_resampling = input_config.get("resampling")
+                if yaml_resampling not in (None, "", False):
+                    if not isinstance(yaml_resampling, dict):
+                        raise ValueError("resampling must be a mapping")
+                    config.resampling = dict(yaml_resampling)
                 yaml_fi = (
                     input_config.get("feature_importance")
                     or input_config.get("feature-importance")
@@ -1266,6 +1274,13 @@ class PipelineConfig:
         )
         if cli_reprofiler:
             config.reprofiler = require_known_reprofiler(cli_reprofiler)
+        resampling_config = getattr(args, "resampling_config", None)
+        if resampling_config:
+            with open(resampling_config, "r", encoding="utf-8") as stream:
+                block = yaml.safe_load(stream) or {}
+            if not isinstance(block, dict):
+                raise ValueError("--resampling-config must contain a YAML mapping")
+            config.resampling = dict(block.get("resampling", block))
         if getattr(args, "no_gpu", False):
             config.gpu = False
             config.no_gpu = True
@@ -1849,6 +1864,7 @@ class PipelineConfig:
             'reprofiler': self.reprofiler,
             'reprofiler_flags': self.reprofiler_flags or "",
             'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
+            'resampling': self.resampling or {},
             'cores': int(self.cores),
             'mem_mb': int(self.mem_mb or 0),
             'gpu': bool(self.gpu),

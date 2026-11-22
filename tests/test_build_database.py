@@ -49,9 +49,11 @@ def test_metaphlan_build_checks_marker_pair_and_indexes_via_shared_runner(tmp_pa
     assert (dest / "markers.pkl").read_bytes() == info.read_bytes()
     assert len(calls) == 1
     fasta.write_text(">SGB1__gene\nAC\n")
-    with pytest.raises(ValueError, match="length"):
-        build_database_from_config(str(cfg), db_type="metaphlan", db_path=str(dest), threads=2)
-    assert len(calls) == 1
+    build_database_from_config(str(cfg), db_type="metaphlan", db_path=str(dest), threads=2)
+    manifest = json.loads((dest / "metaphlan.manifest.json").read_text())
+    assert manifest["marker_length_mismatch_count"] == 1
+    assert manifest["max_abs_marker_length_delta"] == 2
+    assert len(calls) == 2
 
 
 

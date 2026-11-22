@@ -426,10 +426,7 @@ def load_regenerated_table(path: Optional[PathLike]) -> pd.DataFrame:
     if target.is_dir():
         combined = target / "combined_annotation_table.csv"
         if combined.is_file():
-            frame = pd.read_csv(combined)
-            if "sample" in frame.columns:
-                frame = frame.drop(columns=["sample"])
-            return frame
+            return pd.read_csv(combined)
         parts = sorted(target.glob("*.annotation.csv"))
         frames = []
         for path in parts:
@@ -607,7 +604,7 @@ def reprofile_linear(
     """Logistic regression builtin (same contract as imported ML tools)."""
     cfg = dict(config or {})
     flags = _linear_flag_values(cfg.get("extra_argv") or extra_flags_argv(cfg.get("extra_flags")))
-    seed = int(cfg.get("seed") or 42)
+    seed = 42 if cfg.get("seed") is None else int(cfg.get("seed"))
     features_df = cfg.get("features_df")
     df = preprocess_data(regenerated)
     if df.empty or "true" not in df.columns:
@@ -676,7 +673,7 @@ def run_builtin_reprofiler(
         )
     output_dir = Path(cfg.get("output_dir") or ".")
     output_dir.mkdir(parents=True, exist_ok=True)
-    seed = int(cfg.get("seed") or 42)
+    seed = 42 if cfg.get("seed") is None else int(cfg.get("seed"))
     gpu = use_gpu(config=cfg)
     if canon == "rfc2" and not cfg.get("no_gpu"):
         reason = gpu_training_support("RandomForest")
@@ -783,7 +780,7 @@ def run_reprofiler(
     kind, canon = resolve_reprofiler(name)
     cfg = attach_reprofiler_flags(canon if kind == "custom" else canon, dict(config or {}))
     cfg["output_dir"] = str(output_dir)
-    cfg["seed"] = int(cfg.get("seed") or 42)
+    cfg["seed"] = 42 if cfg.get("seed") is None else int(cfg.get("seed"))
     if initial_dir:
         cfg["initial_dir"] = str(initial_dir)
     if regenerated_path:
@@ -797,10 +794,26 @@ def run_reprofiler(
     truth = ground_truth if ground_truth is not None else load_csv_tables(
         ground_truth_dir, skip_prefixes=()
     )
+    resampling_report = None
+    resampling_initial = initial
+    if isinstance(cfg.get("resampling"), dict) and cfg["resampling"]:
+        if resampling_initial is None:
+            resampling_initial = load_initial_tables(initial_dir)
+        from samovar.resample import apply_resampling
+
+        regen, resampling_report = apply_resampling(
+            regen,
+            resampling_initial,
+            cfg,
+            output_dir,
+        )
+        cfg["selected_regenerated_path"] = str(
+            Path(output_dir) / "resampled_training_table.csv"
+        )
     if kind == "builtin":
         init = initial
     else:
-        init = initial if initial is not None else load_initial_tables(initial_dir)
+        init = resampling_initial if resampling_initial is not None else load_initial_tables(initial_dir)
     regen, init = _align_ml_tables(regen, init, initial_dir)
     # Use the full fitted vocabulary, including clusters absent from regenerated reads.
     from samovar.kmer_cluster import cluster_levels_for_run
@@ -816,6 +829,8 @@ def run_reprofiler(
         result = run_builtin_reprofiler(canon, regen, truth, init, cfg)
     else:
         result = _run_custom(canon, regen, truth, init, cfg)
+    if result.model is not None and resampling_report is not None:
+        result.model.samovar_resampling_ = resampling_report
     wrote = bool((result.extras or {}).get("wrote_tables"))
     if not result.tables and not wrote:
         raise EmptyReprofileError(

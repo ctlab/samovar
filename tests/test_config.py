@@ -18,6 +18,14 @@ def test_pipeline_config_from_args_file(tmp_path):
     multiqc:
       sections: [composition, alpha]
       stages: [initial]
+    resampling:
+      tool: builtin
+      columns: [taxID_kraken2, feat_kmer_cluster]
+      groups:
+        - name: all
+          samples: [sample]
+          dataset: regenerated
+          size: 10
     annotators:
       - run_name: k2-test
         type: kraken2
@@ -46,6 +54,8 @@ def test_pipeline_config_from_args_file(tmp_path):
     assert config.read_length == 100
     assert config.coverage == 20
     assert config.email == "test@example.com"
+    assert config.resampling["columns"] == ["taxID_kraken2", "feat_kmer_cluster"]
+    assert config.resampling["groups"][0]["size"] == 10
     assert len(config.annotators) == 2
     k2 = next(a for a in config.annotators if a.type == "kraken2")
     assert k2.run_name == "k2-test"

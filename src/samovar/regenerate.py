@@ -428,6 +428,22 @@ def _union_count_matrix(data: Any) -> pd.DataFrame:
     return stacked
 
 
+def _allocate_community_total(weights: pd.Series, target: int) -> pd.Series:
+    """Allocate one integer community total by deterministic largest remainder."""
+    values = pd.to_numeric(weights, errors="coerce").fillna(0.0).clip(lower=0.0)
+    total = float(values.sum())
+    if total <= 0:
+        return pd.Series(0, index=values.index, dtype="int64")
+    raw = values * float(target) / total
+    allocated = np.floor(raw).astype("int64")
+    remaining = int(target) - int(allocated.sum())
+    if remaining > 0:
+        fractions = (raw - allocated).sort_values(ascending=False, kind="stable")
+        recipients = list(fractions.index[:remaining])
+        allocated.loc[recipients] += 1
+    return allocated
+
+
 def regenerate_concat(
     data,
     *,
@@ -436,33 +452,48 @@ def regenerate_concat(
     max_genomes: Any = None,
     table_name: Optional[str] = None,
 ) -> Dict[str, pd.DataFrame]:
-    """Merge prior abundance tables into one community.
+    """Merge prior abundance tables into exactly one synthetic community.
 
-    ``concat``: union of taxa, equal reads per taxon (optionally totalling
-    ``n_reads`` per sample). ``concat_weighted``: union of taxa with summed
-    counts on shared taxids.
+    ``concat`` gives every union taxon equal mass. ``concat_weighted`` uses the
+    mean relative abundance across all non-empty tool/sample columns. Both
+    modes allocate exactly ``n_reads`` when it is provided; otherwise weighted
+    mode preserves the mean non-empty column mass and equal mode uses one count
+    per taxon.
     """
-    stacked = _union_count_matrix(data)
     name = table_name or ("concat_weighted" if weighted else "concat")
-    if stacked.empty:
+    parts = _source_matrices(data)
+    if not parts:
         return {name: pd.DataFrame(columns=["taxid"])}
-    stacked = cap_matrix_taxa(stacked, max_genomes)
+    taxa = []
+    seen_taxa = set()
+    source_mass = []
+    normalized = []
+    for _source, matrix in parts:
+        matrix = matrix.copy()
+        matrix.index = matrix.index.astype(str)
+        for taxid in matrix.index:
+            if taxid not in seen_taxa:
+                seen_taxa.add(taxid)
+                taxa.append(taxid)
+        active = matrix.columns[matrix.sum(axis=0) > 0]
+        if len(active):
+            source_mass.extend(matrix[active].sum(axis=0).astype(float).tolist())
+            normalized.append(matrix[active].div(matrix[active].sum(axis=0), axis=1))
+    if not normalized:
+        return {name: pd.DataFrame(columns=["taxid"])}
     if weighted:
-        mat = stacked.round()
+        weights = pd.Series(0.0, index=taxa)
+        for matrix in normalized:
+            weights = weights.add(matrix.sum(axis=1), fill_value=0.0)
+        target = int(n_reads) if n_reads and int(n_reads) > 0 else max(
+            1, round(float(np.mean(source_mass)))
+        )
     else:
-        n_taxa = int(len(stacked.index))
-        target = int(n_reads) if n_reads and int(n_reads) > 0 else None
-        if n_taxa <= 0:
-            mat = stacked
-        elif target is None:
-            mat = pd.DataFrame(1.0, index=stacked.index, columns=stacked.columns)
-        else:
-            per = max(1, target // n_taxa)
-            mat = pd.DataFrame(float(per), index=stacked.index, columns=stacked.columns)
-            leftover = target - per * n_taxa
-            if leftover > 0 and len(mat.index):
-                first = mat.index[0]
-                mat.loc[first] = mat.loc[first] + leftover
+        weights = pd.Series(1.0, index=taxa)
+        target = int(n_reads) if n_reads and int(n_reads) > 0 else len(taxa)
+    weights = cap_matrix_taxa(weights.to_frame("community"), max_genomes)["community"]
+    community = _allocate_community_total(weights, target)
+    mat = community.to_frame("community")
     return {name: _abundance_table_from_matrix(mat, name)}
 
 
