@@ -1,7 +1,5 @@
 """Accuracy purity, F1 purity, and annotator quality barplots."""
 
-import math
-
 import pandas as pd
 import pytest
 
@@ -33,7 +31,7 @@ def test_accuracy_purity_majority_within_true_taxid():
 
 
 def test_current_f1_equals_accuracy_and_macro_is_standard():
-    from samovar.scores import format_f1_caption, format_r2_caption, standard_classification_metrics
+    from samovar.scores import format_f1_caption, standard_classification_metrics
 
     true = ["A", "A", "A", "B", "B", "B"]
     pred = ["A", "A", "A", "A", "B", "B"]
@@ -48,14 +46,22 @@ def test_current_f1_equals_accuracy_and_macro_is_standard():
     caption = format_f1_caption(stats["legacy_closed_set_f1_accuracy"], std)
     assert "TP/N" in caption
     assert "F1-macro" in caption
-    assert "1 −" in format_r2_caption(0.5) or "SS" in format_r2_caption(0.5)
-    from samovar.scores import _r2_abundance
-    from samovar.viz_annotation import _r2_table
-    flat = pd.Series(["A", "A", "B", "B"])
-    assert _r2_abundance(flat, flat) == 1.0
-    assert math.isnan(_r2_abundance(flat, pd.Series(["A", "A", "A", "A"])))
-    _, plotted = _r2_table(flat, flat)
-    assert plotted == 1.0
+
+
+def test_saved_score_adapters_preserve_legacy_meaning_without_recalculation():
+    from samovar.scores import (
+        adapt_binning_scores,
+        adapt_profile_scores,
+        adapt_quality_scores,
+    )
+
+    read = adapt_quality_scores(pd.DataFrame([{"annotator": "old", "f1": 0.4, "r2": 0.3}]))
+    assert read.loc[0, "legacy_closed_set_f1_accuracy"] == 0.4
+    assert read.loc[0, "legacy_read_count_r2"] == 0.3
+    assert "r2" not in read
+    assert "not recalculated" in read.loc[0, "warning"]
+    assert adapt_profile_scores(pd.DataFrame([{"f1": 0.5}])).loc[0, "schema"] == "legacy-profile"
+    assert adapt_binning_scores(pd.DataFrame([{"f1": 0.5}])).loc[0, "schema"] == "legacy-binning"
 
 
 def test_f1_purity_penalises_external_calls_into_majority():
@@ -358,7 +364,6 @@ def test_selected_metrics_skip_unused_computations(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("disabled metric was computed")
     monkeypatch.setattr(scores, "annotation_scores", forbidden)
-    monkeypatch.setattr(scores, "_r2_abundance", forbidden)
     frame = pd.DataFrame({"kaiju": ["562", "0"], "true": ["562", "562"]})
     result = scores.score_annotators(frame, ["kaiju"], metrics=["accuracy"])
     assert result.loc[0, "accuracy"] == 0.5

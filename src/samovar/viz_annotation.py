@@ -72,7 +72,7 @@ def normalize_viz_config(settings=None) -> dict:
                 (set(SCORE_COLUMNS) - {"annotator", "schema"})
                 | set(_PURITY_COLUMNS)
                 | set(_RATE_COLUMNS)
-                | {"f1", "r2", LEGACY_CLOSED_SET_F1}
+                | {"f1", LEGACY_CLOSED_SET_F1}
             )
             unknown = set(names) - allowed
             if unknown:
@@ -291,24 +291,6 @@ def _f1_from_counts(counts: pd.DataFrame) -> float:
     if precision + recall == 0:
         return 0.0
     return float(2 * precision * recall / (precision + recall))
-
-
-def _r2_table(true: pd.Series, pred: pd.Series) -> Tuple[pd.DataFrame, float]:
-    counts = _confusion_counts(true, pred)
-    true_tot = counts.groupby("true", as_index=False)["Freq"].sum().rename(columns={"Freq": "true_n"})
-    pred_tot = counts.groupby("pred", as_index=False)["Freq"].sum().rename(columns={"Freq": "pred_n"})
-    pred_tot = pred_tot.rename(columns={"pred": "true"})
-    table = true_tot.merge(pred_tot, on="true", how="outer").fillna(0)
-    if table.empty:
-        return table, 0.0
-    ss_tot = ((table["true_n"] - table["true_n"].mean()) ** 2).sum()
-    ss_res = ((table["pred_n"] - table["true_n"]) ** 2).sum()
-    if ss_tot == 0:
-        # A flat truth has no variance. Matching it is a perfect fit.
-        r2 = 1.0 if ss_res == 0 else float("nan")
-    else:
-        r2 = float(1 - ss_res / ss_tot)
-    return table, r2
 
 
 def _clip_taxon_label(text: str, max_len: int = 25) -> str:
@@ -1049,7 +1031,7 @@ def _run_annotator_compare(args, config, viz) -> None:
         output_dir=args.output_dir,
         csv_file=args.csv_file,
         show_top=args.show_top,
-        types=("f1", "R2", "cv", "scores") if viz["full"] else ("scores",),
+        types=("f1", "cv", "scores") if viz["full"] else ("scores",),
         rank=args.rank,
         split=args.split,
         spearman_full=True if args.spearman_full else None,

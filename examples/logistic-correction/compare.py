@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence
 
-import numpy as np
 import pandas as pd
 
 from samovar.abundance import (
@@ -28,54 +27,23 @@ from samovar.abundance_correctors import (
 from samovar.parse_annotators import Annotation
 
 
-def _classified(table: pd.DataFrame) -> pd.DataFrame:
-    work = normalize_abundance_table(table)
-    return work[work["taxid"].map(lambda x: str(x).strip() not in {"0", "0.0", ""})].copy()
+def _profile_metrics(a: pd.DataFrame, b: pd.DataFrame) -> dict:
+    """Mean canonical profile metrics over shared samples."""
+    from samovar.profiles import metadata
+    from samovar.scores import profile_scores
 
-
-def _rel(table: pd.DataFrame) -> pd.DataFrame:
-    work = _classified(table)
-    cols = n_sample_columns(work)
+    pred = normalize_abundance_table(a)
+    truth = normalize_abundance_table(b)
+    cols = [col for col in n_sample_columns(pred) if col in n_sample_columns(truth)]
     if not cols:
-        return work
-    totals = work[cols].sum(axis=0).replace(0, 1)
-    work[cols] = work[cols].div(totals, axis=1)
-    return work
-
-
-def _align(a: pd.DataFrame, b: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Sequence[str]]:
-    left = a.set_index("taxid")
-    right = b.set_index("taxid")
-    cols = [c for c in left.columns if str(c).startswith("N_") and c in right.columns]
-    idx = left.index.union(right.index)
-    left = left.reindex(idx).fillna(0.0)
-    right = right.reindex(idx).fillna(0.0)
-    return left, right, cols
-
-
-def _l1(a: pd.DataFrame, b: pd.DataFrame) -> float:
-    left, right, cols = _align(_rel(a), _rel(b))
-    if not cols:
-        return float("nan")
-    return float((left[cols] - right[cols]).abs().sum().sum() / max(len(cols), 1))
-
-
-def _r2(a: pd.DataFrame, b: pd.DataFrame) -> float:
-    """SAMOVAR abundance R²: 1 − Σ(n̂_t − n_t)² / Σ(n_t − n̄)², classified taxids.
-
-    Mean over shared ``N_*`` samples. Uses counts (same formula as ``scores._r2_abundance``).
-    """
-    left, right, cols = _align(_classified(a), _classified(b))
-    if not cols:
-        return float("nan")
-    scores = []
-    for col in cols:
-        y = right[col].to_numpy(dtype=float)
-        x = left[col].to_numpy(dtype=float)
-        ss_tot = float(((y - y.mean()) ** 2).sum())
-        ss_res = float(((x - y) ** 2).sum())
-        scores.append(0.0 if ss_tot == 0 else float(1.0 - ss_res / ss_tot))
-    return float(np.mean(scores)) if scores else float("nan")
+        return {"l1_norm": float("nan"), "r2": float("nan")}
+    scores = profile_scores(
+        pred[["taxid", *cols]],
+        truth[["taxid", *cols]],
+        metadata(),
+        metadata(),
+    )
+    return {name: float(scores[name].mean()) for name in ("l1_norm", "r2")}
 
 
 def _true_table(annotation: Annotation) -> Optional[pd.DataFrame]:
@@ -98,11 +66,13 @@ def _row(name, table, corrected, truth):
     cols = n_sample_columns(work)
     row = {"annotator": name, "raw_reads": float(work[cols].sum().sum()) if cols else 0.0}
     if truth is not None:
-        row["L1_raw"] = _l1(table, truth)
-        row["R2_raw"] = _r2(table, truth)
+        raw = _profile_metrics(table, truth)
+        row["L1_raw"] = raw["l1_norm"]
+        row["R2_raw"] = raw["r2"]
         if name in corrected:
-            row["L1_logistic"] = _l1(corrected[name], truth)
-            row["R2_logistic"] = _r2(corrected[name], truth)
+            logistic = _profile_metrics(corrected[name], truth)
+            row["L1_logistic"] = logistic["l1_norm"]
+            row["R2_logistic"] = logistic["r2"]
             row["delta_L1"] = row["L1_raw"] - row["L1_logistic"]
             row["delta_R2"] = row["R2_logistic"] - row["R2_raw"]
     return row
@@ -154,7 +124,7 @@ def compare_run(run_dir: Path, dest: Path) -> pd.DataFrame:
         dest / "comparison_R2.png",
         "R2_raw",
         "R2_logistic",
-        "R² (counts vs true)",
+        "R² (relative abundance vs true)",
         "Abundance R² vs true (classified taxids)",
     )
     return summary

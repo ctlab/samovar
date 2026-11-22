@@ -57,7 +57,11 @@ Use `--ide codex`, `cursor`, or `claude` if your IDE terminal is not detected.
 Workflow:
 
 1. Annotate real or ISS-simulated reads with every configured tool.
-2. Cross-validate taxIDs across tools (CV heatmaps) and against known truth when available (F1 / R²).
+2. Cross-validate per-read taxIDs across tools and score known read/fragment truth
+   with rank-aware binning metrics. Score sample profiles separately: presence
+   precision/recall/F1/Jaccard and, for quantitative truth, R²/L1/Bray–Curtis.
+   Requested pre-simulation abundance and realized read composition remain
+   separate references.
 3. Re-simulate a community from the annotation table (annotation2iss).
 4. Re-annotate the synthetic reads and train a RandomForest reprofiler (`workflow/ML.py`; AdaBoost only with `--reprofiler adaboost` or `ensemble`; `--gpu` uses cuML on CUDA for RandomForest and logistic regression) that maps tool votes → corrected taxID.
 

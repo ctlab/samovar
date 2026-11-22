@@ -468,10 +468,11 @@ _PROFILE_FIELDS = (
 )
 _RESULT_FIELDS = (
     "repeat_id", "sample_id", "seed", "phase", "run_name", *_DESC,
-    "metric", "value", "truth_source", "reason",
+    "ground_truth", "metric", "value", "truth_source", "reason",
 )
 _STAT_FIELDS = (
-    "sample_id", "phase", "run_name", *_DESC, "metric", "taxon", "truth_source",
+    "sample_id", "phase", "run_name", *_DESC, "ground_truth",
+    "metric", "taxon", "truth_source",
     "n_expected", "n_success", "n_valid",
     "mean", "sd", "ci_low", "ci_high",
     "reason", "limitation",
@@ -514,16 +515,40 @@ def _desc(info: Mapping[str, Any]) -> Dict[str, str]:
 
 
 def _adapt_quality_row(rec: Dict[str, Any]) -> Dict[str, Any]:
-    from samovar.scores import LEGACY_CLOSED_SET_F1, LEGACY_READ_WARNING, READ_QUALITY_SCHEMA
+    from samovar.scores import (
+        LEGACY_CLOSED_SET_F1,
+        LEGACY_READ_R2,
+        LEGACY_READ_R2_WARNING,
+        LEGACY_READ_WARNING,
+        READ_QUALITY_SCHEMA,
+    )
 
-    if rec.get("schema") in (READ_QUALITY_SCHEMA, "read-quality-v1"):
-        return rec
-    if "f1" not in rec or LEGACY_CLOSED_SET_F1 in rec:
+    adapted = dict(rec)
+    warnings = []
+    if "r2" in adapted and LEGACY_READ_R2 not in adapted:
+        adapted[LEGACY_READ_R2] = adapted.pop("r2")
+        warnings.append(LEGACY_READ_R2_WARNING)
+    if (
+        adapted.get("schema") not in (READ_QUALITY_SCHEMA, "read-quality-v1")
+        and "f1" in adapted
+        and LEGACY_CLOSED_SET_F1 not in adapted
+    ):
+        adapted[LEGACY_CLOSED_SET_F1] = adapted.pop("f1")
+        adapted["schema"] = "legacy-read-quality"
+        warnings.append(LEGACY_READ_WARNING)
+    if warnings:
+        adapted["warning"] = "; ".join(
+            part for part in (adapted.get("warning", ""), *warnings) if part
+        )
+    return adapted
+
+
+def _adapt_versioned_row(rec: Dict[str, Any], family: str) -> Dict[str, Any]:
+    if rec.get("schema"):
         return rec
     adapted = dict(rec)
-    adapted[LEGACY_CLOSED_SET_F1] = adapted.pop("f1")
-    adapted["schema"] = "legacy-read-quality"
-    adapted["warning"] = LEGACY_READ_WARNING
+    adapted["schema"] = f"legacy-{family}"
+    adapted["warning"] = f"unversioned {family} metrics were not recalculated"
     return adapted
 
 
@@ -537,6 +562,10 @@ def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed:
             for rec in csv.DictReader(handle):
                 if name == "quality_scores.csv":
                     rec = _adapt_quality_row(rec)
+                elif name == "profile_quality_scores.csv":
+                    rec = _adapt_versioned_row(rec, "profile")
+                else:
+                    rec = _adapt_versioned_row(rec, "binning")
                 reason = rec.get("reason") or rec.get("warning") or ""
                 base = {
                     "repeat_id": repeat_id,
@@ -544,9 +573,13 @@ def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed:
                     "seed": seed,
                     "phase": phase,
                     "run_name": rec.get("annotator") or rec.get("tool") or rec.get("run_name") or "",
-                    "truth_source": rec.get("ground_truth") or rec.get("truth_source") or "",
+                    "ground_truth": rec.get("ground_truth") or "",
+                    "truth_source": rec.get("truth_source") or rec.get("ground_truth") or "",
                     "reason": reason,
-                    "_group": "profile" if name == "profile_quality_scores.csv" else "read",
+                    "_group": {
+                        "profile_quality_scores.csv": "profile",
+                        "binning_scores.csv": "binning",
+                    }.get(name, "read"),
                     **_desc(rec),
                 }
                 metrics = []
@@ -645,9 +678,10 @@ def _observation(row: Mapping[str, Any], source: str) -> tuple:
     metric = str(row.get("metric") or "")
     taxon = str(row.get("taxon") or "")
     truth = str(row.get("truth_source") or "")
+    ground_truth = str(row.get("ground_truth") or "")
     run_name = str(row.get("run_name") or "")
     if source == "profile":
-        metric, truth = "", ""
+        metric, truth, ground_truth = "", "", ""
     else:
         taxon = ""
         if metric == "stage_elapsed_s" and not run_name:
@@ -657,6 +691,7 @@ def _observation(row: Mapping[str, Any], source: str) -> tuple:
         str(row.get("phase") or ""),
         run_name,
         *(str(row.get(name) or "") for name in _DESC),
+        ground_truth,
         metric,
         taxon,
         truth,
@@ -935,18 +970,20 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
                                 **info,
                             })
     for item in result_rows:
-        if item.get("_group") == "read" or item.get("kind") or item["metric"] in {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}:
+        if item.get("_group") in {"read", "binning"} or item.get("kind") or item["metric"] in {"elapsed_s", "max_rss_mb", "stage_elapsed_s"}:
             continue
         desc = descriptors.get((item["phase"], item["run_name"]))
         if desc is None:
             continue
-        item.update(dict(zip(_DESC, desc)))
+        for key, value in zip(_DESC, desc):
+            if not item.get(key) and value:
+                item[key] = value
     profile_rows.sort(key=lambda item: (
         item["repeat_id"], item["phase"], item["run_name"], item["sample_id"], item["taxon"],
     ))
     result_rows.sort(key=lambda item: (
         item["repeat_id"], item["phase"], item["run_name"], item["sample_id"],
-        item["metric"], item["truth_source"], item["reason"],
+        item.get("ground_truth", ""), item["metric"], item["truth_source"], item["reason"],
     ))
     summary = root / "summary"
     profiles = summary / "profiles_long.csv"
@@ -974,7 +1011,7 @@ def write_long_tables(root: Path) -> Dict[str, Path]:
     _atomic_csv(statistics, stat_rows, _STAT_FIELDS)
     _write_summary_figures(summary / "figures", stat_rows)
     _atomic_json(summary / "tables.json", {
-        "schema": 1,
+        "schema": 2,
         "built_from": "saved child artifacts",
         "profiles": "profiles_long.csv",
         "results": "results_long.csv",

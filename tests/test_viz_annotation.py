@@ -93,7 +93,7 @@ def test_viz_annotation_writes_png(tmp_path):
     out = tmp_path / "plots"
     results = viz_annotation(
         df,
-        type=("f1", "R2", "cv", "scores"),
+        type=("f1", "cv", "scores"),
         show_top=0,
         output_dir=str(out),
         plot=False,
@@ -139,7 +139,7 @@ def test_viz_annotation_handles_unclassified_assembly(tmp_path):
     out = tmp_path / "plots"
     results = viz_annotation(
         df,
-        type=("f1", "R2", "cv", "scores"),
+        type=("f1", "cv", "scores"),
         show_top=0,
         output_dir=str(out),
         plot=False,
@@ -166,7 +166,7 @@ def test_viz_annotation_without_true_keeps_cv(tmp_path):
     out = tmp_path / "plots"
     results = viz_annotation(
         df,
-        type=("f1", "R2", "cv", "scores"),
+        type=("f1", "cv", "scores"),
         show_top=0,
         output_dir=str(out),
         plot=False,
@@ -199,7 +199,7 @@ def test_compare_annotations_skips_correlation_on_raw(tmp_path):
     compare_annotations(
         annotation_dir=str(ann),
         output_dir=str(out),
-        types=("f1", "R2", "cv", "scores"),
+        types=("f1", "cv", "scores"),
         rank="none",
     )
     assert not list(out.glob("spearman_correlation_mqc.json"))
@@ -223,7 +223,7 @@ def test_compare_annotations_writes_correlation_on_regenerated(tmp_path):
     compare_annotations(
         annotation_dir=str(ann),
         output_dir=str(out),
-        types=("f1", "R2", "cv", "scores"),
+        types=("f1", "cv", "scores"),
         rank="none",
     )
     payload = json.loads((out / "spearman_correlation_mqc.json").read_text())
@@ -318,7 +318,7 @@ def test_compare_annotations_cli_integrity(tmp_path):
         output_dir=str(out),
         csv_file=str(csv),
         show_top=0,
-        types=("f1", "R2", "cv", "scores"),
+        types=("f1", "cv", "scores"),
         rank="none",
     )
     assert not data.empty
@@ -354,3 +354,10 @@ def test_compare_cli_viz_config_and_overrides(tmp_path, monkeypatch):
     assert calls[-1]["types"] == ("scores",) and not calls[-1]["opal"]
     assert calls[-1]["metrics"] == ["accuracy", "tnr"] and calls[-1]["metrics_sample"] == 0
     assert calls[-1]["threads"] == 2 and calls[-1]["seed"] == 9
+
+
+def test_read_quality_metrics_reject_profile_r2():
+    from samovar.viz_annotation import normalize_viz_config
+
+    with pytest.raises(ValueError, match="Unknown viz metrics: r2"):
+        normalize_viz_config({"metrics": ["r2"]})

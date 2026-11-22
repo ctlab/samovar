@@ -22,14 +22,18 @@ def test_summary_does_not_combine_score_schemas_or_truth_sources():
 
     base = dict(sample_id="A", phase="regenerated", run_name="tool", metric="f1",
                 rank="genus", unit="fragment", value="0.5")
-    rows = [{**base, "repeat_id": "0001", "schema": "kraken2-rank-v1", "truth_source": "reads"},
-            {**base, "repeat_id": "0002", "schema": "legacy-read-quality", "truth_source": "reads"},
-            {**base, "repeat_id": "0003", "schema": "kraken2-rank-v1", "truth_source": "requested"}]
+    rows = [{**base, "repeat_id": "0001", "schema": "kraken2-rank-v1",
+             "ground_truth": "reads", "truth_source": "realized reads"},
+            {**base, "repeat_id": "0002", "schema": "legacy-read-quality",
+             "ground_truth": "reads", "truth_source": "realized reads"},
+            {**base, "repeat_id": "0003", "schema": "kraken2-rank-v1",
+             "ground_truth": "requested", "truth_source": "pre-simulation abundance"}]
     result = statistics_rows([], rows, n_expected=3, n_success=3, base_seed=42)
     assert len(result) == 3
-    assert {(row["schema"], row["truth_source"]) for row in result} == {
-        ("kraken2-rank-v1", "reads"), ("legacy-read-quality", "reads"),
-        ("kraken2-rank-v1", "requested")}
+    assert {(row["schema"], row["ground_truth"], row["truth_source"]) for row in result} == {
+        ("kraken2-rank-v1", "reads", "realized reads"),
+        ("legacy-read-quality", "reads", "realized reads"),
+        ("kraken2-rank-v1", "requested", "pre-simulation abundance")}
     assert all(row["n_valid"] == 1 for row in result)
 
 
@@ -525,7 +529,9 @@ def test_long_tables_keep_successful_repeats(tmp_path):
     plots = root / "out_0001" / "initial_annotations_plots"
     plots.mkdir()
     (plots / "profile_quality_scores.csv").write_text(
-        "annotator,reason\nkraken,no profile gold standard available\n", encoding="utf-8"
+        "annotator,ground_truth,truth_source,reason\n"
+        "kraken,reads,realized reads,no profile gold standard available\n",
+        encoding="utf-8",
     )
     runtime = root / "out_0001" / "initial_reports" / "runtime" / "samples" / "kraken" / "classify"
     runtime.mkdir(parents=True)
@@ -541,6 +547,7 @@ def test_long_tables_keep_successful_repeats(tmp_path):
     before = marker.read_bytes()
 
     written = write_long_tables(root)
+    assert json.loads((root / "summary" / "tables.json").read_text())["schema"] == 2
     first = written["profiles"].read_bytes()
     assert write_long_tables(root)["profiles"].read_bytes() == first
     assert marker.read_bytes() == before
@@ -573,6 +580,9 @@ def test_long_tables_keep_successful_repeats(tmp_path):
         results = list(csv.DictReader(handle))
     absent = [row for row in results if row["reason"] == "no profile gold standard available"]
     assert len(absent) == 1 and absent[0]["value"] == "" and absent[0]["metric"] == ""
+    assert absent[0]["schema"] == "legacy-profile"
+    assert absent[0]["ground_truth"] == "reads"
+    assert absent[0]["truth_source"] == "realized reads"
     assert absent[0]["rank"] == "species" and absent[0]["normalization"] == "all"
     rss = [float(row["value"]) for row in results if row["metric"] == "max_rss_mb"]
     assert rss == [10.0, 20.0]

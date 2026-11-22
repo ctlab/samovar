@@ -368,7 +368,7 @@ def _viz_and_score(
             csv_file=str(combined) if combined else None,
             show_top=0,
             rank="none",
-            types=("f1", "R2", "cv", "scores") if viz["full"] else ("scores",),
+            types=("f1", "cv", "scores") if viz["full"] else ("scores",),
             opal=viz["opal"],
             metrics_sample=viz["metrics_sample"],
             metrics=viz["metrics"],

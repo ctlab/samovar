@@ -26,6 +26,8 @@ from samovar.scores import (
     LEGACY_CLOSED_SET_F1,
     OPAL_DISPLAY,
     SCORE_DISPLAY,
+    adapt_binning_scores,
+    adapt_profile_scores,
     adapt_quality_scores,
     canonical_annotator_name,
     is_platform_read_type,
@@ -296,7 +298,6 @@ CONCLUSION_METRICS = (
     LEGACY_CLOSED_SET_F1,
     "accuracy",
     "f1_macro",
-    "r2",
 )
 
 
@@ -357,16 +358,14 @@ def _safe_json(value: Any) -> Any:
     return str(value)
 
 
-def _read_scores_table(plots: Path) -> List[Dict[str, Any]]:
-    csv = plots / "quality_scores.csv"
-    if not csv.is_file():
-        return []
-    try:
-        import pandas as pd
+_SCORE_TABLES = {
+    "quality_scores": ("quality_scores.csv", adapt_quality_scores),
+    "profile_quality_scores": ("profile_quality_scores.csv", adapt_profile_scores),
+    "binning_scores": ("binning_scores.csv", adapt_binning_scores),
+}
 
-        table = adapt_quality_scores(pd.read_csv(csv))
-    except Exception:
-        return []
+
+def _table_records(table) -> List[Dict[str, Any]]:
     rows = []
     for _, row in table.iterrows():
         rec = {}
@@ -383,6 +382,26 @@ def _read_scores_table(plots: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def _read_score_tables(plots: Path) -> Dict[str, List[Dict[str, Any]]]:
+    import pandas as pd
+
+    result = {}
+    for key, (filename, adapter) in _SCORE_TABLES.items():
+        path = plots / filename
+        if not path.is_file():
+            continue
+        try:
+            result[key] = _table_records(adapter(pd.read_csv(path)))
+        except Exception:
+            continue
+    return result
+
+
+def _read_scores_table(plots: Path) -> List[Dict[str, Any]]:
+    """Compatibility reader for the read-quality plots."""
+    return _read_score_tables(plots).get("quality_scores", [])
+
+
 def collect_stage_payload(output_dir: PathLike, stage: str) -> Dict[str, Any]:
     root = as_path(output_dir)
     info = STAGE_INFO.get(stage, {"title": stage, "description": ""})
@@ -396,10 +415,10 @@ def collect_stage_payload(output_dir: PathLike, stage: str) -> Dict[str, Any]:
         }
         if name.endswith("_plots"):
             files[name]["plots"] = _list_rel(folder, PLOT_SUFFIXES)
-            scores = _read_scores_table(folder)
-            if scores:
-                summary["quality_scores"] = scores
-                summary["n_annotators"] = len(scores)
+            score_tables = _read_score_tables(folder)
+            summary.update(score_tables)
+            if score_tables.get("quality_scores"):
+                summary["n_annotators"] = len(score_tables["quality_scores"])
             opal = folder / "opal"
             if opal.is_dir():
                 files[name]["opal"] = _list_rel(opal, PLOT_SUFFIXES | {".html", ".csv"})
@@ -413,7 +432,7 @@ def collect_stage_payload(output_dir: PathLike, stage: str) -> Dict[str, Any]:
             summary["n_genomes"] = _count_files(folder, ("*.fna", "*.fa", "*.fasta", "*.fna.gz", "*.fa.gz"))
     return {
         "id": "samovar",
-        "schema_version": 1,
+        "schema_version": 2,
         "samovar_version": PACKAGE_VERSION,
         "stage": stage,
         "section_name": info["title"],
@@ -1330,6 +1349,48 @@ def _write_score_plots(
     return written
 
 
+def _write_contract_score_table(
+    dest: Path,
+    *,
+    prefix: str,
+    parent_id: str,
+    parent_name: str,
+    parent_description: str,
+    family: str,
+    rows: Sequence[Dict[str, Any]],
+) -> Optional[Path]:
+    if not rows:
+        return None
+    details = {
+        "profile_quality_scores": (
+            "profile_quality_scores",
+            "Taxonomic profiles",
+            "Sample-level profile metrics with an explicit truth source.",
+        ),
+        "binning_scores": (
+            "binning_scores",
+            "Taxonomic binning",
+            "Rank-aware read/fragment scores; unknown truth is unscorable.",
+        ),
+    }
+    stem, section, description = details[family]
+    cid = f"{parent_id}_{stem}"
+    payload = {
+        "id": cid,
+        "section_id": cid,
+        "parent_id": parent_id,
+        "parent_name": parent_name,
+        "parent_description": parent_description,
+        "section_name": f"{parent_name} — {section}",
+        "description": description,
+        "plot_type": "table",
+        "data": {str(i): row for i, row in enumerate(rows)},
+    }
+    out = dest / f"{prefix}_{stem}_mqc.json"
+    _emit_mqc(payload, out)
+    return out
+
+
 def _skip_duplicate_ensemble_plot(path: Path, names: Sequence[str]) -> bool:
     stem, _rt = _split_plot_stem(path.stem.replace("_mqc", ""))
     token = stem.split("_", 1)[-1] if "_" in stem else stem
@@ -1343,7 +1404,8 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
     written: List[Path] = []
     if not plots.is_dir():
         return written
-    sources = sorted(plots.glob("*_mqc.json"))
+    score_json = {"profile_quality_scores_mqc.json", "binning_scores_mqc.json"}
+    sources = [path for path in sorted(plots.glob("*_mqc.json")) if path.name not in score_json]
     names = [p.name for p in sources]
     for src in sources:
         if _skip_duplicate_ensemble_plot(src, names):
@@ -1371,7 +1433,8 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
         out = dest / f"{prefix}_{src.name}"
         _emit_mqc(payload, out)
         written.append(out)
-    scores = _read_scores_table(plots)
+    score_tables = _read_score_tables(plots)
+    scores = score_tables.get("quality_scores", [])
     types = ["all"] + _available_read_types(scores)
     for read_type in types:
         rows = _rows_for_read_type(scores, read_type)
@@ -1391,6 +1454,20 @@ def _copy_plot_assets(plots: Path, dest: Path, stage: str, order: int) -> List[P
                 rows=rows,
             )
         )
+    parent_id, parent_name, parent_description, _hidden = report_parent(stage, None)
+    prefix = f"{order:02d}_{_slug(parent_name)}"
+    for family in ("profile_quality_scores", "binning_scores"):
+        out = _write_contract_score_table(
+            dest,
+            prefix=prefix,
+            parent_id=parent_id,
+            parent_name=parent_name,
+            parent_description=parent_description,
+            family=family,
+            rows=score_tables.get(family, []),
+        )
+        if out is not None:
+            written.append(out)
     return written
 
 
@@ -1536,7 +1613,7 @@ def _conclusion_html(output_dir: PathLike, settings=None) -> str:
                 )
         if not any_metric:
             parts.append(
-                "<li>Ground-truth F1 / R² were not calculated for this run.</li>"
+                "<li>Ground-truth read-quality metrics were not calculated for this run.</li>"
             )
         parts.append("</ul>")
     elif ensemble:

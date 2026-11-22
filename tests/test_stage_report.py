@@ -70,6 +70,48 @@ def test_bundle_multiqc_includes_plots_and_scores(tmp_path):
     assert "Raw" in next(p for p in jsons if "F1_kaiju" in p.name).read_text()
 
 
+def test_rebuild_reads_versioned_profile_and_binning_scores_without_rescoring(tmp_path, monkeypatch):
+    plots = tmp_path / "initial_annotations_plots"
+    plots.mkdir()
+    (plots / "profile_quality_scores.csv").write_text(
+        "annotator,ground_truth,truth_source,sample,f1,r2,reason,schema\n"
+        "kraken,reads,realized reads,A,0.8,0.7,,profile-v2\n",
+        encoding="utf-8",
+    )
+    (plots / "binning_scores.csv").write_text(
+        "tool,truth_source,sample,rank,tp,fp,f1,reason,schema\n"
+        "taxID_kraken,annotation:true,A,species,8,2,0.8,,kraken2-rank-v1\n",
+        encoding="utf-8",
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("saved score rebuild called a numerical scorer")
+
+    monkeypatch.setattr("samovar.scores.profile_scores", forbidden)
+    monkeypatch.setattr("samovar.scores.report_rank_fragments", forbidden)
+    report = json.loads(write_stage_report(tmp_path, "viz_initial").read_text())
+    assert report["schema_version"] == 2
+    assert report["summary"]["profile_quality_scores"][0]["truth_source"] == "realized reads"
+    assert report["summary"]["binning_scores"][0]["rank"] == "species"
+
+    staged = bundle_multiqc(tmp_path)
+    profile = json.loads(next(staged.glob("*profile_quality_scores_mqc.json")).read_text())
+    binning = json.loads(next(staged.glob("*binning_scores_mqc.json")).read_text())
+    assert profile["data"]["0"]["schema"] == "profile-v2"
+    assert profile["data"]["0"]["ground_truth"] == "reads"
+    assert binning["data"]["0"]["schema"] == "kraken2-rank-v1"
+    assert binning["data"]["0"]["truth_source"] == "annotation:true"
+
+    from samovar.multiqc_report import effective_settings
+
+    profiles_only = bundle_multiqc(tmp_path, effective_settings([{"sections": ["profiles"]}]))
+    assert list(profiles_only.glob("*profile_quality_scores_mqc.json"))
+    assert not list(profiles_only.glob("*binning_scores_mqc.json"))
+    binning_only = bundle_multiqc(tmp_path, effective_settings([{"sections": ["benchmark"]}]))
+    assert list(binning_only.glob("*binning_scores_mqc.json"))
+    assert not list(binning_only.glob("*profile_quality_scores_mqc.json"))
+
+
 def test_bundle_profiles_without_ground_truth(tmp_path):
     import pandas as pd
     from samovar.profiles import write_profiles, read_profiles
@@ -188,7 +230,7 @@ def test_multiqc_render_is_adequate(tmp_path):
     for folder in ("initial_annotations_plots", "regenerated_annotations_plots"):
         viz_annotation(
             df,
-            type=("f1", "R2", "cv", "scores"),
+            type=("f1", "cv", "scores"),
             show_top=0,
             output_dir=str(tmp_path / folder),
             plot=False,
@@ -229,8 +271,6 @@ def test_multiqc_render_is_adequate(tmp_path):
     keys = " ".join(plot_data)
     assert "samovar_raw_F1_" in keys
     assert "samovar_regenerated_F1_" in keys
-    assert "samovar_raw_R2_" in keys
-    assert "samovar_regenerated_R2_" in keys
     assert "samovar_raw_score_bars" in keys
     grouped = next(v for k, v in plot_data.items() if "initial_beta_grouped_pcoa" in k)
     assert len(grouped["datasets"]) == 1

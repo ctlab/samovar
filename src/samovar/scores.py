@@ -103,6 +103,8 @@ INVALID_READ_TYPES = frozenset({"", "nan", "none", "na", "all", "0", "unclassifi
 READ_QUALITY_SCHEMA = "read-quality-v2"
 PROFILE_SCHEMA = "profile-v2"
 LEGACY_CLOSED_SET_F1 = "legacy_closed_set_f1_accuracy"
+LEGACY_READ_R2 = "legacy_read_count_r2"
+LEGACY_READ_R2_WARNING = "stored read-count R² was not recalculated as a profile metric"
 LEGACY_READ_WARNING = (
     "Column f1 is closed-set accuracy (TP/N), not rank F1 or profile set-F1. "
     "The stored value was not recalculated."
@@ -227,28 +229,6 @@ def standard_classification_metrics(true: Iterable, pred: Iterable) -> Dict[str,
     }
 
 
-def _r2_abundance(true: pd.Series, pred: pd.Series) -> float:
-    _, normalize_taxon_token = _taxon_helpers()
-    t = normalize_series(true)
-    p = normalize_series(pred)
-    true_n = t.value_counts()
-    pred_n = p.value_counts()
-    true_n = true_n[true_n > 0]
-    pred_n = pred_n[pred_n > 0]
-    taxa = sorted(set(true_n.index) | set(pred_n.index))
-    if not taxa:
-        return float("nan")
-    y = np.array([float(true_n.get(x, 0)) for x in taxa])
-    x = np.array([float(pred_n.get(x, 0)) for x in taxa])
-    ss_tot = float(((y - y.mean()) ** 2).sum())
-    ss_res = float(((x - y) ** 2).sum())
-    if ss_tot == 0:
-        # A flat truth has no variance. Matching it is a perfect fit; any
-        # other prediction cannot be compared with the usual ratio.
-        return 1.0 if ss_res == 0 else float("nan")
-    return float(1.0 - ss_res / ss_tot)
-
-
 def purity_by_taxon(true: Iterable, pred: Iterable) -> pd.DataFrame:
     """Per-true-taxid majority recall / precision / F1.
 
@@ -351,12 +331,44 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
 def adapt_quality_scores(table: pd.DataFrame) -> pd.DataFrame:
     """Read a saved read-quality table without turning its old ``f1`` into set-F1."""
     work = table.copy()
-    if "schema" in work.columns and work["schema"].astype(str).isin((READ_QUALITY_SCHEMA, "read-quality-v1")).all():
-        return work
+    warnings = []
+    if "r2" in work.columns and LEGACY_READ_R2 not in work.columns:
+        work = work.rename(columns={"r2": LEGACY_READ_R2})
+        warnings.append(LEGACY_READ_R2_WARNING)
     if "f1" in work.columns and LEGACY_CLOSED_SET_F1 not in work.columns:
         work = work.rename(columns={"f1": LEGACY_CLOSED_SET_F1})
         work["schema"] = "legacy-read-quality"
-        work["warning"] = LEGACY_READ_WARNING
+        warnings.append(LEGACY_READ_WARNING)
+    if warnings:
+        previous = work["warning"].fillna("").astype(str) if "warning" in work else pd.Series("", index=work.index)
+        work["warning"] = [
+            "; ".join(part for part in (old, *warnings) if part)
+            for old in previous
+        ]
+    return work
+
+
+def adapt_profile_scores(table: pd.DataFrame) -> pd.DataFrame:
+    """Tag unversioned profile scores without changing their stored metrics."""
+    work = table.copy()
+    if "schema" not in work.columns:
+        work["schema"] = ""
+    missing = work["schema"].fillna("").astype(str).str.strip().eq("")
+    work.loc[missing, "schema"] = "legacy-profile"
+    if missing.any():
+        work.loc[missing, "warning"] = "unversioned profile metrics were not recalculated"
+    return work
+
+
+def adapt_binning_scores(table: pd.DataFrame) -> pd.DataFrame:
+    """Tag unversioned binning scores without changing their stored metrics."""
+    work = table.copy()
+    if "schema" not in work.columns:
+        work["schema"] = ""
+    missing = work["schema"].fillna("").astype(str).str.strip().eq("")
+    work.loc[missing, "schema"] = "legacy-binning"
+    if missing.any():
+        work.loc[missing, "warning"] = "unversioned binning metrics were not recalculated"
     return work
 
 
@@ -471,8 +483,9 @@ def score_annotators(
     """Score each annotator plus optional majority-vote SAMOVAR ensemble.
 
     When ``SAMOVAR`` is already a column (re-profiled tables), majority vote is
-    not added again. When ground truth is missing or all-unclassified, F1 / R²
-    and related metrics are left as NaN; ``n_reads`` / ``n_taxa`` are still filled.
+    not added again. When ground truth is missing or all-unclassified,
+    truth-dependent read metrics are left as NaN; ``n_reads`` / ``n_taxa`` are
+    still filled.
 
     Profile presence and abundance are not copied here. ``opal`` is accepted
     for existing callers and does not add a second profile table.
@@ -896,15 +909,6 @@ def format_f1_caption(f1: float, std: Dict[str, float], rank: Optional[str] = No
         f"F1-macro = {std.get('f1_macro', float('nan')):.3f}   "
         f"F1-weighted = {std.get('f1_weighted', float('nan')):.3f}"
         f"{rates}"
-    )
-
-
-def format_r2_caption(r2: float, rank: Optional[str] = None) -> str:
-    """Two-line caption for abundance R² scatter plots (current formula)."""
-    tag = f" ({rank})" if rank else ""
-    return (
-        f"R² (current){tag} = 1 − Σ(n̂_t − n_t)² / Σ(n_t − n̄)² = {r2:.3f}\n"
-        f"n_t = true read count of taxid t; n̂_t = predicted count (labels not in truth → other)"
     )
 
 

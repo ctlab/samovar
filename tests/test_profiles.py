@@ -1037,6 +1037,19 @@ def test_requested_and_realized_regenerated_truth_remain_distinct(tmp_path):
     assert result.set_index("ground_truth").loc["requested", "l1_norm"] == pytest.approx(0.5)
 
 
+def test_regenerated_profile_scoring_requires_realized_truth(tmp_path):
+    from samovar.profile_pipeline import score
+    from samovar.profiles import metadata, write_profiles
+
+    write_profiles(
+        tmp_path / "regenerated_profiles",
+        {"tool": pd.DataFrame({"taxid": ["562"], "N_A": [1]})},
+        {"tool": metadata({"rank": "taxid", "normalization": "all"})},
+    )
+    with pytest.raises(ValueError, match="no realized read-level ground truth"):
+        score(tmp_path, "regenerated", {})
+
+
 def test_profile_r2_uses_aligned_fractions_and_rejects_zero_variance():
     from samovar.profiles import metadata
     from samovar.scores import profile_scores
@@ -1053,6 +1066,21 @@ def test_profile_r2_uses_aligned_fractions_and_rejects_zero_variance():
     binary = prediction.assign(N_s=[1, 1])
     presence = profile_scores(prediction, binary, info, {**info, "kind": "presence"})
     assert pd.isna(presence.iloc[0].r2)
+
+
+def test_profile_scoring_keeps_false_taxa_and_unclassified_mass():
+    from samovar.profiles import metadata
+    from samovar.scores import profile_scores
+
+    info = metadata({"rank": "taxid", "normalization": "all"})
+    truth = pd.DataFrame({"taxid": ["0", "562", "9606"], "N_s": [0, 3, 1]})
+    prediction = pd.DataFrame({"taxid": ["0", "562", "999"], "N_s": [1, 2, 1]})
+    row = profile_scores(prediction, truth, info, info).iloc[0]
+    assert row.fp == 1
+    assert row.fn == 1
+    assert row.jaccard == pytest.approx(1 / 3)
+    assert row.l1_norm == pytest.approx(1)
+    assert row.bray_curtis == pytest.approx(0.5)
 
 
 def test_profile_scoring_preserves_missing_truth_as_unavailable(tmp_path):
