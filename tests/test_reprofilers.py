@@ -227,6 +227,50 @@ def test_prepare_gpu_flag_reaches_ml(tmp_path):
     assert '--cores "$SAMOVAR_CORES"' in script
 
 
+def test_rfc2_contract_flags_survive_training_and_reload(tmp_path):
+    import joblib
+
+    regenerated, ground, initial = _tiny_tables()
+    result = run_reprofiler(
+        "rfc2",
+        regenerated=regenerated,
+        ground_truth=ground,
+        initial=initial,
+        output_dir=tmp_path / "rfc2",
+        config={
+            "seed": 0,
+            "cores": 1,
+            "no_gpu": True,
+            "feature_importance": "none",
+            "reprofiler_flags": (
+                "--n_estimators 4 --min-confidence=0.99 "
+                "--min-class-count 100 --custom-flag 1"
+            ),
+        },
+    )
+    model = result.model
+    assert model.n_estimators == 4
+    assert model.samovar_min_confidence_ == 0.99
+    assert model.samovar_min_class_count_ == 100
+    loaded = joblib.load(tmp_path / "rfc2" / "trained_model.joblib")
+    predicted = predict_taxid(initial["sample.annotation"], loaded)
+    assert set(predicted["taxid_SAMOVAR"]) == {0}
+    assert set(predicted["taxid_SAMOVAR_abstain_reason"]) == {"rare_class"}
+    with pytest.raises(ValueError, match="invalid value"):
+        run_reprofiler(
+            "rfc2",
+            regenerated=regenerated,
+            ground_truth=ground,
+            initial=initial,
+            output_dir=tmp_path / "bad",
+            config={
+                "no_gpu": True,
+                "feature_importance": "none",
+                "reprofiler_flags": "--n_estimators lots --another 2",
+            },
+        )
+
+
 def test_train_models_single_method():
     regenerated, _, _ = _tiny_tables()
     processed = preprocess_data(regenerated)

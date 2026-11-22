@@ -551,6 +551,47 @@ def _coerce_result(value: Any, initial: Dict[str, pd.DataFrame]) -> ReprofileRes
     )
 
 
+_RFC2_FLAG_MAP = {
+    "--n_estimators": ("n_estimators", int),
+    "--n-estimators": ("n_estimators", int),
+    "--min_confidence": ("min_confidence", float),
+    "--min-confidence": ("min_confidence", float),
+    "--min_class_count": ("min_class_count", int),
+    "--min-class-count": ("min_class_count", int),
+}
+
+
+def _rfc2_flag_values(argv: Sequence[str]) -> Dict[str, Any]:
+    """Read RFC2 contract flags from a ``--flags ml "..."`` string.
+
+    Any number of contract flags may appear. Tokens that are not part of this
+    contract stay in ``extra_argv`` and do not stop the run.
+    """
+    extra = list(argv or [])
+    out: Dict[str, Any] = {}
+    i = 0
+    while i < len(extra):
+        token = str(extra[i])
+        flag, inline = (token.split("=", 1) if token.startswith("--") and "=" in token else (token, None))
+        mapped = _RFC2_FLAG_MAP.get(flag)
+        if mapped is None:
+            i += 1
+            continue
+        key, caster = mapped
+        if inline is None:
+            if i + 1 >= len(extra):
+                raise ValueError(f"RFC2 flag {flag} needs a value")
+            inline = extra[i + 1]
+            i += 2
+        else:
+            i += 1
+        try:
+            out[key] = caster(inline)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"RFC2 flag {flag} has invalid value {inline!r}") from exc
+    return out
+
+
 def _linear_flag_values(argv: Sequence[str]) -> Dict[str, Any]:
     extra = list(argv or [])
     out: Dict[str, Any] = {"C": 1.0, "max_iter": 500, "use_priors": False}
@@ -684,6 +725,10 @@ def run_builtin_reprofiler(
         else:
             print(f"Warning: rfc2 is training on CPU. {reason}", file=sys.stderr)
             gpu = False
+    rfc2_flags = _rfc2_flag_values(cfg.get("extra_argv") or []) if canon == "rfc2" else {}
+    n_estimators = rfc2_flags.get("n_estimators", cfg.get("n_estimators"))
+    if n_estimators is None:
+        n_estimators = RFC2_N_ESTIMATORS if canon == "rfc2" else 100
     try:
         best, models, metrics, feature_cols = train_models(
             validation,
@@ -692,7 +737,9 @@ def run_builtin_reprofiler(
             n_jobs=training_n_jobs(config=cfg),
             gpu=gpu,
             abstain=canon == "rfc2",
-            n_estimators=int(cfg.get("n_estimators") or (RFC2_N_ESTIMATORS if canon == "rfc2" else 100)),
+            n_estimators=int(n_estimators),
+            min_class_count=rfc2_flags.get("min_class_count", cfg.get("min_class_count")),
+            min_confidence=rfc2_flags.get("min_confidence", cfg.get("min_confidence")),
         )
     except ValueError as exc:
         raise EmptyReprofileError(

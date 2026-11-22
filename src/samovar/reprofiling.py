@@ -576,13 +576,18 @@ def fit_logistic(X, y, *, n_jobs=1, gpu=False, **kwargs) -> Any:
     return model
 
 
-def _choose_abstention(model, y_train):
-    """Save the fixed rfc2 refusal rule and the training class counts."""
+def _choose_abstention(model, y_train, *, min_class_count=None, min_confidence=None):
+    """Save the rfc2 refusal rule and the training class counts."""
     counts = {int(label): int(n) for label, n in y_train.value_counts().items()}
     model.samovar_abstain_ = True
     model.samovar_class_counts_ = counts
-    model.samovar_min_class_count_ = RFC2_MIN_CLASS_COUNT
-    model.samovar_min_confidence_ = RFC2_MIN_CONFIDENCE
+    model.samovar_n_estimators_ = int(getattr(model, "n_estimators", 0) or 0)
+    model.samovar_min_class_count_ = (
+        RFC2_MIN_CLASS_COUNT if min_class_count is None else int(min_class_count)
+    )
+    model.samovar_min_confidence_ = (
+        RFC2_MIN_CONFIDENCE if min_confidence is None else float(min_confidence)
+    )
 
 
 def _apply_abstention(model, label, confidence):
@@ -605,7 +610,18 @@ def _apply_abstention(model, label, confidence):
     return key, ""
 
 
-def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu=False, abstain=False, n_estimators=None):
+def train_models(
+    df,
+    test_size=0.2,
+    random_state=42,
+    methods=None,
+    n_jobs=1,
+    gpu=False,
+    abstain=False,
+    n_estimators=None,
+    min_class_count=None,
+    min_confidence=None,
+):
     """
     Train RandomForest and/or AdaBoost models for taxID prediction.
 
@@ -726,7 +742,12 @@ def train_models(df, test_size=0.2, random_state=42, methods=None, n_jobs=1, gpu
         model.fit(X_train, y_train)
         model.samovar_preprocessing_ = df_processed.attrs["samovar_preprocessing"]
         if abstain and name == "RandomForest":
-            _choose_abstention(model, y_train)
+            _choose_abstention(
+                model,
+                y_train,
+                min_class_count=min_class_count,
+                min_confidence=min_confidence,
+            )
         score = model.score(X_test, y_test)
         metrics[name] = score
         
