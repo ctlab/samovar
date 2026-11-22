@@ -17,10 +17,11 @@ Modes:
 - ``glm``: correlation-aware synthetic communities (Python).
 - ``camisim-table`` (aliases camisim, cami): CAMISIM log-normal community
   design on the observed taxIDs (same engine as ``samovar generate --simulator camisim --camisim-mode table``).
-- ``concat``: merge prior annotator tables into one (union taxa, equal
-  reads per taxon), then one regeneration.
-- ``concat_weighted`` (default): same merge into one table, summing counts
-  for shared taxa (same proportions as the mean across annotators).
+- ``concat``: merge every tool and sample into one community with equal
+  taxon mass. ``N_reads`` is that community's total. ``N`` other than 1 is rejected.
+- ``concat_weighted`` (default): one community whose taxon weights are the
+  mean relative abundance of every non-empty tool/sample column, totalling
+  ``N_reads``. ``N`` other than 1 is rejected.
 - ``samovar``: optional R regenerator (not part of the Python install). Looked
   up via ``SAMOVAR_R_REGENERATE`` / config ``annotation_regenerate_r``.
 - any other name: custom ``table_reads_generator`` registered with
@@ -240,6 +241,18 @@ def is_direct_mode(mode: Optional[str]) -> bool:
 def is_concat_mode(mode: Optional[str]) -> bool:
     kind, name = resolve_regeneration_mode(mode)
     return kind == "builtin" and name in {"concat", "concat_weighted"}
+
+
+def require_concat_community_count(mode: Optional[str], n: Any) -> None:
+    """``N`` counts communities. A concat mode already has exactly one."""
+    if n in (None, "", False) or not is_concat_mode(mode):
+        return
+    count = int(n)
+    if count != 1:
+        raise ValueError(
+            f"{mode} builds one synthetic community. N={count} is a community "
+            "count, not a read depth. Use N_reads to set that depth, or omit N."
+        )
 
 
 def coerce_seed(seed: Any, default: int = 42) -> int:
@@ -903,12 +916,25 @@ def regenerate_annotation_tables(
         ranked["failed"] = list(generate_errors)
     mixed = ranked.get("tables") or {}
     if not mixed:
+        ineligible = {
+            row.get("mode")
+            for row in ranked.get("candidates") or []
+            if row.get("reason") == "identity copy is not comparable with itself"
+        }
         for mode in modes:
-            if tables_by_mode.get(mode):
-                mixed = tables_by_mode[mode]
-                ranked["winner"] = mode
-                ranked["tables"] = mixed
-                break
+            if mode in ineligible or not tables_by_mode.get(mode):
+                continue
+            mixed = tables_by_mode[mode]
+            ranked["winner"] = mode
+            ranked["tables"] = mixed
+            break
+    payload = {k: v for k, v in ranked.items() if k != "tables"}
+    if select_best and not mixed:
+        write_table_selection(out / "table_selection.json", payload)
+        raise RuntimeError(
+            "No regeneration mode is comparable with the observed tables. "
+            "An identity copy cannot win a comparison with itself."
+        )
     if not mixed:
         raise RuntimeError(
             "No table_reads_generator produced abundance tables. "
@@ -917,7 +943,6 @@ def regenerate_annotation_tables(
             + (f" Unsupported: {unsupported}" if unsupported else "")
         )
     _write_abundance_tables(out, mixed)
-    payload = {k: v for k, v in ranked.items() if k != "tables"}
     write_table_selection(out / "table_selection.json", payload)
     write_table_selection(candidates_root / "table_selection.json", payload)
     try:

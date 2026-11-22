@@ -115,6 +115,8 @@ def test_rank_methods_shannon_has_score_matrix(toy_annotation_dir, tmp_path):
     for key in CANDIDATE_KEYS:
         assert key in row
     assert row["ks_statistic"] == 0.0
+    assert row["ok"] is False
+    assert ranked["winner"] != "direct"
 
 
 def test_ks_bray_identical_tables_is_zero():
@@ -197,7 +199,8 @@ def test_globalpatterns_three_generators_three_scorers(tmp_path, monkeypatch):
     for key in CANDIDATE_KEYS:
         assert key in direct_sh
     assert direct_sh["ks_statistic"] == 0.0
-    assert shannon["winner_by_annotator"][annotator] == "direct"
+    assert direct_sh["ok"] is False
+    assert shannon["winner_by_annotator"][annotator] != "direct"
 
     bray = rank_methods_per_annotator(
         gp, tables_by_mode, "bray_ks", modes=["direct", "bootstrap", "glm"]

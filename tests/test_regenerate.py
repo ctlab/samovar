@@ -917,7 +917,7 @@ def test_custom_cli_receives_import_and_prepare_flags(
     assert list(out.glob("*.csv"))
 
 
-def test_multiple_table_generators_select_direct(toy_annotation_dir, tmp_path):
+def test_multiple_table_generators_do_not_select_an_identity_copy(toy_annotation_dir, tmp_path):
     import json
 
     out = tmp_path / "multi"
@@ -934,7 +934,9 @@ def test_multiple_table_generators_select_direct(toy_annotation_dir, tmp_path):
     )
     assert tables
     selection = json.loads((out / "table_selection.json").read_text())
-    assert selection["winner"] == "direct"
+    assert selection["winner"] != "direct"
+    direct_row = next(row for row in selection["candidates"] if row["mode"] == "direct")
+    assert direct_row["reason"] == "identity copy is not comparable with itself"
     modes = {row["mode"] for row in selection["candidates"]}
     assert modes >= {"direct", "bootstrap"}
     direct_row = next(r for r in selection["candidates"] if r["mode"] == "direct")
@@ -1087,6 +1089,39 @@ def test_regenerate_tables_mixed_choose_best_ignores_concat(toy_annotation_dir, 
     assert modes >= {"direct", "bootstrap"}
 
 
+def test_concat_rejects_extra_communities_and_honors_depth():
+    from samovar.table_regenerators import get_table_regenerator
+
+    with pytest.raises(ValueError, match="N=10"):
+        get_table_regenerator("concat_weighted").run(
+            _concat_source_tables(), None, {"N": 10, "N_reads": 12000}
+        )
+    kept = get_table_regenerator("concat_weighted").run(
+        _concat_source_tables(), None, {"N": 1, "N_reads": 12000}
+    )
+    assert int(kept["concat_weighted"]["N_community"].sum()) == 12000
+
+
+def test_prepare_rejects_concat_community_count(tmp_path):
+    from samovar.config import PipelineConfig
+
+    (tmp_path / "reads").mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "input_config": None,
+            "input_dir": str(tmp_path / "reads"),
+            "output_dir": str(tmp_path / "out"),
+            "table_reads_generator": ["concat_weighted"],
+            "regeneration_n": 10,
+        },
+    )()
+    cfg = PipelineConfig.from_args(args)
+    with pytest.raises(ValueError, match="N=10"):
+        cfg.generate_configs(str(tmp_path / "out"))
+
+
 def test_concat_only_keeps_single_table(toy_annotation_dir, tmp_path):
     out = tmp_path / "concat_only"
     tables = regenerate_annotation_tables(
@@ -1117,20 +1152,20 @@ def test_failed_generator_is_recorded_in_table_selection(toy_annotation_dir, tmp
 
     monkeypatch.setattr(reg, "_regenerate_one_mode", wrapped)
     out = tmp_path / "failed_gen"
-    tables = regenerate_annotation_tables(
-        toy_annotation_dir,
-        out,
-        {
-            "table_reads_generators": ["direct", "bootstrap"],
-            "table_score": "shannon_ks",
-            "N": 2,
-            "N_reads": 50,
-            "seed": 1,
-        },
-    )
-    assert tables
+    with pytest.raises(RuntimeError, match="identity copy"):
+        regenerate_annotation_tables(
+            toy_annotation_dir,
+            out,
+            {
+                "table_reads_generators": ["direct", "bootstrap"],
+                "table_score": "shannon_ks",
+                "N": 2,
+                "N_reads": 50,
+                "seed": 1,
+            },
+        )
     selection = json.loads((out / "table_selection.json").read_text())
-    assert selection["winner"] == "direct"
+    assert selection["winner"] != "direct"
     if unsupported:
         assert selection["unsupported"] == {"bootstrap": "bootstrap boom"}
         assert "bootstrap" not in selection.get("generate_errors", {})

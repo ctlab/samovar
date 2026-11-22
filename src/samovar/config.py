@@ -1708,6 +1708,10 @@ class PipelineConfig:
         from samovar.taxdump import require_metax_taxdump
 
         require_metax_taxdump(self.annotators)
+        from samovar.regenerate import require_concat_community_count
+
+        for mode in self.regeneration_modes or []:
+            require_concat_community_count(mode, self.regeneration_n)
         base_path = Path(absolute_path(base_dir))
         configs_dir = base_path / '.log' / 'configs'
         configs_dir.mkdir(parents=True, exist_ok=True)

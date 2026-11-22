@@ -174,6 +174,52 @@ def shannon_vector_from_annotation_annotator(data: pd.DataFrame, annotator: str)
     return np.array([], dtype=float)
 
 
+IDENTITY_REASON = "identity copy is not comparable with itself"
+
+
+def _fractions(table: Any) -> Optional[pd.DataFrame]:
+    from samovar.abundance import abundance_to_matrix
+
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        return None
+    matrix = abundance_to_matrix(table)
+    if matrix.empty:
+        return None
+    totals = matrix.sum(axis=0)
+    fractions = matrix.div(totals.where(totals > 0), axis=1).fillna(0.0)
+    fractions.index = fractions.index.astype(str)
+    return fractions.sort_index()
+
+
+def compositions_match(observed: Any, generated: Any) -> bool:
+    """True when two abundance tables have the same sample composition."""
+    left = _fractions(observed)
+    right = _fractions(generated)
+    if left is None or right is None:
+        return False
+    if {str(column) for column in left.columns} != {str(column) for column in right.columns}:
+        return False
+    right = right[list(left.columns)]
+    if set(left.index) != set(right.index):
+        return False
+    right = right.reindex(left.index)
+    return bool(
+        np.allclose(
+            left.to_numpy(dtype=float),
+            right.to_numpy(dtype=float),
+            atol=1e-8,
+            equal_nan=True,
+        )
+    )
+
+
+def _mark_identity(score: Dict[str, Any], observed: Any, generated: Any) -> Dict[str, Any]:
+    if compositions_match(observed, generated):
+        score["ok"] = False
+        score["reason"] = IDENTITY_REASON
+    return score
+
+
 def ks_shannon(
     observed: np.ndarray,
     generated: np.ndarray,
@@ -513,6 +559,12 @@ def score_shannon_ks_annotator(
     annotator: str,
     modes: Sequence[str],
 ) -> Dict[str, Any]:
+    from samovar.abundance import input_to_abundance_tables
+
+    observed_tables = input_to_abundance_tables(annotation)
+    observed_table = observed_tables.get(annotator)
+    if observed_table is None and len(observed_tables) == 1:
+        observed_table = next(iter(observed_tables.values()))
     observed = shannon_vector_from_annotation_annotator(annotation, annotator)
     generated_by_mode: Dict[str, np.ndarray] = {}
     rows: List[Dict[str, Any]] = []
@@ -520,10 +572,10 @@ def score_shannon_ks_annotator(
         table = (tables_by_mode.get(mode) or {}).get(annotator)
         generated = shannon_vector_from_table(table) if table is not None else np.array([])
         generated_by_mode[mode] = generated
-        score = ks_shannon(observed, generated)
+        score = _mark_identity(ks_shannon(observed, generated), observed_table, table)
         score["mode"] = mode
         score["annotator"] = annotator
-        score["ok"] = bool(table is not None and not getattr(table, "empty", True))
+        score["ok"] = bool(table is not None and not getattr(table, "empty", True)) and score.get("ok", True)
         rows.append(score)
     grid: Dict[str, Dict[str, Any]] = {m: {} for m in modes}
     for mode_i in modes:
@@ -599,10 +651,14 @@ def score_bray_ks_annotator(
     for mode in modes:
         table = (tables_by_mode.get(mode) or {}).get(annotator)
         generated_by_mode[mode] = table if table is not None else pd.DataFrame()
-        score = ks_bray(observed if observed is not None else pd.DataFrame(), generated_by_mode[mode])
+        score = _mark_identity(
+            ks_bray(observed if observed is not None else pd.DataFrame(), generated_by_mode[mode]),
+            observed,
+            table,
+        )
         score["mode"] = mode
         score["annotator"] = annotator
-        score["ok"] = bool(table is not None and not getattr(table, "empty", True))
+        score["ok"] = bool(table is not None and not getattr(table, "empty", True)) and score.get("ok", True)
         rows.append(score)
     grid: Dict[str, Dict[str, Any]] = {m: {} for m in modes}
     for mode_i in modes:
@@ -775,6 +831,11 @@ def rank_methods_per_annotator(
                 mixed[annotator] = table
         if annotator not in mixed:
             for mode in mode_list:
+                if any(
+                    row.get("mode") == mode and row.get("reason") == IDENTITY_REASON
+                    for row in block.get("candidates") or []
+                ):
+                    continue
                 table = (tables_by_mode.get(mode) or {}).get(annotator)
                 if table is not None and not table.empty:
                     mixed[annotator] = table

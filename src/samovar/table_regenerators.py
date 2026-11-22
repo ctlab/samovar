@@ -659,6 +659,9 @@ class ConcatTableRegenerator(TableRegenerator):
         if n_reads is not None:
             n_reads = int(n_reads)
         name = "concat_weighted" if self.weighted else "concat"
+        from samovar.regenerate import require_concat_community_count
+
+        require_concat_community_count(name, cfg.get("N"))
         return regenerate_concat(
             annotation,
             weighted=self.weighted,

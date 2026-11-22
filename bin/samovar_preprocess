@@ -100,8 +100,8 @@ def main():
         action='append',
         default=None,
         help=(
-            'Abundance table regenerator (default: concat_weighted, one table, '
-            'shared taxa summed across annotators). '
+            'Abundance table regenerator (default: concat_weighted, one community, '
+            'mean relative abundance across tools and samples). '
             'direct|bootstrap|vae|glm|camisim-table|'
             'concat|concat_weighted|sparsedossa2-fit|sparsedossa2-stool|samovar, '
             'or a name imported with `samovar tools import --type table`. '
