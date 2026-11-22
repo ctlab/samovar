@@ -912,7 +912,8 @@ def test_empty_fastq_sample_scores_as_empty_abundance(tmp_path, monkeypatch):
     scores = pd.read_csv(tmp_path / "initial_annotations_plots" / "profile_quality_scores.csv")
     assert set(scores["sample"]) == {"A", "E"}
     empty = scores.loc[scores["sample"] == "E"].iloc[0]
-    assert empty["reason"] == "empty abundance has no quantitative composition"
+    assert "empty abundance has no quantitative composition" in empty["reason"]
+    assert "presence metric undefined" in empty["reason"]
     assert float(empty["l1_norm"]) != float(empty["l1_norm"])
 
     omitted = tmp_path / "omitted"
@@ -1011,6 +1012,64 @@ def test_three_ground_truths_score_independently(tmp_path):
     present = present[present["ground_truth"] == "profile_truth"]
     assert present["reason"].str.contains("presence gold standard").all()
     assert present["bray_curtis"].isna().all()
+
+
+def test_requested_and_realized_regenerated_truth_remain_distinct(tmp_path):
+    from samovar.profile_pipeline import score
+    from samovar.profiles import metadata, write_profiles
+
+    reads = tmp_path / "regenerated_trimmed"
+    reads.mkdir()
+    (reads / "A_tool.fastq").write_text(
+        "@r1|taxid:562\nACGT\n+\nIIII\n@r2|taxid:9606\nACGT\n+\nIIII\n"
+    )
+    requested = tmp_path / "regenerated/.regenerated_abundance"
+    requested.mkdir(parents=True)
+    (requested / "tool.csv").write_text("taxid,N_A\n562,3\n9606,1\n")
+    fields = metadata({"rank": "taxid", "normalization": "all"})
+    write_profiles(tmp_path / "regenerated_profiles", {
+        "tool": pd.DataFrame({"taxid": ["562", "9606"], "N_A_tool": [1, 1]})
+    }, {"tool": fields})
+    assert score(tmp_path, "regenerated", {})
+    result = pd.read_csv(tmp_path / "regenerated_annotations_plots/profile_quality_scores.csv")
+    assert set(result.ground_truth) == {"reads", "requested"}
+    assert result.set_index("ground_truth").loc["reads", "l1_norm"] == pytest.approx(0)
+    assert result.set_index("ground_truth").loc["requested", "l1_norm"] == pytest.approx(0.5)
+
+
+def test_profile_r2_uses_aligned_fractions_and_rejects_zero_variance():
+    from samovar.profiles import metadata
+    from samovar.scores import profile_scores
+
+    info = metadata({"rank": "taxid", "normalization": "all"})
+    truth = pd.DataFrame({"taxid": ["562", "9606"], "N_s": [3, 1]})
+    prediction = pd.DataFrame({"taxid": ["562", "9606"], "N_s": [2, 2]})
+    row = profile_scores(prediction, truth, info, info).iloc[0]
+    assert row.r2 == pytest.approx(0)
+    assert row.l1_norm == pytest.approx(0.5)
+    assert row.bray_curtis == pytest.approx(0.25)
+    flat = profile_scores(prediction, prediction, info, info).iloc[0]
+    assert pd.isna(flat.r2) and "zero variance" in flat.reason
+    binary = prediction.assign(N_s=[1, 1])
+    presence = profile_scores(prediction, binary, info, {**info, "kind": "presence"})
+    assert pd.isna(presence.iloc[0].r2)
+
+
+def test_profile_scoring_preserves_missing_truth_as_unavailable(tmp_path):
+    from samovar.profile_pipeline import score
+    from samovar.profiles import metadata, write_profiles
+
+    fields = metadata({"rank": "taxid", "normalization": "all"})
+    write_profiles(tmp_path / "initial_profiles", {
+        "tool": pd.DataFrame({"taxid": ["562"], "N_A": [1], "N_B": [1]})
+    }, {"tool": fields})
+    truth = tmp_path / "truth.csv"
+    truth.write_text("taxid,N_A\n562,1\n")
+    assert score(tmp_path, "initial", {"profile_truth": {**fields, "path": str(truth)}})
+    result = pd.read_csv(tmp_path / "initial_annotations_plots/profile_quality_scores.csv").set_index("sample")
+    assert result.loc["A", "f1"] == 1
+    assert pd.isna(result.loc["B", "f1"])
+    assert result.loc["B", "reason"] == "no ground truth for this sample"
 
 
 def test_profile_comparison_includes_annotators_on_each_stage(tmp_path, monkeypatch):

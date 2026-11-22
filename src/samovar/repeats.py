@@ -462,7 +462,7 @@ def write_status_summary(root: Path) -> Path:
 
 
 _PHASES = ("initial", "regenerated", "reprofiled")
-_DESC = ("kind", "taxonomy", "rank", "unit", "basis", "normalization")
+_DESC = ("kind", "taxonomy", "rank", "unit", "basis", "normalization", "schema", "taxonomy_version")
 _PROFILE_FIELDS = (
     "repeat_id", "sample_id", "seed", "phase", "run_name", *_DESC, "taxon", "value",
 )
@@ -481,7 +481,7 @@ _N_RESAMPLES = 10000
 _BOOTSTRAP = "percentile"
 _SCORE_IDS = {
     "annotator", "ground_truth", "truth_source", "sample", "sample_id", "reason",
-    "phase", "run_name", *_DESC,
+    "phase", "run_name", "tool", "schema", "taxonomy_version", *_DESC,
 }
 
 
@@ -516,7 +516,7 @@ def _desc(info: Mapping[str, Any]) -> Dict[str, str]:
 def _adapt_quality_row(rec: Dict[str, Any]) -> Dict[str, Any]:
     from samovar.scores import LEGACY_CLOSED_SET_F1, LEGACY_READ_WARNING, READ_QUALITY_SCHEMA
 
-    if rec.get("schema") == READ_QUALITY_SCHEMA:
+    if rec.get("schema") in (READ_QUALITY_SCHEMA, "read-quality-v1"):
         return rec
     if "f1" not in rec or LEGACY_CLOSED_SET_F1 in rec:
         return rec
@@ -529,7 +529,7 @@ def _adapt_quality_row(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed: Any) -> None:
     plots = child / f"{phase}_annotations_plots"
-    for name in ("profile_quality_scores.csv", "quality_scores.csv"):
+    for name in ("profile_quality_scores.csv", "quality_scores.csv", "binning_scores.csv"):
         path = plots / name
         if not path.is_file():
             continue
@@ -543,10 +543,10 @@ def _score_rows(rows: List[dict], child: Path, phase: str, repeat_id: str, seed:
                     "sample_id": rec.get("sample") or rec.get("sample_id") or "",
                     "seed": seed,
                     "phase": phase,
-                    "run_name": rec.get("annotator") or rec.get("run_name") or "",
+                    "run_name": rec.get("annotator") or rec.get("tool") or rec.get("run_name") or "",
                     "truth_source": rec.get("ground_truth") or rec.get("truth_source") or "",
                     "reason": reason,
-                    "_group": "read" if name == "quality_scores.csv" else "profile",
+                    "_group": "profile" if name == "profile_quality_scores.csv" else "read",
                     **_desc(rec),
                 }
                 metrics = []
@@ -774,7 +774,7 @@ def statistics_rows(
                 fixed_abundance=fixed_abundance, zero_width=zero_width,
                 input_kind=input_kind,
             )
-        record = dict(zip(_STAT_FIELDS[:12], key))
+        record = dict(zip(_STAT_FIELDS[:len(key)], key))
         record.update({
             "n_expected": n_expected,
             "n_success": n_success,

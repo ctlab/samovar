@@ -72,7 +72,7 @@ def normalize_viz_config(settings=None) -> dict:
                 (set(SCORE_COLUMNS) - {"annotator", "schema"})
                 | set(_PURITY_COLUMNS)
                 | set(_RATE_COLUMNS)
-                | {"f1", LEGACY_CLOSED_SET_F1}
+                | {"f1", "r2", LEGACY_CLOSED_SET_F1}
             )
             unknown = set(names) - allowed
             if unknown:
@@ -660,7 +660,7 @@ def _pivot_matrix(counts: pd.DataFrame, x_col: str, y_col: str, x_levels: List[s
 
 def viz_annotation(
     data: pd.DataFrame,
-    type: Sequence[str] = ("f1", "R2", "cv", "conf", "scores"),
+    type: Sequence[str] = ("f1", "cv", "conf", "scores"),
     show_top: int = 10,
     output_dir: Optional[str] = None,
     plot: bool = False,
@@ -904,54 +904,6 @@ def viz_annotation(
                         ylab=taxid_ylab,
                     )
 
-    if truth_frame is not None and types & {"r2"}:
-        from samovar.scores import format_r2_caption
-
-        gglist = {}
-        r2_work = truth_frame
-        for name in annotators:
-            pred = normalize_series(r2_work[name])
-            true = normalize_series(r2_work["true"])
-            table, r2 = _r2_table(true, pred)
-            if np.isnan(r2):
-                continue
-            gglist[name] = {"r2": r2, "table": table}
-            if out_dir:
-                _save_scatter_png(table, out_dir / f"R2_{name}.png", name, format_r2_caption(r2, rank_used))
-                _save_altair(_altair_scatter(table, name), out_dir / f"R2_{name}.html")
-                from samovar.stage_report import write_scatter_mqc
-
-                write_scatter_mqc(
-                    table,
-                    out_dir / f"R2_{name}_mqc.json",
-                    section_name=f"Abundance R² — {name}",
-                    description="",
-                    xlab="Predicted taxon",
-                    ylab="True taxon",
-                )
-        results["R2"] = gglist
-        if out_dir and len(platform_types) >= 2 and "read_type" in r2_work.columns:
-            from samovar.stage_report import write_scatter_mqc
-
-            for rt in platform_types:
-                sub = r2_work[r2_work["read_type"].astype(str).str.strip().str.lower() == rt]
-                if sub.empty:
-                    continue
-                for name in annotators:
-                    pred = normalize_series(sub[name])
-                    true = normalize_series(sub["true"])
-                    table, r2 = _r2_table(true, pred)
-                    if np.isnan(r2):
-                        continue
-                    write_scatter_mqc(
-                        table,
-                        out_dir / f"R2_{name}.{rt}_mqc.json",
-                        section_name=f"Abundance R² — {name}",
-                        description="",
-                        xlab="Predicted taxon",
-                        ylab="True taxon",
-                    )
-
     if types & {"cv", "cross-validation", "correlation", "spearman", "corr"}:
         from samovar.annotation_correlation import plot_spearman_annotation_correlation
 
@@ -1092,7 +1044,7 @@ def _viz_from_args(args):
 def _run_annotator_compare(args, config, viz) -> None:
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    compare_annotations(
+    data = compare_annotations(
         annotation_dir=args.annotation_dir,
         output_dir=args.output_dir,
         csv_file=args.csv_file,
@@ -1107,6 +1059,16 @@ def _run_annotator_compare(args, config, viz) -> None:
         seed=args.seed if args.seed is not None else int(config.get("seed", 42)),
         threads=args.threads if args.threads is not None else int(config.get("cores", 1)),
     )
+    if args.output_dir and data is not None and not data.empty and "true" in data.columns:
+        from samovar.scores import report_rank_fragments
+        from samovar.profile_pipeline import _read_folder
+        from samovar.seqio import find_fastq_mate, list_fastq_samples
+
+        root = Path(args.annotation_dir).parent
+        phase = Path(args.annotation_dir).name.removesuffix("_annotations")
+        reads = _read_folder(root, "regenerated" if phase == "regenerated" else "initial")
+        paired = {sample for sample in list_fastq_samples(reads) if find_fastq_mate(reads, sample, "R2")}
+        report_rank_fragments(data, args.output_dir, rank=args.rank or "genus", paired_samples=paired)
 
 
 def _add_annotator_score_flags(parser) -> None:
@@ -1126,7 +1088,7 @@ def _add_annotator_score_flags(parser) -> None:
                         help="Comma-separated score column names; all or none")
     parser.add_argument(
         "--full", action=argparse.BooleanOptionalAction, default=None,
-        help="Also write F1, R2, and CV plots. Default is the scores table and bar plot.",
+        help="Also write F1 and correlation plots. Default is the scores table and bar plot.",
     )
     parser.add_argument(
         "--opal", action=argparse.BooleanOptionalAction, default=None,

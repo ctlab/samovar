@@ -122,7 +122,7 @@ def test_default_scores_skip_opal_and_split_read_types_once():
     overall = plain[plain["read_type"] == "all"]
     assert "completeness" not in plain.columns
     assert "completeness" not in full.columns
-    assert overall["schema"].eq("read-quality-v1").all()
+    assert overall["schema"].eq("read-quality-v2").all()
     assert overall["accuracy"].tolist() == full["accuracy"].tolist()
     assert set(plain["read_type"]) == {"all", "illumina", "ont"}
     sampled = score_annotators(df.drop(columns=["read_type"]), ["kaiju"], metrics_sample=2, seed=1)
@@ -189,7 +189,7 @@ def test_false_taxids_stay_in_the_profile_counts():
     assert native["precision"] == pytest.approx(1 / 3)
     assert native["recall"] == pytest.approx(1 / 2)
     assert native["f1"] == pytest.approx(0.4)
-    assert native["l1_norm"] == pytest.approx(1.25)
+    assert native["l1_norm"] == pytest.approx(1.5)
     frame = pd.DataFrame({"true": y, "taxID_test_0": p, "sample": ["A", "A", "B", "B"]})
     table = score_annotators(frame, ["taxID_test_0"], include_consensus=False, opal=True)
     assert "opal_tp" not in table.columns and "l1_norm" not in table.columns
@@ -208,6 +208,38 @@ def test_false_taxids_stay_in_the_profile_counts():
     assert blank["fp"] == 0 and blank["fn"] == 2
     assert blank["precision"] != blank["precision"]
     assert blank["f1"] != blank["f1"]
+
+
+def test_binning_report_preserves_rank_scorer_and_summary(tmp_path, monkeypatch):
+    import json
+    from samovar.scores import report_rank_fragments
+    from samovar.repeats import _score_rows
+    import samovar.kreport
+    import samovar.taxdump
+
+    nodes = tmp_path / "nodes.dmp"
+    nodes.write_text("pinned taxonomy")
+    monkeypatch.setattr(samovar.taxdump, "nodes_dmp", lambda: nodes)
+    monkeypatch.setattr(samovar.kreport.KReportTaxonomy, "from_taxdump", lambda path: _RANK_TREE)
+    frame = pd.DataFrame({"sample": ["A"] * 5, "seq": ["a", "b", "c", "d", "e"],
+                          "true": [562, 562, 562, 562, 562],
+                          "taxID_k2_0": [562, 562, 4932, 0, 2]})
+    plots = tmp_path / "initial_annotations_plots"
+    plots.mkdir()
+    report_rank_fragments(frame, plots, rank="genus")
+    row = pd.read_csv(plots / "binning_scores.csv").iloc[0]
+    assert row["schema"] == "kraken2-rank-v1"
+    assert (row.tp, row.fp, row.fn, row.vp) == (2, 1, 1, 1)
+    assert row.f1 == pytest.approx(0.5)
+    payload = json.loads((plots / "binning_scores_mqc.json").read_text())
+    assert payload["data"]["0"]["truth_source"] == "annotation:true"
+    summary = []
+    _score_rows(summary, tmp_path, "initial", "0001", 42)
+    assert any(item["metric"] == "f1" and item["value"] == 0.5 for item in summary)
+    report_rank_fragments(frame, plots, rank="genus", paired_samples={"A"})
+    pair = pd.read_csv(plots / "binning_scores.csv").iloc[0]
+    assert pair.unit == "fragment" and pair.total == 0 and pair.unscorable == 5
+    assert pd.isna(pair.f1) and "mate predictions unavailable" in pair.reason
 
 
 def test_same_short_name_keeps_both_profile_identities():
@@ -233,7 +265,7 @@ def test_score_annotators_without_ground_truth():
     assert "kaiju" in names and "kraken2" in names
     assert names[-1] == "SAMOVAR"
     assert table["legacy_closed_set_f1_accuracy"].isna().all()
-    assert table["r2"].isna().all()
+    assert "r2" not in table.columns
     assert (table["n_reads"] == 4).all()
 
 
@@ -271,7 +303,7 @@ def test_viz_annotation_writes_scores_barplot(tmp_path, monkeypatch, opal):
     assert "completeness" not in csv.columns
     assert "accuracy" in csv.columns
     assert "f1_macro" in csv.columns
-    assert csv["schema"].eq("read-quality-v1").all()
+    assert csv["schema"].eq("read-quality-v2").all()
     assert "legacy_closed_set_f1_accuracy" in csv.columns
     assert not (out / "opal_scores.png").exists()
     assert not (out / "opal_scores.html").exists()
@@ -283,7 +315,7 @@ def test_viz_annotation_writes_scores_barplot(tmp_path, monkeypatch, opal):
         assert arr.shape[1] >= 1400, f"{name} width {arr.shape[1]} is too low-res"
         assert arr.shape[0] >= 700, f"{name} height {arr.shape[0]} is too low-res"
     assert "legacy_closed_set_f1_accuracy" in csv.columns
-    assert "r2" in csv.columns
+    assert "r2" not in csv.columns
     assert "SAMOVAR" in set(csv["annotator"].astype(str))
     assert "consensus" not in set(csv["annotator"].astype(str))
 
@@ -330,7 +362,7 @@ def test_selected_metrics_skip_unused_computations(monkeypatch):
     frame = pd.DataFrame({"kaiju": ["562", "0"], "true": ["562", "562"]})
     result = scores.score_annotators(frame, ["kaiju"], metrics=["accuracy"])
     assert result.loc[0, "accuracy"] == 0.5
-    assert result["r2"].isna().all()
+    assert "r2" not in result.columns
     assert "f1_purity" not in result.columns
     assert result.loc[0, "n_reads"] == 2
 

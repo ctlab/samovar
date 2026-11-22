@@ -242,17 +242,21 @@ def profile_from_truth_table(root, table_path, stage="initial"):
         return None
     columns = {}
     matched = 0
+    missing = 0
     for sample in samples:
         counts = Counter()
         for header, _seq, _plus, _qual in iter_fastq_records(find_fastq_mate(folder, sample)):
             tax = lookup(fastq_record_id(header))
             if not tax:
+                missing += 1
                 continue
             counts[tax] += 1
             matched += 1
         columns["N_" + sample] = counts
     if matched == 0:
         raise ValueError(f"No read ids under {folder} match the seq→taxid table {path}")
+    if missing:
+        raise ValueError(f"{missing} reads under {folder} lack truth in {path}; refusing a partial profile gold standard")
     return _counts_table(columns), metadata({
         "rank": "taxid",
         "normalization": "all",
@@ -267,12 +271,13 @@ def ground_truths(root, stage, config):
     if stage == "regenerated":
         aggregated = _truth_from_true_column(root, "regenerated")
         if aggregated:
-            return [("per-read", *aggregated)]
-        headers = truth_from_reads(root, "regenerated")
-        if headers:
-            table, meta = headers
-            return [("reads", table, {**meta, "ground_truth": "reads"})]
-        return []
+            found = [("per-read", *aggregated)]
+        else:
+            headers = truth_from_reads(root, "regenerated")
+            found = [("reads", *headers)] if headers else []
+        if not found:
+            raise ValueError("Regenerated samples have no realized read-level ground truth")
+        return found
     found = []
     headers = truth_from_reads(root, read_stage)
     if headers:
@@ -306,6 +311,27 @@ def ground_truth(root, stage, config):
     if not found:
         return None
     return found[0][1], found[0][2]
+
+
+def requested_truth(root, sample_columns):
+    """Resolve generated FASTQ names to their source abundance table and sample."""
+    from samovar.abundance import load_abundance_dir
+
+    tables = load_abundance_dir(Path(root) / "regenerated" / ".regenerated_abundance")
+    matches = {}
+    for name, table in tables.items():
+        for column in n_sample_columns(table):
+            generated = f"{column}_{name}"
+            if generated not in sample_columns:
+                continue
+            if generated in matches:
+                raise ValueError(f"Ambiguous requested profile for {generated}")
+            matches[generated] = table.set_index("taxid")[column]
+    if not matches:
+        return None
+    result = pd.DataFrame(matches).fillna(0).rename_axis("taxid").reset_index()
+    return result, metadata({"rank": "taxid", "normalization": "all",
+                             "source": "pre-simulation abundance", "ground_truth": "requested"})
 
 
 def align_truth(pred, pm, truth, tm, root, config):
@@ -370,13 +396,52 @@ def score(root, stage, config):
             )]))
     for gt_name, truth, tm in gts:
         for name, table in tables.items():
-            pred, pm, aligned, aligned_meta = align_truth(table, metas[name], truth, tm, root, config)
+            profile_columns = set(n_sample_columns(table))
+            truth_columns = set(n_sample_columns(truth))
+            if truth_columns - profile_columns:
+                raise ValueError("Profile and gold standard sample identities differ: "
+                                 f"missing predictions for {sorted(truth_columns - profile_columns)}")
+            shared = sorted(profile_columns & truth_columns)
+            for col in sorted(profile_columns - truth_columns):
+                info = metas[name]
+                rows.append(pd.DataFrame([dict(annotator=_shown(name), sample=col[2:],
+                    ground_truth=gt_name, truth_source=tm.get("source", gt_name),
+                    scorer="profile_scores", schema="profile-v2",
+                    **{key: info.get(key, "") for key in
+                       ("kind", "taxonomy", "rank", "unit", "basis", "normalization")},
+                    reason="no ground truth for this sample")]))
+            if not shared:
+                continue
+            pred, pm, aligned, aligned_meta = align_truth(table[["taxid", *shared]], metas[name],
+                                                          truth[["taxid", *shared]], tm, root, config)
             result = profile_scores(pred, aligned, pm, aligned_meta)
             for key in ("kind", "taxonomy", "rank", "unit", "basis", "normalization"):
                 result[key] = pm.get(key, "")
+            result["truth_source"] = tm.get("source", gt_name)
             result.insert(0, "ground_truth", gt_name)
             result.insert(0, "annotator", _shown(name))
             rows.append(result)
+    if stage == "regenerated":
+        for name, table in tables.items():
+            requested = requested_truth(root, set(n_sample_columns(table)))
+            cols = n_sample_columns(requested[0]) if requested else []
+            for col in sorted(set(n_sample_columns(table)) - set(cols)):
+                rows.append(pd.DataFrame([dict(annotator=_shown(name), sample=col[2:],
+                    ground_truth="requested", truth_source="pre-simulation abundance",
+                    scorer="profile_scores", schema="profile-v2",
+                    **{key: metas[name].get(key, "") for key in
+                       ("kind", "taxonomy", "rank", "unit", "basis", "normalization")},
+                    reason="requested profile cannot be matched to regenerated sample")]))
+            if requested:
+                truth, tm = requested
+                pred, pm, aligned, aligned_meta = align_truth(table[["taxid", *cols]], metas[name], truth, tm, root, config)
+                result = profile_scores(pred, aligned, pm, aligned_meta)
+                for key in ("kind", "taxonomy", "rank", "unit", "basis", "normalization"):
+                    result[key] = pm.get(key, "")
+                result["truth_source"] = tm["source"]
+                result.insert(0, "ground_truth", "requested")
+                result.insert(0, "annotator", _shown(name))
+                rows.append(result)
     dest = root / f"{stage}_annotations_plots"
     dest.mkdir(parents=True, exist_ok=True)
     result = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
@@ -396,6 +461,7 @@ def score(root, stage, config):
                 "recall": "Recall",
                 "f1": "F1",
                 "jaccard": "Jaccard",
+                "r2": "R²",
                 "l1_norm": "L1",
                 "bray_curtis": "Bray–Curtis",
             },

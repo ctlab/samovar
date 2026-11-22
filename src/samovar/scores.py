@@ -37,8 +37,10 @@ def profile_scores(predicted, reference, predicted_metadata, reference_metadata)
     pred, ref = pred.reindex(ids, fill_value=0), ref.reindex(ids, fill_value=0)
     quantitative = rm["kind"] == "abundance"
     if quantitative:
-        px = fractions(predicted, pm).set_index("taxid").drop(index="0", errors="ignore").reindex(ids, fill_value=0)
-        ry = fractions(reference, rm).set_index("taxid").drop(index="0", errors="ignore").reindex(ids, fill_value=0)
+        px = fractions(predicted, pm).set_index("taxid")
+        ry = fractions(reference, rm).set_index("taxid")
+        quantitative_ids = px.index.union(ry.index)
+        px, ry = px.reindex(quantitative_ids, fill_value=0), ry.reindex(quantitative_ids, fill_value=0)
     def ratio(a, b):
         return float(a / b) if b else float("nan")
     rows = []
@@ -51,15 +53,24 @@ def profile_scores(predicted, reference, predicted_metadata, reference_metadata)
             f1 = ratio(2 * tp, 2 * tp + fp + fn)
         row = dict(sample=col[2:], tp=tp, fp=fp, fn=fn, precision=precision,
                    recall=recall, f1=f1,
-                   jaccard=ratio(tp, tp + fp + fn), l1_norm=float("nan"), bray_curtis=float("nan"),
-                   reason="undefined ratios have zero denominator")
-        if quantitative and px[col].sum() > 0 and ry[col].sum() > 0:
+                   jaccard=ratio(tp, tp + fp + fn), r2=float("nan"), l1_norm=float("nan"), bray_curtis=float("nan"),
+                   reason="")
+        reasons = []
+        if any(pd.isna(row[key]) for key in ("precision", "recall", "f1", "jaccard")):
+            reasons.append("presence metric undefined: zero denominator")
+        if quantitative and ry[col].sum() > 0:
             l1 = float((px[col] - ry[col]).abs().sum())
-            row.update(l1_norm=l1, bray_curtis=l1 / float(px[col].sum() + ry[col].sum()), reason="")
+            residual = float(((px[col] - ry[col]) ** 2).sum())
+            variance = float(((ry[col] - ry[col].mean()) ** 2).sum())
+            r2 = 1 - residual / variance if variance else float("nan")
+            row.update(r2=r2, l1_norm=l1, bray_curtis=l1 / float(px[col].sum() + ry[col].sum()))
+            if not variance:
+                reasons.append("R² undefined: reference abundance has zero variance")
         elif not quantitative:
-            row["reason"] = "presence gold standard; quantitative metrics not defined"
+            reasons.append("presence gold standard; quantitative metrics not defined")
         else:
-            row["reason"] = "empty abundance has no quantitative composition"
+            reasons.append("empty abundance has no quantitative composition")
+        row["reason"] = "; ".join(reasons)
         rows.append(row)
     frame = pd.DataFrame(rows)
     frame["scorer"] = "profile_scores"
@@ -89,8 +100,8 @@ COMBINATION_ANNOTATORS = frozenset({"samovar", "consensus"})
 PLATFORM_READ_TYPE_RE = re.compile(r"^[a-z][a-z0-9_+-]{1,31}$", re.I)
 INVALID_READ_TYPES = frozenset({"", "nan", "none", "na", "all", "0", "unclassified"})
 
-READ_QUALITY_SCHEMA = "read-quality-v1"
-PROFILE_SCHEMA = "profile-v1"
+READ_QUALITY_SCHEMA = "read-quality-v2"
+PROFILE_SCHEMA = "profile-v2"
 LEGACY_CLOSED_SET_F1 = "legacy_closed_set_f1_accuracy"
 LEGACY_READ_WARNING = (
     "Column f1 is closed-set accuracy (TP/N), not rank F1 or profile set-F1. "
@@ -110,7 +121,6 @@ SCORE_COLUMNS = (
     "f1_macro",
     "f1_weighted",
     LEGACY_CLOSED_SET_F1,
-    "r2",
 )
 
 
@@ -341,7 +351,7 @@ def f1_purity(true: Iterable, pred: Iterable) -> float:
 def adapt_quality_scores(table: pd.DataFrame) -> pd.DataFrame:
     """Read a saved read-quality table without turning its old ``f1`` into set-F1."""
     work = table.copy()
-    if "schema" in work.columns and work["schema"].astype(str).eq(READ_QUALITY_SCHEMA).all():
+    if "schema" in work.columns and work["schema"].astype(str).isin((READ_QUALITY_SCHEMA, "read-quality-v1")).all():
         return work
     if "f1" in work.columns and LEGACY_CLOSED_SET_F1 not in work.columns:
         work = work.rename(columns={"f1": LEGACY_CLOSED_SET_F1})
@@ -365,7 +375,6 @@ def annotation_scores(true: Iterable, pred: Iterable, *, include_opal: bool = Fa
     }
     if include_classification:
         stats[LEGACY_CLOSED_SET_F1] = _f1_accuracy(true_s, pred_s)
-        stats["r2"] = _r2_abundance(true_s, pred_s)
         stats.update(standard_classification_metrics(true_s, pred_s))
     return stats
 
@@ -517,8 +526,6 @@ def score_annotators(
             stats = {"n_reads": n_reads, "n_taxa": n_taxa}
         if wanted is None or LEGACY_CLOSED_SET_F1 in wanted:
             stats[LEGACY_CLOSED_SET_F1] = _f1_accuracy(true, aligned)
-        if wanted is None or "r2" in wanted:
-            stats["r2"] = _r2_abundance(true, aligned)
         if wanted is None or wanted & {"accuracy", "precision_macro", "recall_macro", "f1_micro", "f1_macro", "f1_weighted"}:
             stats.update(standard_classification_metrics(true, aligned))
         if wanted is not None and wanted & set(_RATE_COLUMNS):
@@ -1128,6 +1135,44 @@ def write_rank_scores(path, rows) -> None:
         writer = csv.DictWriter(handle, fieldnames=_RANK_FIELDS, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def report_rank_fragments(frame, output_dir, *, rank="genus", paired_samples=()):
+    """Publish the existing rank scorer once for the annotation stage."""
+    import hashlib
+    import json
+    from pathlib import Path
+    from samovar.annotation_columns import tax_annotator_columns
+    from samovar.kreport import KReportTaxonomy
+    from samovar.taxdump import nodes_dmp
+
+    nodes = nodes_dmp()
+    if nodes is None:
+        raise FileNotFoundError("Binning scores require configured NCBI nodes.dmp")
+    tree = KReportTaxonomy.from_taxdump(nodes)
+    version = hashlib.sha256(nodes.read_bytes()).hexdigest()[:12]
+    rows = []
+    for column in tax_annotator_columns(frame.columns):
+        results = score_rank_fragments(frame, tree, rank=rank, pred_col=column,
+                                       tool=column, truth_source="annotation:true",
+                                       taxonomy_version=version)
+        for row in results:
+            # A combined table may have stripped /1 and /2. Its single call
+            # does not prove that both mates had consistent predictions.
+            if row["sample"] in paired_samples and row["unit"] in {"read", "mixed"}:
+                row["unscorable"] += row["total"]
+                row.update(unit="fragment", tp=0, vp=0, fn=0, fp=0, total=0,
+                           ppv="", sensitivity="", f1="", coverage="", classified_at_rank="",
+                           reason="paired mate predictions unavailable after combining")
+        rows.extend(results)
+    if not rows:
+        return
+    output = Path(output_dir)
+    write_rank_scores(output / "binning_scores.csv", rows)
+    payload = {"id": "binning_scores", "section_name": "Taxonomic binning",
+               "description": "Rank-aware read/fragment scores; unknown truth is unscorable.",
+               "plot_type": "table", "data": {str(i): row for i, row in enumerate(rows)}}
+    (output / "binning_scores_mqc.json").write_text(json.dumps(payload, indent=2) + "\n")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -101,18 +101,18 @@ def test_viz_annotation_writes_png(tmp_path):
         use_names=False,
     )
     assert "F1" in results
-    assert "R2" in results
+    assert "R2" not in results
     assert "correlation" in results
     assert "scores" in results
     pngs = list(out.glob("*.png"))
     assert pngs, "expected publication PNGs from cnsplots/matplotlib"
     assert any(p.name.startswith("F1_") for p in pngs)
-    assert any(p.name.startswith("R2_") for p in pngs)
+    assert not any(p.name.startswith("R2_") for p in pngs)
     assert any("spearman" in p.name for p in pngs)
     assert (out / "scores.png").is_file()
     assert (out / "quality_scores.csv").is_file()
     assert list(out.glob("F1_*_mqc.json"))
-    assert list(out.glob("R2_*_mqc.json"))
+    assert not list(out.glob("R2_*_mqc.json"))
     assert list(out.glob("spearman_correlation_mqc.json"))
     assert not list(out.glob("CV_*_mqc.json"))
     htmls = list(out.glob("F1_*.html"))
@@ -127,7 +127,7 @@ def test_viz_annotation_writes_png(tmp_path):
 
 
 @pytest.mark.optional
-def test_viz_annotation_writes_assembly_r2_when_preds_are_unclassified(tmp_path):
+def test_viz_annotation_handles_unclassified_assembly(tmp_path):
     df = pd.DataFrame(
         {
             "seq": [f"r{i}" for i in range(20)],
@@ -147,9 +147,9 @@ def test_viz_annotation_writes_assembly_r2_when_preds_are_unclassified(tmp_path)
         use_names=False,
     )
     assert "assembly" in results.get("F1", {})
-    assert "assembly" in results.get("R2", {})
+    assert "R2" not in results
     assert (out / "F1_assembly.png").is_file()
-    assert (out / "R2_assembly.png").is_file()
+    assert not (out / "R2_assembly.png").exists()
     assert any("spearman" in p.name and "assembly" in p.name for p in out.glob("spearman*")) or (
         out / "spearman_correlation.png"
     ).is_file()

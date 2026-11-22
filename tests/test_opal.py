@@ -44,7 +44,7 @@ def test_opal_style_presence_and_l1():
     row = table.iloc[0]
     assert "opal_tp" not in table.columns
     assert "completeness" not in table.columns
-    assert row["schema"] == "read-quality-v1"
+    assert row["schema"] == "read-quality-v2"
     meta = metadata({"rank": "taxid", "normalization": "all"})
     native = profile_scores(
         pd.DataFrame({"taxid": ["562"], "N_s": [4.0]}),
@@ -52,7 +52,7 @@ def test_opal_style_presence_and_l1():
         meta,
         meta,
     ).iloc[0]
-    assert native["schema"] == "profile-v1"
+    assert native["schema"] == "profile-v2"
     assert native["scorer"] == "profile_scores"
     assert (native["tp"], native["fp"], native["fn"]) == (1, 0, 1)
     assert native["recall"] == pytest.approx(0.5)
@@ -146,7 +146,7 @@ def test_viz_writes_opal_scores_plot(tmp_path):
     )
     csv = pd.read_csv(out / "quality_scores.csv")
     assert "completeness" not in csv.columns
-    assert csv["schema"].eq("read-quality-v1").all()
+    assert csv["schema"].eq("read-quality-v2").all()
     assert (out / "scores.png").is_file()
     assert not (out / "opal_scores.png").exists()
 

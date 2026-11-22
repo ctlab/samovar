@@ -17,6 +17,22 @@ def test_repeat_seed_is_stable_and_distinct():
     assert repeat_seed(42, 1, "repeat") != repeat_seed(7, 1, "repeat")
 
 
+def test_summary_does_not_combine_score_schemas_or_truth_sources():
+    from samovar.repeats import statistics_rows
+
+    base = dict(sample_id="A", phase="regenerated", run_name="tool", metric="f1",
+                rank="genus", unit="fragment", value="0.5")
+    rows = [{**base, "repeat_id": "0001", "schema": "kraken2-rank-v1", "truth_source": "reads"},
+            {**base, "repeat_id": "0002", "schema": "legacy-read-quality", "truth_source": "reads"},
+            {**base, "repeat_id": "0003", "schema": "kraken2-rank-v1", "truth_source": "requested"}]
+    result = statistics_rows([], rows, n_expected=3, n_success=3, base_seed=42)
+    assert len(result) == 3
+    assert {(row["schema"], row["truth_source"]) for row in result} == {
+        ("kraken2-rank-v1", "reads"), ("legacy-read-quality", "reads"),
+        ("kraken2-rank-v1", "requested")}
+    assert all(row["n_valid"] == 1 for row in result)
+
+
 def test_parse_repeat_rejects_bad_counts():
     from samovar.repeats import parse_repeat
 
