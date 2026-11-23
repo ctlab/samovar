@@ -92,6 +92,7 @@ show_usage() {
     echo ""
     echo "Examples:"
     echo "  samovar generate --genome_dir [...] --directory [...] --host_genome [...]"
+    echo "  samovar generate --accessions GCF_... --reindex 1 --directory [...]  # shared processed store; no run copy"
     echo "  samovar generate --simulator camisim --camisim-mode table --outdir samovar/camisim-table ..."
     echo "  samovar prepare --input_dir [...] --directory [...] --cores 16 --mem 16G"
     echo "  samovar prepare --to-mpa --to-cami --directory [...]"

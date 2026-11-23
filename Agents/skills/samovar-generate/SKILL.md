@@ -22,6 +22,12 @@ shown by the installed help. For taxid requests, check local genomes/catalog
 before any download; report unavailable taxa and obtain authorization for new
 downloads. Bundled truncated genomes are test fixtures, not a scientific reference.
 
+For `--accessions`, `--reindex 1` is the default: selected processed assemblies
+are reused from the shared SAMOVAR Database and their canonical paths are locked
+in the generation config; no run-local copy is implied. `--reindex 0` keeps
+unindexed files under the run, while `--reindex 2` indexes that run-local
+processed directory. Do not scan or import the rest of the shared library.
+
 Check sample labels against the installed version too. From SAMOVAR 0.14.3,
 ISS preserves literal `N_<sample>` labels, including zero-based and named samples,
 and infers the count when `--n_samples` is omitted. An explicit count must match.

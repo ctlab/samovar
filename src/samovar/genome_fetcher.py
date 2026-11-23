@@ -43,7 +43,6 @@ from samovar.genome_index import (
     is_assembly_accession,
     normalize_accession,
     processed_filename,
-    processed_storage_dir,
     raw_filename,
     raw_storage_dir,
     resolve_indexed_path,
@@ -774,14 +773,14 @@ def materialize_accessions(
     """Download/process accessions according to ``samovar generate --reindex``.
 
     0: ``$out/.genomes/processed``, do not index
-    1: ``samovar_database/processed`` and index
+    1: shared ``samovar_database/processed`` and index, without run staging
     2: ``$out/.genomes/processed`` and index in place
     """
     mode = int(reindex_mode)
     out = Path(output_dir)
     run_dest = run_processed_dir(out)
     if mode == 1:
-        dest = processed_storage_dir()
+        dest = cache_processed_dir()
         raw_dest = raw_storage_dir()
         do_index = True
     else:
@@ -789,7 +788,6 @@ def materialize_accessions(
         raw_dest = run_raw_dir(out)
         do_index = mode == 2
     dest.mkdir(parents=True, exist_ok=True)
-    run_dest.mkdir(parents=True, exist_ok=True)
     paths: List[str] = []
     for acc in accessions:
         acc = normalize_accession(acc) or str(acc).strip()
@@ -822,7 +820,10 @@ def materialize_accessions(
         if fetched:
             if do_index and source is not None and indexed is None and source.parent != dest:
                 fetched = index_processed_file(fetched, accession=acc, move_to=dest)
-            paths.append(str(stage_into_dir(fetched, run_dest)))
+            selected = Path(fetched)
+            if mode != 1:
+                selected = stage_into_dir(selected, run_dest)
+            paths.append(str(selected.resolve()))
         else:
             logger.warning("Could not materialize %s", acc)
     return paths
@@ -1461,7 +1462,8 @@ def main(argv: Optional[Sequence[str]] = None):
         type=int,
         default=1,
         choices=(0, 1, 2),
-        help='With --accessions: 0 run .genomes only; 1 (default) samovar_database+index; 2 run+index',
+        help='With --accessions: 0 run .genomes only; 1 (default) shared store+index, '
+             'without a run copy; 2 run+index',
     )
     parser.add_argument('--silent', action='store_true',
                       help='Suppress logging output and show progress bars instead')

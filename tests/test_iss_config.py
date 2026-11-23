@@ -80,6 +80,36 @@ def test_iss_config_defaults(tmp_path):
     assert config.seed == 42  # default
     assert config.model == "hiseq"  # default
 
+
+def test_accessions_lock_selected_shared_paths_without_run_view(tmp_path, monkeypatch):
+    from samovar.iss_config import _materialize_generate_accessions
+
+    shared = tmp_path / "shared" / "processed"
+    shared.mkdir(parents=True)
+    first = shared / "GCF_000819615.1.fa.gz"
+    second = shared / "GCF_000840245.1.fa.gz"
+    first.write_text("first")
+    second.write_text("second")
+    monkeypatch.setenv("SAMOVAR_PROCESSED_GENOMES", str(shared))
+    monkeypatch.setattr(
+        "samovar.genome_fetcher.materialize_accessions",
+        lambda *args, **kwargs: [str(first.resolve()), str(second.resolve())],
+    )
+    args = argparse.Namespace(
+        accessions=["GCF_000819615.1", "GCF_000840245.1"],
+        reindex=1,
+        raw_genomes=0,
+        output_dir=str(tmp_path / "run"),
+        genomes=None,
+        max_genome_mb=100,
+        genome_skip_list=None,
+    )
+    _materialize_generate_accessions(args)
+    assert args.genome_dir == str(shared)
+    assert args.genomes == [str(first.resolve()), str(second.resolve())]
+    assert not (tmp_path / "run" / ".genomes").exists()
+
+
 def test_generate_config(tmp_path):
     test_output_dir = str(tmp_path / "run")
     os.makedirs(test_output_dir, exist_ok=True)

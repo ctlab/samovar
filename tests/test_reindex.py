@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import errno
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
     monkeypatch.setenv("SAMOVAR_ROOT", str(root))
     monkeypatch.setenv("SAMOVAR_DATABASE", str(store))
+    monkeypatch.delenv("SAMOVAR_PROCESSED_GENOMES", raising=False)
     write_install_config_pointer(cfg, root=root)
     return cfg, store
 
@@ -174,9 +176,9 @@ def test_materialize_reindex_modes(tmp_path, monkeypatch):
         paths = materialize_accessions(
             [acc], output_dir=str(out1), email="t@e", reindex_mode=1
         )
-    assert paths
+    assert paths == [str((store / "processed" / f"{acc}.fa.gz").resolve())]
     assert (store / "processed" / f"{acc}.fa.gz").is_file()
-    assert (out1 / ".genomes" / "processed" / f"{acc}.fa.gz").is_file()
+    assert not (out1 / ".genomes").exists()
     assert resolve_indexed_path(acc) is not None
 
     out0 = tmp_path / "run0"
@@ -190,6 +192,59 @@ def test_materialize_reindex_modes(tmp_path, monkeypatch):
     assert (out0 / ".genomes" / "processed" / f"{acc2}.fa.gz").is_file()
     # Indexed genome was not re-fetched into the store as a second copy name.
     assert resolve_indexed_path(acc).name == f"{acc}.fa.gz"
+
+
+def test_default_materialize_never_falls_back_to_cross_device_copy(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from samovar.genome_fetcher import materialize_accessions
+
+    _cfg, store = _isolate(tmp_path, monkeypatch)
+    acc = "GCF_000819615.1"
+
+    def fake_fetch(accession, dest_dir, email, **kwargs):
+        dest = _write_fa(Path(dest_dir) / f"{accession}.fa.gz")
+        if kwargs.get("index"):
+            index_processed_file(dest, accession=accession, move_to=Path(dest_dir))
+        return str(dest)
+
+    def exdev(*args, **kwargs):
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    with (
+        patch("samovar.genome_fetcher.fetch_assembly_processed", side_effect=fake_fetch),
+        patch("samovar.seqio.os.link", side_effect=exdev),
+        patch("samovar.seqio.shutil.copy2", side_effect=AssertionError("default mode copied into the run")),
+    ):
+        paths = materialize_accessions(
+            [acc], output_dir=str(tmp_path / "run"), email="t@e", reindex_mode=1
+        )
+    assert paths == [str((store / "processed" / f"{acc}.fa.gz").resolve())]
+    assert not (tmp_path / "run" / ".genomes").exists()
+
+
+def test_default_materialize_respects_processed_store_override(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from samovar.genome_fetcher import materialize_accessions
+
+    _isolate(tmp_path, monkeypatch)
+    override = tmp_path / "separate-filesystem" / "processed"
+    monkeypatch.setenv("SAMOVAR_PROCESSED_GENOMES", str(override))
+    acc = "GCF_000819615.1"
+
+    def fake_fetch(accession, dest_dir, email, **kwargs):
+        dest = _write_fa(Path(dest_dir) / f"{accession}.fa.gz")
+        if kwargs.get("index"):
+            index_processed_file(dest, accession=accession, move_to=Path(dest_dir))
+        return str(dest)
+
+    with patch("samovar.genome_fetcher.fetch_assembly_processed", side_effect=fake_fetch):
+        paths = materialize_accessions(
+            [acc], output_dir=str(tmp_path / "run"), email="t@e", reindex_mode=1
+        )
+    assert paths == [str((override / f"{acc}.fa.gz").resolve())]
+    assert not (tmp_path / "run" / ".genomes").exists()
 
 
 @pytest.mark.parametrize("mode", [0, 1, 2])

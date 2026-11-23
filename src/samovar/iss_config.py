@@ -216,6 +216,7 @@ def _finish_generate(args, result):
 def _materialize_generate_accessions(args):
     from samovar.genome_fetcher import default_entrez_email, materialize_accessions
     from samovar.genome_index import run_processed_dir
+    from samovar.paths import processed_genomes_dir
 
     accessions = list(getattr(args, "accessions", None) or [])
     if not accessions:
@@ -234,7 +235,13 @@ def _materialize_generate_accessions(args):
     )
     if not paths:
         raise SystemExit("generate: no genomes materialized from --accessions")
-    args.genome_dir = str(run_processed_dir(args.output_dir))
+    locked = parse_genome_tokens(getattr(args, "genomes", None))
+    args.genomes = list(dict.fromkeys([*locked, *paths]))
+    args.genome_dir = str(
+        processed_genomes_dir()
+        if reindex_mode == 1
+        else run_processed_dir(args.output_dir)
+    )
 
 
 @dataclass
@@ -432,7 +439,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
         default=1,
         choices=(0, 1, 2),
         help='0: download to $out/.genomes (no index); 1 (default): samovar_database + index; '
-             '2: $out/.genomes + index',
+             'use selected shared paths without a run copy; 2: $out/.genomes + index',
     )
     parser.add_argument(
         '--raw-genomes',

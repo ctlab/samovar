@@ -17,3 +17,6 @@ The package MultiQC report uses the same idea for its own score sections: one ba
 [multiqc/multiqc_report.html](multiqc/multiqc_report.html)
 
 The full run tree stays in `examples_outdir/benchmark/`. Databases stay in `examples_outdir/benchmark_db/`.
+Its `--reindex 1` generation step keeps the selected processed phage assemblies
+in the shared SAMOVAR Database and records their canonical paths; it does not
+copy them into each repeat run.

@@ -17,6 +17,25 @@ def test_repeat_seed_is_stable_and_distinct():
     assert repeat_seed(42, 1, "repeat") != repeat_seed(7, 1, "repeat")
 
 
+def test_accession_repeat_identity_stays_compatible_with_run_local_layout(tmp_path):
+    from samovar.genome_index import run_processed_dir
+    from samovar.repeats import generated_identity
+
+    args = argparse.Namespace(
+        accessions=["GCF_000819615.1"],
+        output_dir=str(tmp_path / "run"),
+        genome_dir=str(tmp_path / "shared" / "processed"),
+        reads_generator="iss",
+        metagenome_generator="",
+        n_samples=1,
+        total_reads=10,
+        abundance_table="",
+    )
+    assert generated_identity(args).split("|", 1)[0] == str(
+        run_processed_dir(args.output_dir).resolve()
+    )
+
+
 def test_summary_does_not_combine_score_schemas_or_truth_sources():
     from samovar.repeats import statistics_rows
 

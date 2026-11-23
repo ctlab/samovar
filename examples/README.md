@@ -30,3 +30,7 @@ Large jobs can use the cluster without changing the scripts: `SAMOVAR_SLURM=1 SA
 Figures and MultiQC reports are copied next to each `pipeline.sh` after a run.
 Full run trees go to `examples_outdir/<name>/` (override with `SAMOVAR_OUTDIR`).
 In git, each example keeps only a few key plots under `figures/` plus `multiqc/multiqc_report.html`.
+
+Examples using `--reindex 1` reuse selected processed assemblies directly from
+the shared SAMOVAR Database; they do not require a duplicate under the run.
+Examples using `--reindex 0` deliberately keep their downloaded genomes local.
