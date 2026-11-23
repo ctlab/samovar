@@ -169,3 +169,62 @@ def test_branch_prepare_merges_hydra_rejects_new_annotator(tmp_path):
                 **{"cmd_kraken2-test": [["kraken2 toy"]]},
             )
         )
+
+
+def test_branch_materializes_linked_reads_and_profiles(tmp_path):
+    src = _seed_run(tmp_path / "source")
+    external = tmp_path / "external"
+    external.mkdir()
+    linked_read = external / "read.fastq"
+    linked_read.write_text("@r\nAC\n+\nII\n")
+    initial = src / "initial" / "linked_R1.fastq"
+    initial.symlink_to(linked_read)
+    profile_file = external / "profile.csv"
+    profile_file.write_text("taxid,N_s\n562,1\n")
+    profiles = src / "initial_profiles"
+    profiles.mkdir()
+    (profiles / "tool.csv").symlink_to(profile_file)
+    dest = tmp_path / "branch"
+    copy_run_until(src, dest, "regenerate_tables")
+    assert not (dest / "initial" / "linked_R1.fastq").is_symlink()
+    assert not (dest / "initial_profiles" / "tool.csv").is_symlink()
+    linked_read.unlink()
+    profile_file.unlink()
+    assert (dest / "initial" / "linked_R1.fastq").read_text() == "@r\nAC\n+\nII\n"
+    assert (dest / "initial_profiles" / "tool.csv").read_text() == "taxid,N_s\n562,1\n"
+
+
+def test_branch_prepare_uses_copied_reads_after_source_removed(tmp_path):
+    src = _seed_run(tmp_path / 'source')
+    dest = tmp_path / 'branch'
+    copy_run_until(src, dest, 'regenerate_tables')
+    import shutil
+    shutil.rmtree(tmp_path / 'source')
+    setup_pipeline(_ns(output_dir=str(dest), run_multiqc=False))
+    config = yaml.safe_load((dest / '.log' / 'configs' / 'config_init.yaml').read_text())
+    assert config['r1_dir'] == str(dest / 'initial_trimmed')
+    assert (dest / 'initial' / '1_full_R1.fastq').read_text() == '@r\nA\n+\nI\n'
+
+
+def test_branch_prepare_respects_explicit_input(tmp_path):
+    from samovar.branch import maybe_merge_branch_prepare
+    src = _seed_run(tmp_path / 'source')
+    dest = tmp_path / 'branch'
+    copy_run_until(src, dest, 'regenerate_tables')
+    new_reads = tmp_path / 'new-input'
+    new_reads.mkdir()
+    args, branched = maybe_merge_branch_prepare(_ns(output_dir=str(dest), input_dir=str(new_reads)))
+    assert branched
+    assert args.input_dir == str(new_reads)
+
+
+def test_branch_preserves_inherited_input_config(tmp_path, monkeypatch):
+    import samovar.branch as branch
+    src = _seed_run(tmp_path / 'source')
+    dest = tmp_path / 'branch'
+    copy_run_until(src, dest, 'regenerate_tables')
+    config = str(tmp_path / 'input.yaml')
+    monkeypatch.setattr(branch, 'load_prepare_hydra_args', lambda _: {'input_config': config})
+    args, branched = branch.maybe_merge_branch_prepare(_ns(output_dir=str(dest)))
+    assert branched
+    assert args.input_config == config

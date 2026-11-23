@@ -156,10 +156,10 @@ def _copy_tree(src: Path, dest: Path) -> None:
             dest,
             dirs_exist_ok=True,
             ignore=_ignore_scratch,
-            symlinks=True,
+            symlinks=False,
         )
         return
-    shutil.copytree(src, dest, ignore=_ignore_scratch, symlinks=True)
+    shutil.copytree(src, dest, ignore=_ignore_scratch, symlinks=False)
 
 
 def copy_run_until(
@@ -193,6 +193,8 @@ def copy_run_until(
     always = (".hydra", ".generate", ".database", "reads", "MAG", "kmer_cluster_models")
     for rel in always:
         piece = src / rel
+        if piece.is_symlink() and not piece.exists():
+            raise ValueError(f"branch artifact is a broken symlink: {piece}")
         if piece.exists():
             _copy_tree(piece, dst / rel)
             copied.append(rel)
@@ -211,6 +213,8 @@ def copy_run_until(
 
     for rel in paths_produced_before(start_s):
         piece = src / rel
+        if piece.is_symlink() and not piece.exists():
+            raise ValueError(f"branch artifact is a broken symlink: {piece}")
         if piece.exists():
             _copy_tree(piece, dst / rel)
             copied.append(rel)
@@ -272,6 +276,13 @@ def maybe_merge_branch_prepare(args: Any) -> Tuple[Any, bool]:
     ns = Namespace(**merged)
     ns.add_annotator = False
     ns.output_dir = out_dir
+    # A branch owns its staged initial reads; inherited Hydra input paths may
+    # point to the source run or an external directory which no longer exists.
+    if (branched and not getattr(args, "input_dir", None) and not getattr(args, "input_config", None)
+            and not getattr(ns, "input_config", None)):
+        initial = as_path(out_dir) / "initial"
+        if initial.is_dir():
+            ns.input_dir = str(initial)
     if not getattr(ns, "input_dir", None) and not getattr(ns, "input_config", None):
         initial = as_path(out_dir) / "initial"
         if initial.is_dir():
