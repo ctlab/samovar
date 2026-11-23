@@ -236,6 +236,8 @@ def _retarget_init_config(
     out["r2_dir"] = str(trimmed)
     out["output_dir"] = str(dest / "initial_reports")
     out["annotation_dir"] = str(dest / "initial_annotations")
+    out["truth_table"] = ""
+    out["profile_inputs"] = {}
     if cfg.get("mag_catalog_root"):
         out["mag_catalog_root"] = str(dest / "MAG")
         # New samples are queries against the trained run's frozen reference,
@@ -270,6 +272,10 @@ def _combine_initial(dest: Path, cfg: Dict[str, Any]) -> None:
     parts = list(ann.glob("*.annotation.csv")) if ann.is_dir() else []
     ingested = reports.is_dir() and any(reports.glob("*.ingested"))
     truth = str(cfg.get("truth_table") or "").strip() or None
+    has_read_tools = any(run.get("output_level", "read") != "profile"
+                         for run in cfg.get("run_config") or [])
+    if not has_read_tools:
+        return
     if parts or ingested:
         finalize_annotations(ann, truth_table=truth)
         return
@@ -406,11 +412,20 @@ def apply_pipeline(
             "apply --output_dir must not be the source --pipeline directory "
             "(that would overwrite the trained run)"
         )
-    if not full and state.model_path is None:
+    runs = state.init_config.get("run_config") or []
+    has_read_tools = any(run.get("output_level", "read") != "profile" for run in runs)
+    has_profilers = any(run.get("output_level") == "profile" for run in runs)
+    profile_settings = state.scoring_config.get("profile_settings") or {}
+    method = state.scoring_config.get("profile_corrector", profile_settings.get("profile_corrector", "profile_ratio"))
+    profile_model = state.root / "reprofiled_profiles" / f"{method}.json"
+    has_profile_work = has_profilers or profile_model.is_file()
+    if has_profilers and method != "none" and not full and not profile_model.is_file():
+        raise MissingModelError(f"normal apply requires saved profile model {profile_model}")
+    if not full and has_read_tools and state.model_path is None:
         raise MissingModelError(
             f"normal apply requires {state.root}/reprofiled_annotations/trained_model.joblib"
         )
-    if full and state.regenerated_annotations is None:
+    if full and has_read_tools and state.regenerated_annotations is None:
         raise ApplyError(
             f"--full requires regenerated annotation tables with known true taxids "
             f"under {state.root}/regenerated_annotations"
@@ -427,6 +442,14 @@ def apply_pipeline(
 
     scoring_cfg = dict(state.scoring_config)
     scoring_cfg["output_dir"] = str(dest)
+    scoring_cfg["profile_inputs"] = {}
+    scoring_cfg["profile_truth"] = None
+    scoring_cfg["initial_ground_truth_table"] = ""
+    if isinstance(scoring_cfg.get("profile_settings"), dict):
+        scoring_cfg["profile_settings"] = {
+            k: v for k, v in scoring_cfg["profile_settings"].items()
+            if k not in {"profile_inputs", "profile_truth", "initial_ground_truth_table"}
+        }
     _dump_yaml(dest / ".log" / "configs" / "config_scoring.yaml", scoring_cfg)
     qc_cfg = dict(state.qc_config)
     qc_cfg["output_dir"] = str(dest)
@@ -468,14 +491,18 @@ def apply_pipeline(
             _run_annotators(init_cfg, dest, cores, env, limit)
         elif step == "combine_initial":
             _combine_initial(dest, init_cfg)
-            _export_stage(
-                dest,
-                "initial",
-                "initial_annotations",
-                export_cfg,
-                reference=reference,
-                model=applied_model,
-            )
+            if has_profilers:
+                from samovar.profile_pipeline import collect
+                collect(dest, "initial", scoring_cfg)
+            if has_read_tools:
+                _export_stage(
+                    dest,
+                    "initial",
+                    "initial_annotations",
+                    export_cfg,
+                    reference=reference,
+                    model=applied_model,
+                )
         elif step == "viz_initial":
             _viz_and_score(
                 dest,
@@ -485,7 +512,11 @@ def apply_pipeline(
                 "viz_initial",
             )
         elif step == "abundance_tables":
-            materialize_observed_abundance(dest)
+            if has_profilers:
+                from samovar.profile_pipeline import materialize
+                materialize(dest, {**a2iss, **scoring_cfg})
+            else:
+                materialize_observed_abundance(dest)
         elif step == "regenerate_tables":
             stage_regenerate_tables(dest, a2iss)
         elif step == "score_sample_qc_full":
@@ -518,7 +549,7 @@ def apply_pipeline(
             ):
                 stage_filter_sample_qc(dest, a2iss, phase="final")
         elif step == "reprofile":
-            if full:
+            if has_read_tools and full:
                 # Train from the source run's labeled tables. Do not copy them
                 # into dest: that would collide on ``samovar merge regenerated``.
                 regen_src = Path(state.regenerated_annotations)
@@ -539,7 +570,7 @@ def apply_pipeline(
                 trained = True
                 applied_model = dest / "reprofiled_annotations" / "trained_model.joblib"
                 reference = regen_src
-            else:
+            elif has_read_tools:
                 apply_saved_reprofiler(
                     model_path=state.model_path,
                     initial_dir=dest / "initial_annotations",
@@ -547,14 +578,36 @@ def apply_pipeline(
                     config=repro_cfg,
                 )
                 applied_model = dest / "reprofiled_annotations" / "trained_model.joblib"
-            _export_stage(
-                dest,
-                "reprofiled",
-                "reprofiled_annotations",
-                export_cfg,
-                reference=reference,
-                model=applied_model,
-            )
+            if has_profile_work:
+                from samovar.profile_pipeline import ground_truth, stage_annotation
+                from samovar.abundance_correctors import run_export
+                if method == "none":
+                    from samovar.profiles import read_profiles, write_profiles
+                    tables, metas = read_profiles(dest / "initial_profiles")
+                    write_profiles(dest / "reprofiled_profiles", tables, metas)
+                else:
+                    profile_cfg = {**scoring_cfg.get("profile_settings", {}), **scoring_cfg, "run_root": str(dest),
+                                   "profile_model": str(dest / "reprofiled_profiles" / f"{method}.json")}
+                    if full:
+                        truth = ground_truth(state.root, "regenerated", state.scoring_config)
+                        if truth is None:
+                            raise ApplyError("--full needs actual regenerated profile truth")
+                        profile_cfg.update(reference=stage_annotation(state.root, "regenerated"), reference_truth=truth)
+                        trained = True
+                    else:
+                        profile_cfg["profile_model"] = str(profile_model)
+                    run_export(method, stage_annotation(dest, "initial"), dest / "reprofiled_profiles", profile_cfg)
+                    if not full:
+                        shutil.copy2(profile_model, dest / "reprofiled_profiles" / profile_model.name)
+            if has_read_tools:
+                _export_stage(
+                    dest,
+                    "reprofiled",
+                    "reprofiled_annotations",
+                    export_cfg,
+                    reference=reference,
+                    model=applied_model,
+                )
         elif step == "viz_reprofiled":
             combined = dest / "reprofiled_annotations" / "combined_annotation_table.csv"
             _viz_and_score(
@@ -577,6 +630,8 @@ def apply_pipeline(
         "output_dir": str(dest),
         "model": str(applied_model) if applied_model else "",
         "source_model": str(state.model_path) if state.model_path else "",
+        "profile_model": str(dest / "reprofiled_profiles" / f"{method}.json") if has_profile_work and method != "none" else "",
+        "source_profile_model": str(profile_model) if profile_model.is_file() else "",
         "seed": state.seed,
         "cores": cores,
         "steps": steps,

@@ -542,6 +542,20 @@ def export_profile_ratio(annotation, dest, config=None):
             raise ValueError("Incompatible profile-ratio model; retrain")
     else:
         raise ValueError("Profile ratio needs a trained model or regenerated reference")
+    if not isinstance(model.get("profiles"), dict) or not model["profiles"]:
+        raise ValueError("Incompatible profile-ratio model schema; retrain")
+    if set(tables) != set(model["profiles"]):
+        raise ValueError("Profile identities differ from regenerated training profiles")
+    for name, saved in model["profiles"].items():
+        if not isinstance(saved, dict) or not isinstance(saved.get("metadata"), dict) or not isinstance(saved.get("factors"), dict):
+            raise ValueError(f"Invalid profile-ratio model schema for {name}; retrain")
+        for factor in saved["factors"].values():
+            try:
+                value = float(factor)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid profile-ratio coefficient for {name}") from exc
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"Invalid profile-ratio coefficient for {name}")
     corrected, output_meta = {}, {}
     from samovar.profiles import at_rank
     for name, table in tables.items():
@@ -564,8 +578,9 @@ def export_profile_ratio(annotation, dest, config=None):
         corrected[identity] = work
         output_meta[identity] = {**pm, "unit": "fraction", "method": "profile_ratio", "source_identity": name}
     write_profiles(dest, corrected, output_meta)
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    model_path.write_text(json.dumps(model, indent=2, allow_nan=False) + "\n")
+    if reference is not None:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.write_text(json.dumps(model, indent=2, allow_nan=False) + "\n")
     return Path(dest)
 
 

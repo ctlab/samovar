@@ -459,3 +459,48 @@ def test_apply_inherits_viz_settings(tmp_path, monkeypatch):
     assert calls[0]["opal"] and "f1" in calls[0]["types"]
     assert calls[0]["metrics_sample"] == 50000 and calls[0]["metrics"] == ["accuracy"]
     assert calls[0]["threads"] == 3 and calls[0]["seed"] == 17
+
+
+def test_profile_only_apply_uses_saved_model_without_initial_truth(tmp_path, monkeypatch):
+    import json
+    from samovar.abundance_correctors import run_export
+    from samovar.parse_annotators import Annotation
+    from samovar.profiles import metadata, read_profiles
+    import samovar.apply as apply_module
+
+    source = _source_pipeline(tmp_path, monkeypatch, with_model=False)
+    configs = source / '.log' / 'configs'
+    init = yaml.safe_load((configs / 'config_init.yaml').read_text())
+    init['run_config'] = [dict(run_name='prof', type='custom', cmd='unused', db_path='db', output_level='profile')]
+    init['truth_table'] = '/obsolete/source/truth.csv'
+    _dump(configs / 'config_init.yaml', init)
+    _dump(configs / 'config_scoring.yaml', dict(profile_corrector='profile_ratio', profile_rank='taxid', profile_truth={'path': '/obsolete/truth'}))
+    _dump(configs / 'config_export.yaml', {'export': 'identity', 'export_formats': ['abundance']})
+    meta = metadata(dict(rank='taxid', database='db', identity='prof'))
+    train = pd.DataFrame({'taxid': ['562', '4932'], 'N_train': [80, 20]})
+    truth = pd.DataFrame({'taxid': ['562', '4932'], 'N_train': [40, 60]})
+    ann = Annotation.from_abundance_tables({'prof': train}, {'prof': meta})
+    model = source / 'reprofiled_profiles' / 'profile_ratio.json'
+    run_export('profile_ratio', ann, source / 'fitted', dict(reference=ann, reference_truth=(truth, meta), profile_rank='taxid', profile_model=str(model)))
+    original = model.read_bytes()
+
+    def reports(config, dest, *args):
+        assert not config['truth_table']
+        report = dest / 'initial_reports' / 'sample_prof.profile.csv'
+        report.parent.mkdir(parents=True, exist_ok=True)
+        train.rename(columns={'N_train': 'N_sample'}).to_csv(report, index=False)
+        Path(str(report) + '.profile.json').write_text(json.dumps(meta))
+
+    monkeypatch.setattr(apply_module, '_run_annotators', reports)
+    monkeypatch.setattr(apply_module, '_viz_and_score', lambda *args, **kwargs: None)
+    reads = tmp_path / 'reads'
+    _fastq_pair(reads)
+    out = tmp_path / 'out'
+    apply_pipeline(reads, source, out, cores=1)
+    profiles, _ = read_profiles(out / 'reprofiled_profiles')
+    result = profiles['prof_profile_ratio'].set_index('taxid')['N_sample']
+    assert result['562'] == pytest.approx(.4)
+    assert result['4932'] == pytest.approx(.6)
+    assert not (out / 'initial_annotations' / 'combined_annotation_table.csv').exists()
+    assert model.read_bytes() == original == (out / 'reprofiled_profiles' / model.name).read_bytes()
+    assert yaml.safe_load((out / '.log/configs/config_scoring.yaml').read_text())['profile_truth'] is None

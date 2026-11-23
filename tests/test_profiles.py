@@ -500,13 +500,28 @@ def test_ratio_correction_saved_apply_and_held_out_bias(tmp_path):
     assert result.loc[result.taxid == "9606", "N_s"].item() == 0
     payload = json.loads(model.read_text())
     assert payload["profiles"]["mpa"]["factors"]["9606"] == 0
+    before_mtime = model.stat().st_mtime_ns
     run_export("profile_ratio", held_out, tmp_path / "loaded", {"profile_model": str(model)})
+    assert model.stat().st_mtime_ns == before_mtime
     pd.testing.assert_frame_equal(read_profiles(tmp_path / "loaded")[0]["mpa_profile_ratio"], result)
     unseen = annotation(table([40, 10, 5, 2], ids=("562", "4932", "9606", "2886930")))
     run_export("profile_ratio", unseen, tmp_path / "unseen", {"profile_model": str(model)})
     assert read_profiles(tmp_path / "unseen")[0]["mpa_profile_ratio"].query("taxid == '2886930'").N_s.item() > 0
     with pytest.raises(ValueError, match="basis"):
         run_export("profile_ratio", annotation(table([50, 50]), basis="organisms"), tmp_path / "bad", {"profile_model": str(model)})
+
+
+def test_ratio_rejects_corrupt_saved_coefficients(tmp_path):
+    from samovar.abundance_correctors import run_export
+    target = annotation(table([1, 2]))
+    path = tmp_path / "model.json"
+    run_export("profile_ratio", target, tmp_path / "trained", {
+        "reference": target, "reference_truth": (table([1, 2]), metadata()), "profile_model": str(path)})
+    payload = json.loads(path.read_text())
+    payload["profiles"]["mpa"]["factors"]["562"] = -1
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="coefficient"):
+        run_export("profile_ratio", target, tmp_path / "bad", {"profile_model": str(path)})
 
 
 def test_profile_input_prepare_does_not_create_per_read_model(tmp_path):
@@ -1181,3 +1196,24 @@ def test_materialize_keeps_selected_genome_taxid(tmp_path):
     written = pd.read_csv(tmp_path / "initial_abundance" / "sylph.csv")
     assert set(written["taxid"].astype(str)) == {"2886930"}
     assert int(written["N_A"].sum()) == 20
+
+
+def test_ratio_mixed_read_and_native_profiles_keep_distinct_identities(tmp_path):
+    from samovar.abundance_correctors import run_export
+    read_data = pd.DataFrame({'seq': ['r1', 'r2', 'r3', 'r4'], 'sample': ['s'] * 4,
+                              'taxID_kaiju_0': [562, 562, 4932, 4932]})
+    mixed = Annotation.from_long_table(read_data)
+    mixed.add_profiles({'mpa': table([3, 1])}, {'mpa': metadata()})
+    truth = table([1, 3])
+    path = tmp_path / 'profile_ratio.json'
+    run_export('profile_ratio', mixed, tmp_path / 'train', {
+        'reference': mixed, 'reference_truth': (truth, metadata()),
+        'profile_rank': 'taxid', 'profile_model': str(path)})
+    run_export('profile_ratio', mixed, tmp_path / 'applied', {'profile_model': str(path)})
+    result, metas = read_profiles(tmp_path / 'applied')
+    assert set(result) == {'kaiju_profile_ratio', 'mpa_profile_ratio'}
+    assert metas['kaiju_profile_ratio']['source_identity'] == 'kaiju'
+    assert metas['mpa_profile_ratio']['source_identity'] == 'mpa'
+    assert not any('SAMOVAR' in name for name in result)
+    for values in result.values():
+        assert values.set_index('taxid').loc['562', 'N_s'] == pytest.approx(.25)
