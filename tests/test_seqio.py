@@ -264,7 +264,7 @@ def test_deinterleave_one_group_keeps_the_other(tmp_path):
     from samovar.seqio import deinterleave_marked_groups
 
     illumina = tmp_path / "1_illumina.fastq"
-    illumina.write_text(_record("r1a", "AA") + _record("r2a", "TT") + _record("r1b", "CC") + _record("r2b", "GG"))
+    illumina.write_text(_record("a/1", "AA") + _record("a/2", "TT") + _record("b/1", "CC") + _record("b/2", "GG"))
     ont = tmp_path / "1_ont.fastq"
     ont.write_text(_record("ont", "NNNN"))
     source = tmp_path / "input"
@@ -273,8 +273,8 @@ def test_deinterleave_one_group_keeps_the_other(tmp_path):
     illumina_src.write_text(illumina.read_text())
     written = deinterleave_marked_groups(tmp_path, ["illumina"])
     assert [p.name for p in written] == ["1_illumina_R1.fastq", "1_illumina_R2.fastq"]
-    assert (tmp_path / "1_illumina_R1.fastq").read_text() == _record("r1a", "AA") + _record("r1b", "CC")
-    assert (tmp_path / "1_illumina_R2.fastq").read_text() == _record("r2a", "TT") + _record("r2b", "GG")
+    assert (tmp_path / "1_illumina_R1.fastq").read_text() == _record("a/1", "AA") + _record("b/1", "CC")
+    assert (tmp_path / "1_illumina_R2.fastq").read_text() == _record("a/2", "TT") + _record("b/2", "GG")
     parked = tmp_path / ".interleaved" / "1_illumina.fastq"
     assert parked.read_text() == illumina_src.read_text()
     assert not illumina.exists()
@@ -329,3 +329,63 @@ def test_single_end_uniform_mate_suffix_is_stripped(tmp_path):
     assert mixed.read_text().splitlines()[0] == "@a/1"
     assert clash.read_text().splitlines()[0] == "@same/1"
     assert normalize_single_end_read_ids(staged) == []
+
+
+def test_interleaved_groups_cli_lists_and_csv_are_equivalent():
+    from samovar.seqio import normalize_interleaved_groups
+    assert normalize_interleaved_groups(['illumina,bgi', 'BGI']) == ['illumina', 'bgi']
+    assert normalize_interleaved_groups('illumina,bgi') == ['illumina', 'bgi']
+
+
+@pytest.mark.parametrize('headers', [
+    ('a/1', 'b/2'), ('a/2', 'a/1'), ('a/1', 'a/1'),
+    ('a 2:N:0:1', 'a 1:N:0:1'),
+])
+def test_interleaved_rejects_wrong_pair_without_publishing(tmp_path, headers):
+    from samovar.seqio import deinterleave_marked_groups
+    path = tmp_path / 's_illumina.fastq'
+    data = ''.join(_record(h, 'AC') for h in headers)
+    path.write_text(data)
+    with pytest.raises(ValueError, match='not mates'):
+        deinterleave_marked_groups(tmp_path, ['illumina'])
+    assert path.read_text() == data
+    assert not (tmp_path / 's_illumina_R1.fastq').exists()
+    assert not (tmp_path / 's_illumina_R2.fastq').exists()
+
+
+def test_interleaved_rejects_unmatched_group_and_preserves_source(tmp_path):
+    from samovar.seqio import deinterleave_marked_groups
+    path = tmp_path / 'sample.fastq'
+    data = _record('a/1', 'AA') + _record('a/2', 'TT')
+    path.write_text(data)
+    with pytest.raises(ValueError, match='No FASTQ sample matched'):
+        deinterleave_marked_groups(tmp_path, ['illumina'])
+    assert path.read_text() == data
+
+
+def test_interleaved_casava_and_symlink_source(tmp_path):
+    from samovar.seqio import deinterleave_marked_groups
+    source = tmp_path / 'source.fastq'
+    data = _record('read 1:N:0:1', 'AA') + _record('read 2:N:0:1', 'TT')
+    source.write_text(data)
+    work = tmp_path / 'work'
+    work.mkdir()
+    (work / 'sample_illumina.fastq').symlink_to(source)
+    assert len(deinterleave_marked_groups(work, ['illumina', 'bgi'])) == 2
+    assert source.read_text() == data
+    assert deinterleave_marked_groups(work, ['illumina']) == []
+
+
+def test_interleaved_gzip_matches_paired_reads(tmp_path):
+    import gzip
+    from samovar.seqio import deinterleave_marked_groups, open_text
+    left = _record('a/1', 'AC') + _record('b/1', 'TG')
+    right = _record('a/2', 'GT') + _record('b/2', 'CA')
+    path = tmp_path / 's_bgi.fastq.gz'
+    with gzip.open(path, 'wt') as out:
+        out.write(_record('a/1', 'AC') + _record('a/2', 'GT') + _record('b/1', 'TG') + _record('b/2', 'CA'))
+    deinterleave_marked_groups(tmp_path, ['bgi'])
+    with open_text(tmp_path / 's_bgi_R1.fastq.gz') as handle:
+        assert handle.read() == left
+    with open_text(tmp_path / 's_bgi_R2.fastq.gz') as handle:
+        assert handle.read() == right

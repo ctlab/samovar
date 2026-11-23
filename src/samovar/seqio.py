@@ -528,7 +528,8 @@ def normalize_interleaved_groups(raw: Any) -> List[str]:
     """Group tokens marked paired-in-one-file. Empty input is no groups."""
     if raw in (None, "", False):
         return []
-    parts = raw.replace(",", " ").split() if isinstance(raw, str) else list(raw)
+    items = [raw] if isinstance(raw, str) else list(raw)
+    parts = [part for item in items for part in str(item).replace(",", " ").split()]
     groups: List[str] = []
     known = set(INTERLEAVED_GROUPS)
     for item in parts:
@@ -544,6 +545,17 @@ def normalize_interleaved_groups(raw: Any) -> List[str]:
     return groups
 
 
+def _interleaved_mate(header: str) -> Optional[int]:
+    """Read mate from /1 or /2 and CASAVA's whitespace-delimited field."""
+    fields = header.strip().split()
+    token = fields[0] if fields else ""
+    suffix = int(token[-1]) if len(token) >= 2 and token[-2:] in ("/1", "/2") else None
+    field = int(fields[1][0]) if len(fields) > 1 and re.match(r"^[12]:", fields[1]) else None
+    if suffix is not None and field is not None and suffix != field:
+        raise ValueError(f"Conflicting FASTQ mate markers in {header.strip()!r}")
+    return suffix if suffix is not None else field
+
+
 def deinterleave_marked_groups(directory: PathLike, groups: Any) -> List[Path]:
     """Split interleaved FASTQ for the named groups into R1 and R2.
 
@@ -556,15 +568,21 @@ def deinterleave_marked_groups(directory: PathLike, groups: Any) -> List[Path]:
     if not wanted or not directory.is_dir():
         return []
     written: List[Path] = []
+    matched = False
     for path in sorted(directory.iterdir()):
         if not path.is_file() or not is_fastq_name(path.name):
             continue
-        if path.name.endswith(FASTQ_R1_SUFFIXES) or path.name.endswith(FASTQ_R2_SUFFIXES):
+        if path.name.endswith(FASTQ_R2_SUFFIXES):
             continue
         sample = sample_name_from_r1(path)
         tail = _CAMISIM_TECH_TAIL.search(sample)
         group = tail.group(1).lower() if tail else ""
         if group not in wanted:
+            continue
+        matched = True
+        if path.name.endswith(FASTQ_R1_SUFFIXES):
+            if find_fastq_mate(directory, sample, "R2") is None:
+                raise ValueError(f"Missing R2 mate for {path}")
             continue
         ext = ".fastq.gz" if path.name.endswith(".gz") else ".fastq"
         r1 = directory / f"{sample}_R1{ext}"
@@ -574,20 +592,40 @@ def deinterleave_marked_groups(directory: PathLike, groups: Any) -> List[Path]:
             continue
         if r1.exists() or r2.exists():
             raise ValueError(f"Partial deinterleave for {path}: {r1.name} / {r2.name}")
-        count = 0
-        with open_text(r1, "wt") as left, open_text(r2, "wt") as right:
-            for record in iter_fastq_records(path):
-                handle = left if count % 2 == 0 else right
-                handle.writelines(record)
-                count += 1
-        if count == 0 or count % 2:
-            r1.unlink(missing_ok=True)
-            r2.unlink(missing_ok=True)
-            raise ValueError(
-                f"Interleaved FASTQ {path} has {count} records; paired ends need a positive even count"
-            )
+        # Write into private files first; malformed inputs must leave no apparent pair.
+        with tempfile.TemporaryDirectory(prefix=".deinterleave-", dir=directory) as tmp:
+            left_path, right_path = Path(tmp) / r1.name, Path(tmp) / r2.name
+            count = 0
+            with open_text(left_path, "wt") as left, open_text(right_path, "wt") as right:
+                records = iter_fastq_records(path)
+                for first in records:
+                    second = next(records, None)
+                    if second is None:
+                        raise ValueError(
+                            f"Interleaved FASTQ {path} has an odd number of records; paired ends need a positive even count"
+                        )
+                    count += 2
+                    a, b = first[0], second[0]
+                    a_id, b_id = fastq_record_id(a), fastq_record_id(b)
+                    a_mate, b_mate = _interleaved_mate(a), _interleaved_mate(b)
+                    if a_id != b_id or a_mate not in (None, 1) or b_mate not in (None, 2):
+                        raise ValueError(
+                            f"Interleaved FASTQ {path}: records {count - 1} and {count} "
+                            f"are not mates in R1/R2 order: {a.strip()!r}, {b.strip()!r}"
+                        )
+                    left.writelines(first)
+                    right.writelines(second)
+            if not count:
+                raise ValueError(f"Interleaved FASTQ {path} is empty; paired ends need a positive even count")
+            left_path.replace(r1)
+            right_path.replace(r2)
         _park_interleaved(path, directory)
         written.extend((r1, r2))
+    if not matched:
+        raise ValueError(
+            f"No FASTQ sample matched interleaved group(s) {', '.join(sorted(wanted))} in {directory}; "
+            "provide a working input name with a technology suffix such as _illumina"
+        )
     return written
 
 
