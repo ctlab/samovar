@@ -276,13 +276,14 @@ def maybe_merge_branch_prepare(args: Any) -> Tuple[Any, bool]:
     ns = Namespace(**merged)
     ns.add_annotator = False
     ns.output_dir = out_dir
-    # A branch owns its staged initial reads; inherited Hydra input paths may
-    # point to the source run or an external directory which no longer exists.
-    if (branched and not getattr(args, "input_dir", None) and not getattr(args, "input_config", None)
-            and not getattr(ns, "input_config", None)):
+    # A branch owns its staged initial reads. Inherited --input_dir and
+    # input_config paths still name the external source, whose files can differ
+    # after sort_reads. An explicit input on this prepare command is kept.
+    if branched and not getattr(args, "input_dir", None) and not getattr(args, "input_config", None):
         initial = as_path(out_dir) / "initial"
         if initial.is_dir():
             ns.input_dir = str(initial)
+            ns._use_branch_initial = True
     if not getattr(ns, "input_dir", None) and not getattr(ns, "input_config", None):
         initial = as_path(out_dir) / "initial"
         if initial.is_dir():

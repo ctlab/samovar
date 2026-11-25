@@ -942,6 +942,8 @@ class PipelineConfig:
             found = references_from_generate(config.output_dir)
             if found:
                 config.profile_references = found
+        if getattr(args, "_use_branch_initial", False):
+            config.input_dir = str((Path(config.output_dir) / "initial").resolve())
         if config.input_dir:
             from samovar.seqio import link_or_copy_reads
 

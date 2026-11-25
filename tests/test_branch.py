@@ -228,3 +228,30 @@ def test_branch_preserves_inherited_input_config(tmp_path, monkeypatch):
     args, branched = branch.maybe_merge_branch_prepare(_ns(output_dir=str(dest)))
     assert branched
     assert args.input_config == config
+    assert args.input_dir == str(dest / "initial")
+    assert args._use_branch_initial is True
+
+
+def test_branch_prepare_keeps_reordered_initial_over_external_config(tmp_path, monkeypatch):
+    import samovar.branch as branch
+
+    src = _seed_run(tmp_path / "src")
+    external = src.parent / "reads"
+    dest = tmp_path / "branch"
+    copy_run_until(src, dest, "regenerate_tables")
+    (dest / "initial" / "1_full_R1.fastq").write_text("@r\nGG\n+\nII\n")
+    config_path = tmp_path / "input.yaml"
+    config_path.write_text(f"input_dir: {external}\n", encoding="utf-8")
+    real_hydra = branch.load_prepare_hydra_args
+
+    def hydra_with_external_config(out_dir):
+        data = real_hydra(out_dir)
+        data["input_config"] = str(config_path)
+        data["input_dir"] = str(external)
+        return data
+
+    monkeypatch.setattr(branch, "load_prepare_hydra_args", hydra_with_external_config)
+    setup_pipeline(_ns(output_dir=str(dest), startpoint="regenerate_tables", run_multiqc=False))
+    recorded = yaml.safe_load((dest / ".hydra" / "config.yaml").read_text())
+    assert recorded["prepare"]["args"]["input_dir"] == str(dest / "initial")
+    assert (dest / "initial" / "1_full_R1.fastq").read_text() == "@r\nGG\n+\nII\n"
