@@ -134,6 +134,7 @@ def test_resampled_cat_is_the_saved_tbml_training_artifact(tmp_path):
             "n_estimators": 4,
             "resampling": {
                 "tool": "builtin",
+                "mode": "separate",
                 "columns": ["taxid_dummy", "length"],
                 "groups": [
                     {
@@ -157,9 +158,15 @@ def test_resampled_cat_is_the_saved_tbml_training_artifact(tmp_path):
     assert table["draw_id"].is_unique
     report = json.loads((output / "resampling.json").read_text())
     assert report["seed"] == 3 and len(report["groups"]) == 2
-    model = joblib.load(output / "trained_model.joblib")
-    assert model.samovar_resampling_ == result.model.samovar_resampling_
+    model = joblib.load(output / "trained_model_case.joblib")
+    assert model.samovar_resampling_ == result.models["case"].samovar_resampling_
     assert model.samovar_resampling_["solver"] == "raking-v1"
+    distributions = json.loads((output / "group_distributions.json").read_text())
+    assert set(distributions) == {"case", "control"}
+    assert distributions["case"]["taxid_dummy"] != distributions["control"]["taxid_dummy"]
+    assert "true" not in distributions["case"] and "taxid_SAMOVAR" not in distributions["case"]
+    assert (output / "trained_model_control.joblib").is_file()
+    assert not (output / "trained_model.joblib").exists()
     zero = tmp_path / "seed-zero"
     run_reprofiler(
         "linear",
@@ -171,6 +178,7 @@ def test_resampled_cat_is_the_saved_tbml_training_artifact(tmp_path):
             "seed": 0,
             "feature_importance": "none",
             "resampling": {
+                "mode": "separate",
                 "columns": ["taxid_dummy"],
                 "groups": [
                     {
@@ -184,6 +192,100 @@ def test_resampled_cat_is_the_saved_tbml_training_artifact(tmp_path):
         },
     )
     assert json.loads((zero / "resampling.json").read_text())["seed"] == 0
+
+
+def test_grouped_run_without_a_mode_fails(tmp_path):
+    regenerated, ground, initial = _tiny_tables()
+    with pytest.raises(ValueError, match="needs mode separate or finetune"):
+        run_reprofiler(
+            "linear",
+            regenerated=regenerated,
+            ground_truth=ground,
+            initial={"s1": initial["sample.annotation"]},
+            output_dir=tmp_path,
+            config={
+                "feature_importance": "none",
+                "resampling": {
+                    "columns": ["taxid_dummy"],
+                    "groups": [
+                        {"name": "A", "samples": ["s1"], "dataset": "regenerated", "size": 2}
+                    ],
+                },
+            },
+        )
+
+
+def test_finetune_linear_keeps_a_base_class_and_trees_refuse(tmp_path):
+    regenerated = pd.DataFrame(
+        {
+            "taxid_dummy": [1, 1, 1, 2],
+            "length": [10, 10, 10, 10],
+            "true": [1, 1, 1, 2],
+        }
+    )
+    initial = {
+        "wide": pd.DataFrame({"taxid_dummy": [1, 2], "length": [10, 10]}),
+        "narrow": pd.DataFrame({"taxid_dummy": [1, 1], "length": [10, 10]}),
+    }
+    groups = [
+        {"name": "wide", "samples": ["wide"], "dataset": "regenerated", "size": 2},
+        {"name": "narrow", "samples": ["narrow"], "dataset": "regenerated", "size": 2, "mode": "finetune"},
+    ]
+    output = tmp_path / "linear"
+    result = run_reprofiler(
+        "linear",
+        regenerated=regenerated,
+        ground_truth={},
+        initial=initial,
+        output_dir=output,
+        config={
+            "seed": 0,
+            "feature_importance": "none",
+            "resampling": {"mode": "separate", "columns": ["taxid_dummy"], "groups": groups},
+        },
+    )
+    assert set(result.models) == {"wide", "narrow"}
+    narrow_rows = pd.read_csv(output / "resampled_training_table.csv")
+    narrow_rows = narrow_rows[narrow_rows["resampling_group"] == "narrow"]
+    assert set(narrow_rows["true"].astype(int)) == {1}
+    assert 2 in set(int(label) for label in result.models["narrow"].classes_)
+    with pytest.raises(ValueError, match="finetune is not supported"):
+        run_reprofiler(
+            "rfc2",
+            regenerated=regenerated,
+            ground_truth={},
+            initial=initial,
+            output_dir=tmp_path / "forest",
+            config={
+                "seed": 0,
+                "feature_importance": "none",
+                "n_estimators": 2,
+                "resampling": {"mode": "finetune", "columns": ["taxid_dummy"], "groups": groups},
+            },
+        )
+
+
+def test_benchmark_refuses_grouped_correction(tmp_path):
+    regenerated, ground, _ = _tiny_tables()
+    with pytest.raises(ValueError, match="benchmark mode does not train"):
+        run_reprofiler(
+            "linear",
+            regenerated=regenerated,
+            ground_truth=ground,
+            initial={"s1": pd.DataFrame({"taxid_dummy": [1], "length": [10]})},
+            output_dir=tmp_path,
+            config={
+                "mode": "benchmark",
+                "feature_importance": "none",
+                "resampling": {
+                    "mode": "separate",
+                    "columns": ["taxid_dummy"],
+                    "groups": [
+                        {"name": "A", "samples": ["s1"], "dataset": "regenerated", "size": 2}
+                    ],
+                },
+            },
+        )
 
 
 def test_prepare_writes_resampling_config(tmp_path):

@@ -15,7 +15,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import yaml
@@ -812,6 +812,126 @@ def _align_ml_tables(regenerated, initial, initial_dir):
     return regen, {key: aligned[i + 1] for i, key in enumerate(keys)}
 
 
+def _group_modes(block: Mapping[str, Any]) -> Dict[str, str]:
+    default = str(block.get("mode") or "").strip().lower()
+    modes: Dict[str, str] = {}
+    for group in block.get("groups") or []:
+        name = str(group.get("name") or "")
+        mode = str(group.get("mode") or default).strip().lower()
+        if mode not in {"separate", "finetune"}:
+            raise ValueError(f"group {name or '?'} needs mode separate or finetune")
+        modes[name] = mode
+    return modes
+
+
+def _training_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    drop = [column for column in ("draw_id", "source_row", "resampling_group") if column in frame.columns]
+    return frame.drop(columns=drop)
+
+
+def _initial_for_group(initial: Mapping[str, pd.DataFrame], samples) -> Dict[str, pd.DataFrame]:
+    if not isinstance(initial, Mapping) or not initial:
+        raise ValueError("grouped reprofile needs the initial sample tables")
+    wanted = {str(sample) for sample in samples}
+    chosen: Dict[str, pd.DataFrame] = {}
+    for key, table in initial.items():
+        if str(key) in wanted:
+            chosen[key] = table
+            wanted.discard(str(key))
+    if wanted:
+        raise ValueError("group samples have no initial table: " + ", ".join(sorted(wanted)))
+    return chosen
+
+
+def _fit_finetuned_linear(base_rows: pd.DataFrame, group_rows: pd.DataFrame, seed: int):
+    """Continue one linear model on a group's rows. A fresh fit is not a substitute."""
+    import copy
+
+    from sklearn.linear_model import SGDClassifier
+
+    base = preprocess_data(base_rows)
+    schema = base.attrs.get("samovar_preprocessing")
+    part = preprocess_data(group_rows, preprocessing=schema)
+    features = sorted(column for column in base.columns if column != "true")
+    model = SGDClassifier(loss="log_loss", random_state=int(seed), max_iter=1000, tol=1e-3)
+    model.partial_fit(base[features], base["true"], classes=pd.unique(base["true"]))
+    continued = copy.deepcopy(model)
+    continued.partial_fit(part[features], part["true"])
+    continued.samovar_preprocessing_ = schema
+    return continued
+
+
+def _save_group_model(model, output_dir: Path, name: str, report) -> None:
+    if model is None:
+        return
+    if report is not None:
+        model.samovar_resampling_ = report
+    single = output_dir / "trained_model.joblib"
+    save_model(model, str(output_dir / f"trained_model_{name}.joblib"))
+    if single.exists():
+        single.unlink()
+
+
+def _run_grouped_reprofiler(
+    kind: str,
+    canon: str,
+    regenerated: pd.DataFrame,
+    ground_truth: Dict[str, pd.DataFrame],
+    initial: Mapping[str, pd.DataFrame],
+    config: Dict[str, Any],
+    modes: Dict[str, str],
+    report,
+) -> ReprofileResult:
+    import json
+
+    from samovar.resample import group_distributions
+
+    block = config["resampling"]
+    output_dir = Path(config.get("output_dir") or ".")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    distributions = group_distributions(initial, block["groups"], block.get("columns") or [])
+    (output_dir / "group_distributions.json").write_text(
+        json.dumps(distributions, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    aligned, aligned_initial = _align_ml_tables(regenerated, dict(initial), None)
+    if "resampling_group" not in aligned.columns:
+        raise ValueError("grouped training needs a resampling_group column")
+    base_rows = _training_rows(aligned)
+    seed = 42 if config.get("seed") is None else int(config["seed"])
+    tables: Dict[str, pd.DataFrame] = {}
+    models: Dict[str, Any] = {}
+    features_df = config.get("features_df")
+    classify = bool(config.get("classify_unclassified"))
+    for group in block["groups"]:
+        name = str(group["name"])
+        rows = aligned[aligned["resampling_group"].astype(str) == name]
+        train_rows = _training_rows(rows)
+        subset = _initial_for_group(aligned_initial, group["samples"])
+        if modes[name] == "finetune":
+            model = _fit_finetuned_linear(base_rows, train_rows, seed)
+            predicted = profile_tables_with_model(
+                subset, model, features_df=features_df, classify_unclassified=classify
+            )
+        elif kind == "builtin":
+            piece = run_builtin_reprofiler(canon, train_rows, ground_truth, subset, config)
+            model = piece.model
+            predicted = piece.tables
+        else:
+            piece = _run_custom(canon, train_rows, ground_truth, subset, config)
+            model = piece.model
+            predicted = piece.tables
+        _save_group_model(model, output_dir, name, report)
+        models[name] = model
+        tables.update(predicted or {})
+    return ReprofileResult(
+        tables=tables,
+        model=None,
+        models=models,
+        extras={"distributions": distributions},
+    )
+
+
 def run_reprofiler(
     name: Optional[str],
     *,
@@ -843,7 +963,15 @@ def run_reprofiler(
     )
     resampling_report = None
     resampling_initial = initial
-    if isinstance(cfg.get("resampling"), dict) and cfg["resampling"]:
+    block = cfg.get("resampling") if isinstance(cfg.get("resampling"), dict) else None
+    group_list = (block or {}).get("groups") or []
+    group_modes = _group_modes(block) if group_list else {}
+    if group_list and str(cfg.get("mode") or "").strip().lower() == "benchmark":
+        raise ValueError("benchmark mode does not train or apply group correction models")
+    if group_list and any(mode == "finetune" for mode in group_modes.values()):
+        if not (kind == "builtin" and canon == "linear"):
+            raise ValueError(f"finetune is not supported for reprofiler {canon}")
+    if block:
         if resampling_initial is None:
             resampling_initial = load_initial_tables(initial_dir)
         from samovar.resample import apply_resampling
@@ -857,25 +985,31 @@ def run_reprofiler(
         cfg["selected_regenerated_path"] = str(
             Path(output_dir) / "resampled_training_table.csv"
         )
-    if kind == "builtin":
-        init = initial
-    else:
-        init = resampling_initial if resampling_initial is not None else load_initial_tables(initial_dir)
-    regen, init = _align_ml_tables(regen, init, initial_dir)
-    # Use the full fitted vocabulary, including clusters absent from regenerated reads.
-    from samovar.kmer_cluster import cluster_levels_for_run
-    levels = cluster_levels_for_run(Path(output_dir).parent, regen.columns)
-    if levels:
-        regen.attrs["samovar_cluster_levels"] = levels
-        cfg["samovar_cluster_levels"] = levels
     cfg["features_df"] = cfg.get("features_df")
     if cfg.get("features") and cfg["features_df"] is None:
         cfg["features_df"] = load_read_features(cfg.get("features"))
-
-    if kind == "builtin":
-        result = run_builtin_reprofiler(canon, regen, truth, init, cfg)
+    if group_list:
+        init = resampling_initial if resampling_initial is not None else {}
+        result = _run_grouped_reprofiler(
+            kind, canon, regen, truth, init, cfg, group_modes, resampling_report
+        )
     else:
-        result = _run_custom(canon, regen, truth, init, cfg)
+        if kind == "builtin":
+            init = initial
+        else:
+            init = resampling_initial if resampling_initial is not None else load_initial_tables(initial_dir)
+        regen, init = _align_ml_tables(regen, init, initial_dir)
+        # Use the full fitted vocabulary, including clusters absent from regenerated reads.
+        from samovar.kmer_cluster import cluster_levels_for_run
+        levels = cluster_levels_for_run(Path(output_dir).parent, regen.columns)
+        if levels:
+            regen.attrs["samovar_cluster_levels"] = levels
+            cfg["samovar_cluster_levels"] = levels
+
+        if kind == "builtin":
+            result = run_builtin_reprofiler(canon, regen, truth, init, cfg)
+        else:
+            result = _run_custom(canon, regen, truth, init, cfg)
     if result.model is not None and resampling_report is not None:
         result.model.samovar_resampling_ = resampling_report
     wrote = bool((result.extras or {}).get("wrote_tables"))

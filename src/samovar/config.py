@@ -1872,6 +1872,7 @@ class PipelineConfig:
             'reprofiler_flags': self.reprofiler_flags or "",
             'reprofiler_tool_flags': self.reprofiler_tool_flags or {},
             'resampling': self.resampling or {},
+            'mode': self.mode,
             'cores': int(self.cores),
             'mem_mb': int(self.mem_mb or 0),
             'gpu': bool(self.gpu),

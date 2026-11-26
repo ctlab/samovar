@@ -248,6 +248,14 @@ def resample_cat(
         raise ValueError("resampling groups need non-empty names")
     if len(names) != len(set(names)):
         raise ValueError("resampling group names must be unique")
+    owner: Dict[str, str] = {}
+    for group in groups:
+        name = str(group["name"])
+        for sample in group.get("samples") or []:
+            key = str(sample)
+            if key in owner:
+                raise ValueError(f"sample {key} is in groups {owner[key]} and {name}")
+            owner[key] = name
     for group in groups:
         name = str(group["name"])
         samples = [str(sample) for sample in group["samples"]]
@@ -329,6 +337,36 @@ def resample_cat(
         "groups": reports,
         "native_profiler_resampled": False,
     }
+
+
+def group_distributions(initial, groups, columns) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """Frequency of each matching column on one group's initial rows."""
+    frame = initial if isinstance(initial, pd.DataFrame) else _initial_frame(initial)
+    if "sample" not in frame.columns:
+        raise ValueError("initial CAT needs a sample column")
+    selected = [str(column) for column in columns]
+    forbidden = [column for column in selected if column.strip().lower() in _FORBIDDEN_MATCH]
+    if forbidden:
+        raise ValueError("resampling matching cannot use " + ", ".join(forbidden))
+    missing = [column for column in selected if column not in frame.columns]
+    if missing:
+        raise ValueError(
+            "distribution columns are not in the initial CAT: " + ", ".join(missing)
+        )
+    distributions: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for group in groups:
+        name = str(group["name"])
+        samples = {str(sample) for sample in group["samples"]}
+        rows = frame[frame["sample"].astype(str).isin(samples)]
+        column_dist: Dict[str, Dict[str, float]] = {}
+        for column in selected:
+            counts = rows[column].astype(str).value_counts(dropna=False)
+            total = float(counts.sum()) or 1.0
+            column_dist[column] = {
+                str(value): float(counts[value]) / total for value in counts.index
+            }
+        distributions[name] = column_dist
+    return distributions
 
 
 def _initial_frame(initial: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
@@ -433,5 +471,5 @@ def apply_resampling(
         tool_config,
     )
     save_resampling(result, output_dir)
-    selected = result["table"].drop(columns=list(PROVENANCE_COLUMNS), errors="ignore")
+    selected = result["table"].drop(columns=["draw_id", "source_row"], errors="ignore")
     return selected, {key: value for key, value in result.items() if key != "table"}

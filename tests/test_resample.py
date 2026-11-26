@@ -70,6 +70,20 @@ def test_replacement_can_repeat_a_row():
     assert result["groups"][0]["residual_mismatch"] == 0
 
 
+def test_one_sample_in_two_groups_is_an_error():
+    initial, regenerated = _cats()
+    with pytest.raises(ValueError, match="is in groups A and B"):
+        resample_cat(
+            initial,
+            {"regen": regenerated},
+            [
+                {"name": "A", "samples": ["s1", "s2"], "dataset": "regen", "size": 1},
+                {"name": "B", "samples": ["s2"], "dataset": "regen", "size": 1},
+            ],
+            columns=["feat"],
+        )
+
+
 def test_unknown_sample_is_an_error():
     initial, regenerated = _cats()
     with pytest.raises(ValueError, match="not in the initial CAT"):
@@ -215,7 +229,8 @@ def test_apply_resampling_saves_selected_cat_diagnostics_and_abundance(tmp_path)
         tmp_path,
     )
     assert len(selected) == 4
-    assert not set(("draw_id", "source_row", "resampling_group")) & set(selected.columns)
+    assert not set(("draw_id", "source_row")) & set(selected.columns)
+    assert set(selected["resampling_group"]) == {"all"}
     assert report["seed"] == 9
     saved = pd.read_csv(tmp_path / "resampled_training_table.csv")
     assert len(saved) == 4 and saved["draw_id"].is_unique
