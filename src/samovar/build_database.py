@@ -692,18 +692,29 @@ def process_fasta_krakenunique(input_file: str, taxid: str, genome_name: str, db
     added = krakenuniq_added_dir(db_path)
     stem = _krakenuniq_taxid_name(taxid)
     processed_fasta = str(added / f"{stem}.fa")
-    preprocess_fasta(input_file, processed_fasta, mutation_rate=0, include_percent=100)
+    existed = os.path.exists(processed_fasta)
+    map_source = processed_fasta
+    if existed:
+        extra = processed_fasta + ".adding"
+        preprocess_fasta(input_file, extra, mutation_rate=0, include_percent=100, taxid=taxid)
+        with open(processed_fasta, "a", encoding="utf-8") as dest, open(extra, encoding="utf-8") as src:
+            dest.write(src.read())
+        map_source = extra
+    else:
+        preprocess_fasta(input_file, processed_fasta, mutation_rate=0, include_percent=100, taxid=taxid)
 
     map_file = str(added / f"{stem}.map")
     wrote = 0
-    with open(map_file, "w", encoding="utf-8") as map_out:
-        for record in iter_seqio_fasta(processed_fasta):
+    with open(map_file, "a" if existed else "w", encoding="utf-8") as map_out:
+        for record in iter_seqio_fasta(map_source):
             seq_id = record.id.split()[0]
             if not seq_id or len(record.seq) == 0:
                 continue
             map_out.write(f"{seq_id}\t{taxid}\t{genome_name}\n")
             wrote += 1
-    if wrote == 0:
+    if existed:
+        os.remove(extra)
+    if wrote == 0 and not existed:
         for path in (processed_fasta, map_file):
             try:
                 os.remove(path)
@@ -871,34 +882,12 @@ def build_database_from_config(
     if isinstance(input_dirs, str):
         input_dirs = [input_dirs]
     file_taxid_map = process_fasta_directories(input_dirs)
-    from samovar.genome_index import is_assembly_accession, numeric_taxid_for
     from samovar.genome_fetcher import assembly_taxid, default_entrez_email
 
-    resolved_map = {}
     email = default_entrez_email()
-    for path, taxid in file_taxid_map.items():
-        ident = str(taxid)
-        resolved = numeric_taxid_for(ident)
-        if is_assembly_accession(ident) and not str(resolved).split(".")[0].isdigit():
-            looked = assembly_taxid(ident, email)
-            if looked:
-                resolved = looked
-        resolved_map[path] = resolved
-    file_taxid_map = resolved_map
-    preferred = {}
-    for path, taxid in file_taxid_map.items():
-        prev = preferred.get(taxid)
-        if prev is None:
-            preferred[taxid] = path
-            continue
-        # Prefer nucleotide genomes so proteome + ORF indexing can both run.
-        nucleotide = (
-            ".fna", ".fa", ".fasta", ".fsa", ".ffn",
-            ".fna.gz", ".fa.gz", ".fasta.gz", ".fsa.gz", ".ffn.gz",
-        )
-        if path.endswith(nucleotide) and not prev.endswith(nucleotide):
-            preferred[taxid] = path
-    file_taxid_map = {path: taxid for taxid, path in preferred.items()}
+    file_taxid_map = reference_inputs(
+        file_taxid_map, lambda accession: assembly_taxid(accession, email) or ""
+    )
 
     apply_omit = should_apply_example_omit(input_dirs, explicit=example_omit)
     omitted: Dict[str, str] = {}
@@ -1121,6 +1110,24 @@ def build_database_kmcp(file_taxid_map, db_path, threads=1, config=None):
     (dest / "kmcp.manifest.json").write_text(json.dumps(dict(
         version=1, genomes=rows, compute=compute, index=index, taxdump_sha256=checksums,
         parameters=dict(kmer_len=k, chunks=chunks, overlap=overlap, false_positive_rate=fpr, num_hashes=hashes)), indent=2) + "\n")
+
+
+def reference_inputs(paths, accession_lookup=None) -> Dict[str, str]:
+    """Resolve one taxid per selected FASTA and keep every nucleotide genome."""
+    from samovar.genome_index import resolve_reference_taxid
+
+    resolved = {
+        path: resolve_reference_taxid(path, accession_lookup) for path in paths
+    }
+    by_taxid: Dict[str, List[str]] = {}
+    for path, taxid in resolved.items():
+        by_taxid.setdefault(taxid, []).append(path)
+    kept: Dict[str, str] = {}
+    for taxid, group in by_taxid.items():
+        genomes = [path for path in group if _is_nucleotide_genome(path)]
+        for path in genomes or group:
+            kept[path] = taxid
+    return kept
 
 
 def nucleotide_genome_rows(file_taxid_map):

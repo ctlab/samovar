@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 PathLike = Union[str, os.PathLike]
 
 ACCESSION_RE = re.compile(r"^(GC[AF]_\d+(?:\.\d+)?)$", re.IGNORECASE)
+_EMBEDDED_ACCESSION_RE = re.compile(r"GC[AF]_\d+(?:\.\d+)?", re.IGNORECASE)
 FOLDER_ID = "samovar_database"
 TEST_FOLDER_ID = "test"
 TEST_TAXID_SUFFIX = "_test"
@@ -478,6 +479,63 @@ def numeric_taxid_for(ident: str, cfg: Optional[Dict[str, Any]] = None) -> str:
         if _is_ncbi_taxid(species):
             return species.split(".")[0]
     return ident
+
+
+def _positive_ncbi_taxid(value: str) -> str:
+    text = str(value or "").strip().split(".")[0]
+    if text.isdigit() and int(text) > 0:
+        return text
+    return ""
+
+
+def _header_taxid(path: Path) -> str:
+    from samovar.seqio import fasta_handle
+
+    with fasta_handle(path) as handle:
+        for line in handle:
+            if line.startswith(">"):
+                match = re.search(r"taxid:([0-9]+)(?=[|\s]|$)", line, re.IGNORECASE)
+                return _positive_ncbi_taxid(match.group(1) if match else "")
+    return ""
+
+
+def resolve_reference_taxid(path: PathLike, accession_lookup=None) -> str:
+    """Positive NCBI taxid for one reference FASTA.
+
+    Digits at the start of a longer filename are not evidence. A header
+    ``taxid:`` tag, an accession in the name, and a filename that is itself a
+    taxid must agree when more than one of them resolves.
+    """
+    src = _as_path(path)
+    stem = sequence_stem(src)
+    if stem.endswith("-processed"):
+        stem = stem[: -len("-processed")]
+    found: Dict[str, str] = {}
+    header = _header_taxid(src)
+    if header:
+        found["header"] = header
+    accession = stem if is_assembly_accession(stem) else ""
+    if not accession:
+        match = _EMBEDDED_ACCESSION_RE.search(stem)
+        if match:
+            accession = match.group(0)
+    if accession:
+        catalog = _positive_ncbi_taxid(numeric_taxid_for(accession))
+        if not catalog and not header and accession_lookup is not None:
+            catalog = _positive_ncbi_taxid(accession_lookup(accession))
+        if catalog:
+            found["accession"] = catalog
+    elif _is_ncbi_taxid(stem) or is_test_taxid(stem):
+        found["filename"] = stem.split(".")[0] if _is_ncbi_taxid(stem) else stem
+    values = set(found.values())
+    if len(values) > 1:
+        detail = ", ".join(f"{key}={found[key]}" for key in sorted(found))
+        raise ValueError(f"Ambiguous NCBI taxid for {src.name}: {detail}")
+    if not values:
+        raise ValueError(
+            f"Unknown NCBI taxid for {src}: a leading number in the filename is not a taxid"
+        )
+    return next(iter(values))
 
 
 def numeric_taxid_from_fasta(path: PathLike) -> str:

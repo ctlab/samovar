@@ -243,3 +243,54 @@ def test_bracken_build_uses_configured_native_steps_and_publishes_distribution(t
     assert (tmp_path / 'database126mers.kmer_distrib').read_text() == 'distribution'
     assert not list((tmp_path / '.tmp').iterdir())
     assert json.loads((tmp_path / 'bracken.manifest.json').read_text())['read_lengths'] == [100, 126]
+
+
+def test_reference_taxid_ignores_a_leading_number_and_keeps_every_genome(tmp_path):
+    from samovar.build_database import reference_inputs
+
+    prefixed = tmp_path / "999_GCF_000005845.2.fna"
+    prefixed.write_text(">x|taxid:562|\nACGT\n", encoding="utf-8")
+    plain = tmp_path / "562.fna"
+    plain.write_text(">562|taxid:562|\nAAAA\n", encoding="utf-8")
+    second = tmp_path / "ecoli_b.fna"
+    second.write_text(">b|taxid:562|\nTTTT\n", encoding="utf-8")
+    proteome = tmp_path / "562.faa"
+    proteome.write_text(">p|taxid:562|\nM\n", encoding="utf-8")
+    unknown = tmp_path / "562_strainB.fna"
+    unknown.write_text(">strainB\nACGT\n", encoding="utf-8")
+
+    mapped = reference_inputs([str(prefixed), str(plain), str(second), str(proteome)])
+    assert mapped[str(prefixed)] == "562"
+    assert mapped[str(plain)] == "562"
+    assert mapped[str(second)] == "562"
+    assert str(proteome) not in mapped
+    with pytest.raises(ValueError, match="Unknown NCBI taxid"):
+        reference_inputs([str(unknown)])
+
+
+def test_reference_taxid_reports_disagreeing_sources(tmp_path, monkeypatch):
+    from samovar.genome_index import resolve_reference_taxid
+
+    path = tmp_path / "562_GCF_000000001.1.fna"
+    path.write_text(">x|taxid:562|\nACGT\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "samovar.genome_index.numeric_taxid_for",
+        lambda ident, cfg=None: "4932",
+    )
+    with pytest.raises(ValueError, match="Ambiguous NCBI taxid"):
+        resolve_reference_taxid(path)
+
+
+def test_krakenuniq_appends_another_genome_with_the_same_taxid(tmp_path):
+    from samovar.build_database import process_fasta_krakenunique
+
+    first = tmp_path / "a.fna"
+    second = tmp_path / "b.fna"
+    first.write_text(">a|taxid:562|\nACGT\n", encoding="utf-8")
+    second.write_text(">b|taxid:562|\nTTTT\n", encoding="utf-8")
+    db = tmp_path / "db"
+    process_fasta_krakenunique(str(first), "562", "a", str(db))
+    process_fasta_krakenunique(str(second), "562", "b", str(db))
+    library = (db / "library" / "added" / "562.fa").read_text(encoding="utf-8")
+    assert "ACGT" in library and "TTTT" in library
+    assert len((db / "library" / "added" / "562.map").read_text(encoding="utf-8").splitlines()) == 2
