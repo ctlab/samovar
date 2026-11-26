@@ -885,6 +885,7 @@ def test_parallel_samples_have_private_native_workspaces(tmp_path, combiner):
         assert len(frame) == 3000
         assert set(frame['taxID_kaiju_0']) == {562 + sample}
     assert not list(annotations.glob('.combine_*'))
+    assert not list(annotations.glob('.tmp/combine_*'))
 
 
 def test_parallel_append_same_sample_keeps_both_tools(tmp_path, combiner):
@@ -937,6 +938,103 @@ def test_parallel_append_without_shared_tmp(tmp_path, combiner):
         frame = pd.read_csv(parent / f"s{sample}.annotation.csv")
         assert len(frame) == 200
         assert set(frame["taxID_kaiju_0"]) == {562 + sample}
+
+
+def test_remove_scratch_retries_a_busy_directory(monkeypatch):
+    import errno
+
+    from samovar.combine_tables import _remove_scratch
+
+    sleeps = []
+    monkeypatch.setattr(
+        "samovar.combine_tables.time.sleep", lambda seconds: sleeps.append(seconds)
+    )
+    calls = {"n": 0}
+
+    def busy_then_removed(path, ignore_errors=False, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3 and not ignore_errors:
+            raise OSError(errno.EBUSY, "busy")
+
+    monkeypatch.setattr("samovar.combine_tables.shutil.rmtree", busy_then_removed)
+    _remove_scratch(Path("scratch"))
+    assert calls["n"] == 3
+    assert sleeps == [0.25, 0.25]
+
+    def missing(path, ignore_errors=False, **kwargs):
+        raise OSError(errno.ENOENT, "missing")
+
+    monkeypatch.setattr("samovar.combine_tables.shutil.rmtree", missing)
+    _remove_scratch(Path("already-gone"))
+
+    def denied(path, ignore_errors=False, **kwargs):
+        raise OSError(errno.EACCES, "denied")
+
+    monkeypatch.setattr("samovar.combine_tables.shutil.rmtree", denied)
+    with pytest.raises(OSError) as caught:
+        _remove_scratch(Path("denied"))
+    assert caught.value.errno == errno.EACCES
+
+    def stays_busy(path, ignore_errors=False, **kwargs):
+        if not ignore_errors:
+            raise OSError(errno.ENOTEMPTY, "busy")
+
+    monkeypatch.setattr("samovar.combine_tables.shutil.rmtree", stays_busy)
+    sleeps.clear()
+    _remove_scratch(Path("leftover"))
+    assert sleeps == [0.25, 0.25, 0.25, 0.25]
+
+
+def test_ingest_survives_a_busy_scratch_and_keeps_the_read_file_on_other_errors(
+    tmp_path, monkeypatch
+):
+    import errno
+
+    monkeypatch.setattr("samovar.combine_tables.time.sleep", lambda seconds: None)
+    ann = tmp_path / "ann"
+    out = tmp_path / "s_kaiju.kaiju.out"
+    sentinel = tmp_path / "s.ingested"
+    _write_kaiju(out, [("r1", 562)])
+
+    def stays_busy(path, ignore_errors=False, **kwargs):
+        if not ignore_errors:
+            raise OSError(errno.EBUSY, "busy")
+
+    monkeypatch.setattr("samovar.combine_tables.shutil.rmtree", stays_busy)
+    csv = ingest_annotator(out, ann, sentinel)
+    assert sentinel.read_text(encoding="utf-8") == "ok\n"
+    assert not out.exists()
+    frame = pd.read_csv(csv)
+    assert frame["seq"].tolist() == ["r1"]
+    assert int(frame.loc[0, "taxID_kaiju_0"]) == 562
+
+    again = tmp_path / "s_kraken2.kraken2.out"
+    again_sentinel = tmp_path / "s2.ingested"
+    _write_kraken2(again, [("r1", 9606, 40)])
+
+    def denied(path, ignore_errors=False, **kwargs):
+        raise OSError(errno.EACCES, "denied")
+
+    monkeypatch.setattr("samovar.combine_tables.shutil.rmtree", denied)
+    with pytest.raises(OSError) as caught:
+        ingest_annotator(again, ann, again_sentinel)
+    assert caught.value.errno == errno.EACCES
+    assert again.is_file()
+    assert not again_sentinel.exists()
+    kept = pd.read_csv(ann / "s.annotation.csv")
+    assert kept["seq"].tolist() == ["r1"]
+    kraken_cols = [name for name in kept.columns if name.startswith("taxID_kraken2_")]
+    assert len(kraken_cols) == 1
+    assert int(kept.loc[0, kraken_cols[0]]) == 9606
+
+    monkeypatch.undo()
+    ingest_annotator(again, ann, again_sentinel)
+    recovered = pd.read_csv(ann / "s.annotation.csv")
+    assert recovered["seq"].tolist() == ["r1"]
+    assert int(recovered.loc[0, "taxID_kaiju_0"]) == 562
+    recovered_kraken = [name for name in recovered.columns if name.startswith("taxID_kraken2_")]
+    assert recovered_kraken == kraken_cols
+    assert int(recovered.loc[0, recovered_kraken[0]]) == 9606
 
 
 def test_missing_annotator_output_includes_rule_log(tmp_path):

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import csv
+import errno
 import fcntl
 import gzip
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
@@ -278,6 +280,22 @@ def _has_data_lines(path: Path) -> bool:
     return False
 
 
+def _remove_scratch(path: Path) -> None:
+    # NFS returns EBUSY while a just-closed sort file still has a silly rename.
+    for _ in range(4):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as err:
+            if err.errno == errno.ENOENT:
+                return
+            if err.errno not in (errno.EBUSY, errno.ENOTEMPTY):
+                raise
+            time.sleep(0.25)
+    # shortcut: leftover scratch after repeated EBUSY, delete when scratch usage grows
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def _append_annotator(
     out_file: Path,
     csv_path: Path,
@@ -304,12 +322,15 @@ def _append_annotator(
     # The native combiner already accepts a private sort/merge workspace.
     scratch_root = csv_path.parent / ".tmp"
     scratch_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="combine_", dir=scratch_root) as scratch:
+    scratch = tempfile.mkdtemp(prefix="combine_", dir=scratch_root)
+    try:
         cmd.extend(["--tmp", scratch])
         with _truth_table_for_cpp(truth_table) as table_path:
             if table_path:
                 cmd.extend(["--truth-table", table_path])
             subprocess.check_call(cmd)
+    finally:
+        _remove_scratch(Path(scratch))
 
 
 def _annotator_log_tail(out_file: Path, limit: int = 40) -> str:
