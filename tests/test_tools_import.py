@@ -26,6 +26,37 @@ def _tool_row(tools: dict, name: str):
     raise KeyError(name)
 
 
+def test_import_metaphlan_records_bowtie_dependencies(tmp_path, monkeypatch):
+    metaphlan = tmp_path / "metaphlan"
+    metaphlan.write_text("#!/bin/sh\nexit 0\n")
+    metaphlan.chmod(metaphlan.stat().st_mode | stat.S_IEXEC)
+    bowtie = tmp_path / "bowtie2"
+    build = tmp_path / "bowtie2-build"
+    for binary in (bowtie, build):
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    found = {"bowtie2": str(bowtie), "bowtie2-build": str(build)}
+    monkeypatch.setattr(
+        "samovar.install_ask.companion_executable",
+        lambda primary, name: found.get(name, ""),
+    )
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    monkeypatch.setattr(
+        "samovar.tools_import.update_config",
+        lambda updates, also_repo_build=True: update_config(updates, also_repo_build=False),
+    )
+    assert import_main(["-n", "metaphlan", "-t", "annotator", "--exec-path", str(metaphlan)]) == 0
+    tools = json.loads(cfg.read_text())["tools"]
+    bowtie_row = parse_tool_entry(_tool_row(tools, "bowtie2"), "bowtie2")
+    build_row = parse_tool_entry(_tool_row(tools, "bowtie2-build"), "bowtie2-build")
+    assert bowtie_row[2] == str(bowtie.resolve())
+    assert bowtie_row[3] == "aligner"
+    assert build_row[2] == str(build.resolve())
+    assert build_row[3] == "aligner"
+
+
 def test_import_tool_writes_config(tmp_path, monkeypatch):
     binary = tmp_path / "mykaiju"
     binary.write_text("#!/bin/sh\nexit 0\n")

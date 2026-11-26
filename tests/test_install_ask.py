@@ -394,6 +394,35 @@ def test_companion_no_skips_helper(tmp_path):
     assert recorded == ["kraken2"]
 
 
+def test_metaphlan_import_records_bowtie2_from_path(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    metaphlan = bindir / "metaphlan"
+    metaphlan.write_text("#!/bin/sh\n")
+    metaphlan.chmod(0o755)
+    bowtie = tmp_path / "bowtie2"
+    build = tmp_path / "bowtie2-build"
+    for binary in (bowtie, build):
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    found = {"bowtie2": str(bowtie), "bowtie2-build": str(build)}
+    monkeypatch.setattr("samovar.install_ask.path_executable", lambda name: found.get(name, ""))
+    answers = iter(["y", "y", "y"])
+    recorded = []
+    spec = next(tool for tool in ASK_TOOLS if tool.name == "metaphlan")
+    result = ask_tool(
+        spec,
+        ask=lambda prompt: next(answers),
+        which_fn=lambda names: [str(metaphlan)],
+        sibling_fn=lambda primary, name: "",
+        record=lambda tool, path, **kwargs: recorded.append((tool.name, tool.type, path)),
+    )
+    assert result == "imported-which"
+    assert recorded[0][0] == "metaphlan"
+    assert ("bowtie2", "aligner", str(bowtie)) in recorded
+    assert ("bowtie2-build", "aligner", str(build)) in recorded
+
+
 @pytest.mark.optional
 def test_metaphlan_is_not_installed_into_samovar():
     called = []

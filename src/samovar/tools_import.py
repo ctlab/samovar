@@ -843,11 +843,28 @@ def main(argv: Optional[list] = None) -> int:
             bibtex=list(getattr(args, "bibtex", None) or []),
             bibtex_file=list(getattr(args, "bibtex_file", None) or []),
         )
+        from samovar.install_ask import ASK_TOOLS, companion_executable, companion_tool
+
+        parent = next((tool for tool in ASK_TOOLS if tool.name == args.name or args.name in tool.which), None)
+        if parent is not None and parent.name == "metaphlan":
+            for companion in parent.companions:
+                if lookup_tool_record(load_config(), companion) is not None:
+                    continue
+                found = companion_executable(dest, companion)
+                if not found:
+                    print(f"  {companion}: not found next to {args.name} or on PATH")
+                    continue
+                import_tool(
+                    name=companion,
+                    tool_type=companion_tool(parent, companion).type,
+                    env=args.env if Path(found).parent == Path(dest).parent else "",
+                    exec_name=companion,
+                    exec_path=found,
+                )
+                print(f"  recorded tools.{companion} -> {found}")
     except (ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    from samovar.main_config import lookup_tool_record
-    from samovar.paths import load_config
 
     rec = lookup_tool_record(load_config(), args.name) or {}
     print(f"Imported tools.{args.name} = {rec}")

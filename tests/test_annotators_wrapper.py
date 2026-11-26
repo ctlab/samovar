@@ -380,3 +380,44 @@ def test_motus_profile_command_reuses_shared_profile_stage(tmp_path, monkeypatch
     assert ('--input-r2' in args) == paired
     assert args[args.index('--threads')+1] == '2'
     assert '--format' in args and args[args.index('--format')+1] == 'motus'
+
+
+def test_metaphlan_annotator_uses_resolved_bowtie2(tmp_path, monkeypatch):
+    import shlex
+    from samovar.annotators_wrapper import MetaPhlanAnnotator
+
+    db = tmp_path / "db"
+    db.mkdir()
+    (db / "toy.1.bt2l").write_bytes(b"index")
+    metaphlan = tmp_path / "metaphlan"
+    bowtie = tmp_path / "bowtie2"
+    for binary in (metaphlan, bowtie):
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    monkeypatch.setattr("samovar.annotators_wrapper._metaphlan_modern_cli", lambda command: True)
+    monkeypatch.setattr("samovar.tools_import.refuse_nonexecutable_annotator", lambda *args, **kwargs: None)
+
+    def resolve(name, tool_key=None, **kwargs):
+        token = tool_key or name
+        if token == "bowtie2":
+            return str(bowtie)
+        return str(metaphlan)
+
+    monkeypatch.setattr("samovar.paths.resolve_executable", resolve)
+    tool = MetaPhlanAnnotator(
+        {"run_name": "mpa", "db_path": str(db), "threads": 1, "cmd": str(metaphlan), "extra": "--bowtie2db /other"},
+        {},
+    )
+    with pytest.raises(ValueError, match="disagree"):
+        tool.get_snakemake_shell_cmd(str(tmp_path / "r1.fq"), str(tmp_path / "r2.fq"), tool.get_expected_outputs("A", str(tmp_path)))
+    tool.extra = ""
+    command = tool.get_snakemake_shell_cmd(
+        str(tmp_path / "r1.fq"), str(tmp_path / "r2.fq"), tool.get_expected_outputs("A", str(tmp_path))
+    )
+    args = shlex.split(command)
+    assert args[args.index("--db_dir") + 1] == str(db)
+    assert "--mapout" in args
+    assert args[args.index("--index") + 1] == "toy"
+    assert args[args.index("--bowtie2_exe") + 1] == str(bowtie)
+    assert args[args.index("--subsampling_paired") + 1] == "1000000000"
+    assert "/usr/bin/bowtie2" not in args

@@ -186,6 +186,19 @@ class BaseAnnotator:
         )
 
 
+def _metaphlan_bowtie2() -> str:
+    from samovar.paths import resolve_executable
+
+    found = resolve_executable("bowtie2", tool_key="bowtie2")
+    path = Path(command_argv(found)[0]) if found else Path()
+    if path.is_file() and os.access(path, os.X_OK):
+        return str(path)
+    raise FileNotFoundError(
+        "bowtie2 was not found for MetaPhlAn. "
+        "Import it with `samovar tools import -n bowtie2 -t aligner` or `./install.sh full ask`."
+    )
+
+
 @lru_cache(maxsize=32)
 def _metaphlan_modern_cli(command):
     import subprocess
@@ -278,16 +291,18 @@ class ProfileAnnotator(BaseAnnotator):
             modern = _metaphlan_modern_cli(self.cmd)
             db_flag, map_flag = ("--db_dir", "--mapout") if modern else ("--bowtie2db", "--bowtie2out")
             extra_parts = shlex.split(self.extra or "")
-            extra_parts = [db_flag if p == "--bowtie2db" else p for p in extra_parts]
+            extra_parts = [
+                db_flag if p == "--bowtie2db" else map_flag if p == "--bowtie2out" else p
+                for p in extra_parts
+            ]
             if db_flag in extra_parts:
                 at = extra_parts.index(db_flag)
                 if at + 1 >= len(extra_parts) or Path(extra_parts[at + 1]) != db:
                     raise ValueError("MetaPhlAn database flags disagree with selected database")
                 del extra_parts[at:at + 2]
-            extra = shlex.join(extra_parts)
             if not any(p == "--bowtie2_exe" or p.startswith("--bowtie2_exe=") for p in extra_parts):
-                from samovar.paths import resolve_executable
-                extra += " --bowtie2_exe " + shlex.quote(resolve_executable("bowtie2", tool_key="bowtie2"))
+                extra_parts.extend(["--bowtie2_exe", _metaphlan_bowtie2()])
+            extra = shlex.join(extra_parts)
             if "--index" not in shlex.split(extra):
                 prefixes = sorted({p.name.split(".1.bt2")[0] for p in db.glob("*.1.bt2*") if ".rev.1.bt2" not in p.name})
                 if len(prefixes) != 1:
@@ -604,6 +619,47 @@ class MetaPhlanAnnotator(BaseAnnotator):
         self, input_r1: str, input_r2: str, outputs: List[str]
     ) -> str:
         out_file, raw_file, bowtie_file = outputs
+        db = Path(self.db_path)
+        modern = _metaphlan_modern_cli(self.cmd)
+        db_flag, map_flag = (
+            ("--db_dir", "--mapout") if modern else ("--bowtie2db", "--bowtie2out")
+        )
+        extra_parts = shlex.split(self.extra or "")
+        extra_parts = [
+            db_flag if p == "--bowtie2db" else map_flag if p == "--bowtie2out" else p
+            for p in extra_parts
+        ]
+        if db_flag in extra_parts:
+            at = extra_parts.index(db_flag)
+            if at + 1 >= len(extra_parts) or Path(extra_parts[at + 1]) != db:
+                raise ValueError("MetaPhlAn database flags disagree with selected database")
+            del extra_parts[at : at + 2]
+        if map_flag in extra_parts:
+            at = extra_parts.index(map_flag)
+            del extra_parts[at : at + 2]
+        if "--index" not in extra_parts:
+            prefixes = sorted(
+                {
+                    p.name.split(".1.bt2")[0]
+                    for p in db.glob("*.1.bt2*")
+                    if ".rev.1.bt2" not in p.name
+                }
+            )
+            if len(prefixes) != 1:
+                raise ValueError(
+                    "MetaPhlAn profiler needs a pinned --index or exactly one installed "
+                    "Bowtie2 index"
+                )
+            extra_parts.extend(["--index", prefixes[0]])
+        # MetaPhlAn 4.x requires an explicit paired-read ceiling; this skips subsampling.
+        if modern and _has_r2(input_r2):
+            extra_parts.extend(["--subsampling_paired", "1000000000"])
+        if not any(
+            p == "--bowtie2_exe" or p.startswith("--bowtie2_exe=")
+            for p in extra_parts
+        ):
+            extra_parts.extend(["--bowtie2_exe", _metaphlan_bowtie2()])
+        extra = shlex.join(extra_parts)
         cmd = (
             f"{self.cmd} "
             f"--input_type fastq "
@@ -613,9 +669,10 @@ class MetaPhlanAnnotator(BaseAnnotator):
                 if _has_r2(input_r2)
                 else f"{shlex.quote(str(input_r1))} "
             )
-            + f"--bowtie2out {shlex.quote(str(bowtie_file))} "
+            + f"{db_flag} {shlex.quote(str(self.db_path))} "
+            f"{map_flag} {shlex.quote(str(bowtie_file))} "
             f"-o {shlex.quote(str(raw_file))} "
-            f"{self.extra} "
+            f"{extra} "
             f"&& "
             f"bzcat {shlex.quote(str(bowtie_file))} | awk -F'\\t' '{{print $1 \"\\t\" $3}}' > {shlex.quote(str(out_file))}"
         )

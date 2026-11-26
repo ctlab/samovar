@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -77,7 +78,10 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
         "krakenuniq", ("krakenuniq",), "annotator", "conda:krakenuniq",
         companions=("krakenuniq-build", "jellyfish"),
     ),
-    AskTool("metaphlan", ("metaphlan", "metaphlan4"), "annotator", ""),
+    AskTool(
+        "metaphlan", ("metaphlan", "metaphlan4"), "annotator", "",
+        companions=("bowtie2", "bowtie2-build"),
+    ),
     AskTool("bracken", ("bracken",), "profiler", "optional:bracken",
             companions=("bracken-build", "est_abundance.py", "kmer2read_distr", "generate_kmer_distribution.py"),
             probes=(("-v",),)),
@@ -586,6 +590,26 @@ def conda_layout(path: str) -> Tuple[str, str]:
     return "", ""
 
 
+def companion_tool(parent: AskTool, name: str) -> AskTool:
+    """Use the companion's own install row when it is a tool in its own right."""
+    for tool in ASK_TOOLS:
+        if tool.name == name:
+            return tool
+        if name in tool.companions and tool.name != parent.name:
+            return AskTool(name, (name,), tool.type, "")
+    return AskTool(name, (name,), parent.type, "")
+
+
+def path_executable(name: str) -> str:
+    which = shutil.which(name)
+    return str(Path(which).resolve()) if which else ""
+
+
+def companion_executable(primary_path: str, name: str) -> str:
+    """Prefer the binary beside the tool, then the one already on PATH."""
+    return sibling_executable(primary_path, name) or path_executable(name)
+
+
 def sibling_executable(primary_path: str, name: str) -> str:
     for folder in (Path(primary_path).parent, Path(primary_path).parent / "src"):
         candidate = folder / name
@@ -615,6 +639,8 @@ def offer_companions(
     """Yes/no for helper binaries that sit next to the one just imported."""
     for name in spec.companions:
         path = sibling_fn(primary_path, name)
+        if not path and spec.name == "metaphlan":
+            path = path_executable(name)
         if not path:
             continue
         note = ""
@@ -637,8 +663,7 @@ def offer_companions(
                 print(f"  {name} did not run ({detail}). Not recorded.")
                 continue
             print(f"  {name} runs: {detail}")
-        companion = AskTool(name, (name,), spec.type, "")
-        record(companion, path, env=env, prefix=prefix, exec_name=name)
+        record(companion_tool(spec, name), path, env=env, prefix=prefix, exec_name=name)
 
 
 def ask_tool(
