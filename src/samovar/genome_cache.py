@@ -419,6 +419,36 @@ def generate_source_genome_dirs(output_dir: PathLike) -> List[Path]:
     return dirs
 
 
+def _view_has_genomes(directory: Path) -> bool:
+    if not _path_is_dir(directory):
+        return False
+    if (directory / ".profile_references.json").is_file():
+        return True
+    try:
+        children = list(directory.iterdir())
+    except OSError:
+        return False
+    for path in children:
+        if path.name.startswith("."):
+            continue
+        if path.is_file() or path.is_symlink() or path.name == "processed":
+            return True
+    return False
+
+
+def run_genome_view(output_dir: PathLike) -> Path:
+    """Directory regeneration reads.
+
+    An existing ordinary ``genomes/`` that already holds files stays in place.
+    A new run uses ``.genomes`` and does not create either directory here.
+    """
+    root = _as_path(output_dir)
+    ordinary = root / "genomes"
+    if _view_has_genomes(ordinary):
+        return ordinary
+    return root / ".genomes"
+
+
 def seed_run_genomes(
     dest_dir: PathLike,
     *,
@@ -427,9 +457,11 @@ def seed_run_genomes(
     include_test_genomes: bool = False,
     generate_output_dir: Optional[PathLike] = None,
 ) -> Dict[str, Any]:
-    """Populate ``$out_dir/genomes`` from generate sources and NCBI libraries."""
+    """Link selected generate genomes into ``dest_dir``.
+
+    The directory is created only when a file is placed.
+    """
     dest = _as_path(dest_dir)
-    dest.mkdir(parents=True, exist_ok=True)
     stats = {"linked": 0, "copied": 0, "skipped": 0, "sources": []}
     do_reuse = reuse_enabled(reuse)
 

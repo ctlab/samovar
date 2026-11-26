@@ -419,18 +419,36 @@ def _selected_reference_paths(taxids, genome_dir, saved):
     return paths
 
 
+def profile_reference_manifest(genome_dir) -> Path:
+    """Where the selected-reference pin is stored.
+
+    A directory that already exists keeps ``.profile_references.json`` beside
+    its FASTAs. A new run records the pin in ``.log`` and does not create
+    ``genomes/`` or ``.genomes/`` only for that file.
+    """
+    genome_dir = Path(genome_dir)
+    local = genome_dir / ".profile_references.json"
+    if local.is_file() or genome_dir.exists():
+        return local
+    if genome_dir.name in {"genomes", ".genomes"}:
+        log_dir = genome_dir.parent / ".log"
+        if log_dir.is_dir():
+            return log_dir / "profile_references.json"
+    return local
+
+
 def pinned_reference_taxids(config, genome_dir=None):
     """Taxids of genomes already selected for this run.
 
-    ``profile_references`` and ``genomes/.profile_references.json`` are the
-    canonical selection. A species id is not added for them.
+    ``profile_references`` and the reference pin are the canonical selection.
+    A species id is not added for them.
     """
     ids = set()
     refs = (config or {}).get("profile_references") or {}
     if isinstance(refs, dict):
         ids.update(_reference_key(key) for key in refs)
     if genome_dir is not None:
-        manifest = Path(genome_dir) / ".profile_references.json"
+        manifest = profile_reference_manifest(genome_dir)
         if manifest.is_file():
             saved = json.loads(manifest.read_text())
             if isinstance(saved, dict):
@@ -469,8 +487,8 @@ def reference_lengths(taxids, genome_dir, config=None, *, selected_paths=None):
     files for one taxid is an error, not a silent cache pick.
     """
     genome_dir = Path(genome_dir)
-    genome_dir.mkdir(parents=True, exist_ok=True)
-    manifest = genome_dir / ".profile_references.json"
+    manifest = profile_reference_manifest(genome_dir)
+    manifest.parent.mkdir(parents=True, exist_ok=True)
     saved = json.loads(manifest.read_text()) if manifest.is_file() else {}
     wanted = {_reference_key(tax) for tax in taxids}
     if selected_paths is not None:

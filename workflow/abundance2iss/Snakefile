@@ -77,7 +77,6 @@ GZIP_READS = bool(config.get("gzip_reads", False))
 REANNOTATION_LEVEL = config.get("reannotation_level", "taxid")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(GENOME_DIR, exist_ok=True)
 
 
 def get_abundance_files():

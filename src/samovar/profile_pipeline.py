@@ -356,9 +356,12 @@ def align_truth(pred, pm, truth, tm, root, config):
         tids = set(truth.loc[truth[n_sample_columns(truth)].sum(axis=1) > 0, "taxid"].astype(str)) - {"0"}
         from samovar.profiles import pinned_reference_taxids
 
-        pinned = pinned_reference_taxids(config, Path(root) / "genomes")
+        from samovar.genome_cache import run_genome_view
+
+        view = run_genome_view(root)
+        pinned = pinned_reference_taxids(config, view)
         wanted = {tax for tax in tids if str(tax).split(".")[0] in pinned}
-        lengths = reference_lengths(wanted, Path(root) / "genomes", config) if wanted else {}
+        lengths = reference_lengths(wanted, view, config) if wanted else {}
         truth, tm = change_basis(truth[truth.taxid != "0"], tm, pm["basis"], lengths, require_all=False)
     return pred, pm, truth, tm
 
@@ -507,12 +510,15 @@ def materialize(root, config):
             raise ValueError("Presence input cannot define a quantitative regeneration community")
         if info["taxonomy"] != "ncbi":
             raise ValueError("Profile regeneration needs an explicit mapping to NCBI reference taxids")
+        from samovar.genome_cache import run_genome_view
+
+        view = run_genome_view(root)
         table, info = retain_pinned_genome_rows(
-            table, info, config.get("taxdump"), config, root / "genomes"
+            table, info, config.get("taxdump"), config, view
         )
         table = table[table.taxid != "0"].copy()
         tids = set(table.loc[table[n_sample_columns(table)].sum(axis=1) > 0, "taxid"])
-        lengths = reference_lengths(tids, root / "genomes", config) if info["basis"] != "reads" else {}
+        lengths = reference_lengths(tids, view, config) if info["basis"] != "reads" else {}
         if info["unit"] == "counts" and info["basis"] == "reads":
             converted, cm = table, info
         else:

@@ -320,6 +320,19 @@ def test_prepare_reuses_generate_genomes_as_profile_references(tmp_path, monkeyp
     assert "562" not in (skipped.profile_references or {})
 
 
+def test_profile_pin_does_not_create_a_genome_directory(tmp_path):
+    from samovar.profiles import reference_lengths
+
+    source = tmp_path / "reference.fa"
+    _write_fasta(source, 8)
+    (tmp_path / ".log").mkdir()
+    assert reference_lengths({"562"}, tmp_path / "genomes", {"profile_references": {"562": str(source)}}) == {"562": 8}
+    pin = json.loads((tmp_path / ".log" / "profile_references.json").read_text())
+    assert pin["562"]["length"] == 8
+    assert not (tmp_path / "genomes").exists()
+    assert not (tmp_path / ".genomes").exists()
+
+
 def test_length_conversion_and_exact_fragment_allocation():
     frame = table([50, 50])
     info = metadata(dict(unit="percent", basis="organisms"))
@@ -381,7 +394,8 @@ def test_explicit_genome_choice_sets_basis_conversion(tmp_path):
 
     assert bc("X") == pytest.approx(0.0)
     assert bc("Y") == pytest.approx(0.2666666666666666)
-    pin = json.loads((tmp_path / "genomes_Y" / "genomes" / ".profile_references.json").read_text())
+    pin = json.loads((tmp_path / "genomes_Y" / ".genomes" / ".profile_references.json").read_text())
+    assert not (tmp_path / "genomes_Y" / "genomes").exists()
     assert pin["562"]["length"] == 6_000_000
     assert pin["562"]["path"].endswith("562_Y.fna")
     ambiguous = tmp_path / "both"

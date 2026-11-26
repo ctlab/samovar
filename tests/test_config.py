@@ -342,6 +342,15 @@ def test_generate_pipeline(tmp_path):
         assert "validate_fastq_directory" in pipeline_content
         assert "cp data/test_genomes" not in pipeline_content
         assert "samovar.genome_cache seed" in pipeline_content
+        assert 'mkdir -p "$out_dir/genomes"' not in pipeline_content
+        assert 'mkdir -p "$XDG_CACHE_HOME" "$SAMOVAR_RUN_GENOMES"' not in pipeline_content
+        assert '--dest "$SAMOVAR_RUN_GENOMES"' in pipeline_content
+        iss_yaml = yaml.safe_load(
+            (Path(test_output_dir) / ".log" / "configs" / "config_annotation2iss.yaml").read_text()
+        )
+        assert iss_yaml["genome_dir"].endswith("/.genomes")
+        assert not (Path(test_output_dir) / "genomes").exists()
+        assert not (Path(test_output_dir) / ".genomes").exists()
         assert "export PYTHONPATH=" in pipeline_content
         assert "export SAMOVAR_ROOT=" in pipeline_content
         assert "samovar.exec_control" in pipeline_content

@@ -211,6 +211,8 @@ def test_prepare_supplied_fastq_methods_omit_iss(tmp_path):
     text = proc.stdout + proc.stderr
     assert proc.returncode == 0, text
     assert not (out / ".generate").exists()
+    assert not (out / "genomes").exists()
+    assert not (out / ".genomes").exists()
     md = (out / "methods.md").read_text(encoding="utf-8")
     assert "Supplied sequencing reads were prepared for the run." in md
     assert "generated with iss" not in md

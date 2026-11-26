@@ -865,7 +865,9 @@ def _resolve_genomes_for_taxids(
     from samovar.genome_resolve import resolve_genome_file
 
     available = {}
-    pins_path = Path(genome_dir) / ".profile_references.json"
+    from samovar.profiles import profile_reference_manifest
+
+    pins_path = profile_reference_manifest(genome_dir)
     pins = json.loads(pins_path.read_text()) if pins_path.is_file() else {}
     from samovar.regenerate import finite_max_genomes
     from samovar.taxonomy import require_regeneration_taxids

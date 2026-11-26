@@ -210,7 +210,7 @@ STAGE_DIRS = {
     "abundance_tables": ("initial_abundance",),
     "regenerate_tables": ("regenerated/.regenerated_abundance",),
     "score_regenerated_tables": ("regenerated/.regenerated_abundance",),
-    "seed_genomes": ("genomes",),
+    "seed_genomes": ("genomes", ".genomes"),
     "regenerate_reads": ("regenerated",),
     "sort_reads": ("regenerated",),
     "qc_generated": ("regenerated_trimmed",),
@@ -428,8 +428,10 @@ def collect_stage_payload(output_dir: PathLike, stage: str) -> Dict[str, Any]:
             summary["n_reports"] = _count_files(folder, ("*.out", "*.csv", "*.tsv", "*.kreport"))
         if name.endswith("_annotations") and not name.endswith("_plots"):
             summary["n_tables"] = _count_files(folder, ("*.csv",))
-        if name == "genomes":
-            summary["n_genomes"] = _count_files(folder, ("*.fna", "*.fa", "*.fasta", "*.fna.gz", "*.fa.gz"))
+        if name in {"genomes", ".genomes"}:
+            summary["n_genomes"] = summary.get("n_genomes", 0) + _count_files(
+                folder, ("*.fna", "*.fa", "*.fasta", "*.fna.gz", "*.fa.gz")
+            )
     return {
         "id": "samovar",
         "schema_version": 2,

@@ -64,7 +64,10 @@ def run(r1, r2, database, output, sample='sample', threads=1, executable='phanta
     scratch.mkdir(parents=True, exist_ok=True)
     info = metadata(dict(unit='fraction', basis='organisms', rank='species', normalization='classified',
                          native_taxonomy_path=str(db / 'taxonomy')))
-    with tempfile.TemporaryDirectory(prefix='profile_', dir=scratch) as tmp:
+    # NFS can report ENOTEMPTY/EBUSY after Phanta has already published its output.
+    from samovar.combine_tables import _remove_scratch
+    tmp = tempfile.mkdtemp(prefix='profile_', dir=scratch)
+    try:
         work = Path(tmp)
         # Upstream shell templates do not quote paths: all native paths are relative.
         native_view = work / 'phanta'
@@ -127,6 +130,8 @@ def run(r1, r2, database, output, sample='sample', threads=1, executable='phanta
         info.update(native_settings=config, native_commands=commands)
         produced.replace(out)
         Path(str(out) + '.profile.json').write_text(json.dumps(info, indent=2) + '\n')
+    finally:
+        _remove_scratch(Path(tmp))
 
 
 def main(argv=None):

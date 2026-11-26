@@ -1707,6 +1707,7 @@ class PipelineConfig:
 
     def generate_configs(self, base_dir: str) -> Dict[str, str]:
         """Generate all necessary config files and return their paths"""
+        from samovar.genome_cache import run_genome_view
         from samovar.taxdump import require_metax_taxdump
 
         require_metax_taxdump(self.annotators)
@@ -1761,7 +1762,7 @@ class PipelineConfig:
             'annotation_dir': str(base_path / 'initial_annotations'),
             'observed_abundance_dir': str(base_path / 'initial_abundance'),
             'abundance_dir': str(base_path / 'regenerated' / '.regenerated_abundance'),
-            'genome_dir': str(base_path / 'genomes'),
+            'genome_dir': str(run_genome_view(base_path)),
             'output_dir': str(base_path / 'regenerated'),
             'email': self.email,
             'read_length': self.read_length,
@@ -2096,7 +2097,7 @@ class PipelineConfig:
         if regen_mode == GROUND_TRUTH_TABLE:
             gt_regen = f' \\\n    --truth-table "{regen_truth}"'
             regen_prefix = f""""$PYTHON_PATH" -m samovar.ground_truth from-genomes \\
-    --genome-dir "$out_dir/genomes" --output "{regen_truth}" --overwrite
+    --genome-dir "$SAMOVAR_RUN_GENOMES" --output "{regen_truth}" --overwrite
 """
             regen_batch = f""""$PYTHON_PATH" {shlex.quote(str(wf / 'combine_annotation_tables.py'))} \\
     -i "$out_dir/regenerated_reports" \\
@@ -2194,12 +2195,15 @@ export SAMOVAR_GENOME_DIRS="${{SAMOVAR_GENOME_DIRS:+$SAMOVAR_GENOME_DIRS:}}{extr
 export SAMOVAR_RUN_DIR="$out_dir"
 export SAMOVAR_REGENERATED_METAGENOMES="{regen_mode}"
 export SAMOVAR_INJECT_TAXID="${{SAMOVAR_INJECT_TAXID:-{inject_taxid}}}"
-export SAMOVAR_RUN_GENOMES="$out_dir/genomes"
+# Ordinary $out_dir/genomes is not created. An old run that already has files
+# there remains the view; otherwise this is $out_dir/.genomes, created later
+# only when a selected genome is linked.
+export SAMOVAR_RUN_GENOMES="$("$PYTHON_PATH" -c 'from samovar.genome_cache import run_genome_view; import sys; print(run_genome_view(sys.argv[1]))' "$out_dir")"
 # Non-genome caches stay under the run dir. Genome downloads use the install
 # library (SAMOVAR_DATABASE / genomes.samovar_database) unless the caller
 # already exported SAMOVAR_GENOMES or SAMOVAR_PROCESSED_GENOMES.
 export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-$out_dir/.cache}}"
-mkdir -p "$XDG_CACHE_HOME" "$SAMOVAR_RUN_GENOMES"
+mkdir -p "$XDG_CACHE_HOME"
 """
 
         setup_reads = _checkpoint_block(
@@ -2343,8 +2347,7 @@ fi
             """# Reuse NCBI/user genome libraries (never the truncated data/test_genomes
 # stubs, unless this run's ISS/CAMISIM generate YAML pointed at them or
 # SAMOVAR_ALLOW_TEST_GENOMES / --test-genomes is set).
-mkdir -p "$out_dir/genomes"
-"$PYTHON_PATH" -m samovar.genome_cache seed --dest "$out_dir/genomes" --generate-dir "$out_dir" --genome-dirs "$SAMOVAR_GENOME_DIRS"
+"$PYTHON_PATH" -m samovar.genome_cache seed --dest "$SAMOVAR_RUN_GENOMES" --generate-dir "$out_dir" --genome-dirs "$SAMOVAR_GENOME_DIRS"
 """,
         )
 
