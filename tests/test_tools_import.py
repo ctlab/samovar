@@ -57,6 +57,26 @@ def test_import_metaphlan_records_bowtie_dependencies(tmp_path, monkeypatch):
     assert build_row[3] == "aligner"
 
 
+def test_import_megahit_records_plain_core(tmp_path, monkeypatch):
+    megahit = tmp_path / "megahit"
+    core = tmp_path / "megahit_core_no_hw_accel"
+    for binary in (megahit, core):
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    monkeypatch.setattr(
+        "samovar.tools_import.update_config",
+        lambda updates, also_repo_build=True: update_config(updates, also_repo_build=False),
+    )
+    assert import_main(["-n", "megahit", "-t", "assembler", "--exec-path", str(megahit)]) == 0
+    tools = json.loads(cfg.read_text())["tools"]
+    row = parse_tool_entry(_tool_row(tools, "megahit_core_no_hw_accel"), "megahit_core_no_hw_accel")
+    assert row[2] == str(core.resolve())
+    assert row[3] == "assembler"
+
+
 def test_import_tool_writes_config(tmp_path, monkeypatch):
     binary = tmp_path / "mykaiju"
     binary.write_text("#!/bin/sh\nexit 0\n")

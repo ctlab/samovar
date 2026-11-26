@@ -846,7 +846,7 @@ def main(argv: Optional[list] = None) -> int:
         from samovar.install_ask import ASK_TOOLS, companion_executable, companion_tool
 
         parent = next((tool for tool in ASK_TOOLS if tool.name == args.name or args.name in tool.which), None)
-        if parent is not None and parent.name == "metaphlan":
+        if parent is not None and parent.name in {"metaphlan", "megahit"}:
             for companion in parent.companions:
                 if lookup_tool_record(load_config(), companion) is not None:
                     continue

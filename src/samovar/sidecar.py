@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -122,6 +124,7 @@ SIDECARS = {
         "binary": "megahit",
         "config_path_key": "megahit_path",
         "tool_keys": ("megahit",),
+        "companions": ("megahit_core_no_hw_accel",),
         "group": "assembler",
         "hint": "Optional MegaHIT assembler (./install.sh MegaHIT).",
     },
@@ -526,6 +529,156 @@ def _install_source_tool(name: str) -> Path:
     return dest
 
 
+_MEGAHIT_FULL = 'megahit_core'
+_MEGAHIT_POPCNT = 'megahit_core_popcnt'
+_MEGAHIT_PLAIN = 'megahit_core_no_hw_accel'
+_MEGAHIT_URL = 'https://github.com/voutcn/megahit/archive/refs/tags/v1.2.9.tar.gz'
+_MEGAHIT_SHA256 = '09026eb07cc4e2d24f58b0a13f7a826ae8bb73da735a47cb1cbe6e4693118852'
+_BMI2 = re.compile(r'\b(bzhi|mulx|pdep|pext|rorx|sarx|shlx|shrx|bextr)\b')
+_AVX2 = re.compile(
+    r'\b(vpblendd|vpbroadcast[bwdq]|vperm[dq]|vpermpd|vpermps|'
+    r'vpsllv[dq]|vpsrlv[dq]|vpsravd|vpgatherd[dq]|vpgatherq[dq])\b'
+)
+_POPCNT = re.compile(r'\bpopcnt\b')
+
+
+def _cpu_flags(text: str | None = None) -> set[str]:
+    if text is None:
+        text = Path('/proc/cpuinfo').read_text(encoding='utf-8', errors='replace')
+    for line in text.splitlines():
+        name, _, value = line.partition(':')
+        if name.strip().lower() in {'flags', 'features'} and value.strip():
+            return set(value.split())
+    return set()
+
+
+def megahit_core_for_cpu(flags: set[str]) -> str:
+    """BMI2 without AVX2 still cannot run the native accelerated core."""
+    if 'bmi2' in flags and 'avx2' in flags:
+        return _MEGAHIT_FULL
+    if 'popcnt' in flags:
+        return _MEGAHIT_POPCNT
+    return _MEGAHIT_PLAIN
+
+
+def megahit_instruction_violations(disassembly: str, core: str) -> list[str]:
+    found = []
+    if core != _MEGAHIT_FULL and _BMI2.search(disassembly):
+        found.append('bmi2')
+    if core != _MEGAHIT_FULL and _AVX2.search(disassembly):
+        found.append('avx2')
+    if core == _MEGAHIT_PLAIN and _POPCNT.search(disassembly):
+        found.append('popcnt')
+    return found
+
+
+def _disassemble(path: Path) -> str:
+    if shutil.which('objdump') is None:
+        raise RuntimeError('objdump is required to check MEGAHIT instruction sets')
+    result = subprocess.run(
+        ['objdump', '-d', str(path)], check=True, capture_output=True, text=True,
+    )
+    return result.stdout
+
+
+def _patch_megahit_source(source: Path) -> None:
+    # GCC 13 no longer pulls in cstdint through the headers this file includes.
+    header = source / 'src' / 'localasm' / 'local_assemble.h'
+    text = header.read_text(encoding='utf-8')
+    if '#include <cstdint>' not in text:
+        text = text.replace('#include <string>', '#include <cstdint>\n#include <string>', 1)
+        header.write_text(text, encoding='utf-8')
+    cmake_lists = source / 'CMakeLists.txt'
+    cmake = cmake_lists.read_text(encoding='utf-8')
+    cmake = cmake.replace(
+        'set_target_properties(megahit_core_popcnt PROPERTIES COMPILE_FLAGS "-mpopcnt")',
+        'set_target_properties(megahit_core_popcnt PROPERTIES COMPILE_FLAGS "-mpopcnt -mno-bmi2 -mno-avx2")',
+    )
+    plain = (
+        'set_target_properties(megahit_core_no_hw_accel PROPERTIES COMPILE_FLAGS '
+        '"-mno-popcnt -mno-bmi2 -mno-avx2")\n'
+    )
+    needle = 'set_target_properties(megahit_core_popcnt PROPERTIES COMPILE_FLAGS'
+    if 'megahit_core_no_hw_accel PROPERTIES COMPILE_FLAGS' not in cmake:
+        cmake = cmake.replace(needle, plain + needle, 1)
+    cmake_lists.write_text(cmake, encoding='utf-8')
+
+
+def _megahit_source_archive() -> Path:
+    import hashlib
+    import urllib.request
+
+    archive = Path(tempfile.gettempdir()) / 'megahit-1.2.9.tar.gz'
+    if archive.is_file() and hashlib.sha256(archive.read_bytes()).hexdigest() == _MEGAHIT_SHA256:
+        return archive
+    if os.environ.get('SAMOVAR_OFFLINE', '0') != '0':
+        raise RuntimeError(f'megahit source is unavailable in offline mode: {archive}')
+    with urllib.request.urlopen(_MEGAHIT_URL, timeout=120) as response, archive.open('wb') as handle:
+        shutil.copyfileobj(response, handle)
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != _MEGAHIT_SHA256:
+        archive.unlink(missing_ok=True)
+        raise RuntimeError('megahit source checksum mismatch')
+    return archive
+
+
+def _build_megahit_cores(dest_bin: Path, cores: tuple[str, ...]) -> None:
+    import tarfile
+
+    archive = _megahit_source_archive()
+    with tempfile.TemporaryDirectory(prefix='megahit-build-') as tmp:
+        work = Path(tmp)
+        with tarfile.open(archive) as contents:
+            kwargs = {'filter': 'data'} if hasattr(tarfile, 'data_filter') else {}
+            contents.extractall(work, **kwargs)
+        source = work / 'megahit-1.2.9'
+        _patch_megahit_source(source)
+        build = work / 'build'
+        env = os.environ.copy()
+        env['CFLAGS'] = '-O3'
+        env['CXXFLAGS'] = '-O3 -mno-avx2 -mno-bmi2'
+        subprocess.run(
+            ['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release'],
+            check=True, env=env,
+        )
+        command = ['cmake', '--build', str(build), '--parallel']
+        for core in cores:
+            command.extend(['--target', core])
+        subprocess.run(command, check=True, env=env)
+        for core in cores:
+            built = build / core
+            if not built.is_file():
+                raise RuntimeError(f'MEGAHIT did not build {core}')
+            shutil.copy2(built, dest_bin / core)
+            (dest_bin / core).chmod(0o755)
+
+
+def ensure_megahit_cores(bin_dir: Path, flags: set[str] | None = None) -> str:
+    """Rebuild the POPCNT and plain cores when they contain BMI2, AVX2, or extra POPCNT.
+
+    Returns the core the launcher selects on this CPU. The full core is left as installed.
+    """
+    chosen = megahit_core_for_cpu(_cpu_flags() if flags is None else set(flags))
+    print(f'megahit: this CPU should run {chosen}')
+    root = Path(bin_dir)
+    dirty = []
+    for core in (_MEGAHIT_POPCNT, _MEGAHIT_PLAIN):
+        path = root / core
+        if not path.is_file():
+            dirty.append(core)
+            continue
+        bad = megahit_instruction_violations(_disassemble(path), core)
+        if bad:
+            print(f'megahit: {core} contains {", ".join(bad)}; rebuilding')
+            dirty.append(core)
+    if dirty:
+        _build_megahit_cores(root, tuple(dirty))
+        for core in dirty:
+            bad = megahit_instruction_violations(_disassemble(root / core), core)
+            if bad:
+                raise RuntimeError(f'rebuilt {core} still contains {", ".join(bad)}')
+    return chosen
+
+
 def install_named(name: str) -> Path:
     key = str(name or "").strip().lower()
     aliases = {
@@ -567,6 +720,8 @@ def install_named(name: str) -> Path:
         ensure_sidecar_compat(key, prefix)
         if sidecar_is_healthy(key, prefix):
             record_sidecar(key, prefix, existing)
+            if key == "megahit":
+                ensure_megahit_cores(Path(existing).resolve().parent)
             print(f"{key} already present:", existing)
             print("tool_envs." + key + ":", prefix)
             return prefix
@@ -574,6 +729,8 @@ def install_named(name: str) -> Path:
     prefix = create_sidecar_env(key)
     binary = prefix / "bin" / str(spec["binary"])
     record_sidecar(key, prefix, str(binary.resolve()))
+    if key == "megahit":
+        ensure_megahit_cores(binary.resolve().parent)
     print(f"{key}:", binary)
     print("tool_envs." + key + ":", prefix)
     return prefix

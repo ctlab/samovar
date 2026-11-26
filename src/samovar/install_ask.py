@@ -115,7 +115,10 @@ ASK_TOOLS: Tuple[AskTool, ...] = (
     AskTool("wgsim", ("wgsim",), "reads_generator", "conda:wgsim"),
     AskTool("sparsedossa2", ("sparsedossa2",), "table_reads_generator", "optional:sparsedossa2"),
     AskTool("R", ("R",), "runtime", "optional:r-package"),
-    AskTool("megahit", ("megahit",), "assembler", "optional:megahit"),
+    AskTool(
+        "megahit", ("megahit",), "assembler", "optional:megahit",
+        companions=("megahit_core_no_hw_accel",),
+    ),
     AskTool("spades", ("spades.py",), "assembler", "optional:spades"),
     AskTool("flye", ("flye",), "assembler", "optional:flye"),
     AskTool("prodigal", ("prodigal",), "gene_caller", "optional:prodigal"),

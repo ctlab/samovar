@@ -3,6 +3,13 @@ from pathlib import Path
 import pytest
 
 from samovar import sidecar
+from samovar.sidecar import (
+    _MEGAHIT_FULL,
+    _MEGAHIT_PLAIN,
+    _MEGAHIT_POPCNT,
+    megahit_core_for_cpu,
+    megahit_instruction_violations,
+)
 
 
 
@@ -83,3 +90,20 @@ def test_source_tool_install_verifies_archive_before_registration(tmp_path, monk
             sidecar.install_named('phanta')
         assert not written and not (tmp_path / 'sources/phanta/test').exists()
     assert not list((tmp_path / 'sources/phanta').glob('.install-*'))
+
+
+def test_griffin_selects_the_popcnt_core_without_bmi2_or_avx2():
+    griffin = {'popcnt', 'avx', 'bmi1'}
+    assert megahit_core_for_cpu(griffin) == _MEGAHIT_POPCNT
+    assert megahit_core_for_cpu({'popcnt', 'bmi2', 'avx2'}) == _MEGAHIT_FULL
+    assert megahit_core_for_cpu({'sse2'}) == _MEGAHIT_PLAIN
+    assert megahit_core_for_cpu({'bmi2', 'popcnt'}) == _MEGAHIT_POPCNT
+    assert megahit_core_for_cpu({'bmi2'}) == _MEGAHIT_PLAIN
+
+
+def test_restricted_cores_reject_bmi2_avx2_and_plain_rejects_popcnt():
+    text = 'bzhi %rax, %rbx, %rcx\nvpermq %ymm0, %ymm1, %ymm2\npopcnt %rax, %rbx\n'
+    assert megahit_instruction_violations(text, _MEGAHIT_POPCNT) == ['bmi2', 'avx2']
+    assert megahit_instruction_violations(text, _MEGAHIT_PLAIN) == ['bmi2', 'avx2', 'popcnt']
+    assert megahit_instruction_violations(text, _MEGAHIT_FULL) == []
+    assert megahit_instruction_violations('mov %rax, %rbx\n', _MEGAHIT_PLAIN) == []
