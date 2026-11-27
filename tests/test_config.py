@@ -719,9 +719,9 @@ def test_interleaved_group_is_split_in_setup_reads(tmp_path):
     assert "deinterleave_marked_groups" in script
     assert script.count("illumina") >= 1
     plain = PipelineConfig(output_dir=str(tmp_path / "plain"))
-    assert "deinterleave_marked_groups" not in Path(
-        plain.generate_pipeline(str(tmp_path / "plain"))
-    ).read_text()
+    plain_script = Path(plain.generate_pipeline(str(tmp_path / "plain"))).read_text()
+    assert "deinterleave_unmarked" in plain_script
+    assert "deinterleave_marked_groups" not in plain_script
     conf = tmp_path / "in.yaml"
     conf.write_text("interleaved: [ont, ont]\n", encoding="utf-8")
     loaded = PipelineConfig.from_args(argparse.Namespace(

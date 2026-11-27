@@ -376,6 +376,42 @@ def test_interleaved_casava_and_symlink_source(tmp_path):
     assert deinterleave_marked_groups(work, ['illumina']) == []
 
 
+def test_unmarked_interleaved_fastq_becomes_a_pair(tmp_path):
+    from samovar.seqio import deinterleave_unmarked
+
+    paired = tmp_path / "A_illumina.fastq"
+    paired.write_text(_record("a/1", "AA") + _record("a/2", "TT"))
+    plain = tmp_path / "reads.fastq"
+    plain.write_text(_record("r1", "AC") + _record("r2", "GT"))
+    same = tmp_path / "dup.fastq"
+    same.write_text(_record("a", "AA") + _record("a", "TT"))
+    mates = tmp_path / "mates.fastq"
+    mates.write_text(_record("a/1", "AA") + _record("a/2", "TT"))
+    named = tmp_path / "1_bgi.fastq"
+    named.write_text(_record("a", "AA") + _record("a", "TT"))
+    uniform = tmp_path / "se.fastq"
+    uniform.write_text(_record("a/1", "AA") + _record("b/1", "TT"))
+
+    written = deinterleave_unmarked(tmp_path)
+    assert [path.name for path in written] == [
+        "1_bgi_R1.fastq", "1_bgi_R2.fastq", "A_illumina_R1.fastq", "A_illumina_R2.fastq",
+        "mates_R1.fastq", "mates_R2.fastq",
+    ]
+    assert (tmp_path / "A_illumina_R1.fastq").read_text() == _record("a/1", "AA")
+    assert (tmp_path / "A_illumina_R2.fastq").read_text() == _record("a/2", "TT")
+    assert plain.read_text().startswith("@r1")
+    assert same.read_text().startswith("@a")
+    assert uniform.read_text().startswith("@a/1")
+    assert not (tmp_path / "A_illumina.fastq").exists()
+    broken = tmp_path / "bad.fastq"
+    broken.write_text(_record("a/2", "AA") + _record("a/1", "TT"))
+    data = broken.read_text()
+    with pytest.raises(ValueError, match="not mates"):
+        deinterleave_unmarked(tmp_path)
+    assert broken.read_text() == data
+    assert not (tmp_path / "bad_R1.fastq").exists()
+
+
 def test_interleaved_gzip_matches_paired_reads(tmp_path):
     import gzip
     from samovar.seqio import deinterleave_marked_groups, open_text

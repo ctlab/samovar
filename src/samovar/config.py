@@ -2151,11 +2151,15 @@ class PipelineConfig:
         )
 
     def _deinterleave_line(self) -> str:
+        line = (
+            "\"$PYTHON_PATH\" -c 'import sys; from samovar.seqio import deinterleave_unmarked; "
+            "deinterleave_unmarked(sys.argv[1])' \"$out_dir/initial\"\n"
+        )
         groups = list(self.interleaved or [])
         if not groups:
-            return ""
+            return line
         quoted = " ".join(shlex.quote(group) for group in groups)
-        return (
+        return line + (
             "\"$PYTHON_PATH\" -c 'import sys; from samovar.seqio import deinterleave_marked_groups; "
             f"deinterleave_marked_groups(sys.argv[1], sys.argv[2:])' \"$out_dir/initial\" {quoted}\n"
         )

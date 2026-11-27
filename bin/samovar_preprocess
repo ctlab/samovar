@@ -252,9 +252,9 @@ def main():
         default=None,
         help=(
             'Paired-end group stored in one FASTQ (repeatable), e.g. '
-            '--interleaved illumina,bgi. setup_reads validates paired IDs and '
-            'splits matching technology-suffixed files into R1/R2 without changing '
-            'the input directory. An unmatched selection is an error.'
+            '--interleaved illumina,bgi. setup_reads also splits an unmarked file '
+            'whose records are already R1/R2 mates. A single-end file stays '
+            'single-end. An unmatched selection is an error.'
         ),
     )
     parser.add_argument(
