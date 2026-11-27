@@ -77,6 +77,26 @@ def test_import_megahit_records_plain_core(tmp_path, monkeypatch):
     assert row[3] == "assembler"
 
 
+def test_import_hybrid_dictionary_is_stored(tmp_path, monkeypatch):
+    binary = tmp_path / "myasm"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg))
+    write_config({"root": str(tmp_path), "tools": {}}, also_repo_build=False)
+    assert import_main([
+        "-n", "customasm", "-t", "assembler", "--exec-path", str(binary),
+        "--hybrid", "illumina=short:pe,ont=long:ont",
+    ]) == 0
+    tools = json.loads(cfg.read_text())["tools"]
+    row = _tool_row(tools, "customasm")
+    assert row["hybrid"]["roles"] == {"illumina": "short:pe", "ont": "long:ont"}
+    assert import_main([
+        "-n", "customasm", "-t", "assembler", "--exec-path", str(binary),
+        "--hybrid", "illumina=short:pe; echo hi",
+    ]) == 1
+
+
 def test_import_tool_writes_config(tmp_path, monkeypatch):
     binary = tmp_path / "mykaiju"
     binary.write_text("#!/bin/sh\nexit 0\n")

@@ -496,6 +496,9 @@ def run_metaflye(
     if len(selected_modes) > 1:
         raise ValueError("Flye requires exactly one read mode")
     read_mode = next(iter(selected_modes), "--nano-raw")
+    from samovar.tool_contracts import validate_native_hybrid
+
+    validate_native_hybrid("flye", ["pacbio" if read_mode.startswith("--pacbio") else "ont"])
     extra_args = [arg for arg in extra_args if arg not in read_modes]
     cmd = [which_tool("flye", exe), "--meta", "-o", str(work), "-t", str(int(threads))]
     cmd.extend(_mem_argv("flye", threads, extra_args))
@@ -534,6 +537,9 @@ def run_spades(r1, r2, ont, dest, threads=1, extra=None):
     """Assemble short reads with an optional ONT library through native SPAdes."""
     if not r1:
         raise ValueError("SPAdes hybrid assembly requires short reads")
+    from samovar.tool_contracts import validate_native_hybrid
+
+    validate_native_hybrid("spades", ["illumina"] + (["ont"] if ont else []))
     threads = _job_threads("spades", threads)
     out = as_path(dest)
     work = out.parent / (out.stem + ".spades")

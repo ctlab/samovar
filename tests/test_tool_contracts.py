@@ -549,6 +549,32 @@ def test_assembler_contract(request, tmp_path, tiny_fastq):
     assert text == "" or text.lstrip().startswith(">")
 
 
+def test_native_hybrid_dictionary_rejects_mixed_flye_and_two_shorts():
+    from samovar.tool_contracts import (
+        filter_hybrid_rows,
+        parse_hybrid_dictionary,
+        validate_native_hybrid,
+    )
+
+    rows = [
+        {"hybrid": ""},
+        {"hybrid": "NA"},
+        {"hybrid": "illumina"},
+    ]
+    assert filter_hybrid_rows(rows) == [{"hybrid": "illumina"}]
+    assert validate_native_hybrid("flye", [])["native"] is False
+    assert validate_native_hybrid("flye", ["ont"])["slots"] == {"ont": "long:ont"}
+    assert validate_native_hybrid("spades", ["1", "ont"])["slots"]["1"] == "short:pe"
+    with pytest.raises(ValueError, match="one long-read type"):
+        validate_native_hybrid("flye", ["ont", "pacbio"])
+    with pytest.raises(ValueError, match="short library"):
+        validate_native_hybrid("spades", ["illumina", "bgi"])
+    with pytest.raises(ValueError, match="not a shell"):
+        parse_hybrid_dictionary(["illumina=short:pe; rm -rf /"])
+    spec = parse_hybrid_dictionary(["illumina=short:pe", "9=illumina"])
+    assert spec["roles"]["9"] == "short:pe"
+
+
 def test_gene_caller_contract(request, tmp_path):
     _skip_if_other_type(request, "gene_caller")
     path = _tool_path(request, "gene_caller")

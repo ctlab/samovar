@@ -312,6 +312,25 @@ def remove_imported_tool(name: str, *, also_repo_build: bool = True) -> str:
     return name
 
 
+def hybrid_from_cli(items: Optional[Sequence[str]]) -> Optional[dict]:
+    """Parse --hybrid. A bare flag asks on a terminal and errors otherwise."""
+    if not items:
+        return None
+    from samovar.tool_contracts import parse_hybrid_dictionary
+
+    given = [str(item) for item in items if str(item or "").strip()]
+    if len(given) != len(items):
+        if not sys.stdin.isatty():
+            raise ValueError("noninteractive --hybrid needs role=slot pairs")
+        print("hybrid role=slot, one pair per line; empty line ends", file=sys.stderr)
+        while True:
+            line = input().strip()
+            if not line:
+                break
+            given.append(line)
+    return parse_hybrid_dictionary(given)
+
+
 def import_tool(
     *,
     name: str,
@@ -325,6 +344,7 @@ def import_tool(
     flags_translate: str = "",
     mem_mb: Optional[int] = None,
     version: str = "",
+    hybrid: Optional[dict] = None,
     also_repo_build: bool = True,
     bibtex: Optional[list] = None,
     bibtex_file: Optional[list] = None,
@@ -370,6 +390,7 @@ def import_tool(
         flags_translate=flags_translate or None,
         version=str(version or "").strip() or None,
         citation=citation_refs or None,
+        hybrid=hybrid,
     )
     if glob:
         kwargs["inputs"] = glob
@@ -674,6 +695,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--hybrid",
+        action="append",
+        nargs="?",
+        const="",
+        default=None,
+        help=(
+            "Native hybrid role=slot pairs, repeatable. Slots: short:pe, short:se, "
+            "long:ont, long:pacbio. Example: --hybrid illumina=short:pe --hybrid ont=long:ont. "
+            "A bare --hybrid asks on a terminal. Empty and NA filter rows and are not native hybrid."
+        ),
+    )
+    parser.add_argument(
         "--pytest",
         action="store_true",
         help=(
@@ -828,6 +861,11 @@ def main(argv: Optional[list] = None) -> int:
         extra_file = str(getattr(args, "lazy_install_file", "") or "").strip()
         if extra_file:
             lazy = "@" + extra_file
+        try:
+            hybrid = hybrid_from_cli(getattr(args, "hybrid", None))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
         spec = import_tool(
             name=args.name,
             tool_type=args.type,
@@ -842,6 +880,7 @@ def main(argv: Optional[list] = None) -> int:
             version=args.version,
             bibtex=list(getattr(args, "bibtex", None) or []),
             bibtex_file=list(getattr(args, "bibtex_file", None) or []),
+            hybrid=hybrid,
         )
         from samovar.install_ask import ASK_TOOLS, companion_executable, companion_tool
 

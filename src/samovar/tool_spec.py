@@ -392,6 +392,8 @@ def parse_tool_record(value: Any, name: str = "") -> Dict[str, Any]:
         cites = parse_citation_refs(value.get("citation") or value.get("citations"))
     if cites:
         rec["citation"] = cites
+    if isinstance(value, dict) and isinstance(value.get("hybrid"), dict):
+        rec["hybrid"] = value.get("hybrid")
     return rec
 
 

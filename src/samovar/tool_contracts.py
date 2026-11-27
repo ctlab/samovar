@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from samovar.main_config import normalize_tool_group
 from samovar.paths import repo_root
@@ -128,7 +128,9 @@ CONTRACTS: Dict[str, Dict[str, str]] = {
         "out": "Trimmed FASTQ at dest_r1/dest_r2 (same layout as input; empty files allowed).",
     },
     "assembler": {
-        "in": "FASTQ R1/R2 via CLI -i/-I, -o contig FASTA, -t threads.",
+        "in": "FASTQ R1/R2 via CLI -i/-I, -o contig FASTA, -t threads. "
+              "Native hybrid is a role=slot dictionary (short:pe, short:se, long:ont, long:pacbio), not a shell command. "
+              "Empty and NA filter rows and are not native hybrid.",
         "out": "Contig FASTA at -o (empty file allowed if assembly produced none).",
     },
     "gene_caller": {
@@ -250,6 +252,127 @@ def default_tool_path(group: str) -> Path:
     if path.is_absolute() and path.is_file():
         return path
     return (_contract_repo_root() / rel).resolve()
+
+
+HYBRID_SLOTS = ("short:pe", "short:se", "long:ont", "long:pacbio")
+_HYBRID_LIMITS = ("max_short", "exclusive_long", "require_short")
+
+
+def builtin_hybrid(name: str) -> Optional[Dict[str, object]]:
+    """Flye keeps one long-read type. metaSPAdes keeps one short PE library."""
+    key = str(name or "").strip().lower().replace("_", "-")
+    if key in {"flye", "metaflye", "meta-flye"}:
+        return {
+            "roles": {"ont": "long:ont", "pacbio": "long:pacbio", "2": "long:ont", "3": "long:pacbio"},
+            "max_short": 0,
+            "exclusive_long": True,
+            "require_short": False,
+        }
+    if key in {"spades", "metaspades", "meta-spades"}:
+        return {
+            "roles": {
+                "illumina": "short:pe",
+                "bgi": "short:pe",
+                "mgi": "short:pe",
+                "ont": "long:ont",
+                "pacbio": "long:pacbio",
+                "1": "short:pe",
+                "2": "long:ont",
+            },
+            "max_short": 1,
+            "exclusive_long": False,
+            "require_short": True,
+        }
+    return None
+
+
+def parse_hybrid_dictionary(items: Sequence[str]) -> Dict[str, object]:
+    """Parse ``role=slot`` pairs. Shell text is rejected."""
+    roles: Dict[str, str] = {}
+    limits = {"max_short": 1, "exclusive_long": False, "require_short": False}
+    chunks = []
+    for item in items:
+        text = str(item or "").strip()
+        if any(ch in text for ch in "$`|&;<>\n\\"):
+            raise ValueError("hybrid dictionary maps roles to slots, not a shell command")
+        chunks.extend(text.replace(",", " ").split())
+    if not chunks:
+        raise ValueError("hybrid dictionary needs role=slot pairs, for example illumina=short:pe")
+    for part in chunks:
+        if "=" not in part:
+            raise ValueError(f"hybrid entry {part!r} must be role=slot")
+        role, value = (piece.strip().lower() for piece in part.split("=", 1))
+        if not role or not value:
+            raise ValueError(f"hybrid entry {part!r} must be role=slot")
+        if role in _HYBRID_LIMITS:
+            if role == "max_short":
+                limits[role] = int(value)
+            else:
+                limits[role] = value in {"1", "true", "yes"}
+            continue
+        roles[role] = value
+    if not roles:
+        raise ValueError("hybrid dictionary needs at least one role")
+    resolved: Dict[str, str] = {}
+    for role in roles:
+        seen = set()
+        current = role
+        while current not in HYBRID_SLOTS:
+            if current in seen or current not in roles:
+                raise ValueError(f"hybrid role {role!r} does not resolve to a slot")
+            seen.add(current)
+            current = roles[current]
+        resolved[role] = current
+    return {"roles": resolved, **limits}
+
+
+def filter_hybrid_rows(rows: Sequence[Mapping[str, str]]) -> list:
+    """Drop empty and NA hybrid cells. This is a filter, not native hybrid."""
+    kept = []
+    for row in rows:
+        value = str(row.get("hybrid") or "").strip().lower()
+        if value in {"", "na"}:
+            continue
+        kept.append(row)
+    return kept
+
+
+def validate_native_hybrid(name: str, selected: Sequence[str], record: Optional[Mapping] = None) -> Dict[str, object]:
+    """Check a native role combination. An empty selection is not native hybrid."""
+    chosen = []
+    for role in selected:
+        text = str(role or "").strip().lower()
+        if text in {"", "na"}:
+            continue
+        chosen.append(text)
+    if not chosen:
+        return {"native": False, "slots": {}}
+    spec = None
+    if isinstance(record, Mapping) and isinstance(record.get("hybrid"), Mapping):
+        spec = record.get("hybrid")
+    if spec is None:
+        spec = builtin_hybrid(name)
+    if spec is None:
+        raise ValueError(f"{name} has no native hybrid dictionary; empty hybrid only filters rows")
+    roles = dict(spec.get("roles") or {})
+    slots = []
+    for role in chosen:
+        if role not in roles:
+            raise ValueError(f"unknown hybrid role {role!r} for {name}")
+        slots.append(str(roles[role]))
+    shorts = [slot for slot in slots if slot.startswith("short:")]
+    longs = [slot for slot in slots if slot.startswith("long:")]
+    if len(shorts) > int(spec.get("max_short", 1)):
+        raise ValueError(f"{name} accepts at most {spec.get('max_short')} short library")
+    if spec.get("exclusive_long") and len(set(longs)) > 1:
+        raise ValueError(f"{name} accepts one long-read type")
+    if int(spec.get("max_short", 1)) == 0 and shorts:
+        raise ValueError(f"{name} long-read mode does not mix in short reads")
+    if int(spec.get("max_short", 1)) == 0 and len(longs) != 1:
+        raise ValueError(f"{name} needs exactly one long-read type")
+    if spec.get("require_short") and longs and "short:pe" not in slots:
+        raise ValueError(f"{name} hybrid needs one short paired library")
+    return {"native": True, "slots": dict(zip(chosen, slots))}
 
 
 def format_contract(group: str) -> str:

@@ -602,6 +602,7 @@ def set_tool(
     flags_translate: Any = None,
     version: Optional[str] = None,
     citation: Any = None,
+    hybrid: Any = None,
 ) -> Dict[str, Any]:
     from samovar.tool_spec import (
         bare_tool_name,
@@ -662,6 +663,9 @@ def set_tool(
         rec["citation"] = prev_cites
     if rec.get("citation") == []:
         rec.pop("citation", None)
+    kept_hybrid = hybrid if hybrid is not None else previous.get("hybrid")
+    if isinstance(kept_hybrid, dict) and kept_hybrid.get("roles"):
+        rec["hybrid"] = kept_hybrid
     if not rec["lazy-install"]:
         from samovar.tool_spec import lazy_install_for
 
@@ -1228,6 +1232,7 @@ def apply_legacy_updates(cfg: Dict[str, Any], updates: Dict[str, Any]) -> Dict[s
                         flags_translate=rec.get("flags-translate"),
                         version=str(rec.get("_version") or ""),
                         citation=rec.get("citation"),
+                        hybrid=rec.get("hybrid"),
                     )
             continue
         if key == "tool_envs":
