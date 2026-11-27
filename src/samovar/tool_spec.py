@@ -306,6 +306,8 @@ def flags_translate_for(name: str, record: Optional[Mapping[str, Any]] = None) -
 
 
 def lazy_install_for(name: str, version: str = "") -> str:
+    if str(version or "").strip() == "unknown":
+        version = ""
     bare = bare_tool_name(name)
     cmd = DEFAULT_LAZY_INSTALL.get(bare, "")
     if cmd and version and "conda install" in cmd and "=" not in cmd.split()[-1]:

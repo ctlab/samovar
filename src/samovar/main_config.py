@@ -672,8 +672,10 @@ def set_tool(
         rec["flags-translate"] = dict(DEFAULT_FLAGS_TRANSLATE.get(bare) or {})
     ver = str(version or key_ver or previous.get("_version") or "").strip()
     if not ver and rec["exec"]["path"] and bare not in {"samovar"}:
-        ver = probe_tool_version(rec["exec"]["path"], bare)
-    disk_key = join_tool_key(bare or name, ver)
+        ver = probe_tool_version(rec["exec"]["path"], bare) or "unknown"
+    if ver == "unknown":
+        rec["version"] = "unknown"
+    disk_key = join_tool_key(bare or name, "" if ver == "unknown" else ver)
     for stored in list(tools):
         if bare_tool_name(stored) == bare:
             tools.pop(stored, None)
@@ -1683,7 +1685,6 @@ def _tools_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
         join_tool_key,
         lazy_install_for,
         parse_tool_record,
-        probe_tool_version,
         split_tool_key,
     )
     from samovar.version import get_version
@@ -1700,9 +1701,11 @@ def _tools_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
         if bare == "samovar" and not ver:
             ver = get_version()
         elif not ver and exe.get("path") and bare not in {"samovar"}:
-            ver = probe_tool_version(str(exe.get("path")), bare, cfg=cfg)
+            ver = "unknown"
+        if ver == "unknown":
+            rec["version"] = "unknown"
         if not rec.get("lazy-install"):
-            rec["lazy-install"] = lazy_install_for(bare, ver)
+            rec["lazy-install"] = lazy_install_for(bare, "" if ver == "unknown" else ver)
         if not rec.get("flags-translate"):
             rec["flags-translate"] = dict(DEFAULT_FLAGS_TRANSLATE.get(bare) or {})
         rec["exec"] = {
@@ -1712,7 +1715,7 @@ def _tools_for_disk(cfg: Dict[str, Any]) -> Dict[str, Any]:
         }
         rec["type"] = rec.get("type") or tool_group_for(bare)
         rec["flags"] = str(rec.get("flags") or "")
-        key = join_tool_key(bare, ver)
+        key = join_tool_key(bare, "" if ver == "unknown" else ver)
         out[key] = rec
     return out
 

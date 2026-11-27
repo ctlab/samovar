@@ -60,6 +60,27 @@ def test_parse_known_with_custom_accepts_threads():
     assert args.custom_cli_flags.get("--threads") == "4"
 
 
+def test_disk_payload_does_not_probe_unversioned_tools(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("config write probed a tool version")
+
+    monkeypatch.setattr("samovar.tool_spec.probe_tool_version", boom)
+    cfg = migrate_legacy(
+        {
+            "root": "/opt/samovar",
+            "tools": {
+                "slow": {
+                    "exec": {"env": "", "parser": "bash", "path": "/tmp/slow_tool.py"},
+                    "type": "reprofiler",
+                    "flags": "",
+                }
+            },
+        }
+    )
+    payload = disk_payload(cfg)
+    assert payload["tools"]["slow"]["version"] == "unknown"
+
+
 def test_disk_payload_versions_tool_keys():
     cfg = migrate_legacy(
         {

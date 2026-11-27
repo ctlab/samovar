@@ -146,3 +146,44 @@ def test_catalog_processed_updates_config(tmp_path, monkeypatch):
     data = genome_data_map()
     assert "562" in data
     assert src.is_file()
+
+
+def test_harvest_skips_cataloged_genomes_and_writes_once(tmp_path, monkeypatch):
+    import gzip
+
+    from samovar.genome_index import harvest_run_genomes
+    from samovar.paths import update_config, write_config
+
+    store = tmp_path / "genomes"
+    cfg_path = tmp_path / "config.json"
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(cfg_path))
+    write_config(
+        {
+            "root": str(tmp_path),
+            "genomes": {"samovar_database": str(store), "processed": {}, "data": {}},
+            "tools": {
+                "slow": {
+                    "exec": {"env": "", "parser": "bash", "path": str(tmp_path / "slow.py")},
+                    "type": "reprofiler",
+                }
+            },
+        },
+        also_repo_build=False,
+    )
+    run = tmp_path / "run" / ".genomes"
+    run.mkdir(parents=True)
+    for name in ("562.fa", "4932.fa"):
+        with gzip.open(run / f"{name}.gz", "wt") as handle:
+            handle.write(">x\nACGT\n")
+    writes = []
+    real = update_config
+
+    def counting(updates, also_repo_build=True):
+        writes.append(updates)
+        return real(updates, also_repo_build=also_repo_build)
+
+    monkeypatch.setattr("samovar.paths.update_config", counting)
+    assert harvest_run_genomes(tmp_path / "run") == 2
+    assert len(writes) == 1
+    assert harvest_run_genomes(tmp_path / "run") == 0
+    assert len(writes) == 1

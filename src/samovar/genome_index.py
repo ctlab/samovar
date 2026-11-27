@@ -10,6 +10,7 @@ the install config pointed at by ``build/config_path``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
 import re
@@ -554,6 +555,46 @@ def numeric_taxid_from_fasta(path: PathLike) -> str:
     return ""
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _same_catalog_file(src: Path, accession: str, cfg: Dict[str, Any]) -> bool:
+    """True when this file is already the catalog copy for ``accession``."""
+    rec = indexed_record(accession, cfg)
+    if rec is None:
+        return False
+    name = (list(rec[1]) + [""] * 4)[3]
+    catalog = processed_storage_dir(cfg) / (name or processed_filename(accession))
+    if not catalog.is_file():
+        return False
+    try:
+        if src.resolve() == catalog.resolve():
+            return True
+    except OSError:
+        if str(src) == str(catalog):
+            return True
+    try:
+        if src.stat().st_size != catalog.stat().st_size:
+            return False
+    except OSError:
+        return False
+    return _file_sha256(src) == _file_sha256(catalog)
+
+
+def _store_genome_block(cfg: Dict[str, Any], block: Dict[str, Any], *, persist: bool) -> None:
+    if persist:
+        from samovar.paths import update_config
+
+        update_config({"genomes": block})
+    else:
+        cfg["genomes"] = block
+
+
 def index_processed_file(
     path: PathLike,
     *,
@@ -562,12 +603,16 @@ def index_processed_file(
     move_to: Optional[Path] = None,
     taxid: str = "",
     species_taxid: str = "",
+    cfg: Optional[Dict[str, Any]] = None,
+    persist: bool = True,
 ) -> Path:
     """Gzip if needed, optionally move into ``move_to``, and record in config."""
     from samovar.main_config import folder_map, genomes_block
-    from samovar.paths import load_config, update_config
+    from samovar.paths import load_config
 
     src = _as_path(path)
+    if cfg is None:
+        cfg = load_config()
     from samovar.genome_cache import is_bundled_test_genomes_path
 
     if is_bundled_test_genomes_path(src):
@@ -590,7 +635,6 @@ def index_processed_file(
         taxid_key = as_test_taxid(
             str(taxid or species_taxid or accession or accession_from_fasta(src) or src.stem)
         )
-        cfg = load_config()
         block = genomes_block(cfg) or {}
         data = genome_data_map(cfg)
         for stale in [k for k in list(data) if k in {taxid_key, numeric_taxid_stem(taxid_key)}]:
@@ -598,7 +642,7 @@ def index_processed_file(
                 data.pop(stale, None)
         data[taxid_key] = [taxid_key, taxid_key, TEST_FOLDER_ID, rel]
         block["data"] = data
-        update_config({"genomes": block})
+        _store_genome_block(cfg, block, persist=persist)
         logger.info("Recorded test genome %s -> %s (not copied into the library)", taxid_key, src)
         return src
 
@@ -623,7 +667,6 @@ def index_processed_file(
         fid = dest_dir.parent.name or "lib"
         if fid in reserved:
             fid = f"lib_{abs(hash(str(dest_dir.resolve())))}"
-    cfg = load_config()
     block = genomes_block(cfg) or {}
     proc = folder_map(block.get("processed"))
     proc[fid] = str(dest_dir)
@@ -653,7 +696,7 @@ def index_processed_file(
         data.pop(key, None)
     data[taxid_key] = [species or organism, acc, fid, dest.name]
     block["data"] = data
-    update_config({"genomes": block})
+    _store_genome_block(cfg, block, persist=persist)
     logger.info("Indexed %s (%s) -> %s", taxid_key, acc, src)
     return src
 
@@ -677,6 +720,8 @@ def catalog_processed_genome(
     species_taxid: str = "",
     keep_src: bool = True,
     stage_dir: Optional[PathLike] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+    persist: bool = True,
 ) -> Path:
     """Copy/hardlink ``path`` into ``samovar_database/processed`` and update config.
 
@@ -713,6 +758,8 @@ def catalog_processed_genome(
         taxid=taxid,
         species_taxid=species_taxid,
         move_to=store,
+        cfg=cfg,
+        persist=persist,
     )
     if stage_dir:
         return stage_into_dir(indexed, stage_dir)
@@ -723,26 +770,33 @@ def harvest_run_genomes(output_dir: PathLike) -> int:
     """Index processed FASTAs under a run dir into the install catalog."""
     if not catalog_enabled():
         return 0
+    from samovar.paths import load_config, update_config
+
+    cfg = load_config()
     counted = 0
-    roots = [
-        _as_path(output_dir) / ".genomes",
-    ]
     seen = set()
-    for root in roots:
-        for path in iter_processed_fastas(root):
-            try:
-                key = str(path.resolve())
-            except OSError:
-                key = str(path)
-            if key in seen:
+    for path in iter_processed_fastas(_as_path(output_dir) / ".genomes"):
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            acc = accession_from_fasta(path)
+            if _same_catalog_file(path, acc, cfg):
                 continue
-            seen.add(key)
-            try:
-                catalog_processed_genome(path, keep_src=True, stage_dir=path.parent)
-                counted += 1
-            except Exception:
-                logger.warning("Could not catalog %s", path, exc_info=True)
+            catalog_processed_genome(
+                path, keep_src=True, stage_dir=path.parent, cfg=cfg, persist=False,
+            )
+            counted += 1
+        except Exception:
+            logger.warning("Could not catalog %s", path, exc_info=True)
     if counted:
+        from samovar.main_config import genomes_block
+
+        update_config({"genomes": genomes_block(cfg)})
         logger.info("Harvested %s processed genome(s) into the install catalog", counted)
     return counted
 
