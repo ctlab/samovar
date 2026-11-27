@@ -358,6 +358,88 @@ def _flag_database_label(token: str) -> str:
         return Path(text.rstrip("/")).name
     return text
 
+
+READS_MANIFEST_COLUMNS = (
+    "sample_id",
+    "path",
+    "library_id",
+    "technology",
+    "layout",
+    "mate",
+    "generation_id",
+    "repeat_id",
+)
+READS_MANIFEST_OPTIONAL = ("pool", "hybrid")
+_READS_LAYOUTS = {"se", "pe", "interleaved"}
+_READS_HYBRID = {"illumina", "ont", "pacbio", "bgi", "mgi"}
+
+
+def load_reads_manifest(path: str) -> List[Dict[str, str]]:
+    """Read schema version 1: one file per row. Filenames do not fill the fields."""
+    import csv
+
+    manifest = Path(path)
+    if not manifest.is_file():
+        raise ValueError(f"reads_manifest not found: {manifest}")
+    with manifest.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        header = list(reader.fieldnames or [])
+        required = list(READS_MANIFEST_COLUMNS)
+        if header[: len(required)] != required:
+            raise ValueError(
+                "reads manifest version 1 requires columns " + ", ".join(required)
+            )
+        extra = header[len(required) :]
+        allowed = [name for name in READS_MANIFEST_OPTIONAL if name in extra]
+        if extra != allowed:
+            raise ValueError("reads manifest version 1 optional columns are pool, hybrid")
+        rows: List[Dict[str, str]] = []
+        seen: Dict[str, int] = {}
+        for line_no, raw in enumerate(reader, start=2):
+            row = {key: (raw.get(key) or "").strip() for key in header}
+            for key in required:
+                if key in {"mate", "generation_id", "repeat_id"}:
+                    continue
+                if not row[key]:
+                    raise ValueError(f"reads manifest line {line_no}: {key} is required")
+            layout = row["layout"].lower()
+            if layout not in _READS_LAYOUTS:
+                raise ValueError(f"reads manifest line {line_no}: unknown layout {row['layout']!r}")
+            row["layout"] = layout
+            if layout == "pe" and row["mate"] not in {"R1", "R2"}:
+                raise ValueError(f"reads manifest line {line_no}: pe mate must be R1 or R2")
+            hybrid = row.get("hybrid", "")
+            if hybrid and hybrid.lower() not in _READS_HYBRID:
+                raise ValueError(f"reads manifest line {line_no}: unknown hybrid {hybrid!r}")
+            if hybrid:
+                row["hybrid"] = hybrid.lower()
+            file_path = Path(row["path"])
+            if not file_path.is_absolute():
+                file_path = manifest.parent / file_path
+            file_path = file_path.resolve()
+            if not file_path.is_file():
+                raise ValueError(f"reads manifest line {line_no}: file not found: {file_path}")
+            key = str(file_path)
+            if key in seen:
+                raise ValueError(
+                    f"reads manifest duplicate path {file_path} (lines {seen[key]} and {line_no})"
+                )
+            seen[key] = line_no
+            row["path"] = key
+            rows.append(row)
+    pairs: Dict[tuple, set] = {}
+    for row in rows:
+        if row["layout"] != "pe":
+            continue
+        pairs.setdefault((row["sample_id"], row["library_id"]), set()).add(row["mate"])
+    for (sample_id, library_id), mates in pairs.items():
+        if mates != {"R1", "R2"}:
+            raise ValueError(
+                f"reads manifest pe library {library_id!r} of sample {sample_id!r} needs both R1 and R2"
+            )
+    return rows
+
+
 @dataclass
 class AnnotatorConfig:
     run_name: str
@@ -373,6 +455,8 @@ class AnnotatorConfig:
 class PipelineConfig:
     input_config: Optional[str] = None
     input_dir: Optional[str] = None
+    reads_manifest: Optional[str] = None
+    reads_rows: Optional[List[Dict[str, str]]] = None
     output_dir: str = DEFAULT_OUTPUT_DIR
     annotators: List[AnnotatorConfig] = None
     profile_inputs: Optional[Dict] = None
@@ -558,6 +642,12 @@ class PipelineConfig:
                     refs.update({key: value for key, value in vars(args).items() if value is not None})
                     offer_prepare_imports(argparse.Namespace(**refs))
                 config.input_dir = input_config.get('input_dir')
+                raw_manifest = str(input_config.get("reads_manifest") or "").strip()
+                if raw_manifest:
+                    manifest_path = Path(raw_manifest)
+                    if not manifest_path.is_absolute():
+                        manifest_path = Path(args.input_config).resolve().parent / manifest_path
+                    config.reads_manifest = str(manifest_path)
                 cli_out = getattr(args, "output_dir", None)
                 config.output_dir = cli_out or input_config.get("output_dir") or DEFAULT_OUTPUT_DIR
                 config.read_length = input_config.get('read_length', config.read_length)
@@ -944,6 +1034,8 @@ class PipelineConfig:
                 config.profile_references = found
         if getattr(args, "_use_branch_initial", False):
             config.input_dir = str((Path(config.output_dir) / "initial").resolve())
+        if config.reads_manifest:
+            config.reads_rows = load_reads_manifest(config.reads_manifest)
         if config.input_dir:
             from samovar.seqio import link_or_copy_reads
 

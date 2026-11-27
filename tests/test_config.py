@@ -727,3 +727,102 @@ def test_interleaved_group_is_split_in_setup_reads(tmp_path):
         input_config=str(conf), input_dir=None, output_dir=str(out), interleaved=None,
     ))
     assert loaded.interleaved == ["ont"]
+
+
+def _fastq(path):
+    path.write_text("@a\nACGT\n+\nIIII\n")
+    return path
+
+
+def _manifest(directory, rows):
+    header = (
+        "sample_id\tpath\tlibrary_id\ttechnology\tlayout\tmate\t"
+        "generation_id\trepeat_id\tpool\thybrid\n"
+    )
+    body = "".join(
+        "\t".join([
+            row["sample_id"], row["path"], row["library_id"], row["technology"],
+            row["layout"], row.get("mate", ""), row.get("generation_id", ""),
+            row.get("repeat_id", ""), row.get("pool", ""), row.get("hybrid", ""),
+        ]) + "\n"
+        for row in rows
+    )
+    path = directory / "reads.tsv"
+    path.write_text(header + body)
+    return path
+
+
+def test_reads_manifest_keeps_one_sample_with_two_libraries(tmp_path):
+    illumina_r1 = _fastq(tmp_path / "s_ont_looking_R1.fastq")
+    illumina_r2 = _fastq(tmp_path / "s_R2.fastq")
+    ont = _fastq(tmp_path / "s_illumina.fastq")
+    manifest = _manifest(tmp_path, [
+        {"sample_id": "s", "path": illumina_r1.name, "library_id": "short",
+         "technology": "illumina", "layout": "pe", "mate": "R1", "hybrid": "illumina"},
+        {"sample_id": "s", "path": illumina_r2.name, "library_id": "short",
+         "technology": "illumina", "layout": "pe", "mate": "R2", "hybrid": "illumina"},
+        {"sample_id": "s", "path": ont.name, "library_id": "long",
+         "technology": "ont", "layout": "se", "hybrid": "ont"},
+    ])
+    conf = tmp_path / "input.yaml"
+    conf.write_text(f"reads_manifest: {manifest.name}\nannotators: []\n")
+    config = PipelineConfig.from_args(argparse.Namespace(
+        input_config=str(conf), input_dir=None, output_dir=str(tmp_path / "out"),
+    ))
+    assert [row["library_id"] for row in config.reads_rows] == ["short", "short", "long"]
+    assert config.reads_rows[0]["technology"] == "illumina"
+    assert config.reads_rows[2]["technology"] == "ont"
+    assert {row["sample_id"] for row in config.reads_rows} == {"s"}
+
+
+def test_reads_manifest_rejects_duplicate_incomplete_and_unknown(tmp_path):
+    read = _fastq(tmp_path / "s_R1.fastq")
+    conf = tmp_path / "input.yaml"
+
+    def load(rows):
+        manifest = _manifest(tmp_path, rows)
+        conf.write_text(f"reads_manifest: {manifest.name}\nannotators: []\n")
+        return PipelineConfig.from_args(argparse.Namespace(
+            input_config=str(conf), input_dir=None, output_dir=str(tmp_path / "out"),
+        ))
+
+    with pytest.raises(ValueError, match="duplicate path"):
+        load([
+            {"sample_id": "s", "path": read.name, "library_id": "a",
+             "technology": "illumina", "layout": "se"},
+            {"sample_id": "s", "path": read.name, "library_id": "b",
+             "technology": "ont", "layout": "se"},
+        ])
+    with pytest.raises(ValueError, match="needs both R1 and R2"):
+        load([{
+            "sample_id": "s", "path": read.name, "library_id": "short",
+            "technology": "illumina", "layout": "pe", "mate": "R1",
+        }])
+    with pytest.raises(ValueError, match="unknown hybrid"):
+        load([{
+            "sample_id": "s", "path": read.name, "library_id": "a",
+            "technology": "illumina", "layout": "se", "hybrid": "hic",
+        }])
+    with pytest.raises(ValueError, match="file not found"):
+        load([{
+            "sample_id": "s", "path": "missing.fastq", "library_id": "a",
+            "technology": "ont", "layout": "se",
+        }])
+    with pytest.raises(ValueError, match="technology is required"):
+        load([{
+            "sample_id": "s", "path": read.name, "library_id": "a",
+            "technology": "", "layout": "se",
+        }])
+
+
+def test_directory_input_without_a_manifest_is_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
+    reads = tmp_path / "reads"
+    reads.mkdir()
+    (reads / "sample_R1.fastq").write_text("@a\nA\n+\nI\n")
+    config = PipelineConfig.from_args(argparse.Namespace(
+        input_config=None, input_dir=str(reads), output_dir=str(tmp_path / "out"),
+    ))
+    assert config.reads_manifest is None
+    assert config.reads_rows is None
+    assert config.input_dir == str(reads.resolve())
