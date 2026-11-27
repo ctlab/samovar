@@ -271,6 +271,23 @@ def test_apply_missing_model(tmp_path, monkeypatch):
         apply_pipeline(reads, source, tmp_path / "out", full=False)
 
 
+def test_apply_copies_group_models_without_a_single_joblib(tmp_path, monkeypatch):
+    source = _source_pipeline(tmp_path, monkeypatch, with_model=False)
+    models = source / "reprofiled_annotations"
+    models.mkdir(parents=True)
+    (models / "trained_model_gut.joblib").write_bytes(b"group-model")
+    reads = tmp_path / "reads"
+    _fastq_pair(reads)
+    monkeypatch.setattr(
+        "samovar.apply.configured_steps",
+        lambda state, *, full: ["reprofile"],
+    )
+    apply_pipeline(reads, source, tmp_path / "out", full=False)
+    copied = tmp_path / "out" / "reprofiled_annotations" / "trained_model_gut.joblib"
+    assert copied.read_bytes() == b"group-model"
+    assert not (tmp_path / "out" / "reprofiled_annotations" / "trained_model.joblib").exists()
+
+
 @pytest.mark.optional
 def test_apply_full_missing_regenerated(tmp_path, monkeypatch):
     source = _source_pipeline(tmp_path, monkeypatch)

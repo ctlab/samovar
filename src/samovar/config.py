@@ -440,6 +440,45 @@ def load_reads_manifest(path: str) -> List[Dict[str, str]]:
     return rows
 
 
+def record_reads_manifest(output_dir: str, manifest_path: str, rows: List[Dict[str, str]]) -> List[str]:
+    """Store a copy and schema stamp. A changed hash clears read checkpoints.
+
+    A run without a previous stamp keeps its checkpoints.
+    """
+    import hashlib
+    import json
+
+    log = Path(output_dir) / ".log"
+    log.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(
+        json.dumps(rows, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+    stamp_path = log / "artifact_schemas.json"
+    previous: Dict[str, Any] = {}
+    old_hash = ""
+    if stamp_path.is_file():
+        try:
+            loaded = json.loads(stamp_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            loaded = {}
+        if isinstance(loaded, dict):
+            previous = loaded
+            old_hash = str((loaded.get("reads_manifest") or {}).get("sha256") or "")
+    cleared: List[str] = []
+    if old_hash and old_hash != digest:
+        from samovar.exec_control import CHECKPOINT_STEPS, clear_checkpoints
+
+        for name in CHECKPOINT_STEPS:
+            for marker in clear_checkpoints(output_dir, name):
+                cleared.append(marker.stem)
+            if name == "viz_reprofiled":
+                break
+    shutil.copy2(manifest_path, log / "reads_manifest.tsv")
+    previous["reads_manifest"] = {"schema_version": 1, "sha256": digest}
+    stamp_path.write_text(json.dumps(previous, indent=2) + "\n", encoding="utf-8")
+    return cleared
+
+
 @dataclass
 class AnnotatorConfig:
     run_name: str
@@ -2658,6 +2697,8 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
 
     try:
         config = PipelineConfig.from_args(args)
+        if config.reads_rows:
+            record_reads_manifest(config.output_dir, config.reads_manifest, config.reads_rows)
         from samovar.repeats import prepare_package
 
         repeat_manifest = prepare_package(config)

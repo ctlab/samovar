@@ -178,6 +178,14 @@ def load_pipeline_state(pipeline_dir: PathLike) -> PipelineState:
     )
 
 
+def saved_group_models(root: Path) -> List[Path]:
+    """Grouped reprofile models written beside a missing single joblib."""
+    folder = Path(root) / "reprofiled_annotations"
+    if not folder.is_dir():
+        return []
+    return sorted(path for path in folder.glob("trained_model_*.joblib") if path.is_file())
+
+
 def configured_steps(state: PipelineState, *, full: bool) -> List[str]:
     """Steps from setup through the source endpoint, minus apply-mode skips.
 
@@ -421,7 +429,8 @@ def apply_pipeline(
     has_profile_work = has_profilers or profile_model.is_file()
     if has_profilers and method != "none" and not full and not profile_model.is_file():
         raise MissingModelError(f"normal apply requires saved profile model {profile_model}")
-    if not full and has_read_tools and state.model_path is None:
+    group_models = saved_group_models(state.root)
+    if not full and has_read_tools and state.model_path is None and not group_models:
         raise MissingModelError(
             f"normal apply requires {state.root}/reprofiled_annotations/trained_model.joblib"
         )
@@ -571,13 +580,20 @@ def apply_pipeline(
                 applied_model = dest / "reprofiled_annotations" / "trained_model.joblib"
                 reference = regen_src
             elif has_read_tools:
-                apply_saved_reprofiler(
-                    model_path=state.model_path,
-                    initial_dir=dest / "initial_annotations",
-                    output_dir=dest / "reprofiled_annotations",
-                    config=repro_cfg,
-                )
-                applied_model = dest / "reprofiled_annotations" / "trained_model.joblib"
+                if state.model_path is not None:
+                    apply_saved_reprofiler(
+                        model_path=state.model_path,
+                        initial_dir=dest / "initial_annotations",
+                        output_dir=dest / "reprofiled_annotations",
+                        config=repro_cfg,
+                    )
+                    applied_model = dest / "reprofiled_annotations" / "trained_model.joblib"
+                else:
+                    copied = dest / "reprofiled_annotations"
+                    copied.mkdir(parents=True, exist_ok=True)
+                    for path in group_models:
+                        shutil.copy2(path, copied / path.name)
+                    applied_model = copied / group_models[0].name
             if has_profile_work:
                 from samovar.profile_pipeline import ground_truth, stage_annotation
                 from samovar.abundance_correctors import run_export

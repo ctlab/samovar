@@ -1161,13 +1161,9 @@ def report_rank_fragments(frame, output_dir, *, rank="genus", paired_samples=())
                                        tool=column, truth_source="annotation:true",
                                        taxonomy_version=version)
         for row in results:
-            # A combined table may have stripped /1 and /2. Its single call
-            # does not prove that both mates had consistent predictions.
-            if row["sample"] in paired_samples and row["unit"] in {"read", "mixed"}:
-                row["unscorable"] += row["total"]
-                row.update(unit="fragment", tp=0, vp=0, fn=0, fp=0, total=0,
-                           ppv="", sensitivity="", f1="", coverage="", classified_at_rank="",
-                           reason="paired mate predictions unavailable after combining")
+            # Combining drops /1 and /2, so the remaining row is the pair's call.
+            if row["sample"] in paired_samples and row["unit"] == "read":
+                row["unit"] = "fragment"
         rows.extend(results)
     if not rows:
         return

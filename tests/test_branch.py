@@ -14,8 +14,8 @@ from samovar.branch import (
     paths_produced_before,
     reject_annotator_change,
 )
-from samovar.config import setup_pipeline
-from samovar.exec_control import mark_done
+from samovar.config import record_reads_manifest, setup_pipeline
+from samovar.exec_control import listed_done, mark_done
 
 
 def _ns(**kwargs):
@@ -255,3 +255,30 @@ def test_branch_prepare_keeps_reordered_initial_over_external_config(tmp_path, m
     recorded = yaml.safe_load((dest / ".hydra" / "config.yaml").read_text())
     assert recorded["prepare"]["args"]["input_dir"] == str(dest / "initial")
     assert (dest / "initial" / "1_full_R1.fastq").read_text() == "@r\nGG\n+\nII\n"
+
+
+def test_branch_keeps_the_reads_manifest_copy(tmp_path):
+    src = _seed_run(tmp_path / "src")
+    manifest = tmp_path / "reads.tsv"
+    manifest.write_text("sample_id\tpath\ns\t/a\n", encoding="utf-8")
+    rows = [{"sample_id": "s", "path": "/a"}]
+    record_reads_manifest(src, manifest, rows)
+    dest = tmp_path / "branch"
+    copy_run_until(src, dest, "regenerate_tables")
+    assert (dest / ".log" / "reads_manifest.tsv").read_text(encoding="utf-8") == manifest.read_text(encoding="utf-8")
+    stamp = (dest / ".log" / "artifact_schemas.json").read_text(encoding="utf-8")
+    assert '"schema_version": 1' in stamp
+
+
+def test_changed_manifest_hash_clears_read_checkpoints_only_after_a_stamp(tmp_path):
+    run = tmp_path / "run"
+    mark_done(run, "setup_reads")
+    manifest = tmp_path / "reads.tsv"
+    manifest.write_text("sample_id\tpath\ns\t/a\n", encoding="utf-8")
+    rows = [{"sample_id": "s", "path": "/a"}]
+    record_reads_manifest(run, manifest, rows)
+    assert listed_done(run) == ["setup_reads"]
+    record_reads_manifest(run, manifest, rows)
+    assert listed_done(run) == ["setup_reads"]
+    record_reads_manifest(run, manifest, [{"sample_id": "s", "path": "/b"}])
+    assert listed_done(run) == []

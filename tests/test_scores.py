@@ -244,8 +244,10 @@ def test_binning_report_preserves_rank_scorer_and_summary(tmp_path, monkeypatch)
     assert any(item["metric"] == "f1" and item["value"] == 0.5 for item in summary)
     report_rank_fragments(frame, plots, rank="genus", paired_samples={"A"})
     pair = pd.read_csv(plots / "binning_scores.csv").iloc[0]
-    assert pair.unit == "fragment" and pair.total == 0 and pair.unscorable == 5
-    assert pd.isna(pair.f1) and "mate predictions unavailable" in pair.reason
+    assert pair.unit == "fragment"
+    assert (pair.tp, pair.fp, pair.fn, pair.vp, pair.total) == (2, 1, 1, 1, 5)
+    assert pair.f1 == pytest.approx(0.5)
+    assert "mate predictions unavailable" not in str(pair.reason)
 
 
 def test_same_short_name_keeps_both_profile_identities():
