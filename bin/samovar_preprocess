@@ -284,8 +284,9 @@ def main():
         dest='resampling_config',
         default=None,
         help=(
-            'YAML resampling block with tool, matching columns and explicit '
-            'initial-sample groups. The selected whole-row CAT trains the reprofiler.'
+            'YAML resampling block: columns, and groups with mode separate or '
+            'finetune. taxID_<tool>_<n> and taxID_<tool> name one single-database '
+            'column. The selected whole-row CAT trains the reprofiler.'
         ),
     )
     parser.add_argument(

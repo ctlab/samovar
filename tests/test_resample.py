@@ -1,3 +1,4 @@
+import argparse
 import json
 
 import pandas as pd
@@ -28,6 +29,95 @@ def _cats():
         }
     )
     return initial, regenerated
+
+
+def test_indexed_and_plain_tax_columns_match():
+    initial = pd.DataFrame({
+        "sample": ["s1", "s2"],
+        "taxID_kraken2_0": [562, 9606],
+        "taxID_kaiju_1": [562, 4932],
+        "feat_kraken2_0_length": [10, 12],
+        "true": [562, 9606],
+    })
+    regenerated = pd.DataFrame({
+        "sample": ["s9"],
+        "taxID_kraken2": [562],
+        "taxID_kaiju": [4932],
+        "feat_kraken2_0_length": [8],
+        "true": [562],
+    })
+    result = resample_cat(
+        initial,
+        {"regenerated": regenerated},
+        [{"name": "all", "samples": ["s1"], "dataset": "regenerated", "size": 1}],
+        columns=["taxID_kraken2_0", "taxID_kaiju_1", "feat_kraken2_0_length"],
+        seed=0,
+    )
+    row = result["table"].iloc[0]
+    assert int(row["taxid_kraken2"]) == 562
+    assert int(row["taxid_kaiju"]) == 4932
+    assert set(result["columns"]) == {"taxid_kraken2", "taxid_kaiju", "feat_kraken2_0_length"}
+
+
+def test_prepare_accepts_either_tax_column_name_when_tables_exist(tmp_path):
+    from samovar.config import PipelineConfig
+
+    out = tmp_path / "out"
+    initial = out / "initial_annotations"
+    regenerated = out / "regenerated_annotations"
+    initial.mkdir(parents=True)
+    regenerated.mkdir()
+    header = "seq,sample,taxID_kraken2_0,taxID_kaiju_1,feat_kraken2_0_length\n"
+    (initial / "combined_annotation_table.csv").write_text(header)
+    (regenerated / "combined_annotation_table.csv").write_text(
+        "seq,sample,taxID_kraken2,taxID_kaiju,feat_kraken2_0_length\n"
+    )
+    path = tmp_path / "rs.yaml"
+    path.write_text(
+        "columns: [taxID_kraken2_0, taxID_kaiju_1]\n"
+        "groups:\n"
+        "  - {name: all, samples: [s1], dataset: regenerated, size: 1, mode: separate}\n",
+        encoding="utf-8",
+    )
+    config = PipelineConfig.from_args(argparse.Namespace(
+        input_config=None,
+        input_dir=str(tmp_path),
+        output_dir=str(out),
+        resampling_config=str(path),
+    ))
+    assert config.resampling["columns"] == ["taxID_kraken2_0", "taxID_kaiju_1"]
+    path.write_text(
+        "columns: [taxID_missing]\n"
+        "groups:\n"
+        "  - {name: all, samples: [s1], dataset: regenerated, size: 1, mode: separate}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="missing matching columns"):
+        PipelineConfig.from_args(argparse.Namespace(
+            input_config=None,
+            input_dir=str(tmp_path),
+            output_dir=str(out),
+            resampling_config=str(path),
+        ))
+
+
+def test_prepare_rejects_a_resampling_block_without_mode(tmp_path):
+    from samovar.config import PipelineConfig
+
+    path = tmp_path / "rs.yaml"
+    path.write_text(
+        "columns: [taxID_kraken2]\n"
+        "groups:\n"
+        "  - {name: all, samples: [s1], dataset: regenerated, size: 1}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="mode separate or finetune"):
+        PipelineConfig.from_args(argparse.Namespace(
+            input_config=None,
+            input_dir=str(tmp_path),
+            output_dir=str(tmp_path / "out"),
+            resampling_config=str(path),
+        ))
 
 
 def test_two_groups_share_one_dataset_and_keep_whole_rows():

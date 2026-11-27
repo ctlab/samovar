@@ -26,6 +26,7 @@ def test_pipeline_config_from_args_file(tmp_path):
           samples: [sample]
           dataset: regenerated
           size: 10
+          mode: separate
     annotators:
       - run_name: k2-test
         type: kraken2

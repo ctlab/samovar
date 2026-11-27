@@ -845,6 +845,9 @@ class PipelineConfig:
                     if not isinstance(yaml_resampling, dict):
                         raise ValueError("resampling must be a mapping")
                     config.resampling = dict(yaml_resampling)
+                    from samovar.resample import validate_resampling_block
+
+                    validate_resampling_block(config.resampling, config.output_dir)
                 yaml_fi = (
                     input_config.get("feature_importance")
                     or input_config.get("feature-importance")
@@ -1414,6 +1417,9 @@ class PipelineConfig:
             if not isinstance(block, dict):
                 raise ValueError("--resampling-config must contain a YAML mapping")
             config.resampling = dict(block.get("resampling", block))
+            from samovar.resample import validate_resampling_block
+
+            validate_resampling_block(config.resampling, config.output_dir)
         if getattr(args, "no_gpu", False):
             config.gpu = False
             config.no_gpu = True

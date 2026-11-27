@@ -30,6 +30,60 @@ def _frame(table: Any) -> pd.DataFrame:
     raise TypeError("CAT resampling expects a DataFrame")
 
 
+def _canonical_columns(columns) -> list[str]:
+    """Map ``taxID_<tool>_<n>`` onto the single-database name ML already uses."""
+    from samovar.reprofiling import standardize_taxid_columns
+
+    probe = standardize_taxid_columns(pd.DataFrame(columns=[str(column) for column in columns]))
+    return [str(column) for column in probe.columns]
+
+
+def validate_resampling_block(block: Mapping[str, Any], output_dir=None) -> None:
+    """Reject a resampling block that prepare cannot execute."""
+    if not isinstance(block, Mapping):
+        raise ValueError("--resampling-config must contain a YAML mapping")
+    columns = block.get("columns")
+    if not isinstance(columns, list) or not [str(column).strip() for column in columns]:
+        raise ValueError("resampling needs at least one matching column")
+    groups = block.get("groups")
+    if not isinstance(groups, list) or not groups:
+        raise ValueError("resampling needs at least one group")
+    default = str(block.get("mode") or "").strip().lower()
+    for group in groups:
+        if not isinstance(group, Mapping):
+            raise ValueError("resampling groups must be mappings")
+        name = str(group.get("name") or "").strip()
+        mode = str(group.get("mode") or default).strip().lower()
+        if mode not in {"separate", "finetune"}:
+            raise ValueError(f"group {name or '?'} needs mode separate or finetune")
+        if not name:
+            raise ValueError("resampling groups need non-empty names")
+        if not group.get("samples"):
+            raise ValueError(f"group {name} needs at least one initial sample")
+        if not str(group.get("dataset") or "").strip():
+            raise ValueError(f"group {name} needs a regenerated dataset")
+    if output_dir is None:
+        return
+    root = Path(output_dir)
+    initial_path = root / "initial_annotations" / "combined_annotation_table.csv"
+    regenerated_path = root / "regenerated_annotations" / "combined_annotation_table.csv"
+    if not initial_path.is_file() or not regenerated_path.is_file():
+        return
+    initial = pd.read_csv(initial_path, nrows=0)
+    regenerated = pd.read_csv(regenerated_path, nrows=0)
+    _validate_columns(
+        standardize_frames(initial)[0],
+        {"regenerated": standardize_frames(regenerated)[0]},
+        _canonical_columns(columns),
+    )
+
+
+def standardize_frames(*frames: pd.DataFrame) -> list[pd.DataFrame]:
+    from samovar.reprofiling import standardize_taxid_columns
+
+    return [standardize_taxid_columns(frame) for frame in frames]
+
+
 def _validate_columns(initial: pd.DataFrame, pools: Mapping[str, pd.DataFrame], columns) -> list[str]:
     selected = [str(column) for column in columns]
     if not selected:
@@ -239,7 +293,10 @@ def resample_cat(
         raise ValueError("initial CAT needs a sample column")
     known = set(initial_cat["sample"].astype(str))
     pools = {str(name): _frame(table) for name, table in regenerated.items()}
-    selected = _validate_columns(initial_cat, pools, columns)
+    selected = _canonical_columns(columns)
+    initial_cat, *pool_frames = standardize_frames(initial_cat, *pools.values())
+    pools = dict(zip(pools, pool_frames))
+    selected = _validate_columns(initial_cat, pools, selected)
     rng = np.random.default_rng(int(seed))
     parts = []
     reports = []
