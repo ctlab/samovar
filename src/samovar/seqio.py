@@ -14,7 +14,7 @@ import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator, List, Optional, Sequence, TextIO, Tuple, Union
+from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, TextIO, Tuple, Union
 
 PathLike = Union[str, os.PathLike]
 
@@ -630,6 +630,40 @@ def _unmarked_is_interleaved(path: Path, sample: str) -> bool:
         if not (saw_one and saw_two) and not named:
             return False
     return count > 0 and (saw_one and saw_two or named)
+
+
+def stage_manifest_rows(rows: Sequence[Mapping[str, str]], dest_dir: PathLike) -> List[Path]:
+    """Stage manifest files by sample and library. The source name is not kept."""
+    dest = as_path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    written: List[Path] = []
+    for row in rows:
+        src = Path(str(row["path"]))
+        ext = ".fastq.gz" if src.name.endswith(".gz") else ".fastq"
+        stem = f"{row['sample_id']}__{row['library_id']}"
+        layout = str(row.get("layout") or "")
+        if layout == "interleaved":
+            staged = _link_staged_read(src, dest / f"{stem}{ext}")
+            written.extend(_publish_interleaved_pairs(staged, dest, stem))
+            continue
+        if layout == "pe":
+            name = f"{stem}_{row['mate']}{ext}"
+        else:
+            name = f"{stem}{ext}"
+        written.append(_link_staged_read(src, dest / name))
+    return written
+
+
+def _link_staged_read(src: Path, dest: Path) -> Path:
+    if dest.exists() or dest.is_symlink():
+        if dest.resolve() == src.resolve():
+            return dest
+        raise ValueError(f"refusing to replace staged read {dest}")
+    try:
+        dest.symlink_to(src.resolve())
+    except OSError:
+        shutil.copy2(src, dest)
+    return dest
 
 
 def deinterleave_unmarked(directory: PathLike) -> List[Path]:

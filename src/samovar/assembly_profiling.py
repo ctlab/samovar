@@ -1002,6 +1002,39 @@ def run_binner(
     return mag_dir
 
 
+def _checkm2_dmnd(db: str) -> str:
+    """Diamond file for CheckM2. The assembly ``-d`` path is GTDB, not this DB."""
+
+    def from_path(raw: str) -> str:
+        if not raw:
+            return ""
+        path = Path(raw).expanduser()
+        if path.is_file() and path.suffix == ".dmnd":
+            return str(path)
+        if path.is_dir():
+            hits = sorted(path.rglob("*.dmnd"))
+            if hits:
+                return str(hits[0])
+        return ""
+
+    found = from_path(db) or from_path(os.environ.get("CHECKM2DB", ""))
+    if found:
+        return found
+    try:
+        from samovar.paths import load_config
+
+        group = (load_config().get("databases") or {}).get("checkm2") or {}
+    except Exception:
+        return ""
+    if isinstance(group, dict):
+        for item in group.values():
+            if isinstance(item, dict):
+                found = from_path(str(item.get("path") or ""))
+                if found:
+                    return found
+    return ""
+
+
 def run_checkm2(
     mag_dir: str,
     dest: str,
@@ -1011,6 +1044,11 @@ def run_checkm2(
 ) -> Path:
     threads = _job_threads("checkm2", threads)
     out = as_path(dest)
+    fastas = _iter_mag_fastas(as_path(mag_dir))
+    if not fastas:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("mag_id\tcompleteness\tcontamination\tscore\n", encoding="utf-8")
+        return out
     work = out.parent / (out.stem + ".checkm2")
     work.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -1024,10 +1062,27 @@ def run_checkm2(
         str(int(threads)),
         "--force",
     ]
-    if db:
-        cmd.extend(["--database_path", str(db)])
-    cmd.extend(str(x) for x in (extra or []))
-    _run(cmd)
+    extras = [str(x) for x in (extra or [])]
+    if "-x" not in extras and "--extension" not in extras:
+        extras = ["-x", fastas[0].suffix] + extras
+    diamond = _checkm2_dmnd(db)
+    if diamond and "--database_path" not in extras:
+        extras.extend(["--database_path", diamond])
+    cmd.extend(extras)
+    try:
+        _run(cmd)
+    except subprocess.CalledProcessError:
+        log = work / "checkm2.log"
+        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        if "No DIAMOND annotation was generated" not in text:
+            raise
+        # A short smoke assembly can call genes and still have no KO hit.
+        # CheckM2 treats that as fatal; the catalog only needs a score row.
+        rows = ["mag_id\tcompleteness\tcontamination\tscore"]
+        rows.extend(f"{fasta.stem}\t0\t0\t0" for fasta in fastas)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return out
     report = work / "quality_report.tsv"
     out.parent.mkdir(parents=True, exist_ok=True)
     rows = ["mag_id\tcompleteness\tcontamination\tscore"]

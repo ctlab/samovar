@@ -191,6 +191,14 @@ def _finish_generate(args, result):
         from samovar.repro import _argv_from_args, _ns_to_dict, record_stage
 
         extra = {}
+        try:
+            from samovar.config import write_generated_reads_manifest
+
+            written = write_generated_reads_manifest(getattr(args, "output_dir", "") or "", args)
+            if written:
+                extra["reads_manifest"] = written
+        except Exception as exc:
+            print(f"Warning: could not write reads manifest: {exc}", file=sys.stderr)
         locked = _genomes_from_generate_yaml((result or {}).get("config"))
         if locked.get("used"):
             extra["genomes"] = locked
@@ -407,6 +415,7 @@ export SAMOVAR_MEM_MB="$MEM_MB"
     --directory "$out_dir" \\
     --cores {self.cores} \\
     --resources mem_mb=$MEM_MB
+"$PYTHON_PATH" -c 'import sys; from samovar.config import write_generated_reads_manifest; write_generated_reads_manifest(sys.argv[1], type("A", (), {{"reads_generator": {self.reads_generator!r}, "simulator": {getattr(self, "simulator", "iss")!r}, "seed": {self.seed!r}, "model": {self.model!r}}})())' "$out_dir"
 """
         
         with open(pipeline_path, 'w') as f:

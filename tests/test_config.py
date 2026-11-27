@@ -816,6 +816,60 @@ def test_reads_manifest_rejects_duplicate_incomplete_and_unknown(tmp_path):
         }])
 
 
+def test_generated_manifest_roundtrip_and_stage(tmp_path):
+    from samovar.config import load_reads_manifest, write_generated_reads_manifest
+    from samovar.seqio import stage_manifest_rows
+
+    initial = tmp_path / "initial"
+    initial.mkdir()
+    (initial / "1_illumina_R1.fastq").write_text("@a/1\nAA\n+\nII\n")
+    (initial / "1_illumina_R2.fastq").write_text("@a/2\nTT\n+\nII\n")
+    (initial / "1_ont.fastq").write_text("@long\nGGG\n+\nIII\n")
+    (initial / "half_R1.fastq").write_text("@x\nA\n+\nI\n")
+    args = argparse.Namespace(reads_generator="iss", seed=7, model="hiseq")
+    written = write_generated_reads_manifest(str(tmp_path), args)
+    assert written == str(tmp_path / "reads_manifest.tsv")
+    assert write_generated_reads_manifest(str(tmp_path), args) is None
+    rows = load_reads_manifest(written)
+    assert [(row["sample_id"], row["library_id"], row["layout"], row["mate"]) for row in rows] == [
+        ("1", "illumina", "pe", "R1"),
+        ("1", "illumina", "pe", "R2"),
+        ("1", "ont", "se", ""),
+    ]
+    assert rows[0]["settings"] == "seed=7;model=hiseq"
+    assert "half" not in {row["sample_id"] for row in rows}
+    staged = tmp_path / "staged"
+    mixed = tmp_path / "mix.fastq"
+    mixed.write_text("@a/1\nAA\n+\nII\n@a/2\nTT\n+\nII\n")
+    stage_manifest_rows([
+        *rows,
+        {"sample_id": "s", "library_id": "short", "path": str(mixed), "layout": "interleaved", "mate": ""},
+    ], staged)
+    assert (staged / "1__illumina_R1.fastq").is_symlink()
+    assert (staged / "1__ont.fastq").is_symlink()
+    assert (staged / "s__short_R1.fastq").read_text().splitlines()[0] == "@a/1"
+    assert (staged / "s__short_R2.fastq").read_text().splitlines()[0] == "@a/2"
+    assert not (staged / "mix.fastq").exists()
+    assert mixed.read_text().startswith("@a/1")
+    config = PipelineConfig.from_args(argparse.Namespace(
+        input_config=None, input_dir=None, output_dir=str(tmp_path),
+    ))
+    assert config.reads_rows[0]["sample_id"] == "1"
+    script = Path(config.generate_pipeline(str(tmp_path / "pipe"))).read_text()
+    assert "stage_manifest_rows" in script
+    assert "link_or_copy_reads" not in script
+    from samovar.repro import record_stage
+    from omegaconf import OmegaConf
+    record_stage("prepare", str(tmp_path / "pipe"), extra={"reads_manifest": written})
+    saved = OmegaConf.to_container(OmegaConf.load(tmp_path / "pipe" / ".hydra" / "config.yaml"), resolve=False)
+    assert saved["reads_manifest"] == written
+    from samovar.iss_config import ISSTestConfig
+    iss = ISSTestConfig(
+        genome_dir="", output_dir=str(tmp_path / "iss"), host_genome="", n_samples=1,
+    ).generate_pipeline(str(tmp_path / "iss"))
+    assert "write_generated_reads_manifest" in Path(iss).read_text()
+
+
 def test_directory_input_without_a_manifest_is_unchanged(tmp_path, monkeypatch):
     monkeypatch.setenv("SAMOVAR_CONFIG", str(tmp_path / "config.json"))
     reads = tmp_path / "reads"

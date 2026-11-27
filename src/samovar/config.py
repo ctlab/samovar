@@ -369,7 +369,7 @@ READS_MANIFEST_COLUMNS = (
     "generation_id",
     "repeat_id",
 )
-READS_MANIFEST_OPTIONAL = ("pool", "hybrid")
+READS_MANIFEST_OPTIONAL = ("pool", "hybrid", "settings")
 _READS_LAYOUTS = {"se", "pe", "interleaved"}
 _READS_HYBRID = {"illumina", "ont", "pacbio", "bgi", "mgi"}
 
@@ -392,7 +392,9 @@ def load_reads_manifest(path: str) -> List[Dict[str, str]]:
         extra = header[len(required) :]
         allowed = [name for name in READS_MANIFEST_OPTIONAL if name in extra]
         if extra != allowed:
-            raise ValueError("reads manifest version 1 optional columns are pool, hybrid")
+            raise ValueError(
+                "reads manifest version 1 optional columns are pool, hybrid, settings"
+            )
         rows: List[Dict[str, str]] = []
         seen: Dict[str, int] = {}
         for line_no, raw in enumerate(reader, start=2):
@@ -438,6 +440,100 @@ def load_reads_manifest(path: str) -> List[Dict[str, str]]:
                 f"reads manifest pe library {library_id!r} of sample {sample_id!r} needs both R1 and R2"
             )
     return rows
+
+
+def write_reads_manifest(path: str, rows: List[Dict[str, str]]) -> str:
+    """Write schema version 1. Empty pool, hybrid, and settings cells are kept."""
+    import csv
+
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    header = list(READS_MANIFEST_COLUMNS) + list(READS_MANIFEST_OPTIONAL)
+    with dest.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=header, delimiter="\t", extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in header})
+    return str(dest)
+
+
+def write_generated_reads_manifest(output_dir: str, args: Any) -> Optional[str]:
+    """Record FASTQ this generate has already produced. Leave an existing file."""
+    from samovar.seqio import (
+        FASTQ_R1_SUFFIXES,
+        _CAMISIM_TECH_TAIL,
+        find_fastq_mate,
+        list_r1_files,
+        sample_name_from_r1,
+    )
+
+    root = Path(output_dir)
+    dest = root / "reads_manifest.tsv"
+    if dest.is_file():
+        return None
+    directory = root / "initial"
+    if not directory.is_dir() or not list_r1_files(directory):
+        directory = root
+    if not directory.is_dir():
+        return None
+    generator = str(
+        getattr(args, "reads_generator", None)
+        or getattr(args, "simulator", None)
+        or "iss"
+    ).strip().lower()
+    default_tech = {
+        "ont": "ont",
+        "nanosim": "ont",
+        "nanosim3": "ont",
+        "pacbio": "pacbio",
+        "bgi": "bgi",
+        "mgi": "mgi",
+    }.get(generator, "illumina")
+    parts = []
+    seed = getattr(args, "seed", None)
+    if seed not in (None, ""):
+        parts.append(f"seed={seed}")
+    model = getattr(args, "model", None)
+    if model not in (None, ""):
+        parts.append(f"model={model}")
+    settings = ";".join(parts)
+    rows: List[Dict[str, str]] = []
+    for path in list_r1_files(directory):
+        sample = sample_name_from_r1(path)
+        technology = default_tech
+        library = default_tech
+        tail = _CAMISIM_TECH_TAIL.search(sample)
+        if tail and tail.group(1).lower() in _READS_HYBRID:
+            technology = tail.group(1).lower()
+            library = technology
+            sample = sample[: tail.start()]
+        mate = find_fastq_mate(directory, sample_name_from_r1(path), "R2")
+        paired = path.name.endswith(FASTQ_R1_SUFFIXES)
+        if paired and mate is None:
+            continue
+        common = {
+            "sample_id": sample,
+            "library_id": library,
+            "technology": technology,
+            "generation_id": generator or "iss",
+            "repeat_id": "",
+            "pool": "",
+            "hybrid": technology if technology != default_tech else "",
+            "settings": settings,
+        }
+        if paired:
+            for label, src in (("R1", path), ("R2", mate)):
+                rows.append({**common, "path": str(src.resolve()), "layout": "pe", "mate": label})
+        else:
+            rows.append({
+                **common,
+                "path": str(path.resolve()),
+                "layout": "se",
+                "mate": "",
+            })
+    if not rows:
+        return None
+    return write_reads_manifest(str(dest), rows)
 
 
 def record_reads_manifest(output_dir: str, manifest_path: str, rows: List[Dict[str, str]]) -> List[str]:
@@ -1076,9 +1172,13 @@ class PipelineConfig:
                 config.profile_references = found
         if getattr(args, "_use_branch_initial", False):
             config.input_dir = str((Path(config.output_dir) / "initial").resolve())
+        if not config.reads_manifest:
+            generated = Path(config.output_dir) / "reads_manifest.tsv"
+            if generated.is_file():
+                config.reads_manifest = str(generated)
         if config.reads_manifest:
             config.reads_rows = load_reads_manifest(config.reads_manifest)
-        if config.input_dir:
+        if config.input_dir and not config.reads_rows:
             from samovar.seqio import link_or_copy_reads
 
             link_or_copy_reads(config.input_dir, Path(config.output_dir) / "initial", validate_only=True)
@@ -2150,6 +2250,24 @@ class PipelineConfig:
             f"    {tos}"
         )
 
+    def _stage_reads_line(self) -> str:
+        if self.reads_rows and self.reads_manifest:
+            quoted = shlex.quote(str(self.reads_manifest))
+            return (
+                "\"$PYTHON_PATH\" -c 'import sys; from samovar.config import load_reads_manifest; "
+                "from samovar.seqio import stage_manifest_rows; "
+                "stage_manifest_rows(load_reads_manifest(sys.argv[1]), sys.argv[2])' "
+                f"{quoted} \"$out_dir/initial\"\n"
+            )
+        return """if [ -n "$SAMOVAR_INPUT_DIR" ] && [ -d "$SAMOVAR_INPUT_DIR" ]; then
+    src_dir=$(readlink -f "$SAMOVAR_INPUT_DIR" || realpath "$SAMOVAR_INPUT_DIR")
+    dst_dir=$(readlink -f "$out_dir/initial" || realpath "$out_dir/initial")
+    if [ "$src_dir" != "$dst_dir" ]; then
+        "$PYTHON_PATH" -c 'import sys; from samovar.seqio import link_or_copy_reads; link_or_copy_reads(sys.argv[1], sys.argv[2])' "$src_dir" "$dst_dir"
+    fi
+fi
+"""
+
     def _deinterleave_line(self) -> str:
         line = (
             "\"$PYTHON_PATH\" -c 'import sys; from samovar.seqio import deinterleave_unmarked; "
@@ -2352,13 +2470,7 @@ mkdir -p "$XDG_CACHE_HOME"
             "setup_reads",
             f"""# Link/copy source reads into output initial/ when input_dir is provided
 # and is not already the destination (generate→preprocess sets input_dir=initial).
-if [ -n "$SAMOVAR_INPUT_DIR" ] && [ -d "$SAMOVAR_INPUT_DIR" ]; then
-    src_dir=$(readlink -f "$SAMOVAR_INPUT_DIR" || realpath "$SAMOVAR_INPUT_DIR")
-    dst_dir=$(readlink -f "$out_dir/initial" || realpath "$out_dir/initial")
-    if [ "$src_dir" != "$dst_dir" ]; then
-        "$PYTHON_PATH" -c 'import sys; from samovar.seqio import link_or_copy_reads; link_or_copy_reads(sys.argv[1], sys.argv[2])' "$src_dir" "$dst_dir"
-    fi
-fi
+{self._stage_reads_line()}
 {self._deinterleave_line()}
 "$PYTHON_PATH" -c 'import sys; from samovar.seqio import normalize_single_end_read_ids; normalize_single_end_read_ids(sys.argv[1])' "$out_dir/initial"
 "$PYTHON_PATH" -c 'import sys; from samovar.seqio import validate_fastq_directory; validate_fastq_directory(sys.argv[1])' "$out_dir/initial"
@@ -2709,6 +2821,9 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
         config = PipelineConfig.from_args(args)
         if config.reads_rows:
             record_reads_manifest(config.output_dir, config.reads_manifest, config.reads_rows)
+            from samovar.seqio import stage_manifest_rows
+
+            stage_manifest_rows(config.reads_rows, Path(config.output_dir) / "initial")
         from samovar.repeats import prepare_package
 
         repeat_manifest = prepare_package(config)
@@ -2792,7 +2907,11 @@ def setup_pipeline(args: Optional[argparse.Namespace] = None) -> Dict[str, str]:
             config.output_dir,
             args=args,
             argv=record_argv,
-            extra={"viz": config.viz, "multiqc": config.multiqc},
+            extra={
+                "viz": config.viz,
+                "multiqc": config.multiqc,
+                "reads_manifest": config.reads_manifest,
+            },
         )
     except Exception as exc:
         print(f"Warning: could not write Hydra snapshot: {exc}", file=sys.stderr)

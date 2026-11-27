@@ -996,6 +996,7 @@ out_dir="{base}"
 mkdir -p "$out_dir"
 
 "$PYTHON_PATH" -c "from samovar.reads_generators import run_generate_from_yaml; run_generate_from_yaml(r'{config_path}')"
+"$PYTHON_PATH" -c "import sys, yaml; from pathlib import Path; from samovar.config import write_generated_reads_manifest; data = yaml.safe_load(Path(r'{config_path}').read_text()) or {{}}; write_generated_reads_manifest(sys.argv[1], type('A', (), data)())" "$out_dir"
 """
     pipeline_path.write_text(pipeline_content, encoding="utf-8")
     _ = cores
