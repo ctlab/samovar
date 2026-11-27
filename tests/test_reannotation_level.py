@@ -187,3 +187,27 @@ def test_harvest_skips_cataloged_genomes_and_writes_once(tmp_path, monkeypatch):
     assert len(writes) == 1
     assert harvest_run_genomes(tmp_path / "run") == 0
     assert len(writes) == 1
+
+
+def test_plain_fasta_is_not_staged_as_fake_gzip(tmp_path, monkeypatch):
+    from samovar.genome_index import stage_into_dir
+    from samovar.seqio import open_text
+
+    dest = tmp_path / ".genomes"
+    gzipped = tmp_path / "562.fa.gz"
+    with gzip.open(gzipped, "wt") as handle:
+        handle.write(">g\nACGT\n")
+    gz_view = stage_into_dir(gzipped, dest)
+    assert gz_view.name == "562.fa.gz"
+    assert gz_view.read_bytes()[:2] == b"\x1f\x8b"
+
+    monkeypatch.setattr(
+        "samovar.genome_cache.is_bundled_test_genomes_path", lambda path: True
+    )
+    src = tmp_path / "9606.fna"
+    src.write_text(">H\nACGT\n")
+    placed = stage_into_dir(src, dest)
+    assert placed.name == "9606.fna"
+    assert placed.is_symlink()
+    assert not (dest / "9606.fa.gz").exists()
+    assert open_text(placed).read().startswith(">H")

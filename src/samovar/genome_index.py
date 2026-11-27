@@ -442,20 +442,41 @@ def _write_data_map(data: Dict[str, List[str]]) -> None:
     update_config({"genomes": block})
 
 
+def _gzip_magic(path: Path) -> bool:
+    try:
+        with path.open("rb") as raw:
+            return raw.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
 def stage_into_dir(src: PathLike, dest_dir: PathLike) -> Path:
-    """Hardlink (fallback: copy) a processed FASTA into ``dest_dir`` under ``{acc}.fa.gz``."""
+    """Link a genome into ``dest_dir``.
+
+    A real gzip file is named ``{acc}.fa.gz``. A plain FASTA keeps its own
+    suffix so a ``.gz`` name is never a copy of uncompressed text.
+    """
     src_path = ensure_gzip_fasta(_as_path(src))
     dest = _as_path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
-    target = dest / processed_filename(accession_from_fasta(src_path))
-    try:
-        same = src_path.resolve() == target.resolve()
-    except OSError:
-        same = str(src_path) == str(target)
-    if same:
+    acc = accession_from_fasta(src_path)
+    if _gzip_magic(src_path):
+        target = dest / processed_filename(acc)
+        try:
+            same = src_path.resolve() == target.resolve()
+        except OSError:
+            same = str(src_path) == str(target)
+        if same:
+            return target
+        publish_genome_file(src_path, target)
         return target
-    publish_genome_file(src_path, target)
-    return target
+    suffixes = list(src_path.suffixes)
+    if suffixes and suffixes[-1].lower() == ".gz":
+        suffixes = suffixes[:-1]
+    name = f"{acc}{''.join(suffixes)}" if suffixes else f"{acc}.fna"
+    from samovar.genome_cache import place_genome
+
+    return place_genome(src_path, dest, acc, dest_name=name)
 
 
 def numeric_taxid_for(ident: str, cfg: Optional[Dict[str, Any]] = None) -> str:
