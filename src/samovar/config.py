@@ -371,7 +371,7 @@ READS_MANIFEST_COLUMNS = (
 )
 READS_MANIFEST_OPTIONAL = ("pool", "hybrid", "settings")
 _READS_LAYOUTS = {"se", "pe", "interleaved"}
-_READS_HYBRID = {"illumina", "ont", "pacbio", "bgi", "mgi"}
+_READS_HYBRID = {"illumina", "ont", "pacbio", "bgi", "mgi", "1", "na", "selected"}
 
 
 def load_reads_manifest(path: str) -> List[Dict[str, str]]:

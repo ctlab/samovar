@@ -1069,15 +1069,112 @@ def sibling_candidates(path: PathLike, taxid: str, suffixes: Sequence[str]) -> L
     return ordered
 
 
+_SHORT_ROLES = {"illumina", "bgi", "mgi", "art", "wgsim", "short:pe", "short:se"}
+_LONG_ROLES = {"ont", "pacbio", "nanosim", "nanosim3", "long:ont", "long:pacbio"}
+
+
+def _manifest_role(row: Mapping) -> str:
+    hybrid = str(row.get("hybrid") or "").strip().lower()
+    if hybrid in {"", "na", "1", "selected"}:
+        return str(row.get("technology") or "").strip().lower()
+    return hybrid
+
+
+def _anchor_manifest_rows(manifest: Path, anchor: Path) -> list:
+    """Resolve a copied manifest whose relative paths are not beside the copy."""
+    import csv
+
+    target = anchor.resolve()
+    with manifest.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    root = None
+    for row in rows:
+        raw = Path((row.get("path") or "").strip())
+        if raw.parts and target.parts[-len(raw.parts):] == raw.parts:
+            root = Path(*target.parts[: -len(raw.parts)])
+            break
+    if root is None:
+        return []
+    located = []
+    for row in rows:
+        raw = Path((row.get("path") or "").strip())
+        found = raw if raw.is_absolute() else root / raw
+        if not found.is_file():
+            raise ValueError(f"reads manifest file not found: {found}")
+        copied = {key: (value or "").strip() for key, value in row.items()}
+        copied["path"] = str(found.resolve())
+        located.append(copied)
+    return located
+
+
+def manifest_sample_rows(r1: Path) -> Optional[list]:
+    """Rows for this file's sample, or None when no manifest names the file."""
+    run = r1.parent.parent if r1.parent.name == "initial" else r1.parent
+    manifest = next(
+        (
+            candidate
+            for candidate in (run / "reads_manifest.tsv", run / ".log" / "reads_manifest.tsv")
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if manifest is None:
+        return None
+    from samovar.config import load_reads_manifest
+
+    try:
+        rows = load_reads_manifest(str(manifest))
+    except ValueError as exc:
+        if "file not found" not in str(exc):
+            raise
+        rows = _anchor_manifest_rows(manifest, r1)
+    resolved = r1.resolve()
+    sample = next(
+        (row["sample_id"] for row in rows if Path(row["path"]).resolve() == resolved),
+        "",
+    )
+    if not sample:
+        return None
+    chosen = [row for row in rows if row["sample_id"] == sample]
+    pools = {str(row.get("pool") or "").strip() for row in chosen}
+    if "" in pools and len(pools) > 1:
+        raise ValueError("mixed pooled and unpooled reads cannot be routed")
+    if any(str(row.get("hybrid") or "").strip() for row in chosen):
+        chosen = [
+            row
+            for row in chosen
+            if str(row.get("hybrid") or "").strip().lower() not in {"", "na"}
+        ]
+    return chosen
+
+
 @contextmanager
 def assembly_read_libraries(r1: PathLike, r2: PathLike = ""):
     """Yield (short R1, short R2, ONT, typed) without guessing lost pairing.
 
     Generated hybrids retain libraries beside the canonical classifier input.
     Older flattened inputs can only recover short reads as an unpaired library.
-    Untagged inputs retain their caller's existing interpretation.
+    Untagged inputs retain their caller's existing interpretation. A reads
+    manifest selects libraries by technology and hybrid columns.
     """
     r1 = as_path(r1)
+    chosen = manifest_sample_rows(r1)
+    if chosen is not None:
+        shorts: dict = {}
+        longs = []
+        for row in chosen:
+            role = _manifest_role(row)
+            if role in _LONG_ROLES:
+                longs.append(row["path"])
+            elif role in _SHORT_ROLES:
+                shorts.setdefault(row.get("library_id") or "", {})[row.get("mate") or "R1"] = row["path"]
+            else:
+                raise ValueError(f"unknown hybrid role: {role}")
+        if len(shorts) > 1 or len(longs) > 1:
+            raise ValueError("Hybrid assembly requires one short-read and one ONT library")
+        mates = next(iter(shorts.values()), {})
+        yield mates.get("R1", ""), mates.get("R2", ""), longs[0] if longs else "", True
+        return
     try:
         stem = sample_name_from_r1(r1)
     except ValueError:

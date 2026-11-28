@@ -224,3 +224,85 @@ def test_ambiguous_read_types_fail(tmp_path):
         with pytest.raises(ValueError):
             with assembly_read_libraries(r1):
                 pytest.fail("ambiguous types must fail")
+
+
+def _fastq(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("@a\nAC\n+\nII\n")
+    return path
+
+
+def _row(path, **fields):
+    row = {
+        "sample_id": "s",
+        "path": str(path),
+        "library_id": "lib",
+        "technology": "illumina",
+        "layout": "se",
+        "mate": "",
+        "generation_id": "",
+        "repeat_id": "",
+        "pool": "",
+        "hybrid": "",
+        "settings": "",
+    }
+    row.update(fields)
+    return row
+
+
+def test_manifest_columns_select_libraries_not_filenames(tmp_path):
+    from samovar.config import write_reads_manifest
+
+    reads = tmp_path / "initial"
+    short = _fastq(reads / "misleading_R1.fastq")
+    mate = _fastq(reads / "misleading_R2.fastq")
+    long = _fastq(reads / "notes.fastq")
+    dropped = _fastq(reads / "dropped.fastq")
+    write_reads_manifest(tmp_path / "reads_manifest.tsv", [
+        _row(short, library_id="short", layout="pe", mate="R1", hybrid="1"),
+        _row(mate, library_id="short", layout="pe", mate="R2", hybrid="selected"),
+        _row(long, library_id="long", technology="ont", hybrid="ont"),
+        _row(dropped, library_id="skip", technology="illumina", hybrid="na"),
+    ])
+    with assembly_read_libraries(short) as (r1, r2, ont, typed):
+        assert Path(r1).resolve() == short.resolve()
+        assert Path(r2).resolve() == mate.resolve()
+        assert Path(ont).resolve() == long.resolve()
+        assert typed
+        assert "dropped" not in ont and "dropped" not in r1
+    copied = tmp_path / "run" / ".log"
+    copied.mkdir(parents=True)
+    text = (tmp_path / "reads_manifest.tsv").read_text(encoding="utf-8")
+    for path in (short, mate, long, dropped):
+        text = text.replace(str(path), f"initial/{path.name}")
+    (copied / "reads_manifest.tsv").write_text(text, encoding="utf-8")
+    staged = tmp_path / "run" / "initial" / "s__short_R1.fastq"
+    staged.parent.mkdir(parents=True)
+    staged.symlink_to(short)
+    with assembly_read_libraries(staged) as (r1, r2, ont, typed):
+        assert Path(r1).resolve() == short.resolve()
+        assert Path(ont).resolve() == long.resolve()
+        assert typed
+
+
+def test_manifest_rejects_mixed_pool_and_two_long_types(tmp_path):
+    from samovar.config import write_reads_manifest
+
+    reads = tmp_path / "initial"
+    one = _fastq(reads / "a.fastq")
+    two = _fastq(reads / "b.fastq")
+    manifest = tmp_path / "reads_manifest.tsv"
+    write_reads_manifest(manifest, [
+        _row(one, library_id="a", technology="ont", hybrid="ont", pool="p"),
+        _row(two, library_id="b", technology="pacbio", hybrid="pacbio", pool=""),
+    ])
+    with pytest.raises(ValueError, match="mixed pooled and unpooled"):
+        with assembly_read_libraries(one):
+            pytest.fail("mixed pool must fail")
+    write_reads_manifest(manifest, [
+        _row(one, library_id="a", technology="ont", hybrid="ont"),
+        _row(two, library_id="b", technology="pacbio", hybrid="pacbio"),
+    ])
+    with pytest.raises(ValueError, match="one short-read and one ONT"):
+        with assembly_read_libraries(one):
+            pytest.fail("two long types must fail")
