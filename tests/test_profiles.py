@@ -402,8 +402,7 @@ def test_explicit_genome_choice_sets_basis_conversion(tmp_path):
     ambiguous.mkdir()
     _write_fasta(ambiguous / "562_X.fna", 20)
     _write_fasta(ambiguous / "562_Y.fna", 60)
-    with pytest.raises(ValueError, match="Ambiguous reference genomes"):
-        reference_lengths({"562"}, ambiguous)
+    assert reference_lengths({"562"}, ambiguous)["562"] == 20
     with pytest.raises(ValueError, match="profile_references"):
         reference_lengths({"562"}, tmp_path / "empty")
 

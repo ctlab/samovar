@@ -6,6 +6,7 @@ travels beside it so organism abundance cannot silently become read counts.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,8 @@ import numpy as np
 import pandas as pd
 
 from samovar.abundance import n_sample_columns
+
+logger = logging.getLogger(__name__)
 
 FORMAT_VERSION = 1
 MANIFEST = ".profiles.json"
@@ -399,19 +402,54 @@ def _local_reference_candidates(genome_dir, taxid):
     return hits
 
 
+def _reference_rank(path: Path) -> int:
+    name = path.name.lower()
+    for rank, ext in enumerate(
+        (".fa.gz", ".fa", ".fasta.gz", ".fasta", ".fsa.gz", ".fsa", ".fna.gz", ".fna")
+    ):
+        if name.endswith(ext):
+            return rank
+    return 100
+
+
+def _unique_references(hits):
+    """One path per file. ``.fa`` / ``.fa.gz`` wins over a second name of the same bytes."""
+    ordered = sorted(hits, key=lambda path: (_reference_rank(path), path.name))
+    kept = []
+    seen = set()
+    for path in ordered:
+        try:
+            stat = path.stat()
+            ident = (stat.st_dev, stat.st_ino)
+        except OSError:
+            ident = (str(path), None)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        kept.append(path)
+    return kept
+
+
 def _selected_reference_paths(taxids, genome_dir, saved):
     """One local FASTA, or the pinned file from an earlier explicit choice."""
     paths = {}
     for tax in sorted({_reference_key(tax) for tax in taxids}):
         hits = _local_reference_candidates(genome_dir, tax)
-        if len(hits) > 1:
-            listed = ", ".join(str(path) for path in hits)
-            raise ValueError(
-                f"Ambiguous reference genomes for taxid {tax}: {listed}. "
-                "Set profile_references to one FASTA; its length is read from the file."
+        chosen = _unique_references(hits)
+        if len(chosen) > 1:
+            picked = chosen[0]
+            logger.warning(
+                "Taxid %s has %d reference genomes (%s); using %s. "
+                "Set profile_references to one FASTA to choose another.",
+                tax,
+                len(chosen),
+                ", ".join(path.name for path in chosen),
+                picked.name,
             )
-        if len(hits) == 1:
-            paths[tax] = str(hits[0].resolve())
+            paths[tax] = str(picked.resolve())
+            continue
+        if len(chosen) == 1:
+            paths[tax] = str(chosen[0].resolve())
             continue
         record = saved.get(tax)
         if record and record.get("path"):
@@ -483,8 +521,9 @@ def reference_lengths(taxids, genome_dir, config=None, *, selected_paths=None):
     """Lengths are the base counts of the selected reference FASTA files.
 
     The public choice is ``profile_references`` (taxid → one genome) or the
-    genomes already selected for this run. A directory with several FASTA
-    files for one taxid is an error, not a silent cache pick.
+    genomes already selected for this run. Several files for one taxid keep
+    the FASTA name (``.fa`` / ``.fa.gz``) when it is another name of the same
+    file, otherwise the first file, with a warning.
     """
     genome_dir = Path(genome_dir)
     manifest = profile_reference_manifest(genome_dir)
